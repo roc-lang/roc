@@ -15,7 +15,7 @@ compute = {
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
 
--- [×] type mismatch --------------------- destructure_closed_assignment.md:3:16
+── ✗ type mismatch ─────────────────────── destructure_closed_assignment.md:3:16
 
 This expression is used in an unexpected way.
 

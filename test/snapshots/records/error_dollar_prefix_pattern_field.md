@@ -13,7 +13,7 @@ match person {
 INVALID RECORD FIELD NAME - error_dollar_prefix_pattern_field.md:2:7:2:12
 # PROBLEMS
 
--- [×] invalid record field name ------ error_dollar_prefix_pattern_field.md:2:7
+── ✗ invalid record field name ──────── error_dollar_prefix_pattern_field.md:2:7
 
 Record field names cannot start with a dollar sign.
 

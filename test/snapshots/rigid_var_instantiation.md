@@ -31,7 +31,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
 
--- [Δ] unused variable ------------------------- rigid_var_instantiation.md:10:5
+── ⚠ unused variable ─────────────────────────── rigid_var_instantiation.md:10:5
 
 Variable `num` is defined here and then never used:
 
@@ -41,7 +41,7 @@ num = identity(42)
 If you don't need this variable, prefix it with an underscore like `_num` to
 suppress this warning.
 
--- [Δ] unused variable ------------------------- rigid_var_instantiation.md:13:5
+── ⚠ unused variable ─────────────────────────── rigid_var_instantiation.md:13:5
 
 Variable `str` is defined here and then never used:
 
@@ -51,7 +51,7 @@ str = identity("hello")
 If you don't need this variable, prefix it with an underscore like `_str` to
 suppress this warning.
 
--- [Δ] unused variable ------------------------- rigid_var_instantiation.md:16:5
+── ⚠ unused variable ─────────────────────────── rigid_var_instantiation.md:16:5
 
 Variable `lst` is defined here and then never used:
 

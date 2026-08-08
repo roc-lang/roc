@@ -13,7 +13,7 @@ match (1, 2) {
 UNCONDITIONAL CONDITION - pattern_as_basic.md:1:7:1:13
 # PROBLEMS
 
--- [Δ] unconditional condition ------------------------- pattern_as_basic.md:1:7
+── ⚠ unconditional condition ─────────────────────────── pattern_as_basic.md:1:7
 
 This match value is known at compile time, so this match will always inspect
 the same value.

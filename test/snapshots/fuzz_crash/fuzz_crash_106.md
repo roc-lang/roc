@@ -22,7 +22,7 @@ MISPLACED CARRIAGE RETURN
 Carriage return characters (\r) are not allowed in Roc source code.
 
 
--- [×] invalid tuple access ------------------------------ fuzz_crash_106.md:1:3
+── ✗ invalid tuple access ──────────────────────────────── fuzz_crash_106.md:1:3
 
 This value is not a tuple, so it has no .0 element.
 

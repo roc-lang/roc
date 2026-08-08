@@ -11,7 +11,7 @@ import#\
 INCOMPLETE IMPORT - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
 
--- [×] incomplete import --------------------------------- fuzz_crash_078.md:2:1
+── ✗ incomplete import ─────────────────────────────────── fuzz_crash_078.md:2:1
 
 I was parsing an import, and the mod path is incomplete.
 

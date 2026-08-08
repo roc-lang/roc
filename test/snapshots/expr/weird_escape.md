@@ -11,7 +11,7 @@ type=expr
 INVALID ESCAPE SEQUENCE - weird_escape.md:1:5:1:7
 # PROBLEMS
 
--- [×] invalid escape sequence ----------------------------- weird_escape.md:1:5
+── ✗ invalid escape sequence ─────────────────────────────── weird_escape.md:1:5
 
 This escape sequence is not recognized.
 

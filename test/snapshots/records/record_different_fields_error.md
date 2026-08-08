@@ -44,7 +44,7 @@ DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 MISSING METHOD - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 
--- [×] stray dollar sign ----------------- record_different_fields_error.md:6:10
+── ✗ stray dollar sign ─────────────────── record_different_fields_error.md:6:10
 
 Dollar sign ($) is only allowed at the very beginning of a name, not in the
 middle or at the end.
@@ -53,7 +53,7 @@ field$special: "dollar",
      ^
 
 
--- [×] unexpected type syntax ------------ record_different_fields_error.md:2:20
+── ✗ unexpected type syntax ────────────── record_different_fields_error.md:2:20
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -68,7 +68,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:2:21
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:21
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -83,7 +83,7 @@ For example:
 
 I found `leading underscore` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:2:39
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:39
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -98,7 +98,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:2:40
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:40
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -114,7 +114,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected type syntax ------------ record_different_fields_error.md:3:13
+── ✗ unexpected type syntax ────────────── record_different_fields_error.md:3:13
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -129,7 +129,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:3:14
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:14
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -144,7 +144,7 @@ For example:
 
 I found `trailing underscore` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:3:33
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:33
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -159,7 +159,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:3:34
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:34
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -175,7 +175,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:4:15
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:15
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -190,7 +190,7 @@ For example:
 
 I found `:` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:4:25
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:25
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -206,7 +206,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:5:15
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:15
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -221,7 +221,7 @@ For example:
 
 I found `:` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:5:24
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:24
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -237,7 +237,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected type syntax ------------ record_different_fields_error.md:6:20
+── ✗ unexpected type syntax ────────────── record_different_fields_error.md:6:20
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -252,7 +252,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:6:21
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:21
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -267,7 +267,7 @@ For example:
 
 I found `dollar` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:6:27
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:27
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -282,7 +282,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:6:28
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:28
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -298,7 +298,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:7:10
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:10
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -313,7 +313,7 @@ For example:
 
 I found `@symbol` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:7:17
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:17
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -328,7 +328,7 @@ For example:
 
 I found `:` here.
 
--- [×] unexpected expression syntax ------ record_different_fields_error.md:7:30
+── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:30
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -344,7 +344,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [Δ] declaration has no value ----------- record_different_fields_error.md:2:5
+── ⚠ declaration has no value ───────────── record_different_fields_error.md:2:5
 
 This declaration has a type annotation but no implementation.
 
@@ -354,7 +354,7 @@ _privateField: "leading underscore",
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- [Δ] declaration has no value ----------- record_different_fields_error.md:3:5
+── ⚠ declaration has no value ───────────── record_different_fields_error.md:3:5
 
 This declaration has a type annotation but no implementation.
 
@@ -364,7 +364,7 @@ field_: "trailing underscore",
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- [×] type mismatch ---------------------- record_different_fields_error.md:4:5
+── ✗ type mismatch ──────────────────────── record_different_fields_error.md:4:5
 
 This expression produces a value, but it's not being used.
 
@@ -378,7 +378,7 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
--- [×] missing method -------------------- record_different_fields_error.md:4:17
+── ✗ missing method ────────────────────── record_different_fields_error.md:4:17
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.
@@ -390,7 +390,7 @@ The value's type, which does not have a method named `from_quote`, is:
 
     {}
 
--- [×] missing method -------------------- record_different_fields_error.md:5:17
+── ✗ missing method ────────────────────── record_different_fields_error.md:5:17
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.
@@ -402,7 +402,7 @@ The value's type, which does not have a method named `from_quote`, is:
 
     {}
 
--- [Δ] declaration has no value ----------- record_different_fields_error.md:6:5
+── ⚠ declaration has no value ───────────── record_different_fields_error.md:6:5
 
 This declaration has a type annotation but no implementation.
 
@@ -412,7 +412,7 @@ field$special: "dollar",
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- [×] missing method -------------------- record_different_fields_error.md:7:19
+── ✗ missing method ────────────────────── record_different_fields_error.md:7:19
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.

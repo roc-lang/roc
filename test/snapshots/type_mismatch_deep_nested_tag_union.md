@@ -17,7 +17,7 @@ collide = |x| x
 TYPE MISMATCH - type_mismatch_deep_nested_tag_union.md:7:15:7:16
 # PROBLEMS
 
--- [×] type mismatch --------------- type_mismatch_deep_nested_tag_union.md:7:15
+── ✗ type mismatch ───────────────── type_mismatch_deep_nested_tag_union.md:7:15
 
 This expression is used in an unexpected way.
 

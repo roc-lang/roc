@@ -159,6 +159,7 @@ const box_underline = "^";
 const IconAndColor = struct {
     icon: []const u8,
     color: []const u8,
+    width: usize,
 };
 
 fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
@@ -166,11 +167,11 @@ fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8
     const yellow = if (palette.reset.len > 0) AnsiCodes.YELLOW else "";
     const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
     
-    if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "[×]", .color = red };
+    if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = red, .width = 1 };
     return switch (severity) {
-        .fatal, .runtime_error => .{ .icon = "[×]", .color = red },
-        .warning => .{ .icon = "[Δ]", .color = yellow },
-        .info => .{ .icon = "[i]", .color = cyan },
+        .fatal, .runtime_error => .{ .icon = "✗", .color = red, .width = 1 },
+        .warning => .{ .icon = "⚠", .color = yellow, .width = 1 },
+        .info => .{ .icon = "[i]", .color = cyan, .width = 3 },
     };
 }
 
@@ -510,7 +511,7 @@ fn renderHeaderLine(
 ) error{WriteFailed}!void {
     if (leading_newline) try writer.writeByte('\n');
     const total_w = @min(config.getMaxLineWidth(), 120);
-    const icon_w: usize = 3;
+    const icon_w: usize = icon_info.width;
     const prefix_w = 3 + icon_w + 1 + title.len + 1;
 
     var loc_len: usize = 0;
@@ -523,14 +524,14 @@ fn renderHeaderLine(
     const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
 
     try writer.writeAll(dim_gray);
-    try writer.writeAll("-- ");
+    try writer.writeAll("── ");
     try writer.writeAll(icon_info.color);
     try writer.writeAll(icon_info.icon);
     try writer.writeByte(' ');
     try writeLowercased(writer, title);
     try writer.writeByte(' ');
     try writer.writeAll(dim_gray);
-    try writer.splatBytesAll("-", dashes);
+    try writer.splatBytesAll("─", dashes);
     if (fname) |f| {
         try writer.writeByte(' ');
         try writeLocation(writer, palette, f, start_line, start_column);
@@ -1697,7 +1698,7 @@ fn renderSourceLocationHeader(
     start_column: u32,
 ) error{WriteFailed}!void {
     const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
-    try renderHeaderLine(writer, palette, config, .{ .icon = "[i]", .color = cyan }, "LOCATION", filename, start_line, start_column, true);
+    try renderHeaderLine(writer, palette, config, .{ .icon = "[i]", .color = cyan, .width = 3 }, "LOCATION", filename, start_line, start_column, true);
 }
 
 /// Number of decimal digits needed to print `n` (e.g. 1 for 7, 4 for 1242).

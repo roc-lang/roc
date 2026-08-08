@@ -5585,7 +5585,7 @@ fn renderSummaryHeaderLine(
     const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
 
     const total_w = @min(config.getMaxLineWidth(), 120);
-    const icon_w: usize = 3;
+    const icon_w: usize = 1;
     const prefix_w = 3 + icon_w + 7 + err_str.len + 5 + warn_str.len + 1;
 
     const sanitised_path = reporting.sanitisePathForSnapshots(path);
@@ -5597,9 +5597,10 @@ fn renderSummaryHeaderLine(
     const cyan = if (use_color) ansi_term.cyan else "";
     const dim_gray = if (use_color) ansi_term.bright_black else "";
     try writer.writeAll(dim_gray);
-    try writer.writeAll("-- ");
+    try writer.writeAll("── ");
+    try writer.writeAll("∴ ");
     try writer.writeAll(reset);
-    try writer.writeAll("[Σ] found ");
+    try writer.writeAll("found ");
     try writer.writeAll(red);
     try writer.writeAll(err_str);
     try writer.writeAll(reset);
@@ -5608,7 +5609,7 @@ fn renderSummaryHeaderLine(
     try writer.writeAll(warn_str);
     try writer.writeAll(dim_gray);
     try writer.writeByte(' ');
-    try writer.splatBytesAll("-", dashes);
+    try writer.splatBytesAll("─", dashes);
     if (sanitised_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(cyan);

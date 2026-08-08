@@ -12,7 +12,7 @@ a=0->b
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
 # PROBLEMS
 
--- [×] name not in scope ------ formatter_idempotence_issue_8851_comment1.md:1:6
+── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment1.md:1:6
 
 Nothing is named `b` in this scope.
 

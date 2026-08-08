@@ -11,7 +11,7 @@ main!=|0|||"".P
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_108.md:1:8:1:9
 # PROBLEMS
 
--- [×] non exhaustive destructure ------------------------ fuzz_crash_108.md:1:8
+── ✗ non exhaustive destructure ────────────────────────── fuzz_crash_108.md:1:8
 
 This destructuring pattern doesn't cover all possible cases.
 

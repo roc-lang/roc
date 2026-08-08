@@ -14,7 +14,7 @@ t = MyList.([])
 INVALID RECURSIVE TYPE - recursion_through_builtin_arg.md:1:1:1:23
 # PROBLEMS
 
--- [×] invalid recursive type ------------- recursion_through_builtin_arg.md:1:1
+── ✗ invalid recursive type ─────────────── recursion_through_builtin_arg.md:1:1
 
 The nominal type MyList refers to itself in a way that would make it infinite.
 

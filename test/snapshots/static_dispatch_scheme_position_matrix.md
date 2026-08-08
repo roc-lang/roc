@@ -46,7 +46,7 @@ MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
 
--- [×] unbound where receiver -- static_dispatch_scheme_position_matrix.md:24:32
+── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:32
 
 The type variable `a` is not introduced by this annotation's type or a
 connected method constraint, so this where clause cannot add the `parse` method
@@ -59,7 +59,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `a` to the annotation, or remove this constraint.
 
--- [×] unbound where receiver -- static_dispatch_scheme_position_matrix.md:24:52
+── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:52
 
 The type variable `a` is not introduced by this annotation's type or a
 connected method constraint, so this where clause cannot add the `show` method
@@ -72,7 +72,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `a` to the annotation, or remove this constraint.
 
--- [×] polymorphic value -------- static_dispatch_scheme_position_matrix.md:22:1
+── ✗ polymorphic value ────────── static_dispatch_scheme_position_matrix.md:22:1
 
 This top-level value still has an unresolved polymorphic type.
 
@@ -83,7 +83,7 @@ Its type is:
 a where [a.gen : {} -> a]
 Add an annotation or use this value in a way that fixes its concrete type.
 
--- [×] missing method ----------- static_dispatch_scheme_position_matrix.md:19:5
+── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:19:5
 
 This is trying to dispatch a method named `gen` on an unresolved type variable,
 but unresolved type variables have no methods.
@@ -95,7 +95,7 @@ Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
 
--- [×] missing method ----------- static_dispatch_scheme_position_matrix.md:28:9
+── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:28:9
 
 This is trying to dispatch a method named `show` on an unresolved type
 variable, but unresolved type variables have no methods.

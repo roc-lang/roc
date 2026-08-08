@@ -16,7 +16,7 @@ main = "${y}"
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
 
--- [×] type mismatch ---------------------------------------- issue_9075.md:6:11
+── ✗ type mismatch ────────────────────────────────────────── issue_9075.md:6:11
 
 This expression is used in an unexpected way.
 

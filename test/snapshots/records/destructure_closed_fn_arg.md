@@ -12,7 +12,7 @@ get_sum = |{ x, y }| x + y
 TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 # PROBLEMS
 
--- [×] type mismatch ------------------------- destructure_closed_fn_arg.md:2:12
+── ✗ type mismatch ─────────────────────────── destructure_closed_fn_arg.md:2:12
 
 This expression is used in an unexpected way.
 

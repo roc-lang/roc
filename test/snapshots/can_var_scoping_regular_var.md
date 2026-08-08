@@ -39,7 +39,7 @@ VAR REASSIGNMENT ERROR
 Cannot reassign a `var` from outside the function where it was declared.
 Variables declared with `var` can only be reassigned within the same function scope.
 
--- [Δ] unused variable --------------------- can_var_scoping_regular_var.md:2:17
+── ⚠ unused variable ─────────────────────── can_var_scoping_regular_var.md:2:17
 
 Variable `items` is defined here and then never used:
 

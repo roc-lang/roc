@@ -20,7 +20,7 @@ EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:48
 DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
 
--- [×] exposed but not defined ---------------------------- platform_int.md:7:16
+── ✗ exposed but not defined ────────────────────────────── platform_int.md:7:16
 
 The mod header says that `multiplyInts` is exposed, but it is not defined
 anywhere in this mod.
@@ -31,7 +31,7 @@ provides { "roc_multiplyInts": multiplyInts }
 You can fix this by either defining `multiplyInts` in this mod, or by
 removing it from the list of exposed values.
 
--- [Δ] declaration has no value ---------------------------- platform_int.md:9:1
+── ⚠ declaration has no value ────────────────────────────── platform_int.md:9:1
 
 This declaration has a type annotation but no implementation.
 

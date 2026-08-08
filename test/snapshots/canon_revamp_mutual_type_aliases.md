@@ -13,7 +13,7 @@ MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:1:1:1:6
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_mutual_type_aliases.md:2:1:2:6
 # PROBLEMS
 
--- [×] mutually recursive type aliases - canon_revamp_mutual_type_aliases.md:1:1
+── ✗ mutually recursive type aliases ─── canon_revamp_mutual_type_aliases.md:1:1
 
 The type alias `A` and `B` form a recursive cycle.
 
@@ -30,7 +30,7 @@ And it references B declared here (canon_revamp_mutual_type_aliases.md:2:1):
 B : A
 ^^^^^
 
--- [×] mutually recursive type aliases - canon_revamp_mutual_type_aliases.md:2:1
+── ✗ mutually recursive type aliases ─── canon_revamp_mutual_type_aliases.md:2:1
 
 The type alias `B` and `A` form a recursive cycle.
 

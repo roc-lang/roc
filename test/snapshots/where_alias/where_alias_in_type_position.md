@@ -14,7 +14,7 @@ describe = |value| value.to_str()
 WHERE ALIAS USED AS A TYPE - where_alias_in_type_position.md:3:12:3:22
 # PROBLEMS
 
--- [×] where alias used as a type --------- where_alias_in_type_position.md:3:12
+── ✗ where alias used as a type ─────────── where_alias_in_type_position.md:3:12
 
 Stringable is a where alias, not a type.
 

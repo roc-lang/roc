@@ -18,7 +18,7 @@ UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
 
--- [×] undeclared type --------------------------------- where_clauses_10.md:7:7
+── ✗ undeclared type ─────────────────────────────────── where_clauses_10.md:7:7
 
 The type `Decode` is not declared in this scope.
 
@@ -26,7 +26,7 @@ The type `Decode` is not declared in this scope.
   ^^^^^^^
 
 
--- [Δ] declaration has no value ------------------------ where_clauses_10.md:3:1
+── ⚠ declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
 This declaration has a type annotation but no implementation.
 

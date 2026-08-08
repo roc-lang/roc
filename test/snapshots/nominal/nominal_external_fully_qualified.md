@@ -22,7 +22,7 @@ MOD NOT FOUND - nominal_external_fully_qualified.md:7:17:7:27
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 # PROBLEMS
 
--- [×] mod not found --------------- nominal_external_fully_qualified.md:3:21
+── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:3:21
 
 This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 
@@ -30,7 +30,7 @@ handleTry : MyTryMod.MyTryType(Str, I32) -> Str
                     ^^^^^^^^^^
 
 
--- [×] mod not found --------------- nominal_external_fully_qualified.md:6:17
+── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:6:17
 
 This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 
@@ -38,7 +38,7 @@ MyTryMod.MyTryType.Ok(value) => value
         ^^^^^^^^^^
 
 
--- [×] mod not found --------------- nominal_external_fully_qualified.md:7:17
+── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:7:17
 
 This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 
@@ -46,7 +46,7 @@ MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
         ^^^^^^^^^^
 
 
--- [Δ] unused variable ---------------- nominal_external_fully_qualified.md:7:32
+── ⚠ unused variable ────────────────── nominal_external_fully_qualified.md:7:32
 
 Variable `code` is defined here and then never used:
 

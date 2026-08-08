@@ -20,7 +20,7 @@ MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 
--- [Δ] unconditional condition -------------------------- if_then_else_9.md:3:11
+── ⚠ unconditional condition ──────────────────────────── if_then_else_9.md:3:11
 
 This if condition is known at compile time, so this conditional will always
 make the same choice.
@@ -29,7 +29,7 @@ make the same choice.
           ^^
 
 
--- [×] type mismatch ------------------------------------ if_then_else_9.md:3:11
+── ✗ type mismatch ────────────────────────────────────── if_then_else_9.md:3:11
 
 This number is being used where a non-number type is needed.
 
@@ -40,7 +40,7 @@ Other code expects this to have the type:
 
     Bool
 
--- [×] missing method ------------------------------------ if_then_else_9.md:2:2
+── ✗ missing method ────────────────────────────────────── if_then_else_9.md:2:2
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.
@@ -52,7 +52,7 @@ The value's type, which does not have a method named `from_numeral`, is:
 
     [A, ..]
 
--- [×] missing method ------------------------------------ if_then_else_9.md:6:2
+── ✗ missing method ────────────────────────────────────── if_then_else_9.md:6:2
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

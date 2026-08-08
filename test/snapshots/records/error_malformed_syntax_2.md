@@ -13,7 +13,7 @@ UNEXPECTED EXPRESSION SYNTAX - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
 
--- [×] unexpected type syntax ------------------ error_malformed_syntax_2.md:1:8
+── ✗ unexpected type syntax ──────────────────── error_malformed_syntax_2.md:1:8
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -28,7 +28,7 @@ For example:
 
 I found `42` here.
 
--- [×] unexpected expression syntax ----------- error_malformed_syntax_2.md:1:10
+── ✗ unexpected expression syntax ───────────── error_malformed_syntax_2.md:1:10
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -44,7 +44,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [Δ] declaration has no value ---------------- error_malformed_syntax_2.md:1:3
+── ⚠ declaration has no value ────────────────── error_malformed_syntax_2.md:1:3
 
 This declaration has a type annotation but no implementation.
 

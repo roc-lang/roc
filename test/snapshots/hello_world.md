@@ -15,7 +15,7 @@ main! = |_| Stdout.line!("Hello, world!")
 NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
 
--- [×] name not in scope ----------------------------------- hello_world.md:5:13
+── ✗ name not in scope ───────────────────────────────────── hello_world.md:5:13
 
 Nothing is named `line!` in this scope.
 

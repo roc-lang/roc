@@ -15,7 +15,7 @@ ModType := {
 PRIVATE TYPE IN EXPOSED FIELD - type_mod_nominal_field_depends_on_private_toplevel_type.md:4:13:4:25
 # PROBLEMS
 
--- [Δ] private type in exposed field ----- type_mod_nominal_field_depends_on_private_toplevel_type.md:4:13
+── ⚠ private type in exposed field ───── type_mod_nominal_field_depends_on_private_toplevel_type.md:4:13
 
 The `field` field of `ModType` refers to `InternalType`, but `InternalType` is
 private to this mod.

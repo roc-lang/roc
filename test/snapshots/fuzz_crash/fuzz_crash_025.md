@@ -42,7 +42,7 @@ UNEXPECTED STATEMENT - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 
--- [×] type application needs parentheses ---------------- fuzz_crash_025.md:9:1
+── ✗ type application needs parentheses ────────────────── fuzz_crash_025.md:9:1
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -60,7 +60,7 @@ I found `d` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_025.md:9:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -75,7 +75,7 @@ For example:
 
 I found `=` here.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_025.md:9:5
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -90,7 +90,7 @@ For example:
 
 I found `18446744073709551615` here.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_025.md:12:48
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -105,7 +105,7 @@ For example:
 
 I found `:` here.
 
--- [×] type application needs parentheses --------------- fuzz_crash_025.md:13:1
+── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -123,7 +123,7 @@ I found `f` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_025.md:13:3
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -138,7 +138,7 @@ For example:
 
 I found `=` here.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_025.md:13:4
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -153,7 +153,7 @@ For example:
 
 I found `8` here.
 
--- [×] invalid number ----------------------------------- fuzz_crash_025.md:12:5
+── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
 
 This number literal does not fit in the inferred type.
 

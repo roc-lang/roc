@@ -18,7 +18,7 @@ ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
--- [×] unexpected statement ------------------------------ fuzz_crash_008.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -33,7 +33,7 @@ For example:
 
 I found `|` here.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_008.md:1:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -48,7 +48,7 @@ For example:
 
 I found `|` here.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_008.md:1:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 

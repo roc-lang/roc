@@ -20,7 +20,7 @@ test = |{}| {
 MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
 
--- [×] missing method ------------------------------------- nominal_local.md:9:5
+── ✗ missing method ─────────────────────────────────────── nominal_local.md:9:5
 
 This `encode_str` method is being called on a value whose type doesn't have
 that method.
