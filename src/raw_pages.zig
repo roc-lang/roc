@@ -7,9 +7,9 @@
 //! `-nostdlib`, so `std.heap.page_allocator` is unavailable: its posix path
 //! reaches `mmap` through libc and pulls in the errno accessor. Those systems
 //! issue the syscall directly here. macOS and Windows reach their kernels only
-//! through libSystem and kernel32 — a direct syscall instruction raises
-//! `SIGSYS` on macOS — and every executable on those systems already links the
-//! library that provides them, so they call it.
+//! through libSystem and kernel32—a direct syscall instruction raises `SIGSYS`
+//! on macOS—and every executable on those systems already links the library
+//! that provides them, so they call it.
 //!
 //! Both mappings are shared rather than restated per consumer because a NetBSD
 //! program links the default-platform runtime and the boxy runtime together,
@@ -196,7 +196,7 @@ fn netBsdMmap(len: usize, fd: usize) usize {
 
 comptime {
     // Weak so that a program linking both the default-platform runtime and the
-    // boxy runtime — each carrying its own copy — resolves to one definition.
+    // boxy runtime—each carrying its own copy—resolves to one definition.
     if (os == .netbsd) asm (
         \\.text
         \\.weak roc_raw_pages_netbsd_mmap
