@@ -95,6 +95,8 @@ const NominalDirection = enum {
 pub const Result = union(enum) {
     const Self = @This();
 
+    /// The relation was accepted. Encountering an existing `.err` can return
+    /// this without merging the queried classes.
     ok,
     /// A mismatch that WAS recorded as a diagnostic (the poison_to_err path).
     problem: Problem.Idx,
@@ -135,7 +137,7 @@ pub const Env = struct {
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
     /// stops the now-erroneous vars from producing cascading downstream errors
-    /// (anything unifies OK against `.err`).
+    /// (later relations against `.err` are accepted without reporting).
     poison_to_err,
     /// Merge on success exactly like a normal unify. On a top-level mismatch,
     /// keep successful child unifications, record nothing, and do not poison the
@@ -182,6 +184,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     unifier.runWorkLoop() catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.ErroneousType => return .ok,
             error.TypeMismatch => {},
         }
 
@@ -385,6 +388,7 @@ const Unifier = struct {
     // unification
 
     const Error = std.mem.Allocator.Error || error{
+        ErroneousType,
         TypeMismatch,
     };
 
@@ -427,6 +431,7 @@ const Unifier = struct {
     fn runWorkLoop(self: *Self) Error!void {
         while (self.scratch.unify_work_stack.items.pop()) |frame| {
             self.processFrame(frame) catch |err| switch (err) {
+                error.ErroneousType => return error.ErroneousType,
                 error.TypeMismatch => try self.handleTypeMismatch(),
                 error.OutOfMemory => return error.OutOfMemory,
             };
@@ -562,7 +567,13 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
-            .err => try self.merge(vars, .err),
+            .err => switch (vars.b.desc.content) {
+                .flex => |b_flex| {
+                    if (b_flex.constraints.len() != 0) return error.ErroneousType;
+                    try self.merge(vars, .err);
+                },
+                .rigid, .alias, .structure, .err => return error.ErroneousType,
+            },
         }
     }
 
@@ -606,7 +617,10 @@ const Unifier = struct {
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 try self.merge(vars, b_content);
             },
-            .err => try self.merge(vars, .err),
+            .err => {
+                if (a_flex.constraints.len() != 0) return error.ErroneousType;
+                try self.merge(vars, .err);
+            },
         }
     }
 
@@ -631,7 +645,7 @@ const Unifier = struct {
                 try self.unifyGuarded(backing_var, vars.a.var_);
             },
             .structure => return error.TypeMismatch,
-            .err => try self.merge(vars, .err),
+            .err => return error.ErroneousType,
         }
     }
 
@@ -670,7 +684,7 @@ const Unifier = struct {
                 // presentation data, not union-find representative shape.
                 try self.unifyGuarded(vars.b.var_, backing_var);
             },
-            .err => try self.merge(vars, .err),
+            .err => return error.ErroneousType,
         }
     }
 
@@ -749,7 +763,7 @@ const Unifier = struct {
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
-            .err => try self.merge(vars, .err),
+            .err => return error.ErroneousType,
         }
     }
 
