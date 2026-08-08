@@ -3402,6 +3402,10 @@ const Pass = struct {
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = (try self.cloneExprSpanFresh(call.args, renames)) orelse return null,
+                .produced_type_source = if (call.produced_type_source) |source|
+                    (try self.cloneExprFresh(source, renames)) orelse return null
+                else
+                    null,
             } },
             .call_proc => |call| .{ .call_proc = .{
                 .callee = call.callee,
@@ -5753,6 +5757,10 @@ const Cloner = struct {
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = try self.cloneExprSpan(call.args),
+                .produced_type_source = if (call.produced_type_source) |source|
+                    try self.cloneExpr(source)
+                else
+                    null,
             } },
             .field_access => |field| return try self.cloneFieldAccess(expr.ty, field),
             .tuple_access => |access| return try self.cloneTupleAccess(expr.ty, access),

@@ -161,7 +161,6 @@ const Solver = struct {
 
     const ReturnContext = struct {
         mono_ret: MonoType.TypeId,
-        solved_args: Type.Span,
         solved_ret: Type.TypeVarId,
     };
 
@@ -412,7 +411,6 @@ const Solver = struct {
 
         try self.return_contexts.append(self.allocator, .{
             .mono_ret = fn_.ret,
-            .solved_args = func.args,
             .solved_ret = func.ret,
         });
         defer _ = self.return_contexts.pop();
@@ -729,7 +727,11 @@ const Solver = struct {
                 for (args, 0..) |arg, i| {
                     arg_tys[i] = try self.inferExpr(arg);
                 }
-                try self.bindLowLevelTypes(call.op, expected, expr.ty, args, arg_tys);
+                const produced_type_source = if (call.produced_type_source) |source|
+                    try self.inferExpr(source)
+                else
+                    null;
+                try self.bindLowLevelTypes(call.op, expected, expr.ty, args, arg_tys, produced_type_source);
             },
             .field_access => |field| {
                 const receiver_ty = try self.inferExpr(field.receiver);
@@ -1496,9 +1498,10 @@ const Solver = struct {
         expected_mono: MonoType.TypeId,
         arg_exprs: []const Lifted.ExprId,
         args: []const Type.TypeVarId,
+        produced_type_source: ?Type.TypeVarId,
     ) Allocator.Error!void {
         if (arg_exprs.len != args.len) Common.invariant("low-level expression and type argument counts differed");
-        if (try self.bindProducedLowLevelTypeFlow(op, expected, expected_mono, arg_exprs, args)) return;
+        if (try self.bindProducedLowLevelTypeFlow(op, expected, expected_mono, arg_exprs, args, produced_type_source)) return;
         const bound_op = std.meta.stringToEnum(BoundLowLevel, @tagName(op)) orelse return;
         switch (bound_op) {
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
@@ -1545,8 +1548,18 @@ const Solver = struct {
         expected_mono: MonoType.TypeId,
         arg_exprs: []const Lifted.ExprId,
         args: []const Type.TypeVarId,
+        produced_type_source: ?Type.TypeVarId,
     ) Allocator.Error!bool {
-        switch (op.producedTypeFlow()) {
+        const produced_flow = op.producedTypeFlow();
+        const expects_contextual_source = switch (produced_flow) {
+            .list_from_enclosing_function_arg_result, .enclosing_function_list_item => true,
+            .none, .box_from_item, .box_item, .list_item, .list_insert, .list_join, .list_replace, .same_as_arg => false,
+        };
+        if (expects_contextual_source != (produced_type_source != null)) {
+            Common.invariant("low-level produced-type source did not match its declared flow");
+        }
+
+        switch (produced_flow) {
             .none => return false,
             .box_from_item => |flow| {
                 expectLowLevelArity(op, args, flow.arity);
@@ -1596,28 +1609,19 @@ const Solver = struct {
             },
             .list_from_enclosing_function_arg_result => |flow| {
                 expectLowLevelArity(op, args, flow.arity);
-                const enclosing_arg = try self.enclosingFunctionArg(flow.function_arg);
-                const callable = try self.functionShape(enclosing_arg);
+                const source = produced_type_source orelse
+                    Common.invariant("contextual callable-result flow had no explicit source");
+                const callable = try self.functionShape(source);
                 try self.unify(try self.listElem(expected), callable.ret);
             },
             .enclosing_function_list_item => |flow| {
                 expectLowLevelArity(op, args, flow.arity);
-                const enclosing_arg = try self.enclosingFunctionArg(flow.function_arg);
-                try self.unify(expected, try self.listElem(enclosing_arg));
+                const source = produced_type_source orelse
+                    Common.invariant("contextual list-item flow had no explicit source");
+                try self.unify(expected, try self.listElem(source));
             },
         }
         return true;
-    }
-
-    fn enclosingFunctionArg(self: *Solver, index: usize) Allocator.Error!Type.TypeVarId {
-        if (self.return_contexts.items.len == 0) {
-            Common.invariant("contextual low-level type flow reached Lambda Solved outside a function");
-        }
-        const args = self.return_contexts.items[self.return_contexts.items.len - 1].solved_args;
-        if (index >= args.count()) {
-            Common.invariant("contextual low-level type flow referenced an absent enclosing function argument");
-        }
-        return self.program.types.spanItem(args, index);
     }
 
     /// Two runtime occurrences of one exact Monotype still receive separate

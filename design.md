@@ -2686,10 +2686,18 @@ lowers those operands once before constructing the result cell: `box_unbox`
 and `list_get_unsafe` project the actual operand, list-preserving operations
 return the actual list cell, and insertion, concatenation, and replacement
 select an exact item representation at their declared storage boundary.
-The checked exact-result-flow pass and Lambda Solved callable analysis consume
-the same metadata. A contextual flow may name the enclosing function argument
-or return cell that a higher-order operation such as list mapping projects.
-Neither consumer may maintain a second handwritten operation classification,
+The checked exact-result-flow pass consumes this metadata while the checked
+procedure's original argument identities are still explicit. When a contextual
+flow names an enclosing function argument that a higher-order operation such as
+list mapping projects, Monotype resolves that selector immediately and records
+the exact local expression as the low-level node's `produced_type_source`.
+Monotype Lifted and every Lifted transformation carry and rewrite that type-only
+source alongside the node, but it is never evaluated, counted as a runtime use,
+or turned into a capture. Lambda Solved consumes that explicit source
+expression; it must not look up an argument position in the node's post-lift
+containing function, whose ABI may have been changed by specialization or
+inlining.
+Neither stage may maintain a second handwritten operation classification,
 stamp the low-level result with the checker-public type, or reconstruct
 callable identity from operation-specific syntax.
 

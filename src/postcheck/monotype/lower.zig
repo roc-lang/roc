@@ -9306,6 +9306,7 @@ fn draftProcCalleeForSlot(slot: DraftFnSlot) DraftProcCallee {
 const DraftLowLevelCall = struct {
     op: can.CIR.Expr.LowLevel,
     args: DraftSpan(DraftExprId),
+    produced_type_source: ?DraftExprId = null,
 };
 
 const DraftMatchExpr = struct {
@@ -12026,6 +12027,7 @@ const BodyDraftStore = struct {
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = ids.exprSpan(call.args),
+                .produced_type_source = if (call.produced_type_source) |source| ids.expr(source) else null,
             } },
             .field_access => |access| .{ .field_access = .{
                 .receiver = ids.expr(access.receiver),
@@ -12662,6 +12664,10 @@ const BodyContext = struct {
     /// Compiler-authored primitives whose phantom result type is absent from
     /// their runtime operands consume this explicit specialization input.
     enclosing_function: ?solve.FunctionNodes = null,
+    /// Exact locals implementing `enclosing_function`'s arguments while its
+    /// checked body is being lowered. Contextual low-level type flow resolves
+    /// its source to one of these locals before lifting can reshape the ABI.
+    enclosing_function_args: []const DraftTypedLocal = &.{},
     /// Stable exact result selection owned by the active checked lambda
     /// specialization. Source `return` expressions and ordinary fallthrough
     /// both contribute to this one selection.
@@ -14626,6 +14632,7 @@ const BodyContext = struct {
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.enclosing_function = self.enclosing_function;
+        child.enclosing_function_args = self.enclosing_function_args;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
@@ -16978,6 +16985,10 @@ const BodyContext = struct {
                 },
             }
         }
+
+        const saved_enclosing_function_args = self.enclosing_function_args;
+        defer self.enclosing_function_args = saved_enclosing_function_args;
+        self.enclosing_function_args = args;
 
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
         const body_ret_cell = if (try self.nodeIsProvenUninhabited(declared_ret_node))
@@ -31369,6 +31380,14 @@ const BodyContext = struct {
         } });
     }
 
+    fn enclosingFunctionTypeSource(self: *BodyContext, index: usize) Allocator.Error!DraftExprId {
+        if (index >= self.enclosing_function_args.len) {
+            Common.invariant("contextual low-level type flow named a missing original function argument");
+        }
+        const source = self.enclosing_function_args[index];
+        return try self.addExprWithTypeCell(source.ty, .{ .local = source.local });
+    }
+
     /// Lower a representation-sensitive primitive from the operands' completed
     /// exact cells. The returned expression keeps the produced cell; the
     /// checker-authored result is only the destination request it is applied
@@ -31398,6 +31417,7 @@ const BodyContext = struct {
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
         }
 
+        var produced_type_source: ?DraftExprId = null;
         const produced_node = switch (flow) {
             .none => unreachable,
             .box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] }),
@@ -31409,6 +31429,7 @@ const BodyContext = struct {
                 if (source.function_arg >= enclosing.args.len) {
                     Common.invariant("contextual low-level callable result named a missing function argument");
                 }
+                produced_type_source = try self.enclosingFunctionTypeSource(source.function_arg);
                 const callable = try self.graph.functionNodes(enclosing.args[source.function_arg]);
                 break :blk try self.graph.newNode(.{ .list = callable.ret });
             },
@@ -31418,6 +31439,7 @@ const BodyContext = struct {
                 if (source.function_arg >= enclosing.args.len) {
                     Common.invariant("contextual low-level list item named a missing function argument");
                 }
+                produced_type_source = try self.enclosingFunctionTypeSource(source.function_arg);
                 break :blk try self.graph.listElementNode(enclosing.args[source.function_arg]);
             },
             .same_as_arg => |same| arg_nodes[same.arg],
@@ -31456,7 +31478,11 @@ const BodyContext = struct {
         _ = try self.graph.applyProducedTypeToRequest(expected_node, produced_node);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
-            .{ .low_level = .{ .op = op, .args = reserved.span } },
+            .{ .low_level = .{
+                .op = op,
+                .args = reserved.span,
+                .produced_type_source = produced_type_source,
+            } },
         );
     }
 

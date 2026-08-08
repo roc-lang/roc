@@ -28,11 +28,13 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 11: low-level nodes may carry an explicit produced-type source.
+/// Version 10: generated nominal identities include their exact producer data.
 /// Version 9: function metadata records whether a signature is independent
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
 const SECTION_COUNT = 42;
 
@@ -695,7 +697,8 @@ pub const MappedProgramView = struct {
             .fn_ref => true,
             .call_value => |call| self.exprRefInBounds(call.callee) and self.exprIdSpanInBounds(call.args),
             .call_proc => |call| self.exprIdSpanInBounds(call.args) and captureOperandSpanInBounds(call.captures),
-            .low_level => |call| self.exprIdSpanInBounds(call.args),
+            .low_level => |call| self.exprIdSpanInBounds(call.args) and
+                (call.produced_type_source == null or self.exprRefInBounds(call.produced_type_source.?)),
             .field_access => |field| self.exprRefInBounds(field.receiver),
             .tuple_access => |tuple| self.exprRefInBounds(tuple.tuple),
             .structural_eq => |eq| self.exprRefInBounds(eq.lhs) and self.exprRefInBounds(eq.rhs),

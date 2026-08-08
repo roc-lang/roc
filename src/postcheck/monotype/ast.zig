@@ -560,6 +560,10 @@ pub const CallProc = struct {
 pub const LowLevelCall = struct {
     op: can.CIR.Expr.LowLevel,
     args: Span(ExprId),
+    /// Exact producer-owned value whose type supplies a result component that
+    /// is absent from the primitive's runtime operands. This expression is
+    /// type evidence only and is never evaluated by the primitive.
+    produced_type_source: ?ExprId = null,
 };
 
 /// Match expression with pattern branches.
