@@ -3161,6 +3161,13 @@ interface and topology only; it cannot replace or merge the producer-owned
 private `rest` representation. This keeps the loop's initial state and every
 back-edge state in the same explicit representation family.
 
+An iterator method dispatch likewise rebuilds its callable request from the
+exact operands it lowered, then requests the method body at that produced
+interface. It never requires the checked-public dispatcher root and an exact
+generated dispatcher root to become one union class; those roots are related
+directionally and the produced callable owns the runtime argument and result
+cells.
+
 Nested call and dispatch operands carry their exact produced types through the
 active instantiation graph until that graph's single final seal. A call or
 dispatch returns its exact result cell directly to its consumer; it does not

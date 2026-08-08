@@ -44996,37 +44996,54 @@ const BodyContext = struct {
         )) |private_node| {
             callable_node = private_node;
         }
-        const plan_fn = try self.graph.functionNodes(callable_node);
-        if (expected_ret_ty) |expected| {
-            if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
-                Common.invariant("checked iterator dispatch plan return type differed from iterator-for expected type");
-            }
-        }
-
-        const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
+        const initial = try self.graph.functionNodes(callable_node);
+        const prepared_callable = try self.graph.functionRequestFromProducedArguments(
+            target_node,
+            callable_node,
+            initial.args,
+        );
+        const prepared_fn = try self.graph.functionNodes(prepared_callable);
+        const dispatcher_node = prepared_fn.args[plan.dispatcher_arg_index];
         try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], loop_iterator);
-        try applyProducedTypeToRequest(self.graph, dispatcher_node, actual_dispatcher_node);
-        if (!self.graph.sameClass(dispatcher_node, actual_dispatcher_node)) {
-            Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
-        }
-        const fn_nodes = try self.graph.functionNodes(callable_node);
-        if (expected_ret_ty) |expected| {
-            if (!self.graph.sameClass(fn_nodes.ret, try expected.toGraphNode(self.graph))) {
-                Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");
-            }
-        }
         const args = try self.allocator.alloc(DraftExprId, plan_args.len);
         defer self.allocator.free(args);
         for (plan_args, 0..) |operand, i| {
-            args[i] = try self.lowerIteratorOperandAtNode(operand, loop_iterator, fn_nodes.args[i]);
+            args[i] = try self.lowerIteratorOperandAtNode(operand, loop_iterator, prepared_fn.args[i]);
+        }
+        var lowered_args = try self.addExprSpan(args);
+        const produced = try self.producedCallableNodeFromCheckedSource(
+            target_node,
+            prepared_callable,
+            lowered_args,
+        );
+        callable_node = produced.node;
+        lowered_args = produced.args;
+        if (try self.generatedIteratorPlanRequestNode(
+            lookup,
+            target_node,
+            callable_node,
+            plan_args,
+        )) |private_node| {
+            callable_node = private_node;
+        }
+        const callee = try self.methodTargetCalleeAtNode(
+            lookup,
+            callable_node,
+            try self.evidenceForIteratorCall(plan),
+        );
+        const completed = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, callable_node));
+        if (expected_ret_ty) |expected| {
+            _ = try self.graph.applyProducedTypeToRequest(
+                try expected.toGraphNode(self.graph),
+                completed.ret,
+            );
         }
 
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(fn_nodes.ret),
+            DraftTypeCell.fromGraphNode(completed.ret),
             .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(lookup, callable_node, try self.evidenceForIteratorCall(plan))),
-                .args = try self.addExprSpan(args),
+                .callee = draftProcCalleeForSlot(callee),
+                .args = lowered_args,
                 .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
