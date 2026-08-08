@@ -38,7 +38,9 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
  │                                                                            │
  └──────────────────────────────────────────────────── where_clauses_7.md:1:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌──────────────────────────────────────────────┐
@@ -51,7 +53,9 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
  │                                                                            │
  └─────────────────────────────────────────────────── where_clauses_7.md:10:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 # TOKENS
 ~~~zig

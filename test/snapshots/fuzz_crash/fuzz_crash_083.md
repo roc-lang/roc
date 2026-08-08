@@ -25,7 +25,9 @@ TOO MANY ARGS - fuzz_crash_083.md:3:11:3:18
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
  └───────────────────────────────────────────────────── fuzz_crash_083.md:1:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌─────────────────────────┐

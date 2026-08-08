@@ -161,7 +161,9 @@ NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
  │                                                                            │
  └──────────────────────────────────────────────────────── everything.md:12:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌──────────────────────────────────────────────┐
@@ -183,7 +185,9 @@ NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
  │                                                                            │
  └──────────────────────────────────────────────────────── everything.md:24:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌─────────────────┐
