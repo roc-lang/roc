@@ -119,6 +119,9 @@ jobs:
       - name: Run Playground Tests
         run: zig build run-test-playground -Doptimize=ReleaseSmall -- --verbose
 
+      - name: Run dedicated REPL WebAssembly tests
+        run: zig build run-test-repl-wasm
+
       - name: Run echo.wasm integration test
         run: zig build run-test-echo-wasm
 

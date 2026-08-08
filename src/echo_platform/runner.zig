@@ -339,6 +339,7 @@ fn runEchoView(
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
 
     if (echo_env.inline_expect_failed) return 1;

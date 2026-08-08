@@ -256,7 +256,7 @@ const CliMainError =
     fmt.FormatStdinError ||
     ReplLine.ReadLineError ||
     eval.BuiltinModules.InitError ||
-    eval.test_helpers.TestHelperError ||
+    eval.Inspected.Error ||
     ipc.CoordinationError ||
     ipc.platform.SharedMemoryError ||
     lir.LirImage.ImageError ||
@@ -6218,6 +6218,7 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     ops.crash(message);
 }
@@ -6240,7 +6241,15 @@ fn evaluateLirImageEntrypoint(
             }
             unreachable;
         },
-        error.OutOfMemory, error.RuntimeError, error.ComptimeExhaustiveness, error.DivisionByZero, error.Crash, error.ExpectErr => {
+        error.OutOfMemory,
+        error.RuntimeError,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.Crash,
+        error.ExpectErr,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
+        => {
             reportCliInterpreterError(ops, &interpreter, @errorCast(err));
             return;
         },
@@ -11501,6 +11510,7 @@ fn interpreterTestFailureMessage(
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     return try allocator.dupe(u8, message);
 }
@@ -11527,7 +11537,7 @@ fn appendFailedCliTestResult(
 
 fn copyCliTestTranscriptEventsFromEval(
     allocator: Allocator,
-    events: []const eval.test_helpers.BoolRootEvent,
+    events: []const eval.Inspected.BoolRootEvent,
 ) Allocator.Error![]CliTestTranscriptEvent {
     if (events.len == 0) return &.{};
 
@@ -11742,8 +11752,10 @@ fn runInterpreterTestRoots(
                 error.ComptimeExhaustiveness,
                 error.Crash,
                 error.DivisionByZero,
+                error.InvalidHostedFunctionSignature,
                 error.OutOfMemory,
                 error.RuntimeError,
+                error.UnsupportedHostedFunction,
                 => run.region,
             };
             const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
@@ -11759,8 +11771,10 @@ fn runInterpreterTestRoots(
                 error.ComptimeExhaustiveness,
                 error.DivisionByZero,
                 error.ExpectErr,
+                error.InvalidHostedFunctionSignature,
                 error.OutOfMemory,
                 error.RuntimeError,
+                error.UnsupportedHostedFunction,
                 => blk: {
                     message_owned = false;
                     break :blk message;
@@ -11839,7 +11853,7 @@ fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult)
 fn cliTestResultItemFromEval(
     ctx: *CliCtx,
     run: CliTestRootRun,
-    eval_result: eval.test_helpers.BoolRootEvalResult,
+    eval_result: eval.Inspected.BoolRootEvalResult,
 ) Allocator.Error!CliTestResultItem {
     var transcript: []const CliTestTranscriptEvent = try copyCliTestTranscriptEventsFromEval(ctx.gpa, eval_result.events);
     errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
@@ -11892,7 +11906,7 @@ fn cliTestResultItemFromEval(
 fn appendEvalResultForRun(
     ctx: *CliCtx,
     run: CliTestRootRun,
-    eval_result: eval.test_helpers.BoolRootEvalResult,
+    eval_result: eval.Inspected.BoolRootEvalResult,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
 ) Allocator.Error!void {
@@ -11911,7 +11925,7 @@ fn runCompiledTestRoots(
     summary: *CliTestRunSummary,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) Allocator.Error!void {
-    var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
+    var bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
 
     for (root_runs, 0..) |run, i| {
@@ -11924,21 +11938,21 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.test_helpers.devEvalBoolRootsWithTiming(
+        .dev => eval.Inspected.devEvalBoolRootsWithTiming(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             bool_roots,
             dev_timing,
         ),
-        .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
+        .llvm_size => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             bool_roots,
             .size,
         ),
-        .llvm_speed => eval.test_helpers.llvmEvalBoolRoots(
+        .llvm_speed => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
@@ -11979,6 +11993,7 @@ fn runCompiledTestRoots(
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -12032,6 +12047,7 @@ fn runCompiledTestRoots(
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -12049,7 +12065,7 @@ fn runCompiledTestRoots(
             return;
         },
     };
-    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
 
     for (root_runs, eval_results) |run, eval_result| {
         try appendEvalResultForRun(ctx, run, eval_result, results, summary);
@@ -12180,7 +12196,7 @@ fn runLlvmLoweredTestModulesOnce(
 ) ReportRenderError!void {
     if (lowered_modules.len == 0) return;
 
-    var bool_modules = std.ArrayList(eval.test_helpers.BoolRootModule).empty;
+    var bool_modules = std.ArrayList(eval.Inspected.BoolRootModule).empty;
     defer {
         for (bool_modules.items) |module| {
             ctx.gpa.free(@constCast(module.roots));
@@ -12192,7 +12208,7 @@ fn runLlvmLoweredTestModulesOnce(
     defer live_runs.deinit(ctx.gpa);
 
     for (lowered_modules) |*lowered_module| {
-        const bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, lowered_module.root_runs.len);
+        const bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, lowered_module.root_runs.len);
         errdefer ctx.gpa.free(bool_roots);
         for (lowered_module.root_runs, 0..) |run, root_index| {
             bool_roots[root_index] = .{
@@ -12213,8 +12229,8 @@ fn runLlvmLoweredTestModulesOnce(
         });
     }
 
-    var completion_callback: ?eval.test_helpers.BoolRootCompletionCallback = null;
-    var event_callback: ?eval.test_helpers.BoolRootEventCallback = null;
+    var completion_callback: ?eval.Inspected.BoolRootCompletionCallback = null;
+    var event_callback: ?eval.Inspected.BoolRootEventCallback = null;
     if (live_output) |live| {
         live.setRuns(live_runs.items);
         completion_callback = .{
@@ -12228,7 +12244,7 @@ fn runLlvmLoweredTestModulesOnce(
     }
     defer if (live_output) |live| live.clearRuns();
 
-    const eval_results = eval.test_helpers.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
+    const eval_results = eval.Inspected.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
         ctx.gpa,
         bool_modules.items,
         switch (mode) {
@@ -12272,6 +12288,7 @@ fn runLlvmLoweredTestModulesOnce(
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -12325,6 +12342,7 @@ fn runLlvmLoweredTestModulesOnce(
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -12366,7 +12384,7 @@ fn runLlvmLoweredTestModulesOnce(
             return;
         },
     };
-    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
     if (live_output) |live| try live.checkError();
 
     var eval_index: usize = 0;
@@ -14358,7 +14376,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn publishEvalResult(
         self: *CliOptimizedLiveTestOutput,
         call_index: usize,
-        eval_result: eval.test_helpers.BoolRootEvalResult,
+        eval_result: eval.Inspected.BoolRootEvalResult,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
             std.debug.panic("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
@@ -14399,7 +14417,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn publishEvent(
         self: *CliOptimizedLiveTestOutput,
         call_index: usize,
-        event_view: eval.test_helpers.BoolRootEventView,
+        event_view: eval.Inspected.BoolRootEventView,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
             std.debug.panic("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
@@ -14409,6 +14427,7 @@ const CliOptimizedLiveTestOutput = struct {
             .dbg => |payload| .{ .stream = .stderr, .kind = .dbg, .payload = payload },
             .expect_failed => |payload| .{ .stream = .stderr, .kind = .expect_failed, .payload = payload },
             .crashed => |payload| .{ .stream = .stderr, .kind = .crashed, .payload = payload },
+            .effect => unreachable,
         };
 
         self.lock();
@@ -14423,7 +14442,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn completionCallback(
         context: *anyopaque,
         call_index: usize,
-        eval_result: *const eval.test_helpers.BoolRootEvalResult,
+        eval_result: *const eval.Inspected.BoolRootEvalResult,
     ) void {
         const self: *CliOptimizedLiveTestOutput = @ptrCast(@alignCast(context));
         self.publishEvalResult(call_index, eval_result.*);
@@ -14432,7 +14451,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn eventCallback(
         context: *anyopaque,
         call_index: usize,
-        event: eval.test_helpers.BoolRootEventView,
+        event: eval.Inspected.BoolRootEventView,
     ) void {
         const self: *CliOptimizedLiveTestOutput = @ptrCast(@alignCast(context));
         self.publishEvent(call_index, event);
@@ -14840,7 +14859,10 @@ fn processReplInput(
     defer session.freeStatementSlices(statements);
 
     for (statements) |statement| {
-        const result = try session.stepWithConfig(statement, report_config);
+        const result = if (parseReplCommand(statement)) |command|
+            try session.executeCommandWithConfig(command, report_config)
+        else
+            try session.stepWithConfig(statement, report_config);
         defer result.deinit(ctx.gpa);
 
         switch (result) {
@@ -14868,6 +14890,25 @@ fn processReplInput(
     }
 
     return false;
+}
+
+/// Parse terminal-only commands before handing Roc source to `ReplSession`.
+/// Other frontends use their own controls and call language stepping directly.
+fn parseReplCommand(input: []const u8) ?ReplSession.Command {
+    const line = std.mem.trim(u8, input, " \t\r\n");
+    if (std.mem.eql(u8, line, ":help")) return .help;
+    if (std.mem.eql(u8, line, ":defs")) return .definitions;
+    if (std.mem.startsWith(u8, line, ":t ")) {
+        return .{ .type_of = std.mem.trim(u8, line[3..], " \t") };
+    }
+    if (std.mem.eql(u8, line, ":exit") or
+        std.mem.eql(u8, line, ":quit") or
+        std.mem.eql(u8, line, ":q") or
+        std.mem.eql(u8, line, "exit"))
+    {
+        return .exit;
+    }
+    return null;
 }
 
 fn replReportingConfig(ctx: *CliCtx, mode: ReplMode) reporting.ReportingConfig {

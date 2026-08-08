@@ -173,6 +173,7 @@ fn appendEncodedRun(
             .dbg => 0,
             .expect_failed => 1,
             .crashed => 2,
+            .effect => unreachable,
         };
         const payload = event.bytes();
         const event_header: EventHeader = .{
@@ -343,8 +344,10 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
         error.RuntimeError,
+        error.UnsupportedHostedFunction,
         => return err,
     };
     switch (eval_result) {
@@ -430,23 +433,23 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
         switch (expected) {
             .dbg => |msg| switch (actual) {
                 .dbg => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                .expect_failed, .crashed => return false,
+                .expect_failed, .crashed, .effect => return false,
             },
             .dbg_contains => |fragment| switch (actual) {
                 .dbg => |actual_msg| if (std.mem.find(u8, actual_msg, fragment) == null) return false,
-                .expect_failed, .crashed => return false,
+                .expect_failed, .crashed, .effect => return false,
             },
             .dbg_any => switch (actual) {
                 .dbg => {},
-                .expect_failed, .crashed => return false,
+                .expect_failed, .crashed, .effect => return false,
             },
             .expect_failed => |msg| switch (actual) {
                 .expect_failed => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                .dbg, .crashed => return false,
+                .dbg, .crashed, .effect => return false,
             },
             .crashed => |msg| switch (actual) {
                 .crashed => |actual_msg| if (!std.mem.eql(u8, msg, actual_msg)) return false,
-                .dbg, .expect_failed => return false,
+                .dbg, .expect_failed, .effect => return false,
             },
         }
     }
@@ -853,6 +856,7 @@ fn printRecordedRun(run: RuntimeHostEnv.RecordedRun) void {
                 std.debug.print("crashed=", .{});
                 printEscapedBytes(msg);
             },
+            .effect => unreachable,
         }
     }
     std.debug.print("]", .{});

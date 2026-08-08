@@ -159,6 +159,8 @@ fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
         error.TempFileError,
         error.LinkFailed,
         error.UnsupportedLowLevel,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.TestExpectedEqual,
         error.TestUnexpectedResult,
         => .other,
