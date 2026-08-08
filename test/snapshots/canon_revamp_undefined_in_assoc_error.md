@@ -17,7 +17,7 @@ Foo := [Whatever].{
 NAME NOT IN SCOPE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
 
--- [×] name not in scope --------- canon_revamp_undefined_in_assoc_error.md:3:18
+── ✗ name not in scope ─────────── canon_revamp_undefined_in_assoc_error.md:3:18
 
 Nothing is named `ghostName` in this scope.
 

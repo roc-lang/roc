@@ -91,7 +91,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
 
--- [Δ] duplicate definition ------------------- can_import_exposing_types.md:1:1
+── ⚠ duplicate definition ───────────────────── can_import_exposing_types.md:1:1
 
 The name `Json` is being redeclared here:
 
@@ -104,7 +104,7 @@ In this scope, `Json` was already defined here (can_import_exposing_types.md:1:1
 import json.Json exposing [Value, Error, Config]
 ^
 
--- [×] undeclared type ----------------------- can_import_exposing_types.md:6:24
+── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:24
 
 The type `Value` is not declared in this scope.
 
@@ -112,7 +112,7 @@ parseJson : Str -> Try(Value, Error)
                        ^^^^^
 
 
--- [×] undeclared type ----------------------- can_import_exposing_types.md:6:31
+── ✗ undeclared type ───────────────────────── can_import_exposing_types.md:6:31
 
 The type `Error` is not declared in this scope.
 
@@ -120,7 +120,7 @@ parseJson : Str -> Try(Value, Error)
                               ^^^^^
 
 
--- [×] name not in scope --------------------- can_import_exposing_types.md:7:21
+── ✗ name not in scope ─────────────────────── can_import_exposing_types.md:7:21
 
 Nothing is named `parse` in this scope.
 
@@ -129,7 +129,7 @@ parseJson = |input| Json.parse(input)
 
 Is it misspelled, or is there an import missing?
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:10:17
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:17
 
 The type `Request` is not declared in this scope.
 
@@ -137,7 +137,7 @@ handleRequest : Request -> Response
                 ^^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:10:28
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:28
 
 The type `Response` is not declared in this scope.
 
@@ -145,7 +145,7 @@ handleRequest : Request -> Response
                            ^^^^^^^^
 
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:12:14
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:12:14
 
 Nothing is named `decode` in this scope.
 
@@ -154,7 +154,7 @@ result = Json.decode(req.body)
 
 Is it misspelled, or is there an import missing?
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:14:22
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:14:22
 
 Nothing is named `ok` in this scope.
 
@@ -163,7 +163,7 @@ Ok(value) => Http.ok(value)
 
 Is it misspelled, or is there an import missing?
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:15:23
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:15:23
 
 Nothing is named `badRequest` in this scope.
 
@@ -172,7 +172,7 @@ Err(error) => Http.badRequest(error)
 
 Is it misspelled, or is there an import missing?
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:20:15
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:15
 
 The type `Config` is not declared in this scope.
 
@@ -180,7 +180,7 @@ processData : Config, List(Value) -> Try(List(Value), Error)
               ^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:20:28
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:28
 
 The type `Value` is not declared in this scope.
 
@@ -188,7 +188,7 @@ processData : Config, List(Value) -> Try(List(Value), Error)
                            ^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:20:47
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:47
 
 The type `Value` is not declared in this scope.
 
@@ -196,7 +196,7 @@ processData : Config, List(Value) -> Try(List(Value), Error)
                                               ^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:20:55
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:55
 
 The type `Error` is not declared in this scope.
 
@@ -204,7 +204,7 @@ processData : Config, List(Value) -> Try(List(Value), Error)
                                                       ^^^^^
 
 
--- [×] does not exist ------------------------ can_import_exposing_types.md:22:5
+── ✗ does not exist ────────────────────────── can_import_exposing_types.md:22:5
 
 `List.mapTry` does not exist.
 
@@ -213,7 +213,7 @@ List.mapTry(
 
 `List` is in scope, but it has no associated `mapTry`.
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:24:13
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:24:13
 
 Nothing is named `validateWith` in this scope.
 
@@ -222,7 +222,7 @@ Nothing is named `validateWith` in this scope.
 
 Is it misspelled, or is there an import missing?
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:29:18
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:29:18
 
 The type `Config` is not declared in this scope.
 
@@ -230,7 +230,7 @@ jsonConfig : Config,
              ^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:30:18
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:30:18
 
 The type `Status` is not declared in this scope.
 
@@ -238,7 +238,7 @@ httpStatus : Status,
              ^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:31:23
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:31:23
 
 The type `Response` is not declared in this scope.
 
@@ -246,7 +246,7 @@ defaultResponse : Response,
                   ^^^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:35:16
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:35:16
 
 The type `Config` is not declared in this scope.
 
@@ -254,7 +254,7 @@ createClient : Config -> Http.Client
                ^^^^^^
 
 
--- [×] mod not found --------------------- can_import_exposing_types.md:35:30
+── ✗ mod not found ─────────────────────── can_import_exposing_types.md:35:30
 
 This `Client` type is declared to be in `http.Client`, which does not exist.
 
@@ -262,7 +262,7 @@ createClient : Config -> Http.Client
                              ^^^^^^^
 
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:36:25
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:36:25
 
 Nothing is named `clientWith` in this scope.
 
@@ -271,7 +271,7 @@ createClient = |config| Http.clientWith(config)
 
 Is it misspelled, or is there an import missing?
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:39:18
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:39:18
 
 The type `Response` is not declared in this scope.
 
@@ -279,7 +279,7 @@ handleResponse : Response -> Str
                  ^^^^^^^^
 
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:42:23
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:42:23
 
 Nothing is named `statusToString` in this scope.
 
@@ -288,7 +288,7 @@ Ok(status) => Http.statusToString(status)
 
 Is it misspelled, or is there an import missing?
 
--- [×] does not exist ----------------------- can_import_exposing_types.md:43:23
+── ✗ does not exist ───────────────────────── can_import_exposing_types.md:43:23
 
 `Error.toString` does not exist.
 
@@ -296,7 +296,7 @@ Err(error) => Error.toString(error)
               ^^^^^^^^^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:47:19
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:19
 
 The type `Value` is not declared in this scope.
 
@@ -304,7 +304,7 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                   ^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:47:26
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:26
 
 The type `Error` is not declared in this scope.
 
@@ -312,7 +312,7 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                          ^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:47:34
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:34
 
 The type `Status` is not declared in this scope.
 
@@ -320,7 +320,7 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                                  ^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:47:48
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:48
 
 The type `Response` is not declared in this scope.
 
@@ -328,7 +328,7 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                                                ^^^^^^^^
 
 
--- [×] undeclared type ---------------------- can_import_exposing_types.md:47:58
+── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:47:58
 
 The type `Error` is not declared in this scope.
 
@@ -336,7 +336,7 @@ combineTrys : Try(Value, Error), Status -> Try(Response, Error)
                                                          ^^^^^
 
 
--- [×] name not in scope -------------------- can_import_exposing_types.md:50:33
+── ✗ name not in scope ────────────────────── can_import_exposing_types.md:50:33
 
 Nothing is named `to_str` in this scope.
 

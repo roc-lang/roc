@@ -11,7 +11,7 @@ app [main!] { roc: platform "../main.roc" }
 RESERVED DEPENDENCY NAME - app_header__roc_version_reserved.md:1:15:1:42
 # PROBLEMS
 
--- [×] reserved dependency name ------- app_header__roc_version_reserved.md:1:15
+── ✗ reserved dependency name ───────── app_header__roc_version_reserved.md:1:15
 
 I was parsing a dependency record, and `roc` is used as the name of a platform
 or package.

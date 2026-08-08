@@ -11,7 +11,7 @@ x : { ..a, }
 DECLARATION HAS NO VALUE - fmt_record_type_extension_trailing_comma_issue_9374.md:1:1:1:13
 # PROBLEMS
 
--- [Δ] declaration has no value ----- fmt_record_type_extension_trailing_comma_issue_9374.md:1:1
+── ⚠ declaration has no value ───── fmt_record_type_extension_trailing_comma_issue_9374.md:1:1
 
 This declaration has a type annotation but no implementation.
 

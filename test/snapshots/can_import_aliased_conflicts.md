@@ -18,7 +18,7 @@ DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:28
 NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
 # PROBLEMS
 
--- [Δ] duplicate definition ---------------- can_import_aliased_conflicts.md:2:1
+── ⚠ duplicate definition ────────────────── can_import_aliased_conflicts.md:2:1
 
 The name `MyMod` is being redeclared here:
 
@@ -31,7 +31,7 @@ In this scope, `MyMod` was already defined here (can_import_aliased_conflicts.md
 import json.Json as MyMod
 ^
 
--- [×] name not in scope ------------------- can_import_aliased_conflicts.md:5:9
+── ✗ name not in scope ───────────────────── can_import_aliased_conflicts.md:5:9
 
 Nothing is named `parse` in this scope.
 

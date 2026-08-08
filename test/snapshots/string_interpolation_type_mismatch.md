@@ -14,7 +14,7 @@ y = "value: ${x}"
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
 
--- [×] type mismatch ---------------- string_interpolation_type_mismatch.md:4:15
+── ✗ type mismatch ────────────────── string_interpolation_type_mismatch.md:4:15
 
 This expression is used in an unexpected way.
 

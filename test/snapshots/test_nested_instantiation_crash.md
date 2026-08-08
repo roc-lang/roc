@@ -24,7 +24,7 @@ answer = composed([42])
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
 
--- [×] type mismatch ------------------ test_nested_instantiation_crash.md:12:16
+── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
 
 This expression is used in an unexpected way.
 

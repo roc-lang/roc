@@ -12,7 +12,7 @@ MOD NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 # PROBLEMS
 
--- [×] mod not found ----------- package_header_nonempty_singleline_1.md:1:21
+── ✗ mod not found ───────────── package_header_nonempty_singleline_1.md:1:21
 
 The mod `SomeType` was not found in this Roc project.
 
@@ -20,7 +20,7 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
                     ^^^^^^^^
 
 
--- [×] exposed but not defined ---- package_header_nonempty_singleline_1.md:1:10
+── ✗ exposed but not defined ────── package_header_nonempty_singleline_1.md:1:10
 
 The mod header says that `something` is exposed, but it is not defined
 anywhere in this mod.

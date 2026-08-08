@@ -13,7 +13,7 @@ if bool {
 MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
 
--- [×] missing method -------------- if_then_else_simple_block_formatting.md:3:8
+── ✗ missing method ──────────────── if_then_else_simple_block_formatting.md:3:8
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

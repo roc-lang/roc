@@ -11,7 +11,7 @@ r = "a"..<"z"
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
 
--- [×] missing method ------------------------ range_missing_method_error.md:1:5
+── ✗ missing method ────────────────────────── range_missing_method_error.md:1:5
 
 The value before this `..<` operator has a type that doesn't have a
 `range_exclusive` method.

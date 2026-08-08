@@ -16,7 +16,7 @@ DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
 MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 
--- [×] file not found ------------------------------ inline_ingested_file.md:1:1
+── ✗ file not found ──────────────────────────────── inline_ingested_file.md:1:1
 
 The file users.json was not found.
 
@@ -25,7 +25,7 @@ import "users.json" as data : Str
 
 Make sure the file exists relative to your source file:
 
--- [Δ] duplicate definition ------------------------ inline_ingested_file.md:2:1
+── ⚠ duplicate definition ────────────────────────── inline_ingested_file.md:2:1
 
 The name `Json` is being redeclared here:
 
@@ -38,7 +38,7 @@ In this scope, `Json` was already defined here (inline_ingested_file.md:1:1):
 import "users.json" as data : Str
 ^
 
--- [×] missing method ------------------------------ inline_ingested_file.md:4:7
+── ✗ missing method ──────────────────────────────── inline_ingested_file.md:4:7
 
 This is trying to dispatch a method named `parser_for` on an unresolved type
 variable, but unresolved type variables have no methods.

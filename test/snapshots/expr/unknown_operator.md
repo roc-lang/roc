@@ -11,7 +11,7 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - unknown_operator.md:1:4:1:5
 # PROBLEMS
 
--- [×] unexpected expression syntax -------------------- unknown_operator.md:1:4
+── ✗ unexpected expression syntax ────────────────────── unknown_operator.md:1:4
 
 I was parsing an expression, and this token cannot start an expression here.
 

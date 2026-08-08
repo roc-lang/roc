@@ -20,7 +20,7 @@ UNEXPECTED STATEMENT - fuzz_crash_059.md:2:15:2:16
 MOD NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
 
--- [×] unexpected statement ------------------------------ fuzz_crash_059.md:2:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -36,7 +36,7 @@ For example:
 I found `if` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_059.md:2:6
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:6
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -51,7 +51,7 @@ For example:
 
 I found `0` here.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_059.md:2:7
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:7
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -66,7 +66,7 @@ For example:
 
 I found `{` here.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_059.md:2:8
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:8
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -83,7 +83,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- [×] unexpected statement ------------------------------ fuzz_crash_059.md:2:9
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:9
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -99,7 +99,7 @@ For example:
 I found `else` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_059.md:2:13
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -114,7 +114,7 @@ For example:
 
 I found `|` here.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_059.md:2:14
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:14
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -129,7 +129,7 @@ For example:
 
 I found `|` here.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_059.md:2:15
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:15
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -144,7 +144,7 @@ For example:
 
 I found `0` here.
 
--- [×] mod not found --------------------------------- fuzz_crash_059.md:1:20
+── ✗ mod not found ─────────────────────────────────── fuzz_crash_059.md:1:20
 
 The mod `B` was not found in this Roc project.
 

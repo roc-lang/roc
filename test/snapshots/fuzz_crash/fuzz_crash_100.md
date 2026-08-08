@@ -13,7 +13,7 @@ T := [].{
 INVALID RECURSIVE TYPE - fuzz_crash_100.md:2:2:2:9
 # PROBLEMS
 
--- [×] invalid recursive type ---------------------------- fuzz_crash_100.md:2:2
+── ✗ invalid recursive type ────────────────────────────── fuzz_crash_100.md:2:2
 
 The nominal type T.A refers to itself in a way that would make it infinite.
 

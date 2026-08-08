@@ -11,7 +11,7 @@ type=expr
 UNCLOSED STRING - parse_unclosed_string.md:1:1:1:7
 # PROBLEMS
 
--- [×] unclosed string ---------------------------- parse_unclosed_string.md:1:1
+── ✗ unclosed string ────────────────────────────── parse_unclosed_string.md:1:1
 
 This string is missing a closing quote.
 

@@ -11,7 +11,7 @@ d=(0->X .a)
 TYPE MISMATCH - fuzz_crash_092.md:1:4:1:8
 # PROBLEMS
 
--- [×] type mismatch ------------------------------------- fuzz_crash_092.md:1:4
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_092.md:1:4
 
 This is not a record, so it does not have any fields to access.
 

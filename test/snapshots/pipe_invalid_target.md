@@ -11,7 +11,7 @@ type=expr
 EXPECTED PIPE TARGET - pipe_invalid_target.md:1:6:1:7
 # PROBLEMS
 
--- [×] expected pipe target ------------------------- pipe_invalid_target.md:1:6
+── ✗ expected pipe target ─────────────────────────── pipe_invalid_target.md:1:6
 
 I was parsing a pipe expression, and I expected a name or parenthesized
 expression after `|>`.

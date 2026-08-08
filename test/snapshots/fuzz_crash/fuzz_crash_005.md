@@ -11,7 +11,7 @@ modu
 UNEXPECTED STATEMENT - fuzz_crash_005.md:1:1:1:5
 # PROBLEMS
 
--- [×] unexpected statement ------------------------------ fuzz_crash_005.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_005.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 

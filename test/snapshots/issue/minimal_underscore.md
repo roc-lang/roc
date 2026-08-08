@@ -11,7 +11,7 @@ BadType := _
 UNDERSCORE IN TYPE ALIAS - minimal_underscore.md:1:1:1:1
 # PROBLEMS
 
--- [×] underscore in type alias ---------------------- minimal_underscore.md:1:1
+── ✗ underscore in type alias ──────────────────────── minimal_underscore.md:1:1
 
 Underscores are not allowed in type alias declarations.
 

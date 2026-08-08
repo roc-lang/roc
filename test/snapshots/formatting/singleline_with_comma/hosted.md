@@ -17,7 +17,7 @@ DECLARATION HAS NO VALUE - hosted.md:3:1:3:16
 DECLARATION HAS NO VALUE - hosted.md:4:1:4:16
 # PROBLEMS
 
--- [×] exposed but not defined ----------------------------------- hosted.md:1:9
+── ✗ exposed but not defined ───────────────────────────────────── hosted.md:1:9
 
 The mod header says that `a!` is exposed, but it is not defined anywhere in
 this mod.
@@ -28,7 +28,7 @@ hosted [a!, b!,]
 You can fix this by either defining `a!` in this mod, or by removing it from
 the list of exposed values.
 
--- [×] exposed but not defined ---------------------------------- hosted.md:1:13
+── ✗ exposed but not defined ──────────────────────────────────── hosted.md:1:13
 
 The mod header says that `b!` is exposed, but it is not defined anywhere in
 this mod.
@@ -39,7 +39,7 @@ hosted [a!, b!,]
 You can fix this by either defining `b!` in this mod, or by removing it from
 the list of exposed values.
 
--- [Δ] declaration has no value ---------------------------------- hosted.md:3:1
+── ⚠ declaration has no value ──────────────────────────────────── hosted.md:3:1
 
 This declaration has a type annotation but no implementation.
 
@@ -49,7 +49,7 @@ a! : Str => Str
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
--- [Δ] declaration has no value ---------------------------------- hosted.md:4:1
+── ⚠ declaration has no value ──────────────────────────────────── hosted.md:4:1
 
 This declaration has a type annotation but no implementation.
 

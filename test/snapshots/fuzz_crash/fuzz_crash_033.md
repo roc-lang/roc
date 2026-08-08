@@ -11,7 +11,7 @@ type=expr
 EXPECTED RECORD FIELD - fuzz_crash_033.md:1:6:1:14
 # PROBLEMS
 
--- [×] expected record field ----------------------------- fuzz_crash_033.md:1:6
+── ✗ expected record field ─────────────────────────────── fuzz_crash_033.md:1:6
 
 I was parsing a record expression, and I expected a lowercase field name.
 

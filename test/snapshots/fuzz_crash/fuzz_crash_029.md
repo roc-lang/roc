@@ -44,7 +44,7 @@ MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
 
--- [×] expected opening brace --------------------------- fuzz_crash_029.md:11:3
+── ✗ expected opening brace ───────────────────────────── fuzz_crash_029.md:11:3
 
 I was parsing a `packages` section, and I expected an opening `{`.
 
@@ -60,7 +60,7 @@ I found `vides` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] expected provides -------------------------------- fuzz_crash_029.md:12:3
+── ✗ expected provides ────────────────────────────────── fuzz_crash_029.md:12:3
 
 I was parsing a platform header, and I expected the `provides` section.
 
@@ -74,7 +74,7 @@ For example:
 
 I found `{` here.
 
--- [×] unexpected type syntax --------------------------- fuzz_crash_029.md:13:6
+── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_029.md:13:6
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -89,7 +89,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:13:7
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:13:7
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -104,7 +104,7 @@ For example:
 
 I found `..l` here.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:13:10
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:10
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -119,7 +119,7 @@ For example:
 
 I found `"` here.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:13:11
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:11
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -135,7 +135,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:13:13
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -152,7 +152,7 @@ I found `mmen` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:13:19
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -169,7 +169,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:14:2
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:14:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -185,7 +185,7 @@ For example:
 I found `provides` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:15:3
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:15:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -200,7 +200,7 @@ For example:
 
 I found `[` here.
 
--- [×] type application needs parentheses -------------- fuzz_crash_029.md:15:14
+── ✗ type application needs parentheses ──────────────── fuzz_crash_029.md:15:14
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -217,7 +217,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:15:16
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:16
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -232,7 +232,7 @@ For example:
 
 I found `(` here.
 
--- [×] unexpected statement ---------------------------- fuzz_crash_029.md:15:17
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:17
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -249,7 +249,7 @@ I found `n` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:16:1
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -266,7 +266,7 @@ I found `ar` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:16:3
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -282,7 +282,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
--- [×] unexpected statement ----------------------------- fuzz_crash_029.md:17:3
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:17:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -299,7 +299,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
--- [×] malformed type ----------------------------------- fuzz_crash_029.md:13:6
+── ✗ malformed type ───────────────────────────────────── fuzz_crash_029.md:13:6
 
 This type annotation is malformed or contains invalid syntax.
 
@@ -307,7 +307,7 @@ pkg: "..l", mmen  } # Cose
      ^
 
 
--- [Δ] declaration has no value ------------------------- fuzz_crash_029.md:13:1
+── ⚠ declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
 
 This declaration has a type annotation but no implementation.
 

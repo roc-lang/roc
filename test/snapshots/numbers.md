@@ -43,7 +43,7 @@ UPPERCASE BASE
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
 
--- [×] invalid number ------------------------------------------- numbers.md:8:5
+── ✗ invalid number ───────────────────────────────────────────── numbers.md:8:5
 
 This number literal does not fit in the inferred type.
 
@@ -54,7 +54,7 @@ The inferred type is:
 
     Dec
 
--- [×] invalid number ------------------------------------------- numbers.md:9:5
+── ✗ invalid number ───────────────────────────────────────────── numbers.md:9:5
 
 This number literal does not fit in the inferred type.
 
@@ -65,7 +65,7 @@ The inferred type is:
 
     Dec
 
--- [×] invalid number ------------------------------------------ numbers.md:10:5
+── ✗ invalid number ──────────────────────────────────────────── numbers.md:10:5
 
 This number literal does not fit in the inferred type.
 
@@ -76,7 +76,7 @@ The inferred type is:
 
     Dec
 
--- [×] invalid number ------------------------------------------ numbers.md:11:5
+── ✗ invalid number ──────────────────────────────────────────── numbers.md:11:5
 
 This number literal does not fit in the inferred type.
 

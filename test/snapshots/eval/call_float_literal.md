@@ -11,7 +11,7 @@ x = 12.34()
 MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
 
--- [×] missing method -------------------------------- call_float_literal.md:1:5
+── ✗ missing method ────────────────────────────────── call_float_literal.md:1:5
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

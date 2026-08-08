@@ -11,7 +11,7 @@ type=expr
 EXPECTED RECORD FIELD - error_malformed_syntax.md:1:18:1:19
 # PROBLEMS
 
--- [×] expected record field -------------------- error_malformed_syntax.md:1:18
+── ✗ expected record field ────────────────────── error_malformed_syntax.md:1:18
 
 I was parsing a record expression, and I expected a lowercase field name.
 
