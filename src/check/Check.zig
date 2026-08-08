@@ -13837,7 +13837,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected.withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
-                _ = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
+                const body_result = try self.unifyInContext(expected_func.ret, body_var, env, anno_context);
+                if (body_result.isProblem()) {
+                    try self.erroneous_value_exprs.put(self.gpa, lambda.body, {});
+                }
                 break :blk lambda_body_does_fx;
             } else blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, lambda_body_expected);
