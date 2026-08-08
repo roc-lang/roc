@@ -16973,14 +16973,18 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                 break :origin_blk .{ .unstable = pkg.root_file };
             };
             const coord_pkg = coord_entry.value_ptr.*;
-            for (coord_pkg.modules.items) |*module_state| {
+            for (coord_pkg.modules.items, 0..) |*module_state, module_idx| {
                 if (module_state.moduleEnv()) |mod_env| {
                     // Checked types record origins under the package-qualified
                     // module name; register the bare name too for roots whose
                     // modules are referenced unqualified.
+                    const is_platform_root = root_pkg.kind == .platform and
+                        std.mem.eql(u8, pkg_name, root_name) and
+                        coord_pkg.root_module_id != null and
+                        @as(usize, coord_pkg.root_module_id.?) == module_idx;
                     const origin = bump.extract.OriginMap.Origin{
                         .kind = origin_kind,
-                        .module_name = mod_env.module_name,
+                        .module_name = if (is_platform_root) "" else mod_env.module_name,
                     };
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
@@ -17003,6 +17007,18 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             .exposed_name = module.name,
             .module_env = module.semantic.env,
             .artifact = artifact,
+        });
+    }
+
+    if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
+        const root_module = build_env.rootModule(root_name) orelse return error.Internal;
+        const root_data = root_module.semanticData() orelse return error.Internal;
+        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        try inputs.append(ctx.gpa, .{
+            .exposed_name = root_module.name,
+            .module_env = root_data.env,
+            .artifact = root_artifact,
+            .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
 
@@ -17188,7 +17204,9 @@ fn generateDocs(
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocs(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path) catch |err| {
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+            .exposed_names = module_info.docs_exposed_names,
+        }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
             continue;
