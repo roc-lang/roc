@@ -28882,7 +28882,7 @@ const BodyContext = struct {
                     self.builder,
                     fn_view,
                     self.method_scope,
-                    ownerTemplateForConstFnDef(fn_value.fn_def),
+                    templateForConstFnDef(fn_value.fn_def),
                     self.graph,
                     self.draft,
                 );
@@ -28908,16 +28908,34 @@ const BodyContext = struct {
                     .exact_graph,
                 );
             },
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
-                self,
-                templateForConstFnDef(fn_value.fn_def),
-                fn_value.source_fn_ty,
-                fn_value.source_fn_key,
-                request_fn_node,
-                retained_evidence.vector,
-                .resolved,
-                .exact_graph,
-            )),
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => blk: {
+                const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+                var fn_ctx = try BodyContext.initWithMethodScope(
+                    self.allocator,
+                    self.builder,
+                    fn_view,
+                    self.method_scope,
+                    templateForConstFnDef(fn_value.fn_def),
+                    self.graph,
+                    self.draft,
+                );
+                fn_ctx.evidence = retained_evidence;
+                fn_ctx.inheritFrozenEmissionContext(self);
+                defer fn_ctx.deinit();
+                try fn_ctx.inheritActiveConstBinding(self);
+                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+                try fn_ctx.relateCheckedFunctionSourceToRequest(fn_value.source_fn_ty, request_fn_node);
+                break :blk try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
+                    &fn_ctx,
+                    templateForConstFnDef(fn_value.fn_def),
+                    fn_value.source_fn_ty,
+                    fn_value.source_fn_key,
+                    request_fn_node,
+                    retained_evidence.vector,
+                    .resolved,
+                    .exact_graph,
+                ));
+            },
         };
     }
 
@@ -29152,16 +29170,34 @@ const BodyContext = struct {
                     .exact_graph,
                 );
             },
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
-                self,
-                templateForConstFnDef(fn_value.fn_def),
-                template.source_fn_ty,
-                template.source_fn_key,
-                request_fn_node,
-                retained_evidence.vector,
-                .resolved,
-                .exact_graph,
-            )),
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => blk: {
+                const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+                var fn_ctx = try BodyContext.initWithMethodScope(
+                    self.allocator,
+                    self.builder,
+                    fn_view,
+                    self.method_scope,
+                    templateForConstFnDef(fn_value.fn_def),
+                    self.graph,
+                    self.draft,
+                );
+                fn_ctx.evidence = retained_evidence;
+                fn_ctx.inheritFrozenEmissionContext(self);
+                defer fn_ctx.deinit();
+                try fn_ctx.inheritActiveConstBinding(self);
+                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+                try fn_ctx.relateCheckedFunctionSourceToRequest(template.source_fn_ty, request_fn_node);
+                break :blk try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
+                    &fn_ctx,
+                    templateForConstFnDef(fn_value.fn_def),
+                    template.source_fn_ty,
+                    template.source_fn_key,
+                    request_fn_node,
+                    retained_evidence.vector,
+                    .resolved,
+                    .exact_graph,
+                ));
+            },
         };
     }
 

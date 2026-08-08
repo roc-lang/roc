@@ -2112,6 +2112,13 @@ consumer-side locals. Thus a restored function and the corresponding runtime
 successor use the same callable identity whenever their checked identity,
 monomorphic type, evidence, and captures agree.
 
+Restoration instantiates the stored `source_fn_ty` in the checked module that
+owns the stored `FnDef`, records that function interface on the restored exact
+request, and applies the interface before requesting a procedure body. The
+durable function type is the runtime request, not a substitute for this checked
+source mapping. In particular, a top-level or imported stored function does not
+gain its source interface from the body that happens to consume the constant.
+
 When Monotype has put a nested function in the nested definition table, that
 table is the only owner of the function body. Later value occurrences of the
 same `FnTemplate` are references to that nested definition; they do not rebuild
