@@ -2909,11 +2909,7 @@ const Lowerer = struct {
     }
 
     fn exprIsUninhabited(self: *const Lowerer, expr: Lifted.ExprId) bool {
-        const index = @intFromEnum(expr);
-        if (index >= self.solved.expr_is_uninhabited.items.len) {
-            Common.invariant("Lambda Solved omitted expression inhabitation data");
-        }
-        return self.solved.expr_is_uninhabited.items[index];
+        return self.solved.exprIsUninhabited(expr);
     }
 
     fn firstUninhabitedExprIndex(self: *const Lowerer, items: anytype) ?usize {

@@ -2611,12 +2611,23 @@ access after either interning point uses the dense identity rather than
 rehashing a type graph. Different representation inputs remain different exact
 types even when checking assigned them the same public Roc type.
 
+The construction lookup computes its graph-local input digest once. A vacant
+lookup carries that digest into registration, so building a cache miss does not
+walk and hash the same inputs again. Collision authority may compare the exact
+inputs reached by that digest, but registration may not independently repeat
+the lookup traversal.
+
 The same construction boundary appends the produced root to an explicit dense
 generated-representation registry. Representation-tier and durable-identity
 finalization iterate only that registry, resolving duplicate union classes and
 coalescing equal finalized content addresses as they go. They never search the
 full Monotype graph to rediscover which nodes are generated representations;
 unrelated graph nodes do no work in either pass.
+
+Recursive value slots and roots selected for the forced-dynamic fixed point are
+direct-indexed permanent-node sets. A query walks only the current union class
+and tests those sets; it never scans every recursive or forced root accumulated
+by the body.
 
 The durable generated-identity table owns one authoritative Monotype tree per
 finalized content address across body graphs. After identity finalization and

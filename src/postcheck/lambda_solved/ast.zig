@@ -111,6 +111,16 @@ pub const Program = struct {
             .runtime_schema_requests = self.runtime_schema_requests.items,
         };
     }
+
+    /// Return Lambda Solved's explicit inhabitation result for one lifted
+    /// expression.
+    pub fn exprIsUninhabited(self: *const Program, expr: Lifted.ExprId) bool {
+        const index = @intFromEnum(expr);
+        if (index >= self.expr_is_uninhabited.items.len) {
+            Common.invariant("Lambda Solved omitted expression inhabitation data");
+        }
+        return self.expr_is_uninhabited.items[index];
+    }
 };
 
 test "lambda solved ast declarations are referenced" {

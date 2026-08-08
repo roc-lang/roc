@@ -19945,7 +19945,8 @@ const BodyContext = struct {
         };
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
-        if (try self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
+        const lookup = try self.graph.lookupGeneratedIterator(public_iterator, kind, components, callable_evidence);
+        if (lookup.existing) |existing| {
             return existing;
         }
 
@@ -20000,7 +20001,7 @@ const BodyContext = struct {
             .kind = kind,
             .mint_depth = mint_depth,
         }, Context.fill);
-        try self.graph.registerGeneratedIterator(generated);
+        try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
         return generated;
     }
 
@@ -20061,7 +20062,8 @@ const BodyContext = struct {
         item_node: NodeId,
         public_source: solve.InstIteratorPublicSource,
     ) Allocator.Error!NodeId {
-        if (try self.graph.findGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null)) |existing| {
+        const lookup = try self.graph.lookupGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null);
+        if (lookup.existing) |existing| {
             return existing;
         }
         const Context = struct {
@@ -20107,7 +20109,7 @@ const BodyContext = struct {
             .item_node = item_node,
             .public_source = public_source,
         }, Context.fill);
-        try self.graph.registerGeneratedIterator(generated);
+        try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
         return generated;
     }
 

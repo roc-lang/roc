@@ -292,6 +292,14 @@ pub const RequestSubstitution = struct {
     produced: NodeId,
 };
 
+/// Result of hashing one complete generated-iterator construction request.
+/// A vacant result carries the digest into registration so a cache miss never
+/// hashes the same inputs twice.
+pub const GeneratedIteratorLookup = struct {
+    existing: ?NodeId,
+    digest: names.TypeDigest,
+};
+
 const RequestSubstitutionSpan = struct {
     start: u32,
     len: u32,
@@ -484,13 +492,13 @@ pub const InstGraph = struct {
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
     /// class and constructs the single forced-dynamic fixed point.
-    forced_dynamic_iterator_roots: std.ArrayList(NodeId),
+    forced_dynamic_iterator_roots: collections.DenseMap(NodeId, void),
     /// Permanent value-slot nodes that differ from the corresponding source
     /// slot on an explicit recursive edge. Function recursion and loop
-    /// feedback both append here; a later minted join touching one of these
-    /// slots proves that recursion grows the representation rather than merely
-    /// recurring over a fixed iterator.
-    recursive_argument_slots: std.ArrayList(NodeId),
+    /// feedback both mark this dense set; a later minted join touching one of
+    /// these slots proves that recursion grows the representation rather than
+    /// merely recurring over a fixed iterator.
+    recursive_argument_slots: collections.DenseMap(NodeId, void),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -531,8 +539,8 @@ pub const InstGraph = struct {
             .request_checked_sources = .empty,
             .request_substitution_spans = .empty,
             .request_substitutions = .empty,
-            .forced_dynamic_iterator_roots = .empty,
-            .recursive_argument_slots = .empty,
+            .forced_dynamic_iterator_roots = collections.DenseMap(NodeId, void).init(allocator),
+            .recursive_argument_slots = collections.DenseMap(NodeId, void).init(allocator),
         };
         return graph;
     }
@@ -580,8 +588,8 @@ pub const InstGraph = struct {
         self.request_substitutions.deinit(allocator);
         self.request_substitution_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
-        self.forced_dynamic_iterator_roots.deinit(allocator);
-        self.recursive_argument_slots.deinit(allocator);
+        self.forced_dynamic_iterator_roots.deinit();
+        self.recursive_argument_slots.deinit();
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
         self.imported_generated_iterator_nodes.deinit(allocator);
@@ -648,12 +656,50 @@ pub const InstGraph = struct {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
         };
-        if (public_named.args.len == 0) return null;
+        return (try self.lookupGeneratedIteratorFromNamed(
+            public_named,
+            kind,
+            components,
+            callable_evidence,
+        )).existing;
+    }
+
+    /// Look up an equal generated iterator and retain the computed digest for
+    /// allocation-free registration when the lookup is vacant.
+    pub fn lookupGeneratedIterator(
+        self: *InstGraph,
+        public_node: NodeId,
+        kind: Type.IteratorKind,
+        components: []const NodeId,
+        callable_evidence: ?names.TypeDigest,
+    ) Allocator.Error!GeneratedIteratorLookup {
+        const public_named = switch (self.content(public_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator lookup received a non-named public type"),
+        };
+        return self.lookupGeneratedIteratorFromNamed(
+            public_named,
+            kind,
+            components,
+            callable_evidence,
+        );
+    }
+
+    fn lookupGeneratedIteratorFromNamed(
+        self: *InstGraph,
+        public_named: InstNamed,
+        kind: Type.IteratorKind,
+        components: []const NodeId,
+        callable_evidence: ?names.TypeDigest,
+    ) Allocator.Error!GeneratedIteratorLookup {
+        if (public_named.args.len == 0) {
+            Common.invariant("generated iterator lookup received no public item argument");
+        }
         const digest = try self.generatedIteratorInternDigest(public_named, kind, components, callable_evidence);
         if (self.generated_iterator_intern.get(digest)) |candidates| {
             for (candidates.items) |candidate| {
                 if (try self.generatedIteratorMatches(candidate, public_named, kind, components, callable_evidence)) {
-                    return self.find(candidate);
+                    return .{ .existing = self.find(candidate), .digest = digest };
                 }
             }
         }
@@ -666,17 +712,29 @@ pub const InstGraph = struct {
             const candidates = self.generated_iterators_by_item.get(member) orelse continue;
             for (candidates.items) |candidate| {
                 if (try self.generatedIteratorMatches(candidate, public_named, kind, components, callable_evidence)) {
-                    return self.find(candidate);
+                    return .{ .existing = self.find(candidate), .digest = digest };
                 }
             }
         }
-        return null;
+        return .{ .existing = null, .digest = digest };
     }
 
     pub fn registerGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
         try self.generated_iterator_nodes.append(self.allocator, raw_node);
         try self.indexGeneratedIterator(raw_node);
+    }
+
+    /// Register a newly built iterator under the digest already computed by
+    /// its immediately preceding vacant lookup.
+    pub fn registerGeneratedIteratorAtDigest(
+        self: *InstGraph,
+        raw_node: NodeId,
+        digest: names.TypeDigest,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        try self.generated_iterator_nodes.append(self.allocator, raw_node);
+        try self.indexGeneratedIteratorAtDigest(raw_node, digest);
     }
 
     fn indexGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
@@ -696,6 +754,22 @@ pub const InstGraph = struct {
             provenance.components,
             provenance.callable_evidence,
         );
+        try self.indexGeneratedIteratorAtDigest(node, digest);
+    }
+
+    fn indexGeneratedIteratorAtDigest(
+        self: *InstGraph,
+        raw_node: NodeId,
+        digest: names.TypeDigest,
+    ) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator interner received a non-named node"),
+        };
+        if (named.args.len == 0) {
+            Common.invariant("generated iterator interner received no item argument");
+        }
         const digest_entry = try self.generated_iterator_intern.getOrPut(digest);
         if (!digest_entry.found_existing) digest_entry.value_ptr.* = .empty;
         for (digest_entry.value_ptr.items) |existing| {
@@ -1032,7 +1106,7 @@ pub const InstGraph = struct {
         for (active.args, initial_active_arg_classes, request.args, joined_args) |active_arg, initial_class, request_arg, *joined_arg| {
             joined_arg.* = try self.joinProducedTypeRepresentations(active_arg, request_arg);
             if (!initial_class.contains(request_arg)) {
-                try self.recursive_argument_slots.append(self.allocator, joined_arg.*);
+                try self.recursive_argument_slots.put(joined_arg.*, {});
             }
         }
         const joined_ret = try self.joinProducedTypeRepresentations(active.ret, request.ret);
@@ -1048,7 +1122,7 @@ pub const InstGraph = struct {
 
     pub fn markRecursiveValueSlot(self: *InstGraph, slot: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
-        try self.recursive_argument_slots.append(self.allocator, slot);
+        try self.recursive_argument_slots.put(slot, {});
     }
 
     const generated_iterator_mint_depth_limit: u8 = 16;
@@ -1108,13 +1182,14 @@ pub const InstGraph = struct {
                 if (named.args.len == 0) {
                     Common.invariant("generated iterator representation had no item argument");
                 }
-                if (try self.findGeneratedIterator(node, .forced_dynamic, &.{}, null)) |existing| {
+                const lookup = try self.lookupGeneratedIterator(node, .forced_dynamic, &.{}, null);
+                if (lookup.existing) |existing| {
                     if (self.find(existing) != node) {
                         try self.unify(node, existing);
                         continue;
                     }
                 }
-                try self.rewriteGeneratedIteratorAsForcedDynamic(node, named);
+                try self.rewriteGeneratedIteratorAsForcedDynamic(node, named, lookup.digest);
             } else {
                 if (item.depth == 0) {
                     Common.invariant("minted iterator representation had zero producer depth");
@@ -1127,9 +1202,17 @@ pub const InstGraph = struct {
     }
 
     fn iteratorRootRequiresForcedDynamic(self: *InstGraph, node: NodeId) bool {
-        const root = self.find(node);
-        for (self.forced_dynamic_iterator_roots.items) |candidate| {
-            if (self.find(candidate) == root) return true;
+        return self.classContainsMarkedNode(node, &self.forced_dynamic_iterator_roots);
+    }
+
+    fn classContainsMarkedNode(
+        self: *InstGraph,
+        node: NodeId,
+        marked: *const collections.DenseMap(NodeId, void),
+    ) bool {
+        var members = self.classMemberIterator(node);
+        while (members.next()) |member| {
+            if (marked.contains(member)) return true;
         }
         return false;
     }
@@ -1138,6 +1221,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         node: NodeId,
         source_named: InstNamed,
+        digest: names.TypeDigest,
     ) Allocator.Error!void {
         const provenance = source_named.generated_iterator orelse
             Common.invariant("forced-dynamic iterator rewrite lacked producer provenance");
@@ -1178,7 +1262,7 @@ pub const InstGraph = struct {
             },
             .declared_order = provenance.public_source.declared_order,
         } });
-        try self.indexGeneratedIterator(node);
+        try self.indexGeneratedIteratorAtDigest(node, digest);
     }
 
     fn forcedDynamicIteratorBackingNode(
@@ -4639,11 +4723,10 @@ pub const InstGraph = struct {
                                 Common.invariant("minted iterator join found backing on only one side");
                             }
 
-                            for (self.recursive_argument_slots.items) |slot| {
-                                const slot_root = self.find(slot);
-                                if (slot_root == left or slot_root == right) {
-                                    try self.forced_dynamic_iterator_roots.append(self.allocator, left);
-                                }
+                            if (self.classContainsMarkedNode(left, &self.recursive_argument_slots) or
+                                self.classContainsMarkedNode(right, &self.recursive_argument_slots))
+                            {
+                                try self.forced_dynamic_iterator_roots.put(left, {});
                             }
 
                             // A graph-owned producer still has the public-source
@@ -6433,17 +6516,11 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        for (self.graph.recursive_argument_slots.items) |slot| {
-            if (self.graph.find(slot) == node) return true;
-        }
-        return false;
+        return self.graph.classContainsMarkedNode(node, &self.graph.recursive_argument_slots);
     }
 
     fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        for (self.graph.forced_dynamic_iterator_roots.items) |root| {
-            if (self.graph.find(root) == node) return true;
-        }
-        return false;
+        return self.graph.classContainsMarkedNode(node, &self.graph.forced_dynamic_iterator_roots);
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
