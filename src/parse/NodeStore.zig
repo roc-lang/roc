@@ -112,6 +112,7 @@ const ExprNodeTag = enum {
     if_without_else,
     match,
     dbg,
+    crash,
     bin_op,
     block,
     ellipsis,
@@ -1248,6 +1249,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .dbg;
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
+        },
+        .crash => |c| {
+            node.tag = .crash;
+            node.region = c.region;
+            node.data.lhs = @intFromEnum(c.expr);
         },
         .record_builder => |rb| {
             node.tag = .record_builder;
@@ -2516,6 +2522,12 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .dbg => {
             return .{ .dbg = .{
+                .region = node.region,
+                .expr = @enumFromInt(node.data.lhs),
+            } };
+        },
+        .crash => {
+            return .{ .crash = .{
                 .region = node.region,
                 .expr = @enumFromInt(node.data.lhs),
             } };

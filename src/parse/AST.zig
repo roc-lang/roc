@@ -494,7 +494,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_close_curly_at_end_of_match => reportParseProblem(ctx, "Unclosed Match", "I was parsing a match expression, and the file ended before the closing `}`.", "Add a closing brace after the final match branch.", .{ .example = "match value {\n    Ok(x) => x\n}" }),
         .expected_open_curly_after_match => reportParseProblem(ctx, "Expected Match Body", "I was parsing a match expression, and I expected `{` after the matched value.", "Match branches are written inside braces after the expression being matched.", .{ .example = "match result {\n    Ok(x) => x\n    Err(_) => 0\n}" }),
         .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
-        .crash_statement_in_expr_position => reportParseProblem(ctx, "Crash Statement In Expression", "I was parsing an expression, but `crash` starts a statement.", "If you need to crash in expression position, wrap the crash statement in a block expression.", .{ .example = "{\n    crash \"unreachable\"\n}" }),
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
         .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
         .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
@@ -635,7 +634,6 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
-        crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
         /// `$name` idents are reassignable variables and cannot name record fields
@@ -2925,6 +2923,10 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
+    crash: struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
     record_builder: struct {
         mapper: Expr.Idx,
         fields: RecordField.Span,
@@ -3014,6 +3016,7 @@ pub const Expr = union(enum) {
             .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
+            .crash => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .nominal_record => |e| e.region,
@@ -3317,6 +3320,16 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .crash => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-crash");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);

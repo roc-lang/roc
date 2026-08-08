@@ -21063,10 +21063,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Generate code for a byte-list literal.
-        fn generateBytesLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!ValueLocation {
-            const bytes = self.store.getStringLiteral(literal);
-            const backing_bytes = self.store.getStringLiteralBacking(literal);
-            const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
+        fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!ValueLocation {
+            const bytes = self.store.getStringLiteral(literal.bytes);
+            const backing_bytes = self.store.getStringLiteralBacking(literal.bytes);
+            const whole_backing = literal.bytes.offset == 0 and @as(usize, literal.bytes.len) == backing_bytes.len;
             const base_offset = self.codegen.allocStackSlot(roc_list_size);
 
             const ptr_reg = try self.allocTempGeneral();
@@ -21080,35 +21080,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 switch (self.generation_mode) {
                     .native_execution => {
-                        const static_backing_bytes = self.staticStringEntry(literal.backing).bytes;
+                        const static_backing_bytes = self.staticStringEntry(literal.bytes.backing).bytes;
                         verifyStaticStringBytes(static_backing_bytes);
-                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.offset))));
+                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.bytes.offset))));
                     },
                     .shim_execution, .object_file => {
-                        const symbol_name = self.staticStringSymbol(literal.backing);
+                        const symbol_name = self.staticStringSymbol(literal.bytes.backing);
                         try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
-                        try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
+                        try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.bytes.offset);
                     },
                 }
                 try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
 
-                try self.codegen.emitLoadImm(ptr_reg, @intCast(bytes.len));
+                try self.codegen.emitLoadImm(ptr_reg, literal.len);
                 try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
 
                 switch (self.generation_mode) {
                     .native_execution => {
-                        const static_backing_bytes = self.staticStringEntry(literal.backing).bytes;
+                        const static_backing_bytes = self.staticStringEntry(literal.bytes.backing).bytes;
                         const cap_or_alloc = if (whole_backing)
-                            bytes.len << 1
+                            @as(usize, literal.len) << 1
                         else
                             @intFromPtr(static_backing_bytes.ptr) | 1;
                         try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
                     },
                     .shim_execution, .object_file => {
                         if (whole_backing) {
-                            try self.codegen.emitLoadImm(ptr_reg, @intCast(bytes.len << 1));
+                            try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << 1);
                         } else {
-                            const symbol_name = self.staticStringSymbol(literal.backing);
+                            const symbol_name = self.staticStringSymbol(literal.bytes.backing);
                             try self.codegen.emitLoadDataAddress(ptr_reg, symbol_name);
                             try self.emitAddUsizeImm(ptr_reg, ptr_reg, 1);
                         }
@@ -21120,7 +21120,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{
                 .struct_offset = base_offset,
                 .data_offset = 0,
-                .num_elements = @intCast(bytes.len),
+                .num_elements = literal.len,
             } };
         }
 

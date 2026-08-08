@@ -680,6 +680,82 @@ test "unify - a is flex_var and b is builtin" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
+test "unify - erroneous record field does not merge enclosing records" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const healthy_field = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    const erroneous_field = try env.module_env.types.freshFromContent(.err);
+    const healthy_record = try env.mkRecordClosed(&.{try env.mkRecordField("field", healthy_field)});
+    const erroneous_record = try env.mkRecordClosed(&.{try env.mkRecordField("field", erroneous_field)});
+    const healthy = try env.module_env.types.freshFromContent(healthy_record.content);
+    const erroneous = try env.module_env.types.freshFromContent(erroneous_record.content);
+
+    const result = try env.unify(healthy, erroneous);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expect(env.module_env.types.resolveVar(healthy).var_ != env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(healthy_field).desc.content);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(erroneous_field).desc.content);
+}
+
+test "unify - erroneous type fills an unconstrained flex placeholder" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const placeholder = try env.module_env.types.fresh();
+    const erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const result = try env.unify(placeholder, erroneous);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(placeholder).var_, env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(placeholder).desc.content);
+
+    const other_placeholder = try env.module_env.types.fresh();
+    const other_erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const other_result = try env.unify(other_erroneous, other_placeholder);
+
+    try std.testing.expectEqual(.ok, other_result);
+    try std.testing.expectEqual(env.module_env.types.resolveVar(other_placeholder).var_, env.module_env.types.resolveVar(other_erroneous).var_);
+    try std.testing.expectEqual(Content.err, env.module_env.types.resolveVar(other_placeholder).desc.content);
+}
+
+test "unify - erroneous type does not overwrite a constrained flex" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_var = try env.module_env.types.fresh();
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("method")),
+        .fn_var = method_var,
+        .origin = .{ .where_clause = .{} },
+    };
+    const constraints = try env.module_env.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const constrained = try env.module_env.types.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+    const erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const result = try env.unify(constrained, erroneous);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expect(env.module_env.types.resolveVar(constrained).var_ != env.module_env.types.resolveVar(erroneous).var_);
+    try std.testing.expectEqual(constraints, env.module_env.types.resolveVar(constrained).desc.content.flex.constraints);
+
+    const other_constrained = try env.module_env.types.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+    const other_erroneous = try env.module_env.types.freshFromContent(.err);
+
+    const other_result = try env.unify(other_erroneous, other_constrained);
+
+    try std.testing.expectEqual(.ok, other_result);
+    try std.testing.expect(env.module_env.types.resolveVar(other_constrained).var_ != env.module_env.types.resolveVar(other_erroneous).var_);
+    try std.testing.expectEqual(constraints, env.module_env.types.resolveVar(other_constrained).desc.content.flex.constraints);
+}
+
 // unification - structure/structure - builtin //
 
 test "unify - a & b are both str" {

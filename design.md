@@ -1347,6 +1347,16 @@ history; it never guesses which variables are source occurrences from their
 storage parents. Error recovery must use this explicit operation rather than
 calling ordinary union or writing a raw redirect.
 
+An already-erroneous operand cannot overwrite a solved type or a flex carrying
+constraints. Encountering `.err` against either terminates the current
+unification successfully for diagnostic recovery, before any enclosing
+structure is merged. An unconstrained flex placeholder may adopt `.err`; this
+is how an erroneous expression explicitly fills its owning binding or
+annotation slot without contaminating an independently constrained producer.
+Checker sites that own a reported error use `markErroneous` to poison the owning
+solved class directly. No successful ordinary unification propagates an
+existing `.err` into a type that already carries information.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -2573,6 +2583,14 @@ pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization.
+Each post-lift capture operand explicitly names the callee capture slot it
+supplies. Capture finalization preserves that key while rewriting the operand
+value and never infers the target slot from the value's own capture identity.
+At the lift boundary, each declared key's namespace states how it joins:
+source-authored and check-generated keys normalize once through the target slot's
+checked identity, while lift-generated keys already name the target's lifted
+slot and remain exact. After that boundary, capture recomputation accepts only
+lifted keys; it never retries a lookup in another identity namespace.
 
 Optional tag reachability uses a recursive abstract value tree. A struct field
 or tag payload carries the complete nested `ValueInfo` output for the value
@@ -3104,6 +3122,19 @@ the data segment. This is why a constant list consumed through `.iter()` can
 have zero runtime list allocation in a size cart even though the eval allocation
 harness, which does not perform final constant hoisting, observes one base-list
 allocation.
+
+Strings and flat scalar lists use one shared content-interned blob store.
+`List(U8)` therefore has the same constant-storage cost as a `Str` containing
+the same bytes, and equal string/list contents reuse one blob. A packed list
+view records its scalar encoding and item count separately from its byte
+view. Lists whose items contain pointers or structured values remain
+explicit child-node lists so their graph edges and sharing stay visible.
+
+When packed list views reach LIR, the shared literal backing records the maximum
+alignment required by every view. Each view offset must also satisfy its own
+item alignment. Static-data materialization aligns the backing to that
+maximum while keeping the Roc list length and capacity in items rather than
+bytes.
 
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves
@@ -3849,6 +3880,10 @@ Other solved-graph mutations:
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
+- `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
+  an already-reported error. It marks the checker node's solved class directly,
+  preserving the class-wide cascade suppression previously provided by
+  unifying that node with a fresh error variable.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
@@ -7330,8 +7365,15 @@ const StoredConstTemplate = struct {
 
 const ConstValue = union(enum) {
     scalar: ConstScalar,
-    string: StringLiteralId,
-    list: Span(ConstNodeId),
+    string: ConstBlobView,
+    list: union(enum) {
+        nodes: Span(ConstNodeId),
+        scalar_bytes: struct {
+            bytes: ConstBlobView,
+            len: u32,
+            item: ConstPackedScalar,
+        },
+    },
     tuple: Span(ConstNodeId),
     record: Span(ConstField),
     tag: ConstTag,
@@ -7340,6 +7382,13 @@ const ConstValue = union(enum) {
     fn_: ConstFn,
 };
 ```
+
+`ConstBlobView` is an `(interned blob id, byte offset, byte length)` view.
+Strings and packed scalar lists intern into the same exact-content namespace.
+Packed multi-byte scalars use little-endian checked-value bytes;
+this is target-independent `ConstStore` data, not a captured host allocation or
+backend-owned byte sequence. Post-check lowering validates the byte count
+against the scalar layout before making a runtime static-data view.
 
 `ConstScalar` is a closed checked scalar representation:
 

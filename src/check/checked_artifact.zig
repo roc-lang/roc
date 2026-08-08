@@ -2513,6 +2513,7 @@ pub const ConstNodeId = const_store.ConstNodeId;
 pub const ConstFnId = const_store.ConstFnId;
 pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
+pub const ConstList = const_store.ConstList;
 pub const ConstNamedType = const_store.NamedType;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
@@ -27968,7 +27969,9 @@ pub const CheckedModuleArtifact = struct {
     // evidence carries the `??` default identity
     // (`ConstStore.TypeField.default`), mirroring the Monotype
     // `Type.FieldDefault` axis (design.md "Defaulted Fields").
-    const serialized_layout_version: u32 = 58;
+    // Version 59 combines the optional/defaulted field layouts above with
+    // upstream's version-57 artifact change.
+    const serialized_layout_version: u32 = 59;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32324,8 +32327,8 @@ test "checked module keeps current compile-time ownership tables" {
     try std.testing.expect(@hasField(ConstTemplateTable, "templates"));
     try std.testing.expect(@hasField(ConstStore, "values"));
     try std.testing.expect(@hasField(ConstStore, "fns"));
-    try std.testing.expect(@hasField(ConstStore, "str_backing"));
-    try std.testing.expect(@hasField(ConstStore, "str_views"));
+    try std.testing.expect(@hasField(ConstStore, "blob_backing"));
+    try std.testing.expect(@hasField(ConstStore, "blob_views"));
 }
 
 fn testIndexId(comptime Id: type, index: usize) Id {
@@ -33913,8 +33916,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x63, 0xC9, 0xBC, 0xAA, 0xD9, 0x18, 0x24, 0x09, 0xBD, 0xCE, 0xB8, 0xC8, 0x4F, 0x6F, 0xEB, 0xF7,
-        0x70, 0xCC, 0x18, 0x05, 0xD0, 0x40, 0x2E, 0xB0, 0xBD, 0x92, 0x60, 0xB2, 0x6A, 0xDF, 0x78, 0xB0,
+        0xD9, 0x82, 0x0A, 0x3E, 0x45, 0xA3, 0x01, 0x27, 0x9E, 0x44, 0x4E, 0x21, 0xFA, 0xD8, 0xA7, 0xAC,
+        0x1C, 0xF4, 0x70, 0x5D, 0xFB, 0x46, 0x4D, 0xD7, 0x56, 0xEB, 0x6A, 0xDD, 0xD0, 0x22, 0x38, 0xA7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

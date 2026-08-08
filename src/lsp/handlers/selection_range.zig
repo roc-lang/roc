@@ -459,6 +459,9 @@ fn collectContainingRegionsFromExpr(
         .dbg => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
         },
+        .crash => |c| {
+            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
+        },
         .record_builder => |rb| {
             try collectContainingRegionsFromExpr(allocator, ast, rb.mapper, target_offset, regions);
             const fields = ast.store.recordFieldSlice(rb.fields);

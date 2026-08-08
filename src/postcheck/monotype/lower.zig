@@ -603,6 +603,14 @@ const EvidenceChain = struct {
     vector: []const SpecEvidence = &.{},
     parent: ?*const EvidenceChain = null,
 
+    fn atScope(self: *const EvidenceChain, scope: EvidenceScope) ?EvidenceChain {
+        var chain: ?*const EvidenceChain = self;
+        while (chain) |frame| : (chain = frame.parent) {
+            if (EvidenceScope.eql(frame.scope, scope)) return frame.*;
+        }
+        return null;
+    }
+
     fn at(self: *const EvidenceChain, ref: static_dispatch.EvidenceChainIndex) ?SpecEvidence {
         var chain: *const EvidenceChain = self;
         var depth = ref.depth;
@@ -623,12 +631,12 @@ fn rootEvidence(owner: names.ProcTemplate, vector: []const SpecEvidence) Evidenc
 
 fn enterEvidenceScope(
     builder: *Builder,
-    lexical_parent: EvidenceChain,
+    evidence: EvidenceChain,
     scope_id: checked.DispatchScopeId,
     checked_expr: checked.CheckedExprId,
     vector: []const SpecEvidence,
 ) Allocator.Error!EvidenceChain {
-    const owner = lexical_parent.scope.owner;
+    const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
     const raw_scope = @intFromEnum(scope_id);
     if (raw_scope >= view.templates.dispatch_scopes.len) {
@@ -652,11 +660,12 @@ fn enterEvidenceScope(
         .{ .generalized = parent }
     else
         .root;
-    if (!names.procedureTemplateRefEql(lexical_parent.scope.owner, owner) or
-        !std.meta.eql(lexical_parent.scope.lexical, expected_parent))
-    {
-        Common.invariant("local procedure evidence scope did not receive its checked lexical parent");
-    }
+    // A local use may come from a sibling scope. Its checked declaration
+    // parent, not the use-site head, owns the enclosing evidence depths.
+    const lexical_parent = evidence.atScope(.{
+        .owner = owner,
+        .lexical = expected_parent,
+    }) orelse Common.invariant("local procedure evidence omitted its checked lexical parent");
     const parent = try builder.evidence_arena.allocator().create(EvidenceChain);
     parent.* = lexical_parent;
     return .{
@@ -5052,7 +5061,15 @@ const Builder = struct {
             .crash,
             => true,
             .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
-            .list,
+            .list => |list| switch (list) {
+                .scalar_bytes => true,
+                .nodes => |children| blk: {
+                    for (children) |child| {
+                        if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                    }
+                    break :blk true;
+                },
+            },
             .tuple,
             .record,
             => |children| blk: {
@@ -5082,7 +5099,10 @@ const Builder = struct {
             => false,
             .str => |str| self.constStrNeedsStaticData(view, str),
             .fn_value => bare_fn == .allow,
-            .list => |items| items.len != 0,
+            .list => |list| switch (list) {
+                .nodes => |items| items.len != 0,
+                .scalar_bytes => |scalar_bytes| scalar_bytes.len != 0,
+            },
             .box => true,
             .tuple,
             .record,
@@ -5094,7 +5114,7 @@ const Builder = struct {
 
     fn constStrNeedsStaticData(self: *Builder, view: ModuleView, str: check.ConstStore.ConstStr) bool {
         const str_bytes = view.const_store.strBytes(str);
-        const backing = view.const_store.strData(str.data);
+        const backing = view.const_store.blobData(str.data);
         const roc_str_size = self.target_usize.size() * 3;
         return backing.len >= roc_str_size or str_bytes.len >= roc_str_size;
     }
@@ -8261,16 +8281,16 @@ const Builder = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalar(scalar),
             .str => |str| .{ .str_lit = try self.program.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.program.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
                 break :blk .{ .low_level = .{
@@ -8304,6 +8324,28 @@ const Builder = struct {
             lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
         }
         return try self.program.addExprSpan(lowered);
+    }
+
+    fn restoreConstListData(
+        self: *Builder,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!Ast.ExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.program.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTuple(
@@ -9651,7 +9693,7 @@ const DraftExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: DraftStringLiteralId,
-    bytes_lit: DraftStringLiteralId,
+    bytes_lit: DraftPackedListLiteral,
     static_data_candidate: DraftStaticDataCandidate,
     list: DraftSpan(DraftExprId),
     tuple: DraftSpan(DraftExprId),
@@ -10744,6 +10786,12 @@ const DraftStringLiteral = struct {
     backing: DraftSpan(u8),
     offset: u32,
     len: u32,
+};
+
+const DraftPackedListLiteral = struct {
+    literal: DraftStringLiteralId,
+    len: u32,
+    element: check.ConstStore.ConstPackedScalar,
 };
 
 const DraftOwner = union(enum(u8)) {
@@ -12131,7 +12179,11 @@ const BodyDraftStore = struct {
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |literal| .{ .str_lit = ids.stringLiteral(literal) },
-            .bytes_lit => |literal| .{ .bytes_lit = ids.stringLiteral(literal) },
+            .bytes_lit => |literal| .{ .bytes_lit = .{
+                .literal = ids.stringLiteral(literal.literal),
+                .len = literal.len,
+                .element = literal.element,
+            } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
                 .runtime_expr = ids.expr(candidate.runtime_expr),
@@ -18228,7 +18280,14 @@ const BodyContext = struct {
                 return try self.lowerQuoteExpr(expr.ty, quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
-            .bytes_literal => |str| .{ .bytes_lit = try self.lowerStringLiteral(str) },
+            .bytes_literal => |str| blk: {
+                const literal = try self.lowerStringLiteral(str);
+                break :blk .{ .bytes_lit = .{
+                    .literal = literal,
+                    .len = @intCast(self.view.bodies.stringLiteral(str).len),
+                    .element = .u8,
+                } };
+            },
             .empty_list => .{ .list = .empty() },
             // `{}` is a record construction that omits every field: lower it
             // through the same path as a non-empty literal so the demanded
@@ -19090,8 +19149,9 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
+            .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .const_node, .expect => Common.invariant("callable eval binding root did not output a callable value"),
+            .expect => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -28599,22 +28659,22 @@ const BodyContext = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalarBody(scalar),
             .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstListAtNode(
+            .list => |list| try self.restoreConstListDataAtNode(
                 store_view,
                 type_view,
                 request_node,
-                items,
+                list,
                 static_data_const_locator,
-            ) },
+            ),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
@@ -28678,6 +28738,34 @@ const BodyContext = struct {
             );
         }
         return try self.addExprSpan(lowered);
+    }
+
+    fn restoreConstListDataAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        request_node: NodeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!BodyExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstListAtNode(
+                store_view,
+                type_view,
+                request_node,
+                items,
+                static_data_const_locator,
+            ) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTupleAtNode(
@@ -28784,16 +28872,16 @@ const BodyContext = struct {
             .zst => .unit,
             .scalar => |scalar| restoreScalarBody(scalar),
             .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
             .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.strData(str.data),
+                store_view.const_store.blobData(str.data),
                 str.offset,
                 str.len,
             ) },
-            .list => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
             .box => |payload| blk: {
                 const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
                 break :blk .{ .low_level = .{
@@ -28827,6 +28915,28 @@ const BodyContext = struct {
             lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
         }
         return try self.addExprSpan(lowered);
+    }
+
+    fn restoreConstListData(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        ty: Type.TypeId,
+        list: checked.ConstList,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!BodyExprData {
+        return switch (list) {
+            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
+            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+                .literal = try self.addStringView(
+                    store_view.const_store.blobData(scalar_bytes.bytes.data),
+                    scalar_bytes.bytes.offset,
+                    scalar_bytes.bytes.len,
+                ),
+                .len = scalar_bytes.len,
+                .element = scalar_bytes.element,
+            } },
+        };
     }
 
     fn restoreConstTuple(
@@ -46872,15 +46982,10 @@ const BodyContext = struct {
             },
         };
 
-        var chain: ?*const EvidenceChain = &self.evidence;
-        while (chain) |frame| : (chain = frame.parent) {
-            if (names.procedureTemplateRefEql(frame.scope.owner, self.owner_template) and
-                std.meta.eql(frame.scope.lexical, wanted))
-            {
-                return frame.*;
-            }
-        }
-        Common.invariant("restored local procedure evidence omitted its checked lexical parent");
+        return self.evidence.atScope(.{
+            .owner = self.owner_template,
+            .lexical = wanted,
+        }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {

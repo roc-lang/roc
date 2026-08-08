@@ -3799,6 +3799,21 @@ pub const Coordinator = struct {
         return null;
     }
 
+    fn buildPlatformRequirementOwnerEnvs(
+        allocator: Allocator,
+        imported_envs: []const *ModuleEnv,
+        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    ) Allocator.Error![]const *const ModuleEnv {
+        return compile_package.buildCheckOwnerEnvs(
+            allocator,
+            imported_envs,
+            imported_artifacts,
+            available_artifacts,
+            null,
+        );
+    }
+
     /// App roots wait for the registered platform's root module to finish
     /// checking successfully, so its requirement surface is final before the
     /// app is checked. Platform failure propagates to the app root instead of
@@ -3838,7 +3853,7 @@ pub const Coordinator = struct {
         module_id: ModuleId,
         mod: *ModuleState,
     ) Allocator.Error!void {
-        const platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
+        var platform_surface: ?messages.PlatformRequirementSurface = if (self.platformRequirementSurfaceForApp(mod)) |surface| surface.* else null;
         const platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = if (platform_surface) |surface| surface.context else null;
 
         const task_payload_alloc = self.getWorkerAllocator();
@@ -3851,21 +3866,33 @@ pub const Coordinator = struct {
         try mod.moduleEnv().?.ensureContentIdentity(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
+
+        var platform_requirement_imported_envs: []const *ModuleEnv = &.{};
+        var platform_requirement_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact = &.{};
+        defer {
+            if (platform_requirement_imported_envs.len > 0) task_payload_alloc.free(platform_requirement_imported_envs);
+            if (platform_requirement_imported_artifacts.len > 0) task_payload_alloc.free(platform_requirement_imported_artifacts);
+        }
+
         // Requirement unification copies platform-owned types into the app's
-        // store, so the app's published API can reference the platform's nominal
-        // types—including types that only appear in the platform's `requires`
-        // signatures (like `Host`), whose declaring modules are not part of the
-        // platform root's public-API type owners. Seed the availability walk with
-        // every checked module of the platform package so each such declaration
-        // is resolvable when the app publishes checked types.
+        // store, including types that only appear in `requires` signatures. The
+        // platform root's publication is deferred for app builds, so seed the
+        // availability walk with its direct imports and every published module
+        // in the platform package. This makes each requirement owner available
+        // to checking and publication, including owners from external packages.
         var platform_seed_list = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         defer platform_seed_list.deinit(task_payload_alloc);
         if (platform_surface != null) {
-            if (self.platformRootCandidate()) |platform_root| {
-                for (platform_root.pkg.modules.items) |*platform_mod| {
-                    if (platform_mod.checkedArtifact()) |platform_artifact| {
-                        try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
-                    }
+            const platform_root = self.platformRootCandidate() orelse
+                coordinatorInvariant("platform requirement surface has no registered platform root", .{});
+            platform_requirement_imported_envs = try self.buildTypecheckImportedEnvs(platform_root.pkg, platform_root.mod, task_payload_alloc);
+            platform_requirement_imported_artifacts = try self.buildTypecheckImportedArtifacts(platform_root.pkg, platform_root.mod, task_payload_alloc);
+            for (platform_requirement_imported_artifacts) |platform_import| {
+                try platform_seed_list.append(task_payload_alloc, platform_import.view);
+            }
+            for (platform_root.pkg.modules.items) |*platform_mod| {
+                if (platform_mod.checkedArtifact()) |platform_artifact| {
+                    try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
                 }
             }
         }
@@ -3884,6 +3911,18 @@ pub const Coordinator = struct {
             try self.finishCachedModule(pkg, mod);
             return;
         }
+
+        const platform_requirement_owner_envs: []const *const ModuleEnv = if (platform_surface != null)
+            try buildPlatformRequirementOwnerEnvs(
+                task_payload_alloc,
+                platform_requirement_imported_envs,
+                platform_requirement_imported_artifacts,
+                available_artifacts,
+            )
+        else
+            &.{};
+        errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
+        if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
 
         mod.phase = .TypeCheck;
         mod.visit_color = .black;
@@ -4958,6 +4997,9 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
+        defer if (task.platform_requirements) |surface| {
+            if (surface.owner_modules.len > 0) task_allocs.result.free(surface.owner_modules);
+        };
         defer task_allocs.result.free(task.explicit_roots);
 
         const result_alloc = task_allocs.result;

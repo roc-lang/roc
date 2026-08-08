@@ -58,6 +58,7 @@ pub const CompileConfig = struct {
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
+    fuzz: bool = false, // Enable libFuzzer-compatible sanitizer coverage
     link_builtins: bool = false,
     host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
@@ -69,6 +70,21 @@ pub const CompileConfig = struct {
         return self.target == target.RocTarget.detectNative();
     }
 };
+
+fn sanitizerCoverageOptions(enabled: bool) ZigLLVMCoverageOptions {
+    var options = std.mem.zeroes(ZigLLVMCoverageOptions);
+    if (enabled) {
+        options.CoverageType = .ZigLLVMCoverageType_Edge;
+        options.IndirectCalls = true;
+        options.TraceCmp = true;
+        options.Inline8bitCounters = true;
+        options.PCTable = true;
+        options.StackDepth = true;
+    } else {
+        options.CoverageType = .ZigLLVMCoverageType_None;
+    }
+    return options;
+}
 
 // Check if LLVM is available at compile time
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -648,8 +664,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Emitting object file to: {s}", .{config.output_path});
     var emit_error_message: [*:0]u8 = undefined;
 
-    var coverage_options = std.mem.zeroes(ZigLLVMCoverageOptions);
-    coverage_options.CoverageType = .ZigLLVMCoverageType_None;
+    const coverage_options = sanitizerCoverageOptions(config.fuzz);
 
     // Flip `dump_llvm_artifacts` to true while working on the compiler to get
     // the optimized LLVM IR for each object written into the current directory
@@ -681,7 +696,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .ir_opt_level = config.optimization.toLLVMIRLevel(),
         .time_report_out = null,
         .tsan = false,
-        .sancov = false,
+        .sancov = config.fuzz,
         .lto = .ZigLLVMThinOrFullLTOPhase_None,
         .allow_fast_isel = false,
         .allow_machine_outliner = true,
@@ -716,6 +731,24 @@ test "LLVM optimization option mapping" {
     try std.testing.expectEqual(LLVMCodeGenLevelAggressive, OptimizationLevel.speed.toLLVMCodeGenLevel());
     try std.testing.expectEqual(ZigLLVMIROptimizationLevel.oz, OptimizationLevel.size.toLLVMIRLevel());
     try std.testing.expectEqual(ZigLLVMIROptimizationLevel.o3, OptimizationLevel.speed.toLLVMIRLevel());
+}
+
+test "libFuzzer sanitizer coverage options" {
+    const disabled = sanitizerCoverageOptions(false);
+    try std.testing.expectEqual(ZigLLVMCoverageType.ZigLLVMCoverageType_None, disabled.CoverageType);
+    try std.testing.expect(!disabled.TraceCmp);
+    try std.testing.expect(!disabled.IndirectCalls);
+    try std.testing.expect(!disabled.Inline8bitCounters);
+    try std.testing.expect(!disabled.PCTable);
+    try std.testing.expect(!disabled.StackDepth);
+
+    const enabled = sanitizerCoverageOptions(true);
+    try std.testing.expectEqual(ZigLLVMCoverageType.ZigLLVMCoverageType_Edge, enabled.CoverageType);
+    try std.testing.expect(enabled.IndirectCalls);
+    try std.testing.expect(enabled.TraceCmp);
+    try std.testing.expect(enabled.Inline8bitCounters);
+    try std.testing.expect(enabled.PCTable);
+    try std.testing.expect(enabled.StackDepth);
 }
 
 /// Check if LLVM is available

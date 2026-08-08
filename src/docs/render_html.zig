@@ -72,7 +72,7 @@ const SidebarNode = struct {
 /// generated reference builtin types but the builtins are not part of the
 /// package being documented. Each builtin type is a top-level page here (e.g.
 /// `…/Str`), matching how `reshapeBuiltin` lays the site out.
-const builtins_docs_base_url = "https://roc-lang.org/builtins/main/";
+const builtins_docs_base_url = "https://roc-lang.org/docs/main/";
 
 /// Builtin types documented as nested types on another type's page rather than
 /// on their own top-level page, mapped to the owning page. Mirrors the builtins'
@@ -3044,11 +3044,11 @@ test "doc shorthand refs in package docs resolve builtins and nested type-module
     const html = try tmp.dir.readFileAlloc(std.testing.io, "index.html", gpa, .limited(1024 * 1024));
     defer gpa.free(html);
 
-    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/builtins/main/Str\"") != null);
+    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/docs/main/Str\"") != null);
     try testing.expect(std.mem.find(u8, html, "href=\"#String.Utf8\"") != null);
 
     // Shorthand `[Name]` refs wrap their label in <code>.
-    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/builtins/main/Str\"><code>Str</code></a>") != null);
+    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/docs/main/Str\"><code>Str</code></a>") != null);
     try testing.expect(std.mem.find(u8, html, "href=\"#String.Utf8\"><code>Utf8</code></a>") != null);
     try testing.expect(std.mem.find(
         u8,

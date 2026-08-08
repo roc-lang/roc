@@ -129,7 +129,8 @@ pub const Constants = struct {
     ///     default identity; no `absent` state, `present` renamed
     ///     `required`), and checked layouts include field kinds and archived
     ///     defaults (design.md "Field Kinds", "Defaulted Fields").
-    pub const CACHE_VERSION = 50;
+    /// 51: Interned literal entries record maximum runtime backing alignment.
+    pub const CACHE_VERSION = 51;
 };
 
 /// Configuration for the Roc cache system.
