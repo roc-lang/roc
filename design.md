@@ -2623,6 +2623,11 @@ inputs. Runtime values themselves are not type-identity inputs. A tuple, record,
 tag payload, list, box, function result, local, pattern binder, and capture use
 the exact produced types of their children directly; they do not retain a
 second checked-public Monotype graph and reconcile it with the produced graph.
+A procedure value's produced type includes the exact callable ABI selected by
+its body. Storing that value in a compound result therefore carries the exact
+argument and result cells through the compound just like any other child value;
+it is not an ordinary checked-public field merely because the procedure has not
+been called at that occurrence.
 
 Generated representation identity is content-addressed. When all identity
 inputs are already resolved or share graph cells, the construction boundary
@@ -2695,8 +2700,8 @@ exact source of its output item independently. For example, `List.iter` takes
 the declaration contract from the checked builtin return and the item cell
 from the exact list operand. The producer passes those two authorities directly
 to generated-type interning; it does not allocate a temporary public nominal
-merely to combine them. It never treats a destination cell—or a structural
-projection of that destination's public backing—as the declaration or item
+merely to combine them. It never treats a destination cell—or a field or
+payload read from that destination's public backing—as the declaration or item
 authority.
 
 Representation-sensitive low-level operations define one explicit

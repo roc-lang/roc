@@ -4005,6 +4005,64 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: top-level record constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = { make_iter: |values| values.iter() }
+        \\
+        \\main = Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level tuple constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = (|values| values.iter(), {})
+        \\
+        \\main = Iter.fold((operations.0)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level tag constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operation = MakeIter(|values| values.iter())
+        \\
+        \\main = match operation {
+        \\    MakeIter(make_iter) => Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level list constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = [|values| values.iter()]
+        \\
+        \\main = match operations {
+        \\    [make_iter] => Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\    _ => []
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level box constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operation = Box.box(|values| values.iter())
+        \\
+        \\main = {
+        \\    make_iter = Box.unbox(operation)
+        \\    Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: record rest preserves an exact iterator field",
         .source_kind = .module,
         .source =
