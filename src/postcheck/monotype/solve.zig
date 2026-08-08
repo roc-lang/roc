@@ -1175,6 +1175,15 @@ pub const InstGraph = struct {
         var active = collections.DenseMap(NodeId, void).init(self.allocator);
         defer active.deinit();
 
+        // Recursive representation growth is an explicit proof that this
+        // class has the dynamic fixed-point tier. Seed that proof into the
+        // depth graph before visiting any producer so every adapter containing
+        // the class observes the dynamic sentinel as its child depth.
+        var forced_roots = self.forced_dynamic_iterator_roots.keyIterator();
+        while (forced_roots.next()) |forced_root| {
+            try depths.put(self.find(forced_root.*), generated_iterator_forced_depth);
+        }
+
         for (self.generated_iterator_nodes.items) |registered_node| {
             const node = self.find(registered_node);
             const entry = try seen.getOrPut(node);
@@ -9772,10 +9781,33 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
         },
     } });
 
+    var adapter_def = public_def;
+    adapter_def.iterator_representation = .minted;
+    adapter_def.iterator_kind = .map;
+    adapter_def.iterator_depth = 2;
+    const adapter = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = adapter_def,
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .components = try graph.arena().dupe(NodeId, &.{owned}),
+            .public_source = public_source,
+        },
+    } });
+
     // This order is significant: the finished type is the left side of the
     // recursive join, but only the graph-owned side can author the final
     // forced-dynamic representation.
     try graph.registerGeneratedIterator(owned);
+    try graph.registerGeneratedIterator(adapter);
     try graph.markRecursiveValueSlot(finished);
     try graph.unify(finished, owned);
     try graph.finalizeGeneratedIteratorRepresentations();
@@ -9784,6 +9816,9 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     try std.testing.expect(finalized.generated_iterator != null);
     try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, finalized.def.iterator_representation);
     try std.testing.expectEqual(Type.IteratorKind.forced_dynamic, finalized.def.iterator_kind);
+    const finalized_adapter = graph.content(adapter).named;
+    try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, finalized_adapter.def.iterator_representation);
+    try std.testing.expectEqual(Type.IteratorKind.forced_dynamic, finalized_adapter.def.iterator_kind);
 }
 
 test "opaque interface relation preserves nested generated-private backing" {
