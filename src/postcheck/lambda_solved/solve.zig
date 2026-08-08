@@ -323,7 +323,7 @@ const Solver = struct {
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
 
-        try self.appendExprInhabitanceFacts();
+        try self.appendExprInhabitanceColumn();
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
@@ -2102,7 +2102,7 @@ const Solver = struct {
     /// analysis over the finalized type stores. Expression types repeat
     /// heavily, so allocating and walking fresh maps per expression is pure
     /// post-check waste.
-    fn appendExprInhabitanceFacts(self: *Solver) Allocator.Error!void {
+    fn appendExprInhabitanceColumn(self: *Solver) Allocator.Error!void {
         var visiting = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visiting.deinit();
         var memo = collections.DenseMap(Type.TypeVarId, bool).init(self.allocator);

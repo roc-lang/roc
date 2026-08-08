@@ -45,7 +45,7 @@ pub const ProgramView = struct {
     local_tys: []const Type.TypeVarId,
     expr_tys: []const Type.TypeVarId,
     /// Whether evaluating each expression would have to produce an
-    /// uninhabited value. Later lowering uses this explicit solved fact to
+    /// uninhabited value. Later lowering uses this explicit solved output to
     /// stop at the first impossible constructor child.
     expr_is_uninhabited: []const bool,
     pat_tys: []const Type.TypeVarId,

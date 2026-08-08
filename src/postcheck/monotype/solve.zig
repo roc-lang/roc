@@ -285,6 +285,8 @@ const FunctionRequestSubstitution = struct {
     }
 };
 
+/// One checker-authored source cell and the produced cell selected for it by a
+/// completed function request.
 pub const RequestSubstitution = struct {
     checked: NodeId,
     produced: NodeId,

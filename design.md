@@ -2666,7 +2666,7 @@ stamp the low-level result with the checker-public type, or reconstruct
 callable identity from operation-specific syntax.
 
 Every checked procedure use that names a compiler-provided low-level operation
-records that exact operation in the checked artifact. A direct call to a
+records that exact operation in `CheckedModule` data. A direct call to a
 representation-sensitive low-level procedure therefore lowers through
 `ProducedTypeFlow` immediately from its independently completed operands; it
 does not first specialize the source-level declaration as an ordinary
@@ -2841,11 +2841,11 @@ an early return from the loop body therefore preserves that item's exact type.
 The pass initializes its dense expression state once for the module; it does
 not clear a module-sized column per template. Multiple calls from one template
 to the same callee add one propagation edge.
-Local procedures carry the same two result-flow facts. Their lexical evidence
+Local procedures carry the same two result-flow columns. Their lexical evidence
 chain selects `exact_graph` only when an evidence-dependent local body actually
 receives evidence for an exact-producing target; unrelated local
 specializations remain independent. A local procedure selected as a method is
-itself explicit dispatch evidence, so its two result-flow facts participate in
+itself explicit dispatch evidence, so its two result-flow columns participate in
 that same evidence-chain decision rather than being treated as graph-free.
 
 A procedure with exact result flow finishes its body in the requesting
@@ -5290,14 +5290,14 @@ The solver:
   the corresponding join-point parameter types
 
 After every Monotype leaf and callable slot is final, Lambda Solved records one
-explicit inhabitation fact for each lifted expression. A true
+explicit inhabitation result for each lifted expression. A true
 `expr_is_uninhabited` entry means evaluating that expression would have to
 produce a value of a closed uninhabited type. Constructor lowering preserves
 the constructor's explicit evaluation order through the first such child, emits the
 compiler-impossible continuation after it, and omits the constructor assignment
 and every later child because none is reachable. In particular, callable flow
 inside a later child is neither propagated through an impossible aggregate nor
-lowered into LIR. Direct LIR lowering consumes this fact; it does not rescan the
+lowered into LIR. Direct LIR lowering consumes this column; it does not rescan the
 solved type graph to rediscover inhabitation.
 The finalized column is computed with one memo over each solved type identity,
 not a fresh type walk per expression. A negative query that crosses an active

@@ -27174,7 +27174,7 @@ const BodyContext = struct {
         } });
     }
 
-    /// Reify an ordinary nominal layer when a definition-private local backing
+    /// Construct an ordinary nominal layer when a definition-private local backing
     /// flows into a checked nominal request. The nominal's declared backing is
     /// the checker-authored authorization for this boundary; generated-private
     /// identities never use it.
@@ -41365,7 +41365,45 @@ const BodyContext = struct {
                 try result_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
-            else => try self.lowerExprAtTypeCell(checked_expr, result_cell),
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .call,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => try self.lowerExprAtTypeCell(checked_expr, result_cell),
         };
     }
 
