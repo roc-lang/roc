@@ -5452,6 +5452,18 @@ const BuildResult = struct {
     diagnostics: CheckDiagnosticCounts,
 };
 
+fn checkedArtifactForBuild(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    source_path: []const u8,
+) CliError!*const check.CheckedArtifact.CheckedModuleArtifact {
+    const artifact = build_env.executableRootCheckedArtifact();
+    if (artifact.hasUnboundPlatformRequirements()) {
+        return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
+    }
+    return artifact;
+}
+
 /// Result of setting up shared memory with type checking information.
 /// Contains the shared memory handle for the compiled modules and
 /// counts of errors and warnings encountered during compilation.
@@ -9556,7 +9568,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -9904,7 +9916,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -10252,7 +10264,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
