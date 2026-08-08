@@ -11,29 +11,31 @@ match person {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - pattern_as_nested.md:3:33:3:64
+TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 # PROBLEMS
 
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
-└┬──────────────┘  previous branch .                                          │
+└┬──────────────┘  previous ones.                                             │
  │                                                                            │
- │  { name } as simplePerson => (simplePerson, name, "unknown")               │
- │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾               │
- └───────────────────────────────────────────────── pattern_as_nested.md:3:33 ┘
+ │  match person {                                                            │
+ │      { name, address: { city } as addr } as fullPerson => (fullPerson, ad… │
+ │      { name } as simplePerson => (simplePerson, name, "unknown")           │
+ │  }                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────────── pattern_as_nested.md:1:5 ┘
 
-    The second branch is:
+    This second branch is trying to match:
 
-        ({ name: a }, a, b) where [b.from_quote : Str -> Try(b,
-        [BadQuotedBytes(Str)])]
+        { name: _field }
 
-    But the previous branch results in:
+    But the expression between the `match` parenthesis has the type:
 
-        ({ address: { city: a }, name: _field }, { city: a }, a)
+        { address: { city: _field }, name: _field2 }
 
-    All branches in a `match` must have compatible types.
-    Note: You can wrap branches values in a tag to make them compatible.
-    To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+    These can never match! Either the pattern or expression has a problem.
+    Hint: This pattern doesn't bind the `address` field. Match it explicitly
+    with `address: _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig
@@ -154,5 +156,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "({ address: { city: a }, name: _field }, { city: a }, a)"))
 ~~~
