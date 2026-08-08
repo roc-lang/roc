@@ -111,6 +111,16 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "List.fold with numeric accumulators",
     },
     .{
+        .roc_file = "test/fx/runtime_dec_to_u8_wrap.roc",
+        .io_spec = "0<72623859790382856|1>[56, 1, 1]",
+        .description = "Regression test: wrapping Dec-to-integer conversion in runtime code (issue #10626)",
+    },
+    .{
+        .roc_file = "test/fx/runtime_dec_to_int_wrap_widths.roc",
+        .io_spec = "0<3|1>widths: 3 3 3 3 3 3 3 3 3 3|1>trunc: 3 -3 -3|1>wide: 11553255926290448384 30000000000000000000 0",
+        .description = "Every runtime Dec-to-integer width recovers the whole part, truncates toward zero, and wraps past the destination range",
+    },
+    .{
         .roc_file = "test/fx/list_for_each.roc",
         .io_spec = "1>Item: apple|1>Item: banana|1>Item: cherry",
         .description = "List.for_each! with effectful callback",

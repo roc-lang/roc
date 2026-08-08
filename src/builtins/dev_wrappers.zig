@@ -1572,10 +1572,11 @@ pub fn roc_builtins_dec_to_str(out: *RocStr, value_low: u64, value_high: u64, ro
 
 // ── Numeric conversion wrappers ──
 
-/// Dec (i128) → i64 by truncating division
+/// Dec (i128) → i64 by truncating division. A Dec's whole part reaches ~1.7e20,
+/// past i64, so the excess wraps rather than trapping.
 pub fn roc_builtins_dec_to_i64_trunc(low: u64, high: u64) callconv(.c) i64 {
     const val: i128 = @bitCast(i128h.from_u64_pair(low, high));
-    return @intCast(i128h.divTrunc_i128(val, dec.RocDec.one_point_zero_i128));
+    return dec.toIntWrap(i64, .{ .num = val });
 }
 
 /// i64 → Dec (i128) via output pointers
