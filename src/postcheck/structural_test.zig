@@ -111,8 +111,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
-    try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved)");
-    try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty)");
+    try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr_id, resolved)");
+    try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(checked_expr, resolved, ty)");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_expr_inner, ".lookup_local => |lookup| return try self.lowerLookupExprAtNode(");
@@ -1077,10 +1077,10 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn iteratorOneBranch(",
         "fn uninhabitedIteratorOneBranch(",
     );
-    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
+    try expectContains(iterator, "self.constrainCheckedPatternInterfaceToCell(for_.pattern, item_cell)");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames");
-    const relate = std.mem.find(u8, iterator, "self.constrainCheckedInterfaceToCell").?;
+    const relate = std.mem.find(u8, iterator, "self.constrainCheckedPatternInterfaceToCell").?;
     const frame = std.mem.find(u8, iterator, "self.withIteratorOneRuntimeDemandGuardFrame").?;
     try std.testing.expect(relate < frame);
 
@@ -1389,6 +1389,8 @@ test "Monotype consumes producer-recorded runtime-mode divergence and explicit u
     try expectContains(lower_source, "exprEvaluationMayBeElidedForInspect");
     try expectNotContains(lower_source, "exprIsSideEffectFreeCallableSyntax");
     try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "evaluation_may_be_elided_for_inspect"));
+    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "produces_exact_graph"));
+    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedPattern, "produces_exact_graph"));
 }
 
 test "Monotype inspect-only lowering is gated by explicit demand" {

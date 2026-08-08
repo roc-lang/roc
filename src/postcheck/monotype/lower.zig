@@ -1210,6 +1210,15 @@ fn methodTargetProducesExactGraph(target: static_dispatch.MethodTarget) bool {
     };
 }
 
+fn methodTargetMayProduceExactGraph(target: static_dispatch.MethodTarget) bool {
+    if (methodTargetProducesExactGraph(target)) return true;
+    return switch (target.kind) {
+        .procedure => |procedure| procedure.exact_graph_from_evidence,
+        .local_proc => |local| local.exact_graph_from_evidence,
+        .structural => false,
+    };
+}
+
 fn specEvidenceProducesExactGraph(evidence: []const SpecEvidence) bool {
     for (evidence) |entry| switch (entry) {
         .target => |target| {
@@ -7745,6 +7754,7 @@ const Builder = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -7879,6 +7889,7 @@ const Builder = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -14591,7 +14602,6 @@ const BodyContext = struct {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
         child.function_entry_demand_guards = &.{};
-        try child.constrainCopiedBinderTypes();
         return child;
     }
 
@@ -14650,15 +14660,6 @@ const BodyContext = struct {
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
         return child;
-    }
-
-    fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
-        var binder_iter = self.binders.iterator();
-        while (binder_iter.next()) |entry| {
-            const local = entry.local;
-            const local_ty = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, entry.binder), local_ty);
-        }
     }
 
     fn enterRestoredLocalProcScope(
@@ -15522,6 +15523,34 @@ const BodyContext = struct {
         _ = try self.graph.applyCheckedTypeMapping(try self.freshInstNode(checked_ty), value_node);
     }
 
+    fn constrainCheckedExprInterfaceToCell(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
+        const value_node = try cell.toGraphNode(self.graph);
+        _ = try self.graph.applyCheckedTypeMapping(
+            try self.checkedExprOccurrenceNode(expr_id),
+            value_node,
+        );
+    }
+
+    fn constrainCheckedPatternInterfaceToCell(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!void {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
+        const value_node = try cell.toGraphNode(self.graph);
+        _ = try self.graph.applyCheckedTypeMapping(
+            try self.checkedPatternOccurrenceNode(pattern_id),
+            value_node,
+        );
+    }
+
     /// Constrain two checked types from (possibly different) instantiation
     /// contexts of the same specialization to denote one type.
     fn constrainCheckedTypeRelations(
@@ -15758,6 +15787,41 @@ const BodyContext = struct {
         }
         const fresh = try self.instNode(checked_ty);
         return try self.graph.applySelectedCheckedSubstitutions(fresh, current);
+    }
+
+    /// Return the shared checked node for an ordinary expression result. Only
+    /// a checker-recorded exact producer needs an isolated occurrence whose
+    /// generated representation may differ from another use of the same
+    /// checked substitution slot.
+    fn checkedExprOccurrenceNode(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!NodeId {
+        const expr = self.view.bodies.expr(expr_id);
+        return try self.checkedTypeOccurrenceNode(
+            expr.ty,
+            self.view.bodies.exprProducesExactGraph(expr_id),
+        );
+    }
+
+    fn checkedTypeOccurrenceNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        isolate_exact_result: bool,
+    ) Allocator.Error!NodeId {
+        if (!isolate_exact_result) return try self.instNode(checked_ty);
+        return try self.freshInstNode(checked_ty);
+    }
+
+    fn checkedPatternOccurrenceNode(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+    ) Allocator.Error!NodeId {
+        const pattern = self.view.bodies.pattern(pattern_id);
+        if (!self.view.bodies.patternProducesExactGraph(pattern_id)) {
+            return try self.instNode(pattern.ty);
+        }
+        return try self.freshInstNode(pattern.ty);
     }
 
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
@@ -16920,10 +16984,7 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
         else
             ret_cell;
-        try self.constrainCheckedInterfaceToCell(
-            self.view.bodies.expr(checked_body).ty,
-            body_ret_cell,
-        );
+        try self.constrainCheckedExprInterfaceToCell(checked_body, body_ret_cell);
         var body = if (materialized_args.items.len == 0)
             switch (ret_destination_relation) {
                 .checked_mapping => try self.lowerProducedValueAtIndependentCheckedCell(checked_body, body_ret_cell),
@@ -17112,12 +17173,12 @@ const BodyContext = struct {
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
+            .lookup_local => |lookup| try self.lookupExprTypeNode(expr_id, lookup.resolved),
+            .lookup_external => |resolved| try self.lookupExprTypeNode(expr_id, resolved),
+            .lookup_required => |resolved| try self.lookupExprTypeNode(expr_id, resolved),
             .lambda => |lambda| try self.lambdaFunctionNode(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionNode(closure),
-            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null),
+            .field_access => |field| try self.fieldAccessTypeNode(expr_id, field.receiver, field.field_name, field.backing_access, null),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeNode(expr.ty),
         };
     }
@@ -17139,7 +17200,7 @@ const BodyContext = struct {
             .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionType(closure),
-            .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null)),
+            .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr_id, field.receiver, field.field_name, field.backing_access, null)),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
         };
     }
@@ -17680,9 +17741,9 @@ const BodyContext = struct {
             .empty_list => .{ .list = .empty() },
             .empty_record => return try self.addConstructorExpr(ty, .{ .record = .empty() }),
             .str => |segments| try self.lowerStr(segments),
-            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
-            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr_id, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr_id, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr_id, resolved, ty),
             .list => |items| .{ .list = try self.lowerListExpr(items, ty) },
             .tuple => |items| return try self.addConstructorExpr(ty, .{ .tuple = try self.lowerExprSpanAtTypes(items, self.builder.tupleItemTypes(ty)) }),
             .record => |record| return try self.lowerRecordExpr(record, ty, &.{}),
@@ -18887,7 +18948,11 @@ const BodyContext = struct {
             .promoted_top_level_proc,
             => |proc| proc,
             .platform_required_proc => |required| required.procedure,
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => return false,
+            .local_proc => |local| return local.produces_exact_graph or local.exact_graph_from_evidence,
+            // First-class callable values do not carry a procedure result-flow
+            // column on the resolved reference itself.
+            .local_param, .local_value, .local_mutable_version, .pattern_binder => return true,
+            .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => return false,
         };
         if (procedure.produces_exact_graph or procedure.exact_graph_from_evidence) return true;
         return if (procedure.iterator_procedure) |iterator|
@@ -25366,6 +25431,7 @@ const BodyContext = struct {
                 call.args,
                 expected_ret_node,
                 try self.hostedTryCapabilityForResolvedTarget(target),
+                self.resolvedTargetMayProduceExactGraph(target),
             );
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
             const initial_fn_nodes = try self.graph.functionNodes(fn_node);
@@ -25521,6 +25587,7 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             null,
+            true,
         );
         const request_fn = try self.graph.functionNodes(fn_node);
         const callee = try self.lowerExprAtTypeCell(
@@ -25700,7 +25767,7 @@ const BodyContext = struct {
         }
         for (checked_args) |checked_arg| {
             const evidence_node = (try self.callArgumentEvidenceNode(checked_arg, null)) orelse continue;
-            const checked_node = try self.freshInstNode(self.view.bodies.expr(checked_arg).ty);
+            const checked_node = try self.checkedExprOccurrenceNode(checked_arg);
             if (!self.graph.sameClass(checked_node, evidence_node)) return null;
         }
         return fn_ty;
@@ -25801,6 +25868,7 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         expected_ret_node: ?NodeId,
         hosted_try_capability: ?HostedTryAdapterCapability,
+        result_may_produce_exact_graph: bool,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != checked_args.len) {
@@ -25816,19 +25884,10 @@ const BodyContext = struct {
         }
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         for (checked_args, 0..) |checked_arg, index| {
-            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
-                _ = try self.graph.applyCheckedTypeMapping(
-                    try caller.freshInstNode(arg_ty),
-                    evidence_node,
-                );
                 request_args[index] = evidence_node;
             } else {
-                // Every argument is a distinct runtime occurrence. Reusing
-                // the caller's cached checked root here lets an exact result
-                // selected for one occurrence preselect an unrelated argument
-                // with the same checked type before that argument is lowered.
-                request_args[index] = try caller.freshInstNode(arg_ty);
+                request_args[index] = try caller.checkedExprOccurrenceNode(checked_arg);
             }
         }
         const request_ret = if (expected_ret_node) |expected| blk: {
@@ -25837,17 +25896,16 @@ const BodyContext = struct {
                     return request_fn;
                 }
             }
-            _ = try self.graph.applyCheckedTypeMapping(
-                try caller.freshInstNode(checked_ret_ty),
-                expected,
-            );
             break :blk expected;
         } else blk: {
             // The result is a distinct runtime occurrence. Sharing the
             // caller's cached checked node here would let later result
             // refinement flow backward into arguments with the same checked
             // variable.
-            const caller_ret = try caller.freshInstNode(checked_ret_ty);
+            const caller_ret = try caller.checkedTypeOccurrenceNode(
+                checked_ret_ty,
+                result_may_produce_exact_graph,
+            );
             if (hosted_try_capability) |capability| {
                 if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
                     return request_fn;
@@ -25886,12 +25944,14 @@ const BodyContext = struct {
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_ty: ?Type.TypeId,
+        result_may_produce_exact_graph: bool,
     ) Allocator.Error!NodeId {
         return (try self.instantiateCallableDispatchPlanRequestFromCallerAtNode(
             callable_plan,
             caller,
             checked_ret_ty,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+            result_may_produce_exact_graph,
             .expression_lowering,
         )).callable;
     }
@@ -25902,6 +25962,7 @@ const BodyContext = struct {
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
+        result_may_produce_exact_graph: bool,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
         return (try self.instantiateCallableDispatchPlanRequestFromCallerAtNode(
@@ -25909,6 +25970,7 @@ const BodyContext = struct {
             caller,
             checked_ret_ty,
             expected_ret_node,
+            result_may_produce_exact_graph,
             phase,
         )).callable;
     }
@@ -25919,6 +25981,7 @@ const BodyContext = struct {
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
+        result_may_produce_exact_graph: bool,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!CallableDispatchRequest {
         const plan = callable_plan.plan;
@@ -25947,16 +26010,11 @@ const BodyContext = struct {
             request_arg.* = formal_node;
             switch (operand) {
                 .checked_expr => |checked_arg| {
-                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     if (phase == .expression_lowering) {
                         const evidence_node = try caller.lowerExprTypeNode(checked_arg);
-                        _ = try self.graph.applyCheckedTypeMapping(
-                            try caller.freshInstNode(arg_ty),
-                            evidence_node,
-                        );
                         request_arg.* = evidence_node;
                     } else {
-                        request_arg.* = try caller.instNode(arg_ty);
+                        request_arg.* = try caller.instNode(caller.view.bodies.expr(checked_arg).ty);
                     }
                 },
                 .generated_interpolation_iter,
@@ -25966,12 +26024,13 @@ const BodyContext = struct {
             }
         }
         const request_ret = if (expected_ret_node) |expected| blk: {
-            _ = try self.graph.applyCheckedTypeMapping(
-                try caller.freshInstNode(checked_ret_ty),
-                expected,
-            );
             break :blk expected;
-        } else try caller.freshInstNode(checked_ret_ty);
+        } else blk: {
+            break :blk try caller.checkedTypeOccurrenceNode(
+                checked_ret_ty,
+                result_may_produce_exact_graph,
+            );
+        };
         const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
         const materialized = try self.graph.functionRequestFromProducedArgumentsAndComponents(
             fn_node,
@@ -26144,7 +26203,7 @@ const BodyContext = struct {
                     .inspectable => try self.graph.recordFieldNode(receiver_node, name),
                     .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, name),
                 };
-                try self.constrainCheckedInterfaceToCell(expr.ty, DraftTypeCell.fromGraphNode(field_node));
+                try self.constrainCheckedExprInterfaceToCell(checked_arg, DraftTypeCell.fromGraphNode(field_node));
                 if (expected_ty) |expected| {
                     _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), field_node);
                 }
@@ -26158,15 +26217,15 @@ const BodyContext = struct {
                     Common.invariant("tuple argument evidence index exceeded its exact tuple arity");
                 }
                 const item_node = items[access.elem_index];
-                try self.constrainCheckedInterfaceToCell(expr.ty, DraftTypeCell.fromGraphNode(item_node));
+                try self.constrainCheckedExprInterfaceToCell(checked_arg, DraftTypeCell.fromGraphNode(item_node));
                 if (expected_ty) |expected| {
                     _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), item_node);
                 }
                 return item_node;
             },
-            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
-            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
-            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
+            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(checked_arg, lookup.resolved, expected_ty),
+            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(checked_arg, resolved, expected_ty),
+            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(checked_arg, resolved, expected_ty),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (expected_ty) |ty| {
@@ -26178,7 +26237,7 @@ const BodyContext = struct {
 
     fn lookupCallArgumentEvidenceNode(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        checked_expr: checked.CheckedExprId,
         maybe_ref: ?checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
@@ -26197,10 +26256,10 @@ const BodyContext = struct {
             // still carry unresolved leaves whose defaults apply at final
             // sealing, so it stays a graph node instead of forcing an eager
             // resolved view.
-            if (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) |node| return node;
+            if (try self.localCallArgumentEvidenceNode(ref_id, expected_ty)) |node| return node;
             return if (expected_ty) |ty| try self.activeNodeFromType(ty) else null;
         }
-        return if (try self.lookupCallArgumentMonoType(checked_ty, maybe_ref, expected_ty)) |ty|
+        return if (try self.lookupCallArgumentMonoType(checked_expr, maybe_ref, expected_ty)) |ty|
             try self.activeNodeFromType(ty)
         else
             null;
@@ -26208,10 +26267,11 @@ const BodyContext = struct {
 
     fn lookupCallArgumentMonoType(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        checked_expr: checked.CheckedExprId,
         maybe_ref: ?checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
+        const checked_ty = self.view.bodies.expr(checked_expr).ty;
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
@@ -26224,7 +26284,7 @@ const BodyContext = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         }
         if ((try self.currentLocalForResolvedValue(ref_id)) != null) {
-            return try self.localCallArgumentEvidenceType(checked_ty, ref_id, expected_ty);
+            return try self.localCallArgumentEvidenceType(ref_id, expected_ty);
         }
         return switch (record.ref) {
             .top_level_const,
@@ -26243,20 +26303,19 @@ const BodyContext = struct {
 
     fn localCallArgumentEvidenceType(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
         ref_id: checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const node = (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) orelse
+        const node = (try self.localCallArgumentEvidenceNode(ref_id, expected_ty)) orelse
             return expected_ty;
         return try self.activeTypeFromNode(node);
     }
 
-    /// Constrain a local call argument's checked mapping and return the local's
-    /// exact produced type as call evidence.
+    /// Return the local's authoritative exact type as call evidence. Its
+    /// checked relation was consumed when the storage cell was bound; the
+    /// callee request relates its formal directly to this produced node.
     fn localCallArgumentEvidenceNode(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
         ref_id: checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
@@ -26267,7 +26326,6 @@ const BodyContext = struct {
             .graph_node => |graph_node| graph_node,
             .sealed => |ty| try self.activeNodeFromType(ty),
         };
-        try self.constrainCheckedInterfaceToCell(checked_ty, cell);
         if (expected_ty) |expected| {
             _ = try self.graph.applyProducedTypeToRequest(try self.graph.importMono(expected), node);
         }
@@ -26276,9 +26334,10 @@ const BodyContext = struct {
 
     fn lookupExprTypeNode(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        checked_expr: checked.CheckedExprId,
         maybe_ref: ?checked.ResolvedValueId,
     ) Allocator.Error!NodeId {
+        const checked_ty = self.view.bodies.expr(checked_expr).ty;
         const ref_id = maybe_ref orelse
             Common.invariant("checked lookup reached Monotype without a resolved value ref");
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
@@ -26287,7 +26346,6 @@ const BodyContext = struct {
                 .graph_node => |graph_node| graph_node,
                 .sealed => |ty| try self.activeNodeFromType(ty),
             };
-            try self.constrainCheckedInterfaceToCell(checked_ty, self.localTypeCell(local_id));
             return node;
         }
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
@@ -26358,7 +26416,7 @@ const BodyContext = struct {
 
     fn fieldAccessTypeNode(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        checked_expr: checked.CheckedExprId,
         receiver: checked.CheckedExprId,
         field_name: names.RecordFieldNameId,
         backing_access: checked.CheckedFieldBackingAccess,
@@ -26370,8 +26428,8 @@ const BodyContext = struct {
             .inspectable => try self.graph.recordFieldNode(receiver_node, mono_field_name),
             .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, mono_field_name),
         };
-        try self.constrainCheckedInterfaceToCell(
-            checked_ty,
+        try self.constrainCheckedExprInterfaceToCell(
+            checked_expr,
             DraftTypeCell.fromGraphNode(field_node),
         );
         if (expected_ty) |expected| {
@@ -26426,6 +26484,7 @@ const BodyContext = struct {
                 call.args,
                 if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
                 null,
+                true,
             );
             return switch (self.graph.content(fn_node)) {
                 .func => |function| function.ret,
@@ -26470,6 +26529,7 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
+            self.resolvedTargetMayProduceExactGraph(call.direct_target.?),
         );
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
@@ -27086,13 +27146,10 @@ const BodyContext = struct {
     fn lowerLocalBindingAtNode(
         self: *BodyContext,
         binding: CurrentLocal,
-        checked_ty: checked.CheckedTypeId,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const local_cell = self.localTypeCell(binding.local);
         const local_node = try local_cell.toGraphNode(self.graph);
-        try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
-        try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
         try applyLocalValueToRequest(self.graph, expected_node, local_node);
         const local_expr = try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
         const adapted = try self.unwrapDefinitionPrivateNominalValueAtRequest(
@@ -27204,10 +27261,11 @@ const BodyContext = struct {
 
     fn lowerLookupExprAtType(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
+        checked_expr: checked.CheckedExprId,
         maybe_ref: ?checked.ResolvedValueId,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        const checked_ty = self.view.bodies.expr(checked_expr).ty;
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
@@ -27243,7 +27301,6 @@ const BodyContext = struct {
             if (local_cell == .graph_node) {
                 return try self.lowerLocalBindingAtNode(
                     binding,
-                    checked_ty,
                     try self.activeNodeFromType(ty),
                 );
             }
@@ -27280,7 +27337,6 @@ const BodyContext = struct {
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
-            try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
             _ = try self.graph.applyProducedTypeToRequest(try self.activeNodeFromType(ty), local_node);
             return try self.addExprWithTypeCell(local_cell, .{ .local = local_id });
         }
@@ -27389,15 +27445,12 @@ const BodyContext = struct {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             return try self.lowerLocalBindingAtNode(
                 binding,
-                self.view.bodies.expr(checked_expr).ty,
                 expected_node,
             );
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
-            const checked_ty = self.view.bodies.expr(checked_expr).ty;
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
-            try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
             try applyLocalValueToRequest(self.graph, expected_node, local_node);
             const local_expr = try self.addExprWithTypeCell(
                 local_cell,
@@ -27498,7 +27551,7 @@ const BodyContext = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration => {},
         }
         const ty = try self.activeTypeFromNode(expected_node);
-        return try self.lowerLookupExprAtType(self.view.bodies.expr(checked_expr).ty, maybe_ref, ty);
+        return try self.lowerLookupExprAtType(checked_expr, maybe_ref, ty);
     }
 
     fn deferConstUseAtNode(
@@ -29276,6 +29329,7 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29424,6 +29478,7 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             request_fn_node,
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29601,6 +29656,7 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29766,6 +29822,7 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             request_fn_node,
+            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29976,15 +30033,12 @@ const BodyContext = struct {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_cell = self.localTypeCell(binding.local);
             const local_node = try local_cell.toGraphNode(self.graph);
-            try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
             try applyLocalValueToRequest(self.graph, expected_node, local_node);
             return;
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
             const local_node = try local_cell.toGraphNode(self.graph);
-            try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try applyLocalValueToRequest(self.graph, expected_node, local_node);
             return;
         }
@@ -30184,6 +30238,7 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             hosted_try_capability,
+            if (call.direct_target) |target| self.resolvedTargetMayProduceExactGraph(target) else true,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
         _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
@@ -30241,14 +30296,11 @@ const BodyContext = struct {
 
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_cell = self.localTypeCell(binding.local);
-            try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
             try self.applyStoredConstructorLocal(request_node, try local_cell.toGraphNode(self.graph));
             return true;
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local| {
             const local_cell = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try self.applyStoredConstructorLocal(request_node, try local_cell.toGraphNode(self.graph));
             return true;
         }
@@ -31610,9 +31662,9 @@ const BodyContext = struct {
             .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, .{ .sealed = ty }),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, .{ .sealed = ty }),
-            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
-            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
-            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(checked_expr, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(checked_expr, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(checked_expr, resolved, ty),
             .structural_eq => |eq| {
                 try self.constrainKnownType(expr.ty, ty);
                 const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
@@ -32411,7 +32463,6 @@ const BodyContext = struct {
             const local = self.binders.get(binder) orelse continue;
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
             const value = try self.addExprWithTypeCell(
                 cell,
                 .{ .local = local },
@@ -32441,8 +32492,8 @@ const BodyContext = struct {
         const fn_nodes = try self.graph.functionNodes(fn_node);
         std.debug.assert(fn_nodes.args.len == lambda.args.len);
         for (lambda.args, fn_nodes.args) |pattern_id, arg_node| {
-            try self.constrainCheckedInterfaceToCell(
-                self.view.bodies.pattern(pattern_id).ty,
+            try self.constrainCheckedPatternInterfaceToCell(
+                pattern_id,
                 DraftTypeCell.fromGraphNode(arg_node),
             );
         }
@@ -32482,7 +32533,6 @@ const BodyContext = struct {
                     const local = self.binders.get(binder) orelse continue;
                     try self.markActiveConstBinderUsed(binder);
                     const cell = self.localTypeCell(local);
-                    try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
                     try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
                 }
                 _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes.items);
@@ -32682,6 +32732,7 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             expected_ret_node,
+            self.dispatchPlanMayProduceExactGraph(plan),
             .expression_lowering,
         );
         var callable_node = dispatch_request.callable;
@@ -33790,6 +33841,7 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             expected_ret_node,
+            self.dispatchPlanMayProduceExactGraph(plan),
             phase,
         );
         const resolution = self.evidenceResolution(plan) orelse
@@ -34174,6 +34226,17 @@ const BodyContext = struct {
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
+    }
+
+    fn dispatchPlanMayProduceExactGraph(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) bool {
+        return switch (self.evidenceResolution(plan) orelse
+            Common.invariant("callable dispatch exact-result query had no resolved evidence")) {
+            .target => |lookup| methodTargetMayProduceExactGraph(lookup.target),
+            .structural => false,
+        };
     }
 
     const DispatchCrashReason = enum { unreachable_value, checked_error };
@@ -40682,10 +40745,10 @@ const BodyContext = struct {
             .interpolation => |interpolation| try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
             .type_dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
             .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null),
+            .lookup_local => |lookup| try self.lookupExprTypeNode(expr_id, lookup.resolved),
+            .lookup_external => |resolved| try self.lookupExprTypeNode(expr_id, resolved),
+            .lookup_required => |resolved| try self.lookupExprTypeNode(expr_id, resolved),
+            .field_access => |field| try self.fieldAccessTypeNode(expr_id, field.receiver, field.field_name, field.backing_access, null),
             .nominal => blk: {
                 const checked_node = try self.lowerExprTypeNode(expr_id);
                 break :blk try self.explicitNominalConstructorNode(checked_node, checked_node);
@@ -41299,7 +41362,7 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         request_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        const checked_node = try self.freshInstNode(self.view.bodies.expr(body).ty);
+        const checked_node = try self.checkedExprOccurrenceNode(body);
         // The fresh checked copy isolates the producer's eventual exact root,
         // but it must first consume the current specialization's substitutions.
         // Otherwise an unconstrained numeric or row variable can default
@@ -42198,7 +42261,7 @@ const BodyContext = struct {
         success_guard: ?PatternSuccessGuard,
     ) Allocator.Error!DraftExprId {
         const value_node = try value_cell.toGraphNode(self.graph);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
+        try self.constrainCheckedPatternInterfaceToCell(pattern_id, value_cell);
         if (!self.patternNeedsExplicitBinding(pattern_id)) {
             const guards_start = self.pattern_literal_guards.items.len;
             const pat = try self.lowerPatternAtNode(pattern_id, value_node);
@@ -42232,7 +42295,7 @@ const BodyContext = struct {
         continuation: BindingContinuation,
         miss: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
+        try self.constrainCheckedPatternInterfaceToCell(pattern_id, value_cell);
         return try self.lowerMaterializedPatternThenInner(
             pattern_id,
             value,
@@ -42257,7 +42320,7 @@ const BodyContext = struct {
         miss: DraftExprId,
         success_guard: ?PatternSuccessGuard,
     ) Allocator.Error!DraftExprId {
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
+        try self.constrainCheckedPatternInterfaceToCell(pattern_id, value_cell);
         const value_node = try value_cell.toGraphNode(self.graph);
         try self.preRegisterPatternBindersAtNode(pattern_id, value_node);
         const previous_reuse = self.reuse_pre_registered_pattern_binders;
@@ -42764,7 +42827,7 @@ const BodyContext = struct {
         // producer is a definition-private structural local, insert that
         // boundary on this occurrence instead of retagging the stored local.
         const scrutinee = try self.wrapCheckedNominalRequestAroundBackingValue(
-            try self.freshInstNode(self.view.bodies.expr(match.cond).ty),
+            try self.checkedExprOccurrenceNode(match.cond),
             produced_scrutinee,
         );
         const scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph);
@@ -44168,7 +44231,7 @@ const BodyContext = struct {
         );
         const value_cell = self.exprTypeCell(value);
         const value_node = try value_cell.toGraphNode(self.graph);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
+        try self.constrainCheckedPatternInterfaceToCell(pattern, value_cell);
         const source_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
             .pat = try self.addPatWithTypeCell(value_cell, .{ .bind = source_local }),
@@ -44211,7 +44274,7 @@ const BodyContext = struct {
             try self.reassignedPatternStorageCell(pattern, expr_id, binders)
         else
             DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
+        try self.constrainCheckedPatternInterfaceToCell(pattern, value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
         const state_value = switch (checked_expr.data) {
             .if_ => |if_| try self.addExprWithTypeCell(
@@ -45078,7 +45141,7 @@ const BodyContext = struct {
         defer self.restoreBinders(saved.items);
 
         const item_cell = DraftTypeCell.fromGraphNode(step.one_item.node);
-        try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell);
+        try self.constrainCheckedPatternInterfaceToCell(for_.pattern, item_cell);
 
         const previous_runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         self.runtime_demand_guard_frames = try self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step);
@@ -45865,7 +45928,7 @@ const BodyContext = struct {
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
 
-        const request_root = try self.freshInstNode(self.view.bodies.expr(expr).ty);
+        const request_root = try self.checkedExprOccurrenceNode(expr);
         try self.collectReassignedPatternStorage(
             pattern,
             request_root,
@@ -47160,7 +47223,7 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => {},
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedInterfaceToCell(pattern.ty, ty_cell),
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedPatternInterfaceToCell(pattern_id, ty_cell),
         }
         const data: BodyPatData = switch (pattern.data) {
             .pending,

@@ -9158,6 +9158,11 @@ pub const StoredCheckedExpr = struct {
     /// Producer-recorded fact that this expression or one of its checked child
     /// nodes contains a checker-authored diagnostic error.
     contains_diagnostic_error: bool = false,
+    /// Producer-recorded fact that this expression's ordinary result can carry
+    /// a post-check generated representation. Monotype uses this to isolate
+    /// only the checked occurrences whose runtime result can select an exact
+    /// representation distinct from the shared specialization mapping.
+    produces_exact_graph: bool = false,
 };
 
 /// POD wrapper for a stored checked pattern.
@@ -9166,6 +9171,9 @@ pub const StoredCheckedPattern = struct {
     ty: CheckedTypeId,
     source_region: base.Region,
     data: StoredCheckedPatternData,
+    /// Whether the value consumed by this pattern can carry an exact generated
+    /// representation at this projection.
+    produces_exact_graph: bool = false,
 };
 
 /// POD wrapper for a stored checked statement.
@@ -9519,6 +9527,12 @@ pub const CheckedBodyStoreView = struct {
         return reconstructCheckedPattern(self, self.stored_patterns[@intFromEnum(id)]);
     }
 
+    pub fn patternProducesExactGraph(self: CheckedBodyStoreView, id: CheckedPatternId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.stored_patterns.len) checkedArtifactInvariant("checked body view exact-pattern fact referenced a missing pattern", .{});
+        return self.stored_patterns[raw].produces_exact_graph;
+    }
+
     pub fn statement(self: CheckedBodyStoreView, id: CheckedStatementId) CheckedStatement {
         return reconstructCheckedStatement(self, self.stored_statements[@intFromEnum(id)]);
     }
@@ -9551,6 +9565,12 @@ pub const CheckedBodyStoreView = struct {
         const raw = @intFromEnum(expr_id);
         if (raw >= self.stored_exprs.len) checkedArtifactInvariant("checked body view diagnostic-error fact referenced a missing expression", .{});
         return self.stored_exprs[raw].contains_diagnostic_error;
+    }
+
+    pub fn exprProducesExactGraph(self: CheckedBodyStoreView, expr_id: CheckedExprId) bool {
+        const raw = @intFromEnum(expr_id);
+        if (raw >= self.stored_exprs.len) checkedArtifactInvariant("checked body view exact-result fact referenced a missing expression", .{});
+        return self.stored_exprs[raw].produces_exact_graph;
     }
 
     pub fn statementDiverges(self: CheckedBodyStoreView, statement_id: CheckedStatementId, mode: InlineExpectMode) bool {
@@ -10747,6 +10767,12 @@ pub const CheckedBodyStore = struct {
         return reconstructCheckedPattern(self, self.stored_patterns.items[@intFromEnum(id)]);
     }
 
+    pub fn patternProducesExactGraph(self: *const CheckedBodyStore, id: CheckedPatternId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.stored_patterns.items.len) checkedArtifactInvariant("checked body store exact-pattern fact referenced a missing pattern", .{});
+        return self.stored_patterns.items[raw].produces_exact_graph;
+    }
+
     pub fn statement(self: *const CheckedBodyStore, id: CheckedStatementId) CheckedStatement {
         return reconstructCheckedStatement(self, self.stored_statements.items[@intFromEnum(id)]);
     }
@@ -10797,6 +10823,12 @@ pub const CheckedBodyStore = struct {
         const raw = @intFromEnum(id);
         if (raw >= self.stored_exprs.items.len) checkedArtifactInvariant("checked body store diagnostic-error fact referenced a missing expression", .{});
         return self.stored_exprs.items[raw].contains_diagnostic_error;
+    }
+
+    pub fn exprProducesExactGraph(self: *const CheckedBodyStore, id: CheckedExprId) bool {
+        const raw = @intFromEnum(id);
+        if (raw >= self.stored_exprs.items.len) checkedArtifactInvariant("checked body store exact-result fact referenced a missing expression", .{});
+        return self.stored_exprs.items[raw].produces_exact_graph;
     }
 
     pub fn statementDiverges(self: *const CheckedBodyStore, id: CheckedStatementId, mode: InlineExpectMode) bool {
@@ -14502,6 +14534,9 @@ const ExactGraphProducerAnalysis = struct {
     binder_value_heads: []?u32,
     binder_exact_sources: []bool,
     binder_values: std.ArrayList(BinderValue),
+    pattern_value_heads: []?u32,
+    pattern_exact_sources: []bool,
+    pattern_values: std.ArrayList(BinderValue),
     projection_steps: std.ArrayList(ProjectionStep),
     dependency_heads: []?u32,
     dependency_caller_by_callee: []?canonical.CheckedProcedureTemplateId,
@@ -14540,6 +14575,12 @@ const ExactGraphProducerAnalysis = struct {
         const binder_exact_sources = try allocator.alloc(bool, bodies.patternBinderCount());
         errdefer allocator.free(binder_exact_sources);
         @memset(binder_exact_sources, false);
+        const pattern_value_heads = try allocator.alloc(?u32, bodies.patternCount());
+        errdefer allocator.free(pattern_value_heads);
+        @memset(pattern_value_heads, null);
+        const pattern_exact_sources = try allocator.alloc(bool, bodies.patternCount());
+        errdefer allocator.free(pattern_exact_sources);
+        @memset(pattern_exact_sources, false);
         const dependency_heads = try allocator.alloc(?u32, templates.templates.len);
         errdefer allocator.free(dependency_heads);
         @memset(dependency_heads, null);
@@ -14562,6 +14603,9 @@ const ExactGraphProducerAnalysis = struct {
             .binder_value_heads = binder_value_heads,
             .binder_exact_sources = binder_exact_sources,
             .binder_values = .empty,
+            .pattern_value_heads = pattern_value_heads,
+            .pattern_exact_sources = pattern_exact_sources,
+            .pattern_values = .empty,
             .projection_steps = .empty,
             .dependency_heads = dependency_heads,
             .dependency_caller_by_callee = dependency_caller_by_callee,
@@ -14569,6 +14613,7 @@ const ExactGraphProducerAnalysis = struct {
             .callable_evidence_dependencies = callable_evidence_dependencies,
         };
         errdefer self.binder_values.deinit(allocator);
+        errdefer self.pattern_values.deinit(allocator);
         errdefer self.projection_steps.deinit(allocator);
         errdefer self.dependencies.deinit(allocator);
         try self.indexBinderValues();
@@ -14581,6 +14626,9 @@ const ExactGraphProducerAnalysis = struct {
         self.allocator.free(self.dependency_caller_by_callee);
         self.allocator.free(self.dependency_heads);
         self.projection_steps.deinit(self.allocator);
+        self.pattern_values.deinit(self.allocator);
+        self.allocator.free(self.pattern_exact_sources);
+        self.allocator.free(self.pattern_value_heads);
         self.binder_values.deinit(self.allocator);
         self.allocator.free(self.binder_exact_sources);
         self.allocator.free(self.binder_value_heads);
@@ -14640,6 +14688,8 @@ const ExactGraphProducerAnalysis = struct {
                     }
                 },
                 .for_ => |for_| try self.markPatternExactSource(for_.pattern),
+                .lambda => |lambda| for (lambda.args) |arg| try self.markPatternExactSource(arg),
+                .hosted_lambda => |lambda| for (lambda.args) |arg| try self.markPatternExactSource(arg),
                 .pending,
                 .numeral,
                 .str_from_quote,
@@ -14661,7 +14711,6 @@ const ExactGraphProducerAnalysis = struct {
                 .nominal,
                 .zero_argument_tag,
                 .closure,
-                .lambda,
                 .binop,
                 .unary_minus,
                 .unary_not,
@@ -14682,7 +14731,6 @@ const ExactGraphProducerAnalysis = struct {
                 .anno_only,
                 .break_,
                 .return_,
-                .hosted_lambda,
                 .run_low_level,
                 => {},
             }
@@ -14698,6 +14746,11 @@ const ExactGraphProducerAnalysis = struct {
         pattern_id: CheckedPatternId,
     ) Allocator.Error!void {
         const pattern = self.bodies.pattern(pattern_id);
+        const pattern_raw = @intFromEnum(pattern_id);
+        if (pattern_raw >= self.pattern_exact_sources.len) {
+            return checkedArtifactInvariant("exact producer analysis referenced a missing exact-source pattern", .{});
+        }
+        self.pattern_exact_sources[pattern_raw] = true;
         switch (pattern.data) {
             .assign => |binder| {
                 const raw = @intFromEnum(binder);
@@ -14758,6 +14811,28 @@ const ExactGraphProducerAnalysis = struct {
         self.binder_value_heads[raw] = edge;
     }
 
+    fn addPatternValue(
+        self: *ExactGraphProducerAnalysis,
+        pattern: CheckedPatternId,
+        expr: CheckedExprId,
+        projection: []const ProjectionStep,
+    ) Allocator.Error!void {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.pattern_value_heads.len) {
+            return checkedArtifactInvariant("exact producer analysis referenced a missing pattern value", .{});
+        }
+        const projection_start: u32 = @intCast(self.projection_steps.items.len);
+        try self.projection_steps.appendSlice(self.allocator, projection);
+        const edge: u32 = @intCast(self.pattern_values.items.len);
+        try self.pattern_values.append(self.allocator, .{
+            .expr = expr,
+            .projection_start = projection_start,
+            .projection_len = @intCast(projection.len),
+            .next = self.pattern_value_heads[raw],
+        });
+        self.pattern_value_heads[raw] = edge;
+    }
+
     fn copyBinderValues(
         self: *ExactGraphProducerAnalysis,
         source: PatternBinderId,
@@ -14786,6 +14861,7 @@ const ExactGraphProducerAnalysis = struct {
         projection: *std.ArrayList(ProjectionStep),
     ) Allocator.Error!void {
         const pattern = self.bodies.pattern(pattern_id);
+        try self.addPatternValue(pattern_id, expr, projection.items);
         switch (pattern.data) {
             .assign => |binder| try self.addBinderValue(binder, expr, projection.items),
             .as => |as_| {
@@ -15169,6 +15245,22 @@ const ExactGraphProducerAnalysis = struct {
         var current = self.binder_value_heads[raw];
         while (current) |edge| {
             const value = self.binder_values.items[edge];
+            const projection = self.projection_steps.items[value.projection_start..][0..value.projection_len];
+            if (try self.exprProjectionProduces(value.expr, projection)) return true;
+            current = value.next;
+        }
+        return false;
+    }
+
+    fn patternProduces(self: *ExactGraphProducerAnalysis, pattern: CheckedPatternId) Allocator.Error!bool {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.pattern_value_heads.len) {
+            return checkedArtifactInvariant("exact producer analysis referenced a missing pattern result", .{});
+        }
+        if (self.pattern_exact_sources[raw]) return true;
+        var current = self.pattern_value_heads[raw];
+        while (current) |edge| {
+            const value = self.pattern_values.items[edge];
             const projection = self.projection_steps.items[value.projection_start..][0..value.projection_len];
             if (try self.exprProjectionProduces(value.expr, projection)) return true;
             current = value.next;
@@ -15571,11 +15663,9 @@ const ExactGraphProducerAnalysis = struct {
                 for (match_.branches) |branch| if (try self.exprProduces(branch.value)) break :blk true;
                 break :blk false;
             },
-            .block => |block| blk: {
-                if (try self.exprProduces(block.final_expr)) break :blk true;
-                for (block.statements) |statement| if (try self.statementReturnsProduced(statement)) break :blk true;
-                break :blk false;
-            },
+            // Explicit returns affect the enclosing callable's result, not the
+            // ordinary value produced by this block occurrence.
+            .block => |block| try self.exprProduces(block.final_expr),
             .field_access => |field| try self.exprProjectionStepProduces(
                 field.receiver,
                 .{ .record_field = field.field_name },
@@ -15588,13 +15678,10 @@ const ExactGraphProducerAnalysis = struct {
             ),
             .dbg, .expect => |child| try self.exprProduces(child),
             .expect_err => |expect_err| try self.exprProduces(expect_err.expr),
-            .return_ => |return_| try self.exprProduces(return_.expr) or
-                try self.exprReturnsProduced(return_.expr),
-            // The loop expression itself produces no item value. Only a
-            // non-local return nested in its operands can determine the
-            // enclosing function's exact result.
-            .for_ => |for_| try self.exprReturnsProduced(for_.expr) or
-                try self.exprReturnsProduced(for_.body),
+            // These expressions do not produce an ordinary runtime result.
+            // Their non-local returns are tracked separately by
+            // `exprReturnsProduced` when computing callable result flow.
+            .return_, .for_ => false,
             .run_low_level => |run| try self.lowLevelProduces(run.op, run.args),
             .pending,
             .numeral,
@@ -15634,7 +15721,7 @@ const ExactGraphProducerAnalysis = struct {
 fn recordExactResultFlowFacts(
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
-    checked_bodies: *const CheckedBodyStore,
+    checked_bodies: *CheckedBodyStore,
     templates: *CheckedProcedureTemplateTable,
     plans: *static_dispatch.StaticDispatchPlanTable,
     refs: *ResolvedValueRefTable,
@@ -15703,6 +15790,22 @@ fn recordExactResultFlowFacts(
         },
         .structural => {},
     };
+
+    // Procedure and evidence columns are now final. Publish the ordinary
+    // result fact on every expression once, so Monotype can consume it in O(1)
+    // instead of speculatively cloning a checked type graph at every use.
+    @memset(analysis.expr_states, .unknown);
+    @memset(analysis.return_states, .unknown);
+    for (checked_bodies.stored_exprs.items, 0..) |*stored, raw_expr| {
+        stored.produces_exact_graph = try analysis.exprProduces(
+            @enumFromInt(@as(u32, @intCast(raw_expr))),
+        );
+    }
+    for (checked_bodies.stored_patterns.items, 0..) |*stored, raw_pattern| {
+        stored.produces_exact_graph = try analysis.patternProduces(
+            @enumFromInt(@as(u32, @intCast(raw_pattern))),
+        );
+    }
 }
 
 fn selectedHoistedConstUse(
@@ -28614,7 +28717,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 60;
+    const serialized_layout_version: u32 = 61;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34451,8 +34554,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6C, 0xB6, 0x0B, 0xBB, 0x00, 0xC9, 0xE4, 0x14, 0xFA, 0x81, 0x11, 0x6B, 0x52, 0xC1, 0x73, 0xCC,
-        0xC1, 0x58, 0x73, 0x0A, 0x99, 0x42, 0xCF, 0xB0, 0x89, 0xBB, 0x3D, 0xFD, 0x6A, 0x24, 0xC5, 0x70,
+        0x77, 0x12, 0x53, 0x1F, 0x26, 0x2E, 0x3C, 0xBA, 0x10, 0x3F, 0x45, 0x2F, 0xEE, 0xDF, 0x41, 0x9F,
+        0x3E, 0xFD, 0x62, 0x85, 0xA3, 0x58, 0xA1, 0x93, 0x74, 0xDF, 0x47, 0xC4, 0x5D, 0x07, 0x55, 0x1C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

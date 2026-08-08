@@ -2744,6 +2744,13 @@ substitution. In particular, a compiler-generated interpolation iterator enters
 original checked-public callable argument and ask the callee to reconstruct or
 repair the representation.
 
+An already-produced operand cell enters that request directly. Monotype does
+not first instantiate the operand expression's checked type and map that copy
+to the cell: the request's single formal-to-produced traversal is the required
+relation. An existing result destination likewise enters as the request return
+directly. Only an exact-producing result with no destination needs an isolated
+checked occurrence to hold its not-yet-produced output.
+
 Iterator producer operations are applied to that completed callable, after
 lowered operands have supplied their exact cells. In particular, `Iter.next`
 and adapter operations derive their exact result from the iterator actually
@@ -2806,15 +2813,21 @@ list, call, field read, tuple-item read, or tag-payload read can still replace
 its checked destination with a distinct exact output cell while it lowers.
 Casting a branch or procedure result into an independent producer cell first
 instantiates a fresh checked copy from the destination's already-selected
-specialization substitutions. The copy isolates the eventual exact root; it
-must not independently default numeric, row, or other checked variables and
-only compare them with the destination after lowering.
-Every fresh checked occurrence inside a specialization follows this rule,
-including call arguments and results and dispatch results. It copies only
-substitutions that are already selected: an unresolved source variable remains
-an independent unresolved variable. Consequently, later exact production at
-one occurrence cannot flow backward into another occurrence merely because
-their checked types shared a variable before lowering.
+specialization substitutions only when checked output records that the
+expression can produce an exact graph. The copy isolates the eventual exact
+root; it must not independently default numeric, row, or other checked
+variables and only compare them with the destination after lowering. An
+expression recorded as producing only its ordinary checked result consumes the
+specialization's shared checked mapping directly; allocating an isolated graph
+for it is unnecessary work. The same explicit `produces_exact_graph` column
+selects isolated
+not-yet-produced call results, control-flow values, match scrutinees, and
+reassignment values.
+An isolated occurrence copies only substitutions that are already selected: an
+unresolved source variable remains an independent unresolved variable.
+Consequently, later exact production at one occurrence cannot flow backward
+into another occurrence merely because their checked types shared a variable
+before lowering.
 Once a body's generated identities are final and its relations are frozen, it
 commits those identities to the durable Monotype interner before lowering any
 deferred nested specialization. Nested lowering can therefore reuse the
@@ -2845,6 +2858,21 @@ do not ask whether any type contains a generated nominal. Checked body output
 collects direct result flow and dense procedure dependencies in one pass, then
 propagates the two columns with a reverse-call work queue. It must not repeatedly
 rescan procedure bodies until a fixed point is reached.
+After that fixed point, checked output records `produces_exact_graph` inline on every
+checked expression for its ordinary result (separate from any non-local return
+nested inside it). Monotype consumes that dense expression column in O(1) when
+deciding whether a use needs an isolated checked occurrence. It does not infer
+the answer from type shape or perform a generated-private containment query.
+Checked output also records `produces_exact_graph` on every pattern.
+Lambda parameters and iterator-item patterns are explicit exact sources;
+declarations, reassignments, and match patterns retain the exact source
+expression and its record-field, tuple-item, list-item, tag-payload, or
+nominal-backing steps. Pattern lowering therefore
+isolates only the occurrences whose producer edge can carry an exact graph,
+without scanning the value's Monotype. Once a binder has been assigned a local
+cell at that boundary, the cell is its exact type authority. Reads, captures,
+and copied lexical scopes consume that cell directly; they do not repeatedly
+instantiate and relate the binder's or lookup expression's checked type.
 An expression query that crosses an active recursion edge may cache a positive
 answer, but it must leave a negative answer unresolved: another member of the
 recursive component may still establish exact result flow before the work queue
