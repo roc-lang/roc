@@ -2255,6 +2255,22 @@ pub const InstGraph = struct {
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
 
+        // A checked occurrence can already have consumed this specialization's
+        // exact nominal selection before a later interface constraint creates
+        // a fresh public view. Normalize that checked-mapping pair here: the
+        // exact nominal remains authoritative, and the public node contributes
+        // only its checker-proved interface relation.
+        if (kind == .checked_mapping and
+            isGeneratedPrivateRootContent(public_content) and
+            private_content == .named and
+            private_content.named.backing != null and
+            private_content.named.backing.?.authority == .checked_public and
+            sameTypeDef(public_content.named.def, private_content.named.def))
+        {
+            try self.relateGeneratedOpaquePair(private_content, public_content.named, pending);
+            return;
+        }
+
         // A still-open cell contains no selected substitution to copy. Do not
         // merge it with the fresh occurrence: either side may later receive a
         // different producer-owned exact representation of the same checked
@@ -2327,18 +2343,15 @@ pub const InstGraph = struct {
                     }
                     switch (public_content) {
                         .unresolved => |public_var| {
-                            if (private_named.generated_iterator != null) {
-                                try self.materializeGeneratedIteratorPublicInterface(public_node, public_var, private_named);
-                                try self.relateGeneratedOpaquePair(
-                                    self.nodes.items[@intFromEnum(self.find(public_node))],
-                                    private_named,
-                                    pending,
-                                );
-                                return;
+                            if (public_var.numeric_default_phase != null or public_var.row_default != null) {
+                                Common.invariant("generated-private substitution received a defaultable request variable");
                             }
-                            if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
-                                return;
-                            }
+                            // A generic checked slot has no public nominal
+                            // contract to preserve. Select the exact produced
+                            // nominal directly; only an already-materialized
+                            // public nominal takes the interface path below.
+                            try self.selectNamedOverUnresolved(private_node, public_node);
+                            return;
                         },
                         .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
                     }
@@ -2689,70 +2702,6 @@ pub const InstGraph = struct {
         }
     }
 
-    fn resolvePublicVariableToImportedGeneratedIterator(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_node: NodeId,
-        private_named: InstNamed,
-    ) Allocator.Error!bool {
-        if (private_named.generated_iterator != null) return false;
-        if (private_named.def.generated == null) return false;
-        switch (private_named.def.iterator_representation) {
-            .minted, .forced_dynamic => {},
-            .none => return false,
-        }
-        const owner = private_named.builtin_owner orelse return false;
-        if (!static_dispatch.isIteratorOwner(owner)) return false;
-        if (private_named.args.len == 0) {
-            Common.invariant("imported generated iterator relation received no item argument");
-        }
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("imported generated iterator relation received a defaultable public variable");
-        }
-        try self.selectNamedOverUnresolved(private_node, public_node);
-        return true;
-    }
-
-    fn materializeGeneratedIteratorPublicInterface(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_named: InstNamed,
-    ) Allocator.Error!void {
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("generated iterator interface relation received a defaultable public variable");
-        }
-        if (private_named.args.len == 0) {
-            Common.invariant("generated iterator interface relation received no private item argument");
-        }
-        const generated = private_named.generated_iterator orelse
-            Common.invariant("generated iterator interface relation lacked producer provenance");
-        const public_source = generated.public_source;
-        if (!static_dispatch.isIteratorOwner(public_source.builtin_owner) or
-            public_source.def.iterator_representation != .none or
-            public_source.def.iterator_kind != .none)
-        {
-            Common.invariant("generated iterator interface relation received an invalid public iterator source");
-        }
-        if (public_source.backing.authority != .checked_public) {
-            Common.invariant("generated iterator interface relation received a non-public source backing");
-        }
-
-        const args = try self.arena().alloc(NodeId, 1);
-        args[0] = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-        try self.setContent(public_node, .{ .named = .{
-            .named_type = public_source.named_type,
-            .def = public_source.def,
-            .kind = public_source.kind,
-            .builtin_owner = public_source.builtin_owner,
-            .args = args,
-            .backing = public_source.backing,
-            .generated_iterator = null,
-            .declared_order = public_source.declared_order,
-        } });
-    }
-
     const BackingAccess = enum { inspectable, runtime_layout };
 
     fn backingAllowsAccess(use: Type.BackingUse, access: BackingAccess) bool {
@@ -2823,6 +2772,32 @@ pub const InstGraph = struct {
             produced_args,
             &.{},
         )).request;
+    }
+
+    /// Record the exact generated nominals selected by a complete function
+    /// request. Ordinary checked substitutions already share union-find
+    /// classes with the function body; public nominal interfaces deliberately
+    /// do not, so body instantiation consumes these explicit replacements by
+    /// checked-node identity.
+    pub fn collectFunctionRequestExactNominalSelections(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        exact_fn_node: NodeId,
+        selections: *collections.DenseMap(NodeId, NodeId),
+    ) Allocator.Error!void {
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+        try self.collectFunctionRequestSubstitutions(
+            checked_fn_node,
+            exact_fn_node,
+            &substitution,
+        );
+        var replacements = substitution.replacements.iterator();
+        while (replacements.next()) |entry| {
+            const exact = self.find(entry.value_ptr.*);
+            if (!isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(exact)])) continue;
+            try selections.put(self.find(entry.key_ptr.*), exact);
+        }
     }
 
     pub const MaterializedFunctionRequest = struct {
@@ -2946,12 +2921,13 @@ pub const InstGraph = struct {
         if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
             sameTypeDef(checked_content.named.def, produced_content.named.def))
         {
-            if (checked_content.named.args.len != produced_content.named.args.len) {
-                Common.invariant("generated-private function substitution changed public argument arity");
-            }
-            for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
-                try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
-            }
+            // Generated definitions are ordinary exact nominal types in a
+            // specialization request. Replacing the complete checked-public
+            // occurrence preserves the producer-selected runtime type in
+            // every argument/result position where the checked slot recurs.
+            // Multiple exact values for one checked slot meet through the
+            // normal produced-representation join in recordFunctionRequestReplacement.
+            try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
             return;
         }
 

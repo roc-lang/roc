@@ -13,6 +13,8 @@ pub const ProducedTypeFlow = union(enum) {
     box_from_item: struct { item_arg: u8, arity: u8 },
     box_item: struct { box_arg: u8, arity: u8 },
     list_item: struct { list_arg: u8, arity: u8 },
+    list_from_enclosing_function_arg_result: struct { function_arg: u8, arity: u8 },
+    enclosing_function_list_item: struct { function_arg: u8, arity: u8 },
     same_as_arg: struct { arg: u8, arity: u8 },
     list_insert: struct { list_arg: u8, item_arg: u8, arity: u8 },
     list_join: struct { left_arg: u8, right_arg: u8, arity: u8 },
@@ -24,6 +26,8 @@ pub const ProducedTypeFlow = union(enum) {
             .box_from_item => |flow| flow.arity,
             .box_item => |flow| flow.arity,
             .list_item => |flow| flow.arity,
+            .list_from_enclosing_function_arg_result => |flow| flow.arity,
+            .enclosing_function_list_item => |flow| flow.arity,
             .same_as_arg => |flow| flow.arity,
             .list_insert => |flow| flow.arity,
             .list_join => |flow| flow.arity,
@@ -636,6 +640,8 @@ pub const LowLevel = enum(u16) {
             result[@intFromEnum(LowLevel.list_reverse)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
             result[@intFromEnum(LowLevel.list_release_excess_capacity)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
             result[@intFromEnum(LowLevel.list_map_prepare_reuse)] = .{ .same_as_arg = .{ .arg = 0, .arity = 1 } };
+            result[@intFromEnum(LowLevel.list_map_cast_unsafe)] = .{ .list_from_enclosing_function_arg_result = .{ .function_arg = 1, .arity = 1 } };
+            result[@intFromEnum(LowLevel.list_map_extract_unsafe)] = .{ .enclosing_function_list_item = .{ .function_arg = 0, .arity = 2 } };
             result[@intFromEnum(LowLevel.list_swap)] = .{ .same_as_arg = .{ .arg = 0, .arity = 3 } };
             result[@intFromEnum(LowLevel.list_append_range_within)] = .{ .same_as_arg = .{ .arg = 0, .arity = 3 } };
             result[@intFromEnum(LowLevel.list_copy_range_within)] = .{ .same_as_arg = .{ .arg = 0, .arity = 4 } };

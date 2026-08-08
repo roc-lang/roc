@@ -12570,6 +12570,9 @@ const TypeInstantiationContext = struct {
     id: InstantiationScopeId,
     module_bytes: [32]u8,
     node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    /// Exact generated nominal selected for a checked-public node by this
+    /// procedure's complete function request.
+    exact_nominal_selections: collections.DenseMap(NodeId, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
@@ -12584,11 +12587,13 @@ const TypeInstantiationContext = struct {
             .id = id,
             .module_bytes = module_bytes,
             .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .exact_nominal_selections = collections.DenseMap(NodeId, NodeId).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiationContext) void {
         self.decl_scopes.deinit(self.allocator);
+        self.exact_nominal_selections.deinit();
         self.node_map.deinit();
     }
 };
@@ -12642,6 +12647,10 @@ const BodyContext = struct {
     /// If any argument finalizes as uninhabited, the body is unreachable.
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
+    /// Exact ABI of the checked procedure body currently being lowered.
+    /// Compiler-authored primitives whose phantom result type is absent from
+    /// their runtime operands consume this explicit specialization input.
+    enclosing_function: ?solve.FunctionNodes = null,
     /// Stable exact result selection owned by the active checked lambda
     /// specialization. Source `return` expressions and ordinary fallthrough
     /// both contribute to this one selection.
@@ -14606,6 +14615,7 @@ const BodyContext = struct {
         child.active_const_binding = self.active_const_binding;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
+        child.enclosing_function = self.enclosing_function;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
@@ -14630,6 +14640,10 @@ const BodyContext = struct {
             var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
                 try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            var selection_iter = self.instantiation.exact_nominal_selections.iterator();
+            while (selection_iter.next()) |entry| {
+                try child.instantiation.exact_nominal_selections.put(entry.key_ptr.*, entry.value_ptr.*);
             }
         }
 
@@ -15718,6 +15732,9 @@ const BodyContext = struct {
         const scoped_ty = self.scopedCheckedType(checked_ty);
         if (self.scopedNode(scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
+            if (self.instantiation.exact_nominal_selections.get(self.graph.rootNode(existing))) |exact| {
+                return self.graph.rootNode(exact);
+            }
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
@@ -16059,6 +16076,15 @@ const BodyContext = struct {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }
         const fn_nodes = try self.graph.functionNodes(fn_node);
+        const checked_fn_node = try self.instNode(template.checked_fn_root);
+        try self.graph.collectFunctionRequestExactNominalSelections(
+            checked_fn_node,
+            fn_node,
+            &self.instantiation.exact_nominal_selections,
+        );
+        const saved_enclosing_function = self.enclosing_function;
+        defer self.enclosing_function = saved_enclosing_function;
+        self.enclosing_function = fn_nodes;
         const saved_function_entry_demand_guards = self.function_entry_demand_guards;
         defer self.function_entry_demand_guards = saved_function_entry_demand_guards;
         self.function_entry_demand_guards = fn_nodes.args;
@@ -16072,7 +16098,7 @@ const BodyContext = struct {
                         body.root_expr,
                         lambda,
                         fn_node,
-                        try self.instNode(template.checked_fn_root),
+                        checked_fn_node,
                         try self.functionRequestReturnRelation(fn_node),
                     ),
                     .closure => |closure| closure_blk: {
@@ -16085,7 +16111,7 @@ const BodyContext = struct {
                             closure.lambda,
                             lambda_expr.data.lambda,
                             fn_node,
-                            try self.instNode(template.checked_fn_root),
+                            checked_fn_node,
                             try self.functionRequestReturnRelation(fn_node),
                         );
                     },
@@ -18051,9 +18077,18 @@ const BodyContext = struct {
         if (try self.lowerCallsiteIntrinsicCallExpr(checked_expr_id, checked_ret_ty, call, null)) |expr| {
             return expr;
         }
+        const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
+        if (call.direct_target) |target| {
+            if (self.lowLevelForResolvedTarget(target)) |op| {
+                if (try self.lowerProducedLowLevelExprAtNode(
+                    op,
+                    call.args,
+                    checked_ret_node,
+                )) |lowered| return lowered;
+            }
+        }
         const lowered = try self.lowerCall(checked_ret_ty, call);
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
-        const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
         if (!self.graph.sameClass(ret_node, checked_ret_node)) {
             _ = try self.graph.applyCheckedTypeMapping(checked_ret_node, ret_node);
         }
@@ -19738,7 +19773,7 @@ const BodyContext = struct {
                     request_fn.args,
                     try self.generatedIteratorNode(
                         .custom,
-                        public_fn.ret,
+                        request_fn.ret,
                         &.{ request_fn.args[0], request_fn.args[2] },
                         if (checked_args) |args| try self.callableArgumentEvidenceDigest(args[2]) else null,
                     ),
@@ -19750,7 +19785,7 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.list, public_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(.list, request_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .str_iter_utf8 => {
@@ -19759,7 +19794,7 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.str, public_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(.str, request_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .iter_single => {
@@ -19768,26 +19803,26 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.single, public_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(.single, request_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_exclusive, public_fn.ret, &.{}, null),
+                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, &.{}, null),
                 );
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_inclusive, public_fn.ret, &.{}, null),
+                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, &.{}, null),
                 );
             },
-            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, 1),
-            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, 1),
-            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, 1),
-            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, null),
-            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, null),
+            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, request_fn.ret, request_fn.args, checked_args, 1),
+            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, request_fn.ret, request_fn.args, checked_args, 1),
+            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, request_fn.ret, request_fn.args, checked_args, 1),
+            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, request_fn.ret, request_fn.args, checked_args, null),
+            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, request_fn.ret, request_fn.args, checked_args, null),
             .iter_concat => {
                 if (request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
@@ -19797,11 +19832,11 @@ const BodyContext = struct {
                 {
                     return try self.graphFunctionNode(
                         request_fn.args,
-                        try self.generatedIteratorNode(.concat, public_fn.ret, request_fn.args, null),
+                        try self.generatedIteratorNode(.concat, request_fn.ret, request_fn.args, null),
                     );
                 }
             },
-            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, public_fn.ret, request_fn.args, checked_args, null),
+            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, request_fn.ret, request_fn.args, checked_args, null),
             .iter_from_step, .range_done => {},
         }
         return null;
@@ -25329,6 +25364,30 @@ const BodyContext = struct {
                 try self.hostedTryCapabilityForResolvedTarget(target),
             );
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
+            const initial_fn_nodes = try self.graph.functionNodes(fn_node);
+            if (try self.lowerDirectCallWithUninhabitedArgument(call.args, initial_fn_nodes)) |lowered| return lowered;
+
+            // Complete ordinary operands before specializing the callee. An
+            // inline callable needs the substitutions selected by its sibling
+            // operands, so defer only lambdas and closures until the first
+            // complete request has been built. Every other operand is emitted
+            // exactly once and retained for the final call.
+            var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
+            defer pre_lowered.deinit(self.allocator);
+            try self.preLowerDirectCallOperands(
+                call.args,
+                initial_fn_nodes.args,
+                &pre_lowered,
+            );
+            const initial_produced_args = try self.producedCallArgumentNodes(
+                initial_fn_nodes.args,
+                pre_lowered.items,
+            );
+            fn_node = try self.graph.functionRequestFromProducedArguments(
+                self.graph.requestCheckedSource(fn_node) orelse fn_node,
+                fn_node,
+                initial_produced_args,
+            );
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
@@ -25337,25 +25396,30 @@ const BodyContext = struct {
                     fn_node = private_fn_node;
                 }
             }
-            const initial_fn_nodes = try self.graph.functionNodes(fn_node);
-            fn_node = try self.graph.functionRequestFromProducedArguments(
-                self.graph.requestCheckedSource(fn_node) orelse fn_node,
-                fn_node,
-                initial_fn_nodes.args,
+            var fn_nodes = try self.graph.functionNodes(fn_node);
+            var lowered_args = try self.lowerCallOperandsAtNodes(
+                call.args,
+                fn_nodes.args,
+                pre_lowered.items,
             );
-            const fn_nodes = try self.graph.functionNodes(fn_node);
-            try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
-            if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
+            const produced = try call_ctx.producedCallableNode(fn_node, lowered_args);
+            fn_node = produced.node;
+            lowered_args = produced.args;
             if (iterator_procedure) |procedure| {
-                if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
+                const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
+                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
+                    fn_node = private_fn_node;
+                }
+            }
+            fn_nodes = try self.graph.functionNodes(fn_node);
+            if (iterator_procedure) |procedure| {
+                if (try self.lowerGeneratedIteratorNextCall(procedure, lowered_args, fn_nodes)) |lowered| return lowered;
             }
             const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
-                var args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
-                if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
-                const produced = try call_ctx.producedCallableNode(fn_node, args);
-                fn_node = produced.node;
-                args = produced.args;
+                if (lowered_args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
                 const completed_fn = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, fn_node));
                 const captures = try self.directCallCaptureSpan(target);
@@ -25363,16 +25427,12 @@ const BodyContext = struct {
                     .ret_ty = DraftTypeCell.fromGraphNode(completed_fn.ret),
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = callee },
-                        .args = args,
+                        .args = lowered_args,
                         .iterator_procedure = iterator_procedure,
                         .captures = captures,
                     } },
                 };
             }
-            var lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
-            const produced = try call_ctx.producedCallableNode(fn_node, lowered_args);
-            fn_node = produced.node;
-            lowered_args = produced.args;
             const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
             const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
             const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
@@ -25479,20 +25539,18 @@ const BodyContext = struct {
     fn lowerGeneratedIteratorNextCall(
         self: *BodyContext,
         procedure: checked.IteratorProcedureId,
-        checked_args: []const checked.CheckedExprId,
+        lowered_args: DraftSpan(DraftExprId),
         fn_nodes: FunctionNodes,
     ) Allocator.Error!?LoweredCall {
         if (procedure != .iter_next) return null;
-        if (checked_args.len != 1 or fn_nodes.args.len != 1) {
+        const args = self.exprSpan(lowered_args);
+        if (args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("Iter.next reached Monotype with an unexpected arity");
         }
         const iterator_node = fn_nodes.args[0];
         if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) return null;
 
-        const iterator = try self.lowerExprAtTypeCell(
-            checked_args[0],
-            DraftTypeCell.fromGraphNode(iterator_node),
-        );
+        const iterator = args[0];
         const produced_iterator_node = try self.exprTypeCell(iterator).toGraphNode(self.graph);
         if (!self.isGeneratedIteratorEvidenceNode(produced_iterator_node)) {
             Common.invariant("generated iterator next argument did not produce generated iterator evidence");
@@ -26027,7 +26085,8 @@ const BodyContext = struct {
             function_nodes.ret,
             try self.graph.importMono(ret_ty),
         );
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return try self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args);
     }
 
     /// Return exact producer evidence for a call operand without sealing and
@@ -30309,6 +30368,86 @@ const BodyContext = struct {
         return null;
     }
 
+    fn preLowerDirectCallOperands(
+        self: *BodyContext,
+        checked_exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId,
+        pre_lowered: *std.ArrayList(PreLoweredOperand),
+    ) Allocator.Error!void {
+        if (checked_exprs.len != nodes.len) {
+            Common.invariant("direct-call argument arity differed from function graph node");
+        }
+        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
+            switch (self.view.bodies.expr(checked_expr).data) {
+                .lambda, .closure => continue,
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            }
+            const lowered = try self.lowerExprAtTypeCell(
+                checked_expr,
+                DraftTypeCell.fromGraphNode(node),
+            );
+            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+        }
+    }
+
+    fn producedCallArgumentNodes(
+        self: *BodyContext,
+        current_nodes: []const NodeId,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error![]const NodeId {
+        const produced_nodes = try self.graph.arena().dupe(NodeId, current_nodes);
+        for (pre_lowered) |operand| {
+            if (operand.index >= produced_nodes.len) {
+                Common.invariant("pre-lowered direct-call operand index exceeded call arity");
+            }
+            produced_nodes[operand.index] = try self.exprTypeCell(operand.expr).toGraphNode(self.graph);
+        }
+        return produced_nodes;
+    }
+
+    fn lowerCallOperandsAtNodes(
+        self: *BodyContext,
+        checked_exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!DraftSpan(DraftExprId) {
+        if (checked_exprs.len != nodes.len) {
+            Common.invariant("direct-call argument arity differed from function graph node");
+        }
+        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
+                try prepareProducedOperandForRequest(
+                    self.graph,
+                    node,
+                    try self.exprTypeCell(pre).toGraphNode(self.graph),
+                );
+            } else {
+                try self.relateExprAtNode(checked_expr, node);
+            }
+        }
+        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered, index) == null) {
+                try self.ensureNestedCallableAtNode(checked_expr, node);
+            }
+        }
+
+        const reserved = try self.reserveExprSpan(checked_exprs.len);
+        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
+        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
+            const lowered = if (self.preLoweredOperandAt(pre_lowered, index)) |pre|
+                try self.wrapCheckedNominalRequestAroundBackingValue(node, pre)
+            else
+                try self.lowerExprAtTypeCell(checked_expr, DraftTypeCell.fromGraphNode(node));
+            self.draft.setReservedExprSpanItem(reserved, index, lowered);
+            try applyProducedTypeToRequest(
+                self.graph,
+                node,
+                try self.exprTypeCell(lowered).toGraphNode(self.graph),
+            );
+        }
+        return reserved.span;
+    }
+
     fn lowerDispatchOperandsAtNodes(
         self: *BodyContext,
         operands: []const static_dispatch.StaticDispatchOperand,
@@ -31168,6 +31307,23 @@ const BodyContext = struct {
             .box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] }),
             .box_item => |box| try self.graph.boxElementNode(arg_nodes[box.box_arg]),
             .list_item => |list| try self.graph.listElementNode(arg_nodes[list.list_arg]),
+            .list_from_enclosing_function_arg_result => |source| blk: {
+                const enclosing = self.enclosing_function orelse
+                    Common.invariant("contextual low-level callable result reached lowering outside a procedure body");
+                if (source.function_arg >= enclosing.args.len) {
+                    Common.invariant("contextual low-level callable result named a missing function argument");
+                }
+                const callable = try self.graph.functionNodes(enclosing.args[source.function_arg]);
+                break :blk try self.graph.newNode(.{ .list = callable.ret });
+            },
+            .enclosing_function_list_item => |source| blk: {
+                const enclosing = self.enclosing_function orelse
+                    Common.invariant("contextual low-level list item reached lowering outside a procedure body");
+                if (source.function_arg >= enclosing.args.len) {
+                    Common.invariant("contextual low-level list item named a missing function argument");
+                }
+                break :blk try self.graph.listElementNode(enclosing.args[source.function_arg]);
+            },
             .same_as_arg => |same| arg_nodes[same.arg],
             .list_insert => |insert| blk: {
                 const list_node = arg_nodes[insert.list_arg];
@@ -44816,7 +44972,8 @@ const BodyContext = struct {
             const expected_node = try expected.toGraphNode(self.graph);
             request_ret = try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
         }
-        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
+        return try self.graph.functionRequestFromProducedArguments(fn_node, request_fn, request_args);
     }
 
     fn iteratorOperandNode(
@@ -45179,6 +45336,12 @@ const BodyContext = struct {
             // finalization will force only slots that actually joined distinct
             // minted iterator identities.
             try self.graph.markRecursiveValueSlot(carry_node);
+            const current_node = try self.localTypeCell(current).toGraphNode(self.graph);
+            if (self.graph.content(carry_node) != .named and self.graph.content(current_node) != .named) {
+                try self.graph.applyCompoundStorageRepresentation(carry_node, current_node);
+            } else {
+                try applyProducedTypeToRequest(self.graph, carry_node, current_node);
+            }
         }
         return try self.storedLocalValueAtTypeCell(current, carry.ty);
     }

@@ -4080,6 +4080,29 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: list map preserves an exact iterator result item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = List.map([1.I64, 2], |value| [value].iter())
+        \\    selected = stored.get(1).ok_or([].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2]" },
+    },
+    .{
+        .name = "inspect: list map extracts an exact iterator input item",
+        .source_kind = .module,
+        .source =
+        \\main = List.map(
+        \\    [[1.I64, 2, 3].iter()],
+        \\    |iter| Iter.fold(iter, 0.I64, |sum, value| sum + value),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "[6]" },
+    },
+    .{
         .name = "inspect: generic procedure passes through exact iterator",
         .source_kind = .module,
         .source =

@@ -131,24 +131,6 @@ const Solver = struct {
     };
 
     const BoundLowLevel = enum {
-        box_box,
-        box_unbox,
-        list_get_unsafe,
-        list_append_unsafe,
-        list_concat,
-        list_reserve,
-        list_drop_at,
-        list_sublist,
-        list_take_first,
-        list_take_last,
-        list_drop_first,
-        list_drop_last,
-        list_release_excess_capacity,
-        list_reverse,
-        list_set,
-        list_replace_unsafe,
-        list_swap,
-        list_prepend,
         dict_pseudo_seed,
         hasher_finish,
         crypto_sha256_hash_bytes,
@@ -179,6 +161,7 @@ const Solver = struct {
 
     const ReturnContext = struct {
         mono_ret: MonoType.TypeId,
+        solved_args: Type.Span,
         solved_ret: Type.TypeVarId,
     };
 
@@ -429,6 +412,7 @@ const Solver = struct {
 
         try self.return_contexts.append(self.allocator, .{
             .mono_ret = fn_.ret,
+            .solved_args = func.args,
             .solved_ret = func.ret,
         });
         defer _ = self.return_contexts.pop();
@@ -1514,95 +1498,9 @@ const Solver = struct {
         args: []const Type.TypeVarId,
     ) Allocator.Error!void {
         if (arg_exprs.len != args.len) Common.invariant("low-level expression and type argument counts differed");
+        if (try self.bindProducedLowLevelTypeFlow(op, expected, expected_mono, arg_exprs, args)) return;
         const bound_op = std.meta.stringToEnum(BoundLowLevel, @tagName(op)) orelse return;
         switch (bound_op) {
-            .box_box => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(args[0], try self.boxElem(expected));
-                try self.markErasedCallablesReachedByType(args[0]);
-            },
-            .box_unbox => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(expected, try self.boxElem(args[0]));
-                try self.markErasedCallablesReachedByType(expected);
-            },
-            .list_get_unsafe => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, try self.listElem(args[0]));
-            },
-            .list_append_unsafe => {
-                expectLowLevelArity(op, args, 2);
-                // Monotype has already selected the exact result
-                // representation from the inserted item. The input list is a
-                // distinct runtime occurrence and may still have the checked-
-                // public element representation (for example, appending to
-                // an empty list).
-                try self.unify(args[1], try self.listElem(expected));
-                try self.relateSameMonotypeOccurrences(
-                    expected,
-                    expected_mono,
-                    args[0],
-                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
-                );
-            },
-            .list_concat => {
-                expectLowLevelArity(op, args, 2);
-                for (args, arg_exprs) |arg, arg_expr| {
-                    try self.relateSameMonotypeOccurrences(
-                        expected,
-                        expected_mono,
-                        arg,
-                        self.lifted.exprs[@intFromEnum(arg_expr)].ty,
-                    );
-                }
-            },
-            .list_reserve,
-            .list_drop_at,
-            .list_sublist,
-            .list_take_first,
-            .list_take_last,
-            .list_drop_first,
-            .list_drop_last,
-            => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-            },
-            .list_release_excess_capacity,
-            .list_reverse,
-            => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(expected, args[0]);
-            },
-            .list_set => {
-                expectLowLevelArity(op, args, 3);
-                try self.unify(args[2], try self.listElem(expected));
-                try self.relateSameMonotypeOccurrences(
-                    expected,
-                    expected_mono,
-                    args[0],
-                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
-                );
-            },
-            .list_replace_unsafe => {
-                expectLowLevelArity(op, args, 3);
-                const input_elem = try self.listElem(args[0]);
-                try self.unify(args[2], try self.listElem(try self.recordFieldByLabel(expected, "list")));
-                try self.unify(try self.recordFieldByLabel(expected, "prev"), input_elem);
-            },
-            .list_swap => {
-                expectLowLevelArity(op, args, 3);
-                try self.unify(expected, args[0]);
-            },
-            .list_prepend => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(args[1], try self.listElem(expected));
-                try self.relateSameMonotypeOccurrences(
-                    expected,
-                    expected_mono,
-                    args[0],
-                    self.lifted.exprs[@intFromEnum(arg_exprs[0])].ty,
-                );
-            },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
             .crypto_sha256_hash_bytes,
@@ -1634,6 +1532,92 @@ const Solver = struct {
             .hasher_write_str,
             => expectLowLevelArity(op, args, 2),
         }
+    }
+
+    /// Carry callable identity through the exact produced-type relationship
+    /// declared by the primitive itself. Monotype has already selected these
+    /// runtime types; Lambda Solved only relates the fresh callable slots of
+    /// the corresponding runtime occurrences.
+    fn bindProducedLowLevelTypeFlow(
+        self: *Solver,
+        op: can.CIR.Expr.LowLevel,
+        expected: Type.TypeVarId,
+        expected_mono: MonoType.TypeId,
+        arg_exprs: []const Lifted.ExprId,
+        args: []const Type.TypeVarId,
+    ) Allocator.Error!bool {
+        switch (op.producedTypeFlow()) {
+            .none => return false,
+            .box_from_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(args[flow.item_arg], try self.boxElem(expected));
+                try self.markErasedCallablesReachedByType(args[flow.item_arg]);
+            },
+            .box_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, try self.boxElem(args[flow.box_arg]));
+                try self.markErasedCallablesReachedByType(expected);
+            },
+            .list_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, try self.listElem(args[flow.list_arg]));
+            },
+            .list_insert => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(args[flow.item_arg], try self.listElem(expected));
+                try self.relateSameMonotypeOccurrences(
+                    expected,
+                    expected_mono,
+                    args[flow.list_arg],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[flow.list_arg])].ty,
+                );
+            },
+            .list_join => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                inline for (.{ flow.left_arg, flow.right_arg }) |arg_index| {
+                    try self.relateSameMonotypeOccurrences(
+                        expected,
+                        expected_mono,
+                        args[arg_index],
+                        self.lifted.exprs[@intFromEnum(arg_exprs[arg_index])].ty,
+                    );
+                }
+            },
+            .list_replace => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const input_elem = try self.listElem(args[flow.list_arg]);
+                const result_list = try self.recordFieldByLabel(expected, "list");
+                try self.unify(args[flow.item_arg], try self.listElem(result_list));
+                try self.unify(try self.recordFieldByLabel(expected, "prev"), input_elem);
+            },
+            .same_as_arg => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, args[flow.arg]);
+            },
+            .list_from_enclosing_function_arg_result => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const enclosing_arg = try self.enclosingFunctionArg(flow.function_arg);
+                const callable = try self.functionShape(enclosing_arg);
+                try self.unify(try self.listElem(expected), callable.ret);
+            },
+            .enclosing_function_list_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const enclosing_arg = try self.enclosingFunctionArg(flow.function_arg);
+                try self.unify(expected, try self.listElem(enclosing_arg));
+            },
+        }
+        return true;
+    }
+
+    fn enclosingFunctionArg(self: *Solver, index: usize) Allocator.Error!Type.TypeVarId {
+        if (self.return_contexts.items.len == 0) {
+            Common.invariant("contextual low-level type flow reached Lambda Solved outside a function");
+        }
+        const args = self.return_contexts.items[self.return_contexts.items.len - 1].solved_args;
+        if (index >= args.count()) {
+            Common.invariant("contextual low-level type flow referenced an absent enclosing function argument");
+        }
+        return self.program.types.spanItem(args, index);
     }
 
     /// Two runtime occurrences of one exact Monotype still receive separate

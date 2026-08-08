@@ -15017,9 +15017,13 @@ const ExactGraphProducerAnalysis = struct {
         if (raw >= self.refs.records.len) return checkedArtifactInvariant("exact producer analysis referenced a missing resolved value", .{});
         return switch (self.refs.records[raw].ref) {
             .local_proc => |local| try self.callableExprProduces(local.expr),
+            // A callable parameter's result representation is selected by the
+            // concrete callable supplied for this specialization. Invoking it
+            // is therefore an exact-result producer even though checking only
+            // records the public function type.
+            .local_param => true,
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
             .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
-            .local_param,
             .local_value,
             .local_mutable_version,
             .pattern_binder,
@@ -15487,6 +15491,9 @@ const ExactGraphProducerAnalysis = struct {
             .box_from_item => |box| try self.exprProduces(args[box.item_arg]),
             .box_item => |box| try self.exprProduces(args[box.box_arg]),
             .list_item => |list| try self.exprProduces(args[list.list_arg]),
+            .list_from_enclosing_function_arg_result,
+            .enclosing_function_list_item,
+            => false,
             .same_as_arg => |same| try self.exprProduces(args[same.arg]),
             .list_insert => |insert| try self.exprProduces(args[insert.list_arg]) or
                 try self.exprProduces(args[insert.item_arg]),
@@ -15519,7 +15526,7 @@ const ExactGraphProducerAnalysis = struct {
                     .local_proc => |local| try self.callableExprProduces(local.expr),
                     .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
                     .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
-                    .local_param,
+                    .local_param => true,
                     .local_value,
                     .local_mutable_version,
                     .pattern_binder,
