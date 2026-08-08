@@ -4385,6 +4385,39 @@ pub fn build(b: *std.Build) void {
 
     // Build WASM static library fixture and test runner with bytebox.
     {
+        const provided_callable_wasm_host = b.addObject(.{
+            .name = "provided_callable_wasm_host",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/wasm/provided-callable-host/platform/host.zig"),
+                .target = wasm32_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        configureBackend(provided_callable_wasm_host, wasm32_resolved_target);
+        provided_callable_wasm_host.root_module.addImport("builtins", roc_modules.builtins);
+        provided_callable_wasm_host.root_module.addImport("host_alloc", roc_modules.host_alloc);
+        provided_callable_wasm_host.link_function_sections = true;
+        provided_callable_wasm_host.link_data_sections = true;
+
+        const copy_provided_callable_wasm_host = b.addUpdateSourceFiles();
+        copy_provided_callable_wasm_host.addCopyFileToSource(
+            provided_callable_wasm_host.getEmittedBin(),
+            "test/wasm/provided-callable-host/platform/targets/wasm32/host.wasm",
+        );
+
+        const build_wasm_provided_callable_app = b.addRunArtifact(roc_exe);
+        build_wasm_provided_callable_app.addArgs(&.{
+            "build",
+            "test/wasm/provided-callable-host/app.roc",
+            "--target=wasm32",
+            "--output=test/wasm/provided-callable-host/app.wasm",
+        });
+        build_wasm_provided_callable_app.step.dependOn(&copy_provided_callable_wasm_host.step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.step);
+
         const build_wasm_app = b.addRunArtifact(roc_exe);
         build_wasm_app.addArgs(&.{
             "build",
@@ -4595,6 +4628,19 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
+            const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_provided_callable_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/provided-callable-host/app.wasm",
+                "--expected",
+                "42",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+            });
+            run_wasm_provided_callable_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
+
             const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_list_builtin_test.addArgs(&.{
                 "--wasm-path",
