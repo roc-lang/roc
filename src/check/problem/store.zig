@@ -209,6 +209,7 @@ pub const Store = struct {
                     .effectful_expect,
                     .effectful_function_name,
                     .annotation_only_value,
+                    .unsupported_generated_method,
                     .hosted_unboxed_function,
                     .host_boundary_open_row,
                     .platform_def_not_found,

@@ -548,6 +548,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_anno_only = .{
             .ident = rand_ident_idx(),
+            .kind = .unsupported_generated_method,
         },
     });
     try expressions.append(gpa, CIR.Expr{
