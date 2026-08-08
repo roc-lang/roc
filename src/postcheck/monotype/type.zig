@@ -302,11 +302,6 @@ pub const Store = struct {
     /// Empty on a field-wise clone.
     dedup_excluded: std.AutoHashMap(TypeId, void),
 
-    /// Debug/probe-only sealed-population sink. When set, every committed final
-    /// seal id is recorded here so a Debug probe can compare the full sealed
-    /// population against a directed re-translation (reunify.md section 9, Slice 7
-    /// Stage A). Never set on a production lowering path; defaults to null so a
-    /// field-wise clone and a plain `init` both leave it disconnected.
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{

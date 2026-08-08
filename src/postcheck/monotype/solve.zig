@@ -418,9 +418,6 @@ pub const InstGraph = struct {
     /// Slice 7 flip-prep). The per-specialization rehearsal owns the storage and
     /// attaches it while this graph lowers; null on every other path, and read by
     /// nothing inside this module.
-    /// Debug/probe-only: the rehearsal that owns `trace`, so the seal exit can
-    /// compare what it produces against directed translation the same way the
-    /// live exit does (reunify.md 13.2 step 2a).
 
     /// Allocation-free scratch for exact generated-private containment walks.
     /// Node ids are dense, so an epoch array replaces a fresh hash set on every
@@ -2671,16 +2668,6 @@ pub const InstGraph = struct {
         try self.unifyRootsTransitively(a, b, false);
     }
 
-    /// Debug/probe-only: whether a class holds a variable the checked module
-    /// left undisposed, which is the population the seal comparison isolated
-    /// as the graph's only irreplaceable contribution.
-    fn classHasResidual(self: *InstGraph, node: NodeId) bool {
-        return switch (self.nodes.items[@intFromEnum(self.find(node))]) {
-            .unresolved => true,
-            else => false,
-        };
-    }
-
     /// Join two matching structural request containers after their components
     /// have already been related with public/private-aware edges. The request
     /// node remains the class representative so later body lowering continues
@@ -4066,7 +4053,6 @@ pub const GraphTypeFinals = struct {
     /// children through the same entry point, so only a depth-zero call is a
     /// read a caller asked for; the rest is the graph materializing itself
     /// (reunify.md 13.2 step 2a).
-    seal_depth: u32 = 0,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();

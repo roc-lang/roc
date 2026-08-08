@@ -2081,10 +2081,6 @@ const Builder = struct {
     builtin_try_def: ?Type.TypeDef = null,
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
-    /// Bounded count of recorded seam divergences (Debug measurement only).
-    seam_divergences_noted: usize = 0,
-    /// Whether this lowering has already named its modules for the census.
-    module_names_dumped: bool = false,
     /// The specialization graph currently being lowered. Template body
     /// requests made anywhere inside that specialization defer to its end,
     /// when its types are final and specialization keys are stable.
@@ -4851,23 +4847,6 @@ const Builder = struct {
         Common.invariant("procedure template referenced a checked module that is not in the lowering input");
     }
 
-    /// Like `moduleForDigest` but returns null instead of panicking when the
-    /// module is not in the lowering input. The directed-translation probe reads
-    /// a sealed type's provenance module, which — for an imported declaration
-    /// whose defining view never reaches lowering — may not be present; the probe
-    /// records that as a skip rather than aborting the compile.
-    /// Debug/probe-only: name every module this lowering sees, so a census line
-    /// keyed by a module digest can be read as a module name.
-    fn dumpModuleNames(self: *Builder) void {
-        if (comptime !census.enabled) return;
-        if (self.module_names_dumped) return;
-        self.module_names_dumped = true;
-        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
-        self.dumpOneModuleName(raw_path, moduleView(self.root_view));
-        for (self.modules.imports) |imported| self.dumpOneModuleName(raw_path, moduleView(imported));
-        for (self.modules.root.relation_modules) |relation| self.dumpOneModuleName(raw_path, moduleView(relation));
-    }
-
     fn dumpOneModuleName(self: *Builder, raw_path: [*:0]const u8, view: ModuleView) void {
         const module_hex = std.fmt.bytesToHex(view.key.bytes[0..8].*, .lower);
         const line = std.fmt.allocPrint(
@@ -4880,7 +4859,6 @@ const Builder = struct {
     }
 
     fn moduleForDigestOrNull(self: *Builder, module_bytes: [32]u8) ?ModuleView {
-        self.dumpModuleNames();
         if (moduleBytesEqual(module_bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
         for (self.modules.imports) |imported| {
             if (moduleBytesEqual(module_bytes, imported.key.bytes)) return moduleView(imported);
