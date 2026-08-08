@@ -7477,3 +7477,45 @@ test "check type - weak top-level literal rejects second use at different type" 
     ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
+
+// PRINCIPALITY. Writing an annotation may only ever NARROW an inferred type,
+// never widen it. These two modules differ ONLY in whether the dispatch
+// chain's receiver carries an annotation, so every def must infer the same
+// type in both.
+//
+// This states the promise itself rather than the machinery that keeps it, so
+// it fails no matter HOW a change breaks it—in particular if a later change
+// ever settles an outer-scope receiver before the whole module has been read,
+// every def resting on that receiver would silently be decided against a
+// guessed type instead of the real one, and this test is what catches it.
+//
+// The two call sites at different element types are load-bearing: `f`'s
+// polymorphism is only observable through them. With one call site, or none,
+// both modules agree even when the receiver's chain has collapsed `f` to a
+// single module-wide type, and the test proves nothing.
+const principality_chain_defs = &[_]DefAndExpectation{
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated receiver, two call sites" {
+    const source =
+        \\top_str : Str
+        \\top_str = "a,b,c"
+        \\f = |g| top_str.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+test "check type - principality - inferred receiver, two call sites" {
+    const source =
+        \\top_str = "a,b,c"
+        \\f = |g| top_str.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}

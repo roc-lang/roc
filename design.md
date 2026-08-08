@@ -3248,6 +3248,67 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
+### Delayed Generalization For Outer-Rooted Dispatch Chains
+
+A body that dispatches on an outer-scope WEAK VALUE whose literal is still open
+cannot decide at its own generalization boundary which of its type variables
+generalize. The method's signature is unknown until the receiver settles, and
+the receiver cannot settle until enough of the program has been read, because
+any later definition may still constrain it.
+
+Two outer receivers look alike here and must not be treated alike. The open
+literal is the whole test:
+
+- A weak value (`s = "a,b,c"`, whether top-level or an enclosing frame's local)
+  has one. Nothing settles it in time, and a use of the def that dispatches on
+  it pins that def first, so waiting is the only way the def's inferred type
+  comes out the same as it would with the value annotated.
+- A PARAMETER of an enclosing lambda does not, even when it looks like it:
+  unifying it with a literal argument (`offset == 1`) leaves it carrying a
+  literal conversion of its own. Its type belongs to the caller, the enclosing
+  frame's boundary is the right place to decide it, and waiting for a
+  settlement that is not coming would collapse the enclosing function to
+  whatever that literal defaults to.
+
+Deciding anyway is not a neutral choice, and both available guesses are wrong.
+Freezing the chain's vars to the receiver's rank publishes one monomorphic type
+module-wide, so the first use pins the def for every other use, and annotating
+the receiver then makes the def MORE polymorphic—an annotation that widens the
+inferred type, which is not type inference. Letting them generalize is the
+opposite error: the chain fires once, against the scheme's own vars, so every
+per-use instantiation is left unconstrained.
+
+The rule: such a boundary parks its frame instead of deciding
+(`suspendGeneralizationIfChained`), and every var the chain reaches joins the
+boundary's protected set so nothing defaults it in the meantime. At module
+finalize, once literal defaulting has settled the receivers,
+`resumeSuspendedGeneralizations` re-establishes each parked frame at its own
+rank and generalizes it there, so the ordinary rank-adjustment rules make the
+decision with the information the frame was missing. A lookup of a parked def
+parks too, recording a pending instantiation rather than linking to the def's
+in-flight var, and takes its own instantiation once the scheme exists; a parked
+def that turns out not to generalize gives its uses the ordinary shared link.
+Parked frames resume in check order, so a def's scheme exists before the defs
+that use it are decided, and resumption never iterates a hash map—unstable
+iteration order there would make inferred types vary between runs.
+
+ORDERING IS PART OF THE RULE, not an implementation detail. Resumption must
+follow receiver settling. Settling a receiver early—because its type "looks
+obvious" before the whole module has been read—silently returns every parked
+decision to a guess, producing a plausible wrong type with no crash and no
+diagnostic. `resumeSuspendedGeneralizations` therefore asserts that module-wide
+defaulting ran before it, and the accepted side is pinned by a test that states
+the promise itself rather than the machinery.
+
+Both sides are pinned by tests in src/check/test/type_checking_integration.zig:
+accepted—"principality - annotated receiver, two call sites" and "principality -
+inferred receiver, two call sites", which assert IDENTICAL types for two modules
+differing only in the receiver's annotation (two call sites at different element
+types are load-bearing; with one call site or none, both modules agree even when
+the def has collapsed to a single module-wide type); rejected—"weak top-level
+literal rejects second use at different type", since parking a generalization
+decision must not turn a weak value into a polymorphic one.
+
 ### Rewrite Inventory
 
 Every solver-mutating rewrite in checking, classified. A change that adds a
@@ -3300,6 +3361,14 @@ Other solved-graph mutations:
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
   committed probes of ordinary unification.
+- `suspendGeneralizationIfChained` / `resumeSuspendedGeneralizations`
+  (`setDescRank`)—policy: Delayed Generalization For Outer-Rooted Dispatch
+  Chains (above). A parked frame's own vars are re-ranked back into the frame
+  when it resumes, because binding the def's pattern and firing the chain
+  stamped them with the rank that happened to be current while the frame was
+  away. Vars reachable from any other definition are excluded, so a var an
+  enclosing scope or a weak value can also reach stays where it was declared
+  and no other scope's var is quantified.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 
