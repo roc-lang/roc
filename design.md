@@ -2810,6 +2810,11 @@ table. Isolated body ABIs and generated callable wrappers share the immutable
 span as explicit request metadata; they do not copy its entries. At body entry,
 Monotype consumes the span directly and selects its generated-private roots; it
 does not reconstruct them by walking the complete function type.
+If a request already has that explicit source and substitution span, its source
+is unchanged, it has no new checked components, and every produced argument is
+already in the request argument's union class, refinement is a true no-op. It
+returns the existing request and empty component span immediately; rebuilding
+or rematerializing the same request graph is forbidden unnecessary work.
 
 Each completed argument is its own structural authority, so two independent
 concrete `Iter(U64)` parameters may retain two different exact identities.
@@ -4190,22 +4195,25 @@ available before any dependency identity is chosen. Transitive replay reaches
 a fixed point across arbitrary wrapper depth and recursive call graphs without
 making source syntax or body-lowering order part of type meaning.
 
-Repeated open dependency requests are memoized by the complete procedure
-family (template, method scope, and checked source-function key), exact evidence
-topology, and an immutable alpha-normalized graph-native shape captured from
-the function request after the caller-owned relations have been applied.
-Digests select an expected O(1) bucket only; exact evidence equality and exact
-shape bytes are the collision authorities. The first request computes the
-transitive relation closure. Equivalent requests retain independent graph cells
-while relations are still being produced, then relate directly to the live
-representative's final interface after the whole closure is known. An active
-exact memo entry is a recursive edge and joins the active representative.
-Requests with different concrete interfaces, checked source identities, method
-scopes, or evidence can never share an entry. Work is therefore proportional to
-relation sites plus unique exact graph requests, rather than to the number of
-duplicate call paths through the same interface problem.
+Repeated dependency requests are memoized by the complete procedure family
+(template, method scope, and checked source-function key), exact evidence
+topology, and the request identity captured after the caller-owned relations
+have been applied. A fully resolved request uses an immutable active `TypeId`
+snapshot and the ordinary cached specialization digest and structural equality
+of that snapshot. A still-unresolved request uses an immutable
+alpha-normalized graph-native shape. Digests select an expected O(1) bucket
+only; exact type equality or exact open-shape bytes are the corresponding
+collision authorities. The first request computes the transitive relation
+closure. Equivalent requests retain independent graph cells while relations
+are still being produced, then relate directly to the live representative's
+final interface after the whole closure is known. An active exact memo entry is
+a recursive edge and joins the active representative. Requests with different
+concrete interfaces, checked source identities, method scopes, or evidence can
+never share an entry. Work is therefore proportional to relation sites plus
+unique exact requests, rather than to the number of duplicate call paths
+through the same interface problem.
 
-The alpha-normalized shape stream writes a graph-owned generated iterator as
+The alpha-normalized open-shape stream writes a graph-owned generated iterator as
 the same content-addressed nominal identity that representation finalization
 will stamp on the type. The identity hashes the public source, item type,
 producer kind, ordered component identities, and callable evidence; nested
@@ -4216,7 +4224,9 @@ imported generated type uses its stored identity directly. Generated-lookup
 keys that precede durable identity finalization encode graph-owned generated
 nodes as first-encounter definitions and dense references so shared producer
 history is still traversed linearly without turning graph ids into durable
-type identity.
+type identity. Capturing one open shape serializes and hashes the graph in one
+pass, retaining the emitted bytes as collision authority; a sizing pass may not
+walk and hash the same interface a second time.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -4360,17 +4370,27 @@ than refilling an observed `TypeId`. The draft retains the graph node, not the
 snapshot id, and final sealing allocates fresh durable ids. Consequently no
 durable `TypeId` can change shape after a consumer has seen it.
 
+A graph-owned generated iterator may enter an active snapshot only when all of
+its explicit identity inputs are resolved. It is then stamped with the
+content-addressed identity determined by those producer inputs.
+The snapshot is scratch identity only: it is not published to the durable
+generated-type interner, and later relation changes invalidate the current
+snapshot cache normally. This makes the generated nominal an ordinary atomic
+named type for resolved specialization lookup without scanning or serializing
+its private backing.
+
 Snapshot invalidation is logically immediate but may be physically coalesced.
 A relation mutation marks the complete active-snapshot cache stale; the next
 inspection clears it once before performing any lookup. Multiple mutations with
 no intervening inspection therefore do not repeatedly clear the same cache, and
 no inspection may consume an entry produced before the most recent mutation.
 
-Interface replay never materializes a provisional `TypeId`. Its graph-native
-shape preserves unresolved-variable aliasing, defaults, recursion, and exact
-generated-producer evidence directly. Memo hits relate duplicate request nodes
-to the representative node after replay finishes; they do not serialize and
-re-import the representative interface.
+Interface replay never materializes a provisional type for an unresolved
+request. Its graph-native shape preserves unresolved-variable aliasing,
+defaults, recursion, and exact generated-producer evidence directly. A resolved
+request uses the immutable active snapshot described above. Memo hits relate
+duplicate request nodes to the representative node after replay finishes; they
+do not serialize and re-import the representative interface.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every

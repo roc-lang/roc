@@ -15102,6 +15102,7 @@ fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype graph identity", &monotypeGraphIdentityCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
 }
 
@@ -15126,6 +15127,7 @@ fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     );
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype graph identity", &monotypeGraphIdentityCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
 }
 
@@ -15179,7 +15181,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [23]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15201,9 +15203,19 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]
         .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
         .{ .name = "Produced-type joins", .count = graph.produced_type_joins },
         .{ .name = "Function request builds", .count = graph.function_request_builds },
+        .{ .name = "Function request no-op reuses", .count = graph.function_request_noop_reuses },
         .{ .name = "Function request pairs visited", .count = graph.function_request_pairs_visited },
         .{ .name = "Function request replacements", .count = graph.function_request_replacements },
         .{ .name = "Function request nodes materialized", .count = graph.function_request_nodes_materialized },
+    };
+}
+
+fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [10]progress.Counter {
+    const graph = diagnostics.graph;
+    return .{
+        .{ .name = "Open function shapes captured", .count = graph.open_function_shape_requests },
+        .{ .name = "Open function shape nodes visited", .count = graph.open_function_shape_nodes_visited },
+        .{ .name = "Open function shape bytes written", .count = graph.open_function_shape_bytes_written },
         .{ .name = "Generated representation roots finalized", .count = graph.generated_representation_roots_finalized },
         .{ .name = "Generated identity roots finalized", .count = graph.generated_identity_roots_finalized },
         .{ .name = "Generated identity roots coalesced", .count = graph.generated_identity_roots_coalesced },
@@ -15301,6 +15313,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.produced_type_pairs_visited = 202;
     diagnostics.graph.function_request_pairs_visited = 203;
+    diagnostics.graph.open_function_shape_nodes_visited = 204;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -15318,8 +15331,11 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
     try std.testing.expectEqualStrings("Produced-type pairs visited", graph[16].name);
     try std.testing.expectEqual(@as(u64, 202), graph[16].count);
-    try std.testing.expectEqualStrings("Function request pairs visited", graph[19].name);
-    try std.testing.expectEqual(@as(u64, 203), graph[19].count);
+    try std.testing.expectEqualStrings("Function request pairs visited", graph[20].name);
+    try std.testing.expectEqual(@as(u64, 203), graph[20].count);
+    const graph_identity = monotypeGraphIdentityCounters(diagnostics);
+    try std.testing.expectEqualStrings("Open function shape nodes visited", graph_identity[1].name);
+    try std.testing.expectEqual(@as(u64, 204), graph_identity[1].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);

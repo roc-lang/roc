@@ -420,8 +420,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn applyCheckedTemplateInterfaceScopeRelations(",
         "fn lowerEntryWrapperAtCell(",
     );
+    try expectContains(interface_replay, "activeIdentityTypeFromNode(pending.request_fn_node)");
     try expectContains(interface_replay, "openFunctionInterfaceShape(pending.request_fn_node)");
-    try expectContains(interface_replay, "std.mem.eql(u8, entry.request_shape.bytes, request_shape.bytes)");
+    try expectContains(interface_replay, "entry.request_identity.eql(");
     try expectContains(interface_replay, "entry.representative,");
     try expectNotContains(interface_replay, "provisionalTypeViewForNode");
     try expectNotContains(interface_replay, "importMono(final_ty)");
@@ -486,7 +487,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectContains(solve_source, "immutable Monotype snapshot requested for an unresolved instantiation graph node");
-    try expectContains(solve_source, "GraphTypeFinals.initActiveSnapshot(self)");
+    try expectContains(solve_source, "GraphTypeFinals.initActiveSnapshot(self, &generated_identity_finalizer)");
     try expectNotContains(solve_source, "replaceGraphView");
     try expectNotContains(solve_source, "fn fillMono(");
 }

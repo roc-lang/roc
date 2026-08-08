@@ -210,6 +210,7 @@ pub const GraphDiagnostics = struct {
     produced_type_pairs_visited: u64 = 0,
     produced_type_joins: u64 = 0,
     function_request_builds: u64 = 0,
+    function_request_noop_reuses: u64 = 0,
     function_request_pairs_visited: u64 = 0,
     function_request_replacements: u64 = 0,
     function_request_nodes_materialized: u64 = 0,
@@ -220,6 +221,9 @@ pub const GraphDiagnostics = struct {
     generated_identity_cache_hits: u64 = 0,
     generated_type_store_hits: u64 = 0,
     generated_type_store_misses: u64 = 0,
+    open_function_shape_requests: u64 = 0,
+    open_function_shape_nodes_visited: u64 = 0,
+    open_function_shape_bytes_written: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -2156,32 +2160,26 @@ pub const InstGraph = struct {
     /// its live graph nodes. The bytes are graph-arena owned and must not escape
     /// draft specialization lookup.
     pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
-        var sizing_finalizer = GeneratedIteratorIdentityFinalizer.init(self);
-        defer sizing_finalizer.deinit();
-        var sizing = OpenFunctionInterfaceShapeWriter.init(self);
-        defer sizing.deinit();
-        sizing.generated_identity_finalizer = &sizing_finalizer;
-        try sizing.writeFunctionInterface(node);
-        const digest: names.TypeDigest = .{ .bytes = sizing.hasher.finalResult() };
-
-        const bytes = try self.arena().alloc(u8, sizing.output_len);
-        var output_finalizer = GeneratedIteratorIdentityFinalizer.init(self);
-        defer output_finalizer.deinit();
-        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, bytes);
+        self.countDiagnostic("open_function_shape_requests");
+        var output = std.ArrayList(u8).empty;
+        defer output.deinit(self.allocator);
+        var finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer finalizer.deinit();
+        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, &output);
         defer writer.deinit();
-        writer.generated_identity_finalizer = &output_finalizer;
+        writer.generated_identity_finalizer = &finalizer;
         try writer.writeFunctionInterface(node);
-        if (writer.output_len != bytes.len) {
-            Common.invariant("open function-interface shape changed while being captured");
+        if (writer.output_error) |output_error| return output_error;
+        if (writer.output_len != output.items.len) {
+            Common.invariant("open function-interface shape wrote an incomplete byte snapshot");
         }
-        const written_digest: names.TypeDigest = .{ .bytes = writer.hasher.finalResult() };
-        if (!std.mem.eql(u8, &digest.bytes, &written_digest.bytes)) {
-            Common.invariant("open function-interface shape digest differed from its exact bytes");
-        }
-        if (sizing.primary_resolved != writer.primary_resolved) {
-            Common.invariant("open function-interface resolution changed while being captured");
-        }
-        return .{ .digest = digest, .bytes = bytes, .resolved = sizing.primary_resolved };
+        self.countDiagnosticBy("open_function_shape_bytes_written", output.items.len);
+        const bytes = try self.arena().dupe(u8, output.items);
+        return .{
+            .digest = .{ .bytes = writer.hasher.finalResult() },
+            .bytes = bytes,
+            .resolved = writer.primary_resolved,
+        };
     }
 
     /// Whether a live graph type is already closed and can be snapshotted
@@ -2985,6 +2983,23 @@ pub const InstGraph = struct {
         else
             false;
         const stored = self.request_substitution_spans.items[@intFromEnum(current_request_fn_node)];
+        if (current_source != null and
+            stored.isInitialized() and
+            !source_changed and
+            checked_components.len == 0)
+        {
+            var arguments_unchanged = true;
+            for (current_request_fn.args, produced_args) |current_arg, produced_arg| {
+                if (!self.sameClass(current_arg, produced_arg)) {
+                    arguments_unchanged = false;
+                    break;
+                }
+            }
+            if (arguments_unchanged) {
+                self.countDiagnostic("function_request_noop_reuses");
+                return .{ .request = current_request_fn_node, .components = &.{} };
+            }
+        }
         if (stored.isInitialized() and !source_changed) {
             for (self.requestSubstitutions(current_request_fn_node)) |selection| {
                 try self.seedFunctionRequestReplacement(
@@ -5983,6 +5998,15 @@ pub const InstGraph = struct {
     /// closes them. The returned TypeId is graph-owned scratch state and must
     /// not be written to completed Monotype output.
     pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        return try self.activeIdentityViewForNode(node) orelse
+            Common.invariant("active Monotype TypeId requested before generated identity inputs resolved");
+    }
+
+    /// Return an immutable Type-shaped identity only when the ordinary type
+    /// graph and every graph-owned generated representation input are resolved.
+    /// The generated inputs are checked while the sealer encounters their
+    /// exact roots; there is no preliminary containment scan.
+    pub fn activeIdentityViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!?Type.TypeId {
         self.requireRelationProduction();
         self.countDiagnostic("active_type_requests");
         if (self.imported_monos.get(node)) |imported| {
@@ -5990,12 +6014,12 @@ pub const InstGraph = struct {
             return imported;
         }
         if (!try self.typeIsResolved(node)) {
-            Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
+            return null;
         }
         return try self.monoFor(node);
     }
 
-    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!?Type.TypeId {
         const root = self.find(node);
         if (!try self.typeIsResolved(root)) {
             Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
@@ -6007,9 +6031,12 @@ pub const InstGraph = struct {
         }
         self.countDiagnostic("active_snapshot_cache_misses");
 
-        var snapshot = GraphTypeFinals.initActiveSnapshot(self);
+        var generated_identity_finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer generated_identity_finalizer.deinit();
+        var snapshot = GraphTypeFinals.initActiveSnapshot(self, &generated_identity_finalizer);
         defer snapshot.deinit();
         const ty = try snapshot.sealNode(root);
+        if (!generated_identity_finalizer.inputs_resolved) return null;
         self.countDiagnosticBy("active_snapshot_nodes_materialized", snapshot.sealed.count());
 
         var materialized = snapshot.sealed.iterator();
@@ -6153,6 +6180,10 @@ pub const GraphTypeFinals = struct {
     sealed: collections.DenseMap(NodeId, Type.TypeId),
     sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     generated_types_by_identity: ?*std.AutoHashMap(names.TypeDigest, Type.TypeId),
+    /// Active snapshots stamp graph-owned generated roots with their current
+    /// content-addressed identity without publishing that scratch TypeId to the
+    /// durable generated-type interner.
+    generated_identity_finalizer: ?*GeneratedIteratorIdentityFinalizer,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
@@ -6169,9 +6200,14 @@ pub const GraphTypeFinals = struct {
         return finals;
     }
 
-    fn initActiveSnapshot(graph: *InstGraph) GraphTypeFinals {
+    fn initActiveSnapshot(
+        graph: *InstGraph,
+        generated_identity_finalizer: *GeneratedIteratorIdentityFinalizer,
+    ) GraphTypeFinals {
         graph.requireRelationProduction();
-        return initUnchecked(graph);
+        var finals = initUnchecked(graph);
+        finals.generated_identity_finalizer = generated_identity_finalizer;
+        return finals;
     }
 
     fn initUnchecked(graph: *InstGraph) GraphTypeFinals {
@@ -6180,6 +6216,7 @@ pub const GraphTypeFinals = struct {
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
             .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
             .generated_types_by_identity = null,
+            .generated_identity_finalizer = null,
         };
     }
 
@@ -6206,13 +6243,23 @@ pub const GraphTypeFinals = struct {
 
         const node_content = self.graph.nodes.items[@intFromEnum(node)];
         const generated_identity = switch (node_content) {
-            .named => |named| if (named.def.iterator_representation != .none) named.def.generated else null,
+            .named => |named| if (named.def.iterator_representation != .none)
+                if (named.generated_iterator != null)
+                    if (self.generated_identity_finalizer) |finalizer|
+                        try finalizer.digestFor(node)
+                    else
+                        named.def.generated
+                else
+                    named.def.generated
+            else
+                null,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => null,
         };
-        if (node_content == .named and node_content.named.def.iterator_representation != .none) {
-            if (node_content.named.generated_iterator != null and self.generated_types_by_identity == null) {
-                Common.invariant("active Monotype snapshot traversed a graph-owned generated iterator");
-            }
+        if (node_content == .named and
+            node_content.named.generated_iterator != null and
+            generated_identity == null)
+        {
+            Common.invariant("graph-owned generated iterator reached sealing without an identity authority");
         }
         if (self.graph.generated_authoritative_monos.get(node)) |authoritative| {
             if (generated_identity) |identity| {
@@ -6289,22 +6336,32 @@ pub const GraphTypeFinals = struct {
             .empty_record => .{ .record = Type.Span.empty() },
             .tag_union => .{ .tag_union = try self.sealTagRow(node) },
             .record => .{ .record = try self.sealRecordRow(node) },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.sealNodeSpan(named.args),
-                .backing = if (named.backing) |raw_backing| backing: {
-                    const structural = try self.graph.structuralBackingNode(raw_backing.node, named);
-                    break :backing .{
-                        .ty = try self.sealNode(structural.node),
-                        .use = raw_backing.use,
-                        .authority = raw_backing.authority,
-                    };
-                } else null,
-                .declared_order = try self.sealDeclaredFieldSpan(named.declared_order),
-            } },
+            .named => |named| named_content: {
+                var def = named.def;
+                if (named.generated_iterator != null) {
+                    def.generated = if (self.generated_identity_finalizer) |finalizer|
+                        try finalizer.digestFor(node)
+                    else
+                        def.generated orelse
+                            Common.invariant("final generated iterator had no durable identity");
+                }
+                break :named_content .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.sealNodeSpan(named.args),
+                    .backing = if (named.backing) |raw_backing| backing: {
+                        const structural = try self.graph.structuralBackingNode(raw_backing.node, named);
+                        break :backing .{
+                            .ty = try self.sealNode(structural.node),
+                            .use = raw_backing.use,
+                            .authority = raw_backing.authority,
+                        };
+                    } else null,
+                    .declared_order = try self.sealDeclaredFieldSpan(named.declared_order),
+                } };
+            },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
@@ -6597,7 +6654,8 @@ const OpenFunctionInterfaceShapeWriter = struct {
     generated_identity_finalizer: ?*GeneratedIteratorIdentityFinalizer = null,
     next_unresolved: u32 = 0,
     next_generated: u32 = 0,
-    output: ?[]u8 = null,
+    output: ?*std.ArrayList(u8) = null,
+    output_error: ?Allocator.Error = null,
     output_len: usize = 0,
     primary_resolved: bool = true,
 
@@ -6630,7 +6688,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         return writer;
     }
 
-    fn initWithOutput(graph: *InstGraph, output: []u8) OpenFunctionInterfaceShapeWriter {
+    fn initWithOutput(graph: *InstGraph, output: *std.ArrayList(u8)) OpenFunctionInterfaceShapeWriter {
         var writer = init(graph);
         writer.output = output;
         return writer;
@@ -6664,6 +6722,9 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
+        if (self.mode == .open_interface) {
+            self.graph.countDiagnostic("open_function_shape_nodes_visited");
+        }
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
         if (self.mode == .open_interface and content == .named) {
@@ -7079,10 +7140,11 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
         self.hasher.update(bytes);
         if (self.output) |output| {
-            if (self.output_len > output.len or bytes.len > output.len - self.output_len) {
-                Common.invariant("open function-interface shape exceeded its measured byte count");
+            if (self.output_error == null) {
+                output.appendSlice(self.graph.allocator, bytes) catch |err| {
+                    self.output_error = err;
+                };
             }
-            @memcpy(output[self.output_len..][0..bytes.len], bytes);
         }
         self.output_len += bytes.len;
     }
@@ -8928,6 +8990,95 @@ test "opaque iterator relation resolves unresolved public variable to imported g
     try std.testing.expectEqual(Type.IteratorRepresentation.minted, retained.def.iterator_representation);
     try std.testing.expectEqual(@as(usize, 1), retained.args.len);
     try std.testing.expect(graph.sameClass(retained.args[0], item));
+}
+
+test "active snapshot gives a graph-owned generated iterator an immutable content identity" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x76} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(14) };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const public_backing = try graph.newNode(.empty_record);
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
+        .declared_order = &.{},
+    };
+    const generated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .components = &.{item},
+            .public_source = public_source,
+        },
+    } });
+    try graph.registerGeneratedIterator(generated);
+
+    const first = try graph.activeTypeViewForNode(generated);
+    const second = try graph.activeTypeViewForNode(generated);
+    try std.testing.expectEqual(first, second);
+    try std.testing.expect(type_store.get(first).named.def.generated != null);
+    const first_identity = type_store.get(first).named.def.generated.?;
+    try std.testing.expect(graph.content(generated).named.def.generated == null);
+
+    const unrelated = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    try graph.unify(unrelated, item);
+    const refreshed = try graph.activeTypeViewForNode(generated);
+    try std.testing.expect(first != refreshed);
+    try std.testing.expectEqualDeep(first_identity, type_store.get(refreshed).named.def.generated.?);
+
+    const unresolved_component = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const open_generated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_representation = .minted,
+            .iterator_kind = .map,
+            .iterator_depth = 2,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .components = &.{unresolved_component},
+            .public_source = public_source,
+        },
+    } });
+    try graph.registerGeneratedIterator(open_generated);
+    try std.testing.expect(try graph.activeIdentityViewForNode(open_generated) == null);
 }
 
 test "opaque interface relation deduplicates only identical generated-private iterator requests" {

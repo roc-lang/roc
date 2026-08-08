@@ -3582,28 +3582,28 @@ const Builder = struct {
         else
             null;
 
-        // Specialization identity stays graph-native for the entire
-        // relation-production phase. Even a currently resolved request can
-        // still be joined by body/evidence relations, so no live request is
-        // promoted to a durable TypeId before the single final seal.
+        // A resolved request can be captured as an immutable graph snapshot.
+        // Generated iterator roots in that snapshot carry their current
+        // content-addressed identity, so ordinary TypeId digest/equality is the
+        // complete lookup authority without rescanning their private backing.
+        // Unresolved requests remain graph-native until relations close them.
         var selection = DraftOpenCandidateSelection{};
-        const request_shape = try source_ctx.graph.openFunctionInterfaceShape(request_fn_node);
-        const open_request_shape: ?solve.OpenFunctionInterfaceShape = request_shape;
-        // A closed request's exact graph shape is its lookup key. Open
-        // caller-owned requests also use their alpha-normalized shape; other
-        // open requests remain discoverable only through explicit graph
-        // interface classes until their relations close them.
-        const resolved_lookup_address: ?DraftTemplateLookupAddress = if (request_shape.resolved) .{
+        const resolved_request_ty = try source_ctx.activeIdentityTypeFromNode(request_fn_node);
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (caller_owned_body and resolved_request_ty == null)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
+        else
+            null;
+        const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_ty| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
             .request_kind = 0,
-            .request_fn_key = request_shape.digest.bytes,
+            .request_fn_key = self.specializationTypeDigest(request_ty).bytes,
         } else null;
-        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (caller_owned_body and !request_shape.resolved) .{
+        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape) |shape| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
             .request_kind = 2,
-            .request_fn_key = request_shape.digest.bytes,
+            .request_fn_key = shape.digest.bytes,
         } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
@@ -3611,8 +3611,15 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    const spec_shape = spec.open_request_shape orelse continue;
-                    if (!std.mem.eql(u8, spec_shape, request_shape.bytes)) continue;
+                    const initial_matches = if (spec.initial_request_ty) |spec_ty|
+                        try self.program.types.typeEql(&self.program.names, spec_ty, resolved_request_ty.?)
+                    else
+                        false;
+                    const produced_matches = if (!initial_matches and spec.produced_request_ty != null)
+                        try self.program.types.typeEql(&self.program.names, spec.produced_request_ty.?, resolved_request_ty.?)
+                    else
+                        false;
+                    if (!initial_matches and !produced_matches) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
             }
@@ -3690,7 +3697,7 @@ const Builder = struct {
             // the durable proof that they are the same specialization request.
             // This scan retains graph-interface identity for active recursive
             // and partially overlapping requests.
-            if (request_shape.resolved) {
+            if (resolved_request_ty) |request_ty| {
                 for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                     const raw_spec: u32 = @intCast(raw_spec_usize);
                     if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
@@ -3701,9 +3708,17 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    const current_spec_shape = try source_ctx.graph.openFunctionInterfaceShape(spec.request_fn_node);
-                    if (!current_spec_shape.resolved) continue;
-                    if (!std.mem.eql(u8, current_spec_shape.bytes, request_shape.bytes)) continue;
+                    const current_spec_ty = spec.produced_request_ty orelse current: {
+                        const ty = try source_ctx.activeIdentityTypeFromNode(spec.request_fn_node) orelse continue;
+                        spec.produced_request_ty = ty;
+                        break :current ty;
+                    };
+                    const initial_matches = if (spec.initial_request_ty) |initial|
+                        try self.program.types.typeEql(&self.program.names, initial, request_ty)
+                    else
+                        false;
+                    if (!initial_matches and
+                        !try self.program.types.typeEql(&self.program.names, current_spec_ty, request_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
             }
@@ -3835,6 +3850,8 @@ const Builder = struct {
             .lexical_owner = lexical_owner,
             .lexical = lexical,
             .lexical_context_key = lexical_context_key,
+            .initial_request_ty = resolved_request_ty,
+            .produced_request_ty = null,
             .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
             .fn_id = fn_id,
         });
@@ -3951,6 +3968,15 @@ const Builder = struct {
         });
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
+        if (try source_ctx.activeIdentityTypeFromNode(completed_fn_node)) |completed_fn_ty| {
+            source_ctx.draft.template_specs.items[spec_index].produced_request_ty = completed_fn_ty;
+            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, .{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 0,
+                .request_fn_key = self.specializationTypeDigest(completed_fn_ty).bytes,
+            }, @intCast(spec_index));
+        }
         try registerTemplateSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
@@ -5313,12 +5339,20 @@ const Builder = struct {
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(requested_evidence);
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
-        // Nested bodies always contribute relations in their caller's graph,
-        // so their specialization request cannot become a durable TypeId until
-        // that graph freezes. The exact open shape is the graph-local lookup
-        // authority whether or not the current nodes happen to look resolved.
-        const open_request_shape: ?solve.OpenFunctionInterfaceShape =
-            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node);
+        const resolved_request_ty = try source_ctx.activeIdentityTypeFromNode(request_fn_node);
+        // Only an unresolved nested request needs an alpha-normalized graph
+        // shape. Resolved requests use the same immutable TypeId identity as
+        // top-level template requests.
+        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
+            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
+        else
+            null;
+        const resolved_lookup_address: ?DraftNestedLookupAddress = if (resolved_request_ty) |request_ty| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 0,
+            .request_fn_key = self.specializationTypeDigest(request_ty).bytes,
+        } else null;
         const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
@@ -5331,6 +5365,31 @@ const Builder = struct {
         var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
         defer seen_specs.deinit();
         var selection = DraftOpenCandidateSelection{};
+        if (resolved_lookup_address) |address| {
+            if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
+                for (candidates.items) |raw_spec| {
+                    const spec = &source_ctx.draft.nested_specs.items[raw_spec];
+                    if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
+                    if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
+                    if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
+                    if (signature_relation == .exact_graph and
+                        source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                    {
+                        continue;
+                    }
+                    const initial_matches = if (spec.initial_request_ty) |spec_ty|
+                        try self.program.types.typeEql(&self.program.names, spec_ty, resolved_request_ty.?)
+                    else
+                        false;
+                    const produced_matches = if (!initial_matches and spec.produced_request_ty != null)
+                        try self.program.types.typeEql(&self.program.names, spec.produced_request_ty.?, resolved_request_ty.?)
+                    else
+                        false;
+                    if (!initial_matches and !produced_matches) continue;
+                    if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
         if (selection.selected() == null) {
             if (open_shape_lookup_address) |address| {
                 if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
@@ -5543,6 +5602,8 @@ const Builder = struct {
             .local_context_dependent = evidenceChainRequiresLocalContext(requested_evidence),
             .symbol = symbol,
             .fn_id = fn_id,
+            .initial_request_ty = resolved_request_ty,
+            .produced_request_ty = null,
             .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
         });
         var indexed_nodes = collections.DenseMap(NodeId, void).init(self.allocator);
@@ -5621,6 +5682,15 @@ const Builder = struct {
         });
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = nested_fn_template;
         source_ctx.draft.nested_specs.items[spec_index].request_fn_node = completed_fn_node;
+        if (try source_ctx.activeIdentityTypeFromNode(completed_fn_node)) |completed_fn_ty| {
+            source_ctx.draft.nested_specs.items[spec_index].produced_request_ty = completed_fn_ty;
+            try registerNestedSpecLookup(source_ctx.draft, self.allocator, .{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 0,
+                .request_fn_key = self.specializationTypeDigest(completed_fn_ty).bytes,
+            }, @intCast(spec_index));
+        }
         try registerNestedSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
@@ -9983,6 +10053,12 @@ const DraftTemplateSpec = struct {
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
+    /// Immutable identity of a request that was already resolved before this
+    /// specialization body contributed any relations.
+    initial_request_ty: ?Type.TypeId = null,
+    /// Immutable identity of the function representation produced after this
+    /// specialization body contributed its relations.
+    produced_request_ty: ?Type.TypeId = null,
     /// Exact alpha-normalized shape of a caller-owned request before its body
     /// contributed relations. This graph-local snapshot is the collision
     /// authority and never becomes durable specialization identity.
@@ -10473,6 +10549,8 @@ const DraftNestedSpec = struct {
     local_context_dependent: bool,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
+    initial_request_ty: ?Type.TypeId = null,
+    produced_request_ty: ?Type.TypeId = null,
     /// Exact alpha-normalized shape of the unresolved request before this nested
     /// body contributed its relations. This graph-local snapshot is the collision
     /// authority and never becomes durable specialization identity.
@@ -12548,9 +12626,42 @@ const InterfaceReplayAddress = struct {
     request_digest: [32]u8,
 };
 
+const InterfaceReplayRequestIdentity = union(enum) {
+    resolved: struct {
+        ty: Type.TypeId,
+        digest: names.TypeDigest,
+    },
+    open: solve.OpenFunctionInterfaceShape,
+
+    fn digest(self: InterfaceReplayRequestIdentity) names.TypeDigest {
+        return switch (self) {
+            .resolved => |resolved| resolved.digest,
+            .open => |open| open.digest,
+        };
+    }
+
+    fn eql(
+        self: InterfaceReplayRequestIdentity,
+        other: InterfaceReplayRequestIdentity,
+        types: *Type.Store,
+        name_store: *const names.NameStore,
+    ) Allocator.Error!bool {
+        return switch (self) {
+            .resolved => |left| switch (other) {
+                .resolved => |right| try types.typeEql(name_store, left.ty, right.ty),
+                .open => false,
+            },
+            .open => |left| switch (other) {
+                .resolved => false,
+                .open => |right| std.mem.eql(u8, left.bytes, right.bytes),
+            },
+        };
+    }
+};
+
 const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
-    request_shape: solve.OpenFunctionInterfaceShape,
+    request_identity: InterfaceReplayRequestIdentity,
     representative: NodeId,
     duplicates: std.ArrayList(NodeId) = .empty,
     status: InterfaceReplayStatus = .expanding,
@@ -13291,6 +13402,12 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
         return try self.graph.activeTypeViewForNode(node);
+    }
+
+    fn activeIdentityTypeFromNode(self: *BodyContext, node: NodeId) Allocator.Error!?Type.TypeId {
+        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
+        defer timing_scope.end();
+        return try self.graph.activeIdentityViewForNode(node);
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -16289,7 +16406,7 @@ const BodyContext = struct {
             target: checked.ResolvedValueId,
             source_fn_ty: checked.CheckedTypeId,
             request_fn_node: NodeId,
-            request_shape: solve.OpenFunctionInterfaceShape,
+            request_identity: InterfaceReplayRequestIdentity,
         };
         var pending_dependencies = std.ArrayList(PendingDependency).empty;
         defer pending_dependencies.deinit(self.allocator);
@@ -16334,7 +16451,7 @@ const BodyContext = struct {
                             .target = target,
                             .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
-                            .request_shape = undefined,
+                            .request_identity = undefined,
                         });
                     }
                 },
@@ -16392,14 +16509,19 @@ const BodyContext = struct {
         }
 
         for (pending_dependencies.items) |*pending| {
-            pending.request_shape = try self.graph.openFunctionInterfaceShape(pending.request_fn_node);
+            pending.request_identity = if (try self.activeIdentityTypeFromNode(pending.request_fn_node)) |ty| resolved: {
+                break :resolved .{ .resolved = .{
+                    .ty = ty,
+                    .digest = self.builder.specializationTypeDigest(ty),
+                } };
+            } else .{ .open = try self.graph.openFunctionInterfaceShape(pending.request_fn_node) };
         }
         for (pending_dependencies.items) |pending| {
             try self.applyDirectCalleeInterfaceRelations(
                 pending.target,
                 pending.source_fn_ty,
                 pending.request_fn_node,
-                pending.request_shape,
+                pending.request_identity,
                 replay_state,
             );
         }
@@ -16422,7 +16544,7 @@ const BodyContext = struct {
         target: checked.ResolvedValueId,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
-        request_shape: solve.OpenFunctionInterfaceShape,
+        request_identity: InterfaceReplayRequestIdentity,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
@@ -16473,13 +16595,17 @@ const BodyContext = struct {
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
             .evidence_digest = evidence_digest.bytes,
-            .request_digest = request_shape.digest.bytes,
+            .request_digest = request_identity.digest().bytes,
         };
 
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
-                !std.mem.eql(u8, entry.request_shape.bytes, request_shape.bytes))
+                !try entry.request_identity.eql(
+                    request_identity,
+                    &self.builder.program.types,
+                    &self.builder.program.names,
+                ))
             {
                 continue;
             }
@@ -16497,7 +16623,7 @@ const BodyContext = struct {
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .evidence = stored_evidence,
-            .request_shape = request_shape,
+            .request_identity = request_identity,
             .representative = request_fn_node,
         });
         const bucket = try replay_state.buckets.getOrPut(address);
