@@ -1,54 +1,52 @@
 # META
 ~~~ini
-description=Simple record destructuring in match expression
+description=Branch patterns stay mutually consistent when the scrutinee is erroneous
 type=expr
 ~~~
 # SOURCE
 ~~~roc
-match person {
+match undefined_scrutinee {
     { name } => name
-    { age } => age
+    { name, age } => age
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - simple_record.md:1:1:1:1
+TYPE MISMATCH - erroneous_scrutinee_pattern_consistency.md:1:1:1:1
 # PROBLEMS
 
 ┌───────────────┐
 │ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
 └┬──────────────┘  previous ones.                                             │
  │                                                                            │
- │  match person {                                                            │
+ │  match undefined_scrutinee {                                               │
  │      { name } => name                                                      │
- │      { age } => age                                                        │
+ │      { name, age } => age                                                  │
  │  }                                                                         │
  │                                                                            │
- └────────────────────────────────────────────────────── simple_record.md:1:5 ┘
+ └──────────────────────────── erroneous_scrutinee_pattern_consistency.md:1:5 ┘
 
     This second branch is trying to match:
 
-        { age: _field }
+        { age: _field, name: _field2 }
 
     But the expression between the `match` parenthesis has the type:
 
         { name: _field }
 
     These can never match! Either the pattern or expression has a problem.
-    Hint: This pattern doesn't bind the `name` field. Match it explicitly with
-    `name: _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
 OpenCurly,LowerIdent,CloseCurly,OpFatArrow,LowerIdent,
-OpenCurly,LowerIdent,CloseCurly,OpFatArrow,LowerIdent,
+OpenCurly,LowerIdent,Comma,LowerIdent,CloseCurly,OpFatArrow,LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-match
-	(e-ident (raw "person"))
+	(e-ident (raw "undefined_scrutinee"))
 	(branches
 		(branch
 			(p-record
@@ -56,14 +54,15 @@ EndOfFile,
 			(e-ident (raw "name")))
 		(branch
 			(p-record
+				(field (name "name") (rest false))
 				(field (name "age") (rest false)))
 			(e-ident (raw "age")))))
 ~~~
 # FORMATTED
 ~~~roc
-match person {
+match undefined_scrutinee {
 	{ name } => name
-	{ age } => age
+	{ name, age } => age
 }
 ~~~
 # CANONICALIZE
@@ -89,6 +88,9 @@ match person {
 					(pattern (degenerate false)
 						(p-record-destructure
 							(destructs
+								(record-destruct (label "name") (ident "name")
+									(required
+										(p-assign (ident "name"))))
 								(record-destruct (label "age") (ident "age")
 									(required
 										(p-assign (ident "age"))))))))

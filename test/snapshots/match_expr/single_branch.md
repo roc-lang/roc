@@ -10,9 +10,23 @@ match value {
 }
 ~~~
 # EXPECTED
-NIL
+POLYMORPHIC VALUE - single_branch.md:1:1:3:2
 # PROBLEMS
-NIL
+
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match value {                                                             │
+ │      x => x + 1                                                            │
+ │  }                                                                         │
+ │                                                                            │
+ └────────────────────────────────────────────────────── single_branch.md:1:1 ┘
+
+    Its type is:
+    a where [a.plus : a, Dec -> a]
+    Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -49,7 +63,7 @@ match value {
 					(pattern (degenerate false)
 						(p-assign (ident "x"))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 206)
+					(e-dispatch-call (method "plus") (constraint-fn-var 207)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -58,5 +72,5 @@ match value {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.plus : a, Dec -> a]"))
 ~~~

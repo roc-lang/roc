@@ -13,6 +13,7 @@ match nestedList {
 ~~~
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
+POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 
 ┌────────────────┐
@@ -25,10 +26,27 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
 
     The value's type, which does not have a method named `times`, is:
 
-        List(_a)
+        List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
 
     Hint: The `*` operator calls a method named `times` on the value preceding
     it, passing the value after the operator as the one argument.
+
+
+┌───────────────────┐
+│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
+└┬──────────────────┘  polymorphic type.                                      │
+ │                                                                            │
+ │  match nestedList {                                                        │
+ │      [[x], [y]] => x + y                                                   │
+ │      [[x, y]] => x - y                                                     │
+ │      [x, [y]] => x * y                                                     │
+ │  }                                                                         │
+ │                                                                            │
+ └──────────────────────────────────────────────── nested_list_scoping.md:1:1 ┘
+
+    Its type is:
+    a where [a.minus : a, a -> a, a.plus : a, a -> a]
+    Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -97,7 +115,7 @@ match nestedList {
 									(patterns
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 221)
+					(e-dispatch-call (method "plus") (constraint-fn-var 222)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -114,7 +132,7 @@ match nestedList {
 										(p-assign (ident "x"))
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 223)
+					(e-dispatch-call (method "minus") (constraint-fn-var 224)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -139,5 +157,5 @@ match nestedList {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.minus : a, a -> a, a.plus : a, a -> a]"))
 ~~~
