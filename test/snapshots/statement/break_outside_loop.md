@@ -17,14 +17,13 @@ result = {
 BREAK OUTSIDE LOOP - break_outside_loop.md:4:2:4:7
 # PROBLEMS
 
-┌────────────────────┐
-│ BREAK OUTSIDE LOOP ├─ The `break` statement can only be used inside loops ──┐
-└┬───────────────────┘  like `while` or `for` to exit the loop early.         │
- │                                                                            │
- │  break                                                                     │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────────────────────────────────── break_outside_loop.md:4:2 ┘
+── ✗ break outside loop ────────────────────────────── break_outside_loop.md:4:2
 
+The `break` statement can only be used inside loops like `while` or `for` to
+exit the loop early.
+
+break
+^^^^^
 
 # TOKENS
 ~~~zig

@@ -14,22 +14,20 @@ y = "value: ${x}"
 TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  y = "value: ${x}"                                                         │
- │                ‾                                                           │
- └──────────────────────────────── string_interpolation_type_mismatch.md:4:15 ┘
+── ✗ type mismatch ────────────────── string_interpolation_type_mismatch.md:4:15
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        U8
+y = "value: ${x}"
+              ^
 
-    But you are trying to use it as:
+It has the type:
 
-        Str
+    U8
 
+But you are trying to use it as:
+
+    Str
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

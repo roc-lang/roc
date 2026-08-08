@@ -19,16 +19,14 @@ main! = bad_function("This should fail")
 NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  bad_function = |msg| Stdout.line!(msg)                                    │
- │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
+── ✗ name not in scope ──────────── pure_annotation_effectful_body_error.md:7:22
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+bad_function = |msg| Stdout.line!(msg)
+                     ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

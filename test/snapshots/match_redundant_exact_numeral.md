@@ -16,21 +16,18 @@ f = |x| match x {
 REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:6:2
 # PROBLEMS
 
-┌───────────────────┐
-│ REDUNDANT PATTERN ├─ The second branch of this `match` is redundant. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  f = |x| match x {                                                         │
- │      1e-40 => 1                                                            │
- │      1e-40 => 2                                                            │
- │      _ => 0                                                                │
- │  }                                                                         │
- │                                                                            │
- └────────────────────────────────────── match_redundant_exact_numeral.md:2:9 ┘
+── ⚠ redundant pattern ──────────────────── match_redundant_exact_numeral.md:2:9
 
-    This pattern can never match because earlier patterns already cover all the
-    values it would match.
+The second branch of this `match` is redundant.
 
+f = |x| match x {
+    1e-40 => 1
+    1e-40 => 2
+    _ => 0
+}
+
+This pattern can never match because earlier patterns already cover all the
+values it would match.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

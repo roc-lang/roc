@@ -14,22 +14,19 @@ main = 0
 INVALID RECURSIVE TYPE - recursion_infinite_mutual.md:1:1:1:14
 # PROBLEMS
 
-┌────────────────────────┐
-│ INVALID RECURSIVE TYPE ├─ The nominal type T refers to itself in a way ─────┐
-└┬───────────────────────┘  that would make it infinite.                      │
- │                                                                            │
- │  T := (U, U64)                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └────────────────────────────────────────── recursion_infinite_mutual.md:1:1 ┘
+── ✗ invalid recursive type ─────────────────── recursion_infinite_mutual.md:1:1
 
-    Its definition is:
+The nominal type T refers to itself in a way that would make it infinite.
 
-        (U, U64)
+T := (U, U64)
+^^^^^^^^^^^^^
 
-    Hint: Recursion in a nominal type is only allowed inside a tag union
-    payload or record field—for example `ConsList(a) := [Nil, Cons(a,
-    ConsList(a))]`.
+Its definition is:
 
+    (U, U64)
+
+Hint: Recursion in a nominal type is only allowed inside a tag union payload or
+record field—for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

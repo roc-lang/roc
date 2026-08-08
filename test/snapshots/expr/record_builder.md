@@ -20,116 +20,102 @@ DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  { Foo.Bar.baz <-                                                          │
- │                ‾‾                                                          │
- └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
+── ✗ unexpected expression syntax ─────────────────────── record_builder.md:1:15
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I was parsing an expression, and this token cannot start an expression here.
 
-    For example:
-        add(1, 2)
+{ Foo.Bar.baz <-
+              ^^
 
-    I found `<-` here.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
+For example:
+    add(1, 2)
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  x: 5,                                                                     │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
+I found `<-` here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+── ✗ unexpected type syntax ────────────────────────────── record_builder.md:2:8
 
-    For example:
-        List(U64)
+I was parsing a type annotation, and this token cannot start a type here.
 
-    I found `5` here.
+x: 5,
+   ^
 
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  x: 5,                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
+For example:
+    List(U64)
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+I found `5` here.
 
-    For example:
-        add(1, 2)
+── ✗ unexpected expression syntax ──────────────────────── record_builder.md:2:9
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing an expression, and this token cannot start an expression here.
 
+x: 5,
+    ^
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  y: 0,                                                                     │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+For example:
+    add(1, 2)
 
-    For example:
-        List(U64)
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    I found `0` here.
+── ✗ unexpected type syntax ────────────────────────────── record_builder.md:3:8
 
+I was parsing a type annotation, and this token cannot start a type here.
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  y: 0,                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
+y: 0,
+   ^
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-    For example:
-        add(1, 2)
+For example:
+    List(U64)
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I found `0` here.
 
+── ✗ unexpected expression syntax ──────────────────────── record_builder.md:3:9
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  x: 5,                                                                     │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────────── record_builder.md:2:5 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+y: 0,
+    ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  y: 0,                                                                     │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────────── record_builder.md:3:5 ┘
+For example:
+    add(1, 2)
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+I found `,` here.
+A comma separates items, but there must be a valid item on both sides of it.
 
+── ⚠ declaration has no value ──────────────────────────── record_builder.md:2:5
+
+This declaration has a type annotation but no implementation.
+
+x: 5,
+^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ⚠ declaration has no value ──────────────────────────── record_builder.md:3:5
+
+This declaration has a type annotation but no implementation.
+
+y: 0,
+^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

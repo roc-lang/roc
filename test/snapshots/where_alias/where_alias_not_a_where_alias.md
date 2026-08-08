@@ -14,18 +14,16 @@ describe = |value| value.to_str()
 NOT A WHERE ALIAS - where_alias_not_a_where_alias.md:3:29:3:37
 # PROBLEMS
 
-┌───────────────────┐
-│ NOT A WHERE ALIAS ├─ A where clause can only name a where alias, but ───────┐
-└┬──────────────────┘  Wrapper is a type.                                     │
- │                                                                            │
- │  describe : a -> Str where [a.Wrapper]                                     │
- │                              ‾‾‾‾‾‾‾‾                                      │
- └───────────────────────────────────── where_alias_not_a_where_alias.md:3:29 ┘
+── ✗ not a where alias ─────────────────── where_alias_not_a_where_alias.md:3:29
 
-    A where alias names a set of method constraints, declared like `a.Sortable
-    : where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as
-    `where [a.Sortable]`
+A where clause can only name a where alias, but Wrapper is a type.
 
+describe : a -> Str where [a.Wrapper]
+                            ^^^^^^^^
+
+A where alias names a set of method constraints, declared like `a.Sortable :
+where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
+[a.Sortable]`
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,

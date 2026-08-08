@@ -17,76 +17,59 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_105.md:2:46:2:47
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_105.md:2:3 ┘
+── ✗ undeclared type variable ──────────────────────────── fuzz_crash_105.md:2:3
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable `a` is not declared in this scope.
 
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+  ^
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └───────────────────────────────────────────────────── fuzz_crash_105.md:2:1 ┘
+Type variables must be introduced in a type annotation before they can be used.
 
-    You're attempting do this here:
+── ✗ where clause not allowed in type declaration ──────── fuzz_crash_105.md:2:1
 
+You cannot define a `where` clause inside a type declaration.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `b` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                               ‾                                            │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:30 ┘
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+You're attempting do this here:
 
+── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:30
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:28 ┘
+The type variable `b` is not declared in this scope.
 
-    You're attempting do this here:
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                             ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `e` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                                               ‾                            │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:46 ┘
+── ✗ where clause not allowed in type declaration ─────── fuzz_crash_105.md:2:28
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+You cannot define a `where` clause inside a type declaration.
 
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                           ^^^^^^^^^^^^^^^^
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}                │
- │                                                        ‾‾                  │
- └──────────────────────────────────────────────────── fuzz_crash_105.md:2:55 ┘
+You're attempting do this here:
 
-    If you want to represent nothing, try using an empty record: `{}`.
+── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:46
 
+The type variable `e` is not declared in this scope.
+
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                                             ^
+
+Type variables must be introduced in a type annotation before they can be used.
+
+── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_105.md:2:55
+
+I am part way through parsing this tuple, but it is empty.
+
+A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
+                                                      ^^
+
+If you want to represent nothing, try using an empty record: `{}`.
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,CloseSquare,UpperIdent,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,CloseSquare,UpperIdent,OpColon,LowerIdent,OpArrow,OpenSquare,CloseSquare,LowerIdent,OpAssign,OpenCurly,OpenCurly,NoSpaceOpenRound,CloseRound,CloseCurly,CloseCurly,

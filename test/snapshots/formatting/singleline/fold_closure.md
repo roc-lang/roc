@@ -11,16 +11,14 @@ sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 NAME NOT IN SCOPE - fold_closure.md:1:13:1:17
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `fold` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)                       │
- │              ‾‾‾‾                                                          │
- └────────────────────────────────────────────────────── fold_closure.md:1:13 ┘
+── ✗ name not in scope ──────────────────────────────────── fold_closure.md:1:13
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `fold` in this scope.
 
+sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
+            ^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,Comma,Int,CloseSquare,Comma,Int,Comma,OpBar,LowerIdent,Comma,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,CloseRound,

@@ -12,40 +12,35 @@ UNEXPECTED STATEMENT - fuzz_crash_038.md:1:1:1:2
 EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  *import B as                                                              │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_038.md:1:1 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_038.md:1:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+*import B as
+^
 
-    I found `*` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌───────────────────────┐
-│ EXPECTED IMPORT ALIAS ├─ I was parsing an import alias, and I expected an ──┐
-└┬──────────────────────┘  uppercase name after `as`.                         │
- │                                                                            │
- │  *import B as                                                              │
- │   ‾‾‾‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_038.md:1:2 ┘
+I found `*` here.
 
-    Import aliases must start with an uppercase letter.
+── ✗ expected import alias ─────────────────────────────── fuzz_crash_038.md:1:2
 
-    For example:
-        import Json/Decode as Decode
+I was parsing an import alias, and I expected an uppercase name after `as`.
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+*import B as
+ ^^^^^^
 
+Import aliases must start with an uppercase letter.
+
+For example:
+    import Json/Decode as Decode
+
+I found `import` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 # TOKENS
 ~~~zig
 OpStar,KwImport,UpperIdent,KwAs,

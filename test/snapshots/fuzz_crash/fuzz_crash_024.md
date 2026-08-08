@@ -19,94 +19,82 @@ UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 # PROBLEMS
 
-┌──────────────────┐
-│ VAR OUTSIDE BODY ├─ I was parsing a statement, and `var` appeared outside ──┐
-└┬─────────────────┘  a function or block body.                               │
- │                                                                            │
- │  var t= ]                                                                  │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_024.md:2:1 ┘
+── ✗ var outside body ──────────────────────────────────── fuzz_crash_024.md:2:1
 
-    Mutable variables are local body statements. Move this `var` into a body,
-    or use an ordinary top-level declaration.
+I was parsing a statement, and `var` appeared outside a function or block body.
 
-    For example:
-        main = {
-            var count = 0
-            count
-        }
+var t= ]
+^^^
 
-    I found `var` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+Mutable variables are local body statements. Move this `var` into a body, or
+use an ordinary top-level declaration.
 
+For example:
+    main = {
+        var count = 0
+        count
+    }
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  var t= ]                                                                  │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
+I found `var` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_024.md:2:8
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+var t= ]
+       ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────┐
-│ VAR OUTSIDE BODY ├─ I was parsing a statement, and `var` appeared outside ──┐
-└┬─────────────────┘  a function or block body.                               │
- │                                                                            │
- │  var t= 0                                                                  │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_024.md:5:1 ┘
+For example:
+    add(1, 2)
 
-    Mutable variables are local body statements. Move this `var` into a body,
-    or use an ordinary top-level declaration.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        main = {
-            var count = 0
-            count
-        }
+── ✗ var outside body ──────────────────────────────────── fuzz_crash_024.md:5:1
 
-    I found `var` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+I was parsing a statement, and `var` appeared outside a function or block body.
 
+var t= 0
+^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  var t= ]                                                                  │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_024.md:2:8 ┘
+Mutable variables are local body statements. Move this `var` into a body, or
+use an ordinary top-level declaration.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    main = {
+        var count = 0
+        count
+    }
+
+I found `var` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
+
+── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_024.md:2:8
+
+I don't recognize this syntax.
+
+var t= ]
+       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ──────────────────────────────── fuzz_crash_024.md:5:5
+
+The name `t` is being redeclared here:
+
+var t= 0
+    ^
 
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `t` is being redeclared here. ─────────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  var t= 0                                                                  │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_024.md:5:5 ┘
+In this scope, `t` was already defined here (fuzz_crash_024.md:2:5):
 
-    In this scope, `t` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    2 │  var t= ]                                                             │
-      │      ‾                                                                │
-      └──────────────────────────────────────────────── fuzz_crash_024.md:2:5 ┘
-
+var t= ]
+    ^
 # TOKENS
 ~~~zig
 KwVar,LowerIdent,OpAssign,CloseSquare,

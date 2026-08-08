@@ -12,14 +12,12 @@ app[]{f:platform"",r:"
 UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
 # PROBLEMS
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  app[]{f:platform"",r:"                                                    │
- │                       ‾                                                    │
- └──────────────────────────────────────────────────── fuzz_crash_058.md:1:22 ┘
+── ✗ unclosed string ──────────────────────────────────── fuzz_crash_058.md:1:22
 
+This string is missing a closing quote.
+
+app[]{f:platform"",r:"
+                     ^
 
 # TOKENS
 ~~~zig

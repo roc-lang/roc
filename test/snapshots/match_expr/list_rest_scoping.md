@@ -17,50 +17,44 @@ OLD LIST REST PATTERN - list_rest_scoping.md:3:6:3:12
 OLD LIST REST PATTERN - list_rest_scoping.md:4:9:4:15
 # PROBLEMS
 
-┌───────────────────────┐
-│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
-└┬──────────────────────┘  old rest syntax.                                   │
- │                                                                            │
- │  [first, ..rest] => first + 1                                              │
- │          ‾‾‾‾‾‾                                                            │
- └───────────────────────────────────────────────── list_rest_scoping.md:2:13 ┘
+── ✗ old list rest pattern ─────────────────────────── list_rest_scoping.md:2:13
 
-    List rest patterns now use `.. as name`. The name is optional, but if it is
-    present it must come after `as`.
+I was parsing a list pattern, and this uses the old rest syntax.
 
-    For example:
-        [first, .. as rest]
+[first, ..rest] => first + 1
+        ^^^^^^
 
+List rest patterns now use `.. as name`. The name is optional, but if it is
+present it must come after `as`.
 
-┌───────────────────────┐
-│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
-└┬──────────────────────┘  old rest syntax.                                   │
- │                                                                            │
- │  [..rest, last] => last + 2                                                │
- │   ‾‾‾‾‾‾                                                                   │
- └────────────────────────────────────────────────── list_rest_scoping.md:3:6 ┘
+For example:
+    [first, .. as rest]
 
-    List rest patterns now use `.. as name`. The name is optional, but if it is
-    present it must come after `as`.
+── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:3:6
 
-    For example:
-        [first, .. as rest]
+I was parsing a list pattern, and this uses the old rest syntax.
 
+[..rest, last] => last + 2
+ ^^^^^^
 
-┌───────────────────────┐
-│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
-└┬──────────────────────┘  old rest syntax.                                   │
- │                                                                            │
- │  [x, ..rest, y] => x + y                                                   │
- │      ‾‾‾‾‾‾                                                                │
- └────────────────────────────────────────────────── list_rest_scoping.md:4:9 ┘
+List rest patterns now use `.. as name`. The name is optional, but if it is
+present it must come after `as`.
 
-    List rest patterns now use `.. as name`. The name is optional, but if it is
-    present it must come after `as`.
+For example:
+    [first, .. as rest]
 
-    For example:
-        [first, .. as rest]
+── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:4:9
 
+I was parsing a list pattern, and this uses the old rest syntax.
+
+[x, ..rest, y] => x + y
+    ^^^^^^
+
+List rest patterns now use `.. as name`. The name is optional, but if it is
+present it must come after `as`.
+
+For example:
+    [first, .. as rest]
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

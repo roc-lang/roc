@@ -24,22 +24,20 @@ answer = composed([42])
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  composed = |n| get_value(make_record(n))                                  │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
+── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        List(a)
+composed = |n| get_value(make_record(n))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    But the annotation says it should be:
+It has the type:
 
-        Str
+    List(a)
 
+But the annotation says it should be:
+
+    Str
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

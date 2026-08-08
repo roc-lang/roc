@@ -50,84 +50,72 @@ TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
 
-┌───────────────────────┐
-│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
-└┬──────────────────────┘                                                     │
- │                                                                            │
- │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └────────────────────────────────────────── type_comprehensive_scope.md:10:1 ┘
+── ⚠ builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
 
-    This may make the builtin type inaccessible in this scope.
+The type `Try` shadows a builtin type.
 
-    The new declaration is here:
+Try(ok, err) : [Ok(ok), Err(err)]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+This may make the builtin type inaccessible in this scope.
 
-┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `Tree` and `Node` form ───┐
-└┬────────────────────────────────┘  a recursive cycle.                       │
- │                                                                            │
- │  Tree(a) : [Branch(Node(a)), Leaf(a)]                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
- └────────────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
+The new declaration is here:
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If
-    you need recursive types, use nominal types (`:=`) instead.
+── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:13:1
 
-    This type is declared here:
+The type alias `Tree` and `Node` form a recursive cycle.
 
-    And it references Node declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    16 │  Node(a) : { value: a, children: List(Tree(a)) }                     │
-       │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                     │
-       └──────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-┌─────────────────────────────────┐
-│ MUTUALLY RECURSIVE TYPE ALIASES ├─ The type alias `Node` and `Tree` form ───┐
-└┬────────────────────────────────┘  a recursive cycle.                       │
- │                                                                            │
- │  Node(a) : { value: a, children: List(Tree(a)) }                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
- └────────────────────────────────────────── type_comprehensive_scope.md:16:1 ┘
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-    Type aliases are transparent synonyms and cannot be mutually recursive. If
-    you need recursive types, use nominal types (`:=`) instead.
+This type is declared here:
 
-    This type is declared here:
+And it references Node declared here (type_comprehensive_scope.md:16:1):
 
-    And it references Tree declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    13 │  Tree(a) : [Branch(Node(a)), Leaf(a)]                                │
-       │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
-       └──────────────────────────────────── type_comprehensive_scope.md:13:1 ┘
+Node(a) : { value: a, children: List(Tree(a)) }
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:16:1
+
+The type alias `Node` and `Tree` form a recursive cycle.
+
+Node(a) : { value: a, children: List(Tree(a)) }
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Person` is being redeclared. ──────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Person : U64                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────── type_comprehensive_scope.md:22:1 ┘
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-    The redeclaration is here:
+This type is declared here:
 
-    But Person was already declared here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    7 │  Person : { name: Str, age: U64 }                                     │
-      │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
-      └────────────────────────────────────── type_comprehensive_scope.md:7:1 ┘
+And it references Tree declared here (type_comprehensive_scope.md:13:1):
+
+Tree(a) : [Branch(Node(a)), Leaf(a)]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+── ✗ type redeclared ────────────────────────── type_comprehensive_scope.md:22:1
+
+The type `Person` is being redeclared.
+
+Person : U64
+^^^^^^^^^^^^
 
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `SomeUndeclaredType` is not declared in this ───┐
-└┬────────────────┘  scope.                                                   │
- │                                                                            │
- │  BadType : SomeUndeclaredType                                              │
- │            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
- └───────────────────────────────────────── type_comprehensive_scope.md:25:11 ┘
+The redeclaration is here:
 
+But Person was already declared here (type_comprehensive_scope.md:7:1):
+
+Person : { name: Str, age: U64 }
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+── ✗ undeclared type ───────────────────────── type_comprehensive_scope.md:25:11
+
+The type `SomeUndeclaredType` is not declared in this scope.
+
+BadType : SomeUndeclaredType
+          ^^^^^^^^^^^^^^^^^^
 
 # TOKENS
 ~~~zig

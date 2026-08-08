@@ -13,14 +13,12 @@ T := [].{
 MISSING NESTED TYPE - fuzz_crash_096.md:2:6:2:9
 # PROBLEMS
 
-┌─────────────────────┐
-│ MISSING NESTED TYPE ├─ `T` is in scope, but it doesn't have a nested type ──┐
-└┬────────────────────┘  named `A`.                                           │
- │                                                                            │
- │  A : T.A                                                                   │
- │      ‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_096.md:2:6 ┘
+── ✗ missing nested type ───────────────────────────────── fuzz_crash_096.md:2:6
 
+`T` is in scope, but it doesn't have a nested type named `A`.
+
+A : T.A
+    ^^^
 
 # TOKENS
 ~~~zig

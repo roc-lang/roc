@@ -17,16 +17,14 @@ Outer := [A].{
 NAME NOT IN SCOPE - simple_scope_test.md:6:17:6:26
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `inner_val` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  outer_val = inner_val                                                     │
- │              ‾‾‾‾‾‾‾‾‾                                                     │
- └───────────────────────────────────────────────── simple_scope_test.md:6:17 ┘
+── ✗ name not in scope ─────────────────────────────── simple_scope_test.md:6:17
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `inner_val` in this scope.
 
+outer_val = inner_val
+            ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

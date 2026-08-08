@@ -13,18 +13,16 @@ f = || {
 TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  crash 1                                                                   │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────── fuzz_crash_067.md:2:11 ┘
+── ✗ type mismatch ────────────────────────────────────── fuzz_crash_067.md:2:11
 
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        Str
+crash 1
+      ^
 
+Other code expects this to have the type:
+
+    Str
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,

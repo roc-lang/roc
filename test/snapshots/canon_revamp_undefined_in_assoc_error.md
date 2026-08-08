@@ -17,16 +17,14 @@ Foo := [Whatever].{
 NAME NOT IN SCOPE - canon_revamp_undefined_in_assoc_error.md:3:18:3:27
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `ghostName` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  callsGhost = ghostName                                                    │
- │               ‾‾‾‾‾‾‾‾‾                                                    │
- └───────────────────────────── canon_revamp_undefined_in_assoc_error.md:3:18 ┘
+── ✗ name not in scope ─────────── canon_revamp_undefined_in_assoc_error.md:3:18
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `ghostName` in this scope.
 
+callsGhost = ghostName
+             ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

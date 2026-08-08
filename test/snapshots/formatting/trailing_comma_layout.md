@@ -89,135 +89,113 @@ UNUSED VARIABLE - trailing_comma_layout.md:59:4:59:7
 UNUSED VARIABLE - trailing_comma_layout.md:61:16:61:19
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `make` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  compact_call = make(                                                      │
- │                 ‾‾‾‾                                                       │
- └──────────────────────────────────────────── trailing_comma_layout.md:13:16 ┘
+── ✗ name not in scope ────────────────────────── trailing_comma_layout.md:13:16
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `make` in this scope.
 
+compact_call = make(
+               ^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `make` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  expanded_call = make(1, 2,)                                               │
- │                  ‾‾‾‾                                                      │
- └──────────────────────────────────────────── trailing_comma_layout.md:18:17 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ────────────────────────── trailing_comma_layout.md:18:17
 
+Nothing is named `make` in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  two                                                                       │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────── trailing_comma_layout.md:32:2 ┘
+expanded_call = make(1, 2,)
+                ^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+Is it misspelled, or is there an import missing?
 
+── ⚠ unused variable ───────────────────────────── trailing_comma_layout.md:32:2
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_ident = |one, two,| one                                   │
- │                                ‾‾‾                                         │
- └──────────────────────────────────────────── trailing_comma_layout.md:35:31 ┘
+Variable `two` is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+two
+^^^
 
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `one` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_block = |one, two,| {}                                    │
- │                           ‾‾‾                                              │
- └──────────────────────────────────────────── trailing_comma_layout.md:36:26 ┘
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:35:31
 
-    If you don't need this variable, prefix it with an underscore like `_one`
-    to suppress this warning.
+Variable `two` is defined here and then never used:
 
+expanded_lambda_ident = |one, two,| one
+                              ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_block = |one, two,| {}                                    │
- │                                ‾‾‾                                         │
- └──────────────────────────────────────────── trailing_comma_layout.md:36:31 ┘
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:36:26
 
+Variable `one` is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_list = |one, two,| [one]                                  │
- │                               ‾‾‾                                          │
- └──────────────────────────────────────────── trailing_comma_layout.md:37:30 ┘
+expanded_lambda_block = |one, two,| {}
+                         ^^^
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_one` to
+suppress this warning.
 
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:36:31
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `one` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_nested = |one, two,| |value| value                        │
- │                            ‾‾‾                                             │
- └──────────────────────────────────────────── trailing_comma_layout.md:39:27 ┘
+Variable `two` is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_one`
-    to suppress this warning.
+expanded_lambda_block = |one, two,| {}
+                              ^^^
 
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  expanded_lambda_nested = |one, two,| |value| value                        │
- │                                 ‾‾‾                                        │
- └──────────────────────────────────────────── trailing_comma_layout.md:39:32 ┘
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:37:30
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+Variable `two` is defined here and then never used:
 
+expanded_lambda_list = |one, two,| [one]
+                             ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `two` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  two                                                                       │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────── trailing_comma_layout.md:59:4 ┘
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_two`
-    to suppress this warning.
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:39:27
 
+Variable `one` is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `one` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  ExpandedPair(one, two,) => two                                            │
- │               ‾‾‾                                                          │
- └──────────────────────────────────────────── trailing_comma_layout.md:61:16 ┘
+expanded_lambda_nested = |one, two,| |value| value
+                          ^^^
 
-    If you don't need this variable, prefix it with an underscore like `_one`
-    to suppress this warning.
+If you don't need this variable, prefix it with an underscore like `_one` to
+suppress this warning.
 
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:39:32
+
+Variable `two` is defined here and then never used:
+
+expanded_lambda_nested = |one, two,| |value| value
+                               ^^^
+
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
+
+── ⚠ unused variable ───────────────────────────── trailing_comma_layout.md:59:4
+
+Variable `two` is defined here and then never used:
+
+two
+^^^
+
+If you don't need this variable, prefix it with an underscore like `_two` to
+suppress this warning.
+
+── ⚠ unused variable ──────────────────────────── trailing_comma_layout.md:61:16
+
+Variable `one` is defined here and then never used:
+
+ExpandedPair(one, two,) => two
+             ^^^
+
+If you don't need this variable, prefix it with an underscore like `_one` to
+suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

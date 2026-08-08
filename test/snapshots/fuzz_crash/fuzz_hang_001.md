@@ -12,39 +12,35 @@ UNEXPECTED STATEMENT - fuzz_hang_001.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0 (                                                                       │
- │  ‾                                                                         │
- └────────────────────────────────────────────────────── fuzz_hang_001.md:1:1 ┘
+── ✗ unexpected statement ───────────────────────────────── fuzz_hang_001.md:1:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+0 (
+^
 
-    I found `0` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0 (                                                                       │
- │    ‾                                                                       │
- └────────────────────────────────────────────────────── fuzz_hang_001.md:1:3 ┘
+I found `0` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ───────────────────────────────── fuzz_hang_001.md:1:3
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `(` here.
+0 (
+  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `(` here.
 # TOKENS
 ~~~zig
 Int,OpenRound,

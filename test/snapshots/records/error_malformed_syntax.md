@@ -11,22 +11,20 @@ type=expr
 EXPECTED RECORD FIELD - error_malformed_syntax.md:1:18:1:19
 # PROBLEMS
 
-┌───────────────────────┐
-│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
-└┬──────────────────────┘  expected a lowercase field name.                   │
- │                                                                            │
- │  …Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number…│
- │           ‾                                                                │
- └──────────────────────────────────────────── error_malformed_syntax.md:1:18 ┘
+── ✗ expected record field ────────────────────── error_malformed_syntax.md:1:18
 
-    Record fields start with lowercase names. After the name, either write `:
-    value` or omit the value to use field punning.
+I was parsing a record expression, and I expected a lowercase field name.
 
-    For example:
-        { name: "Ada", age }
+{ name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
+                 ^
 
-    I found `:` here.
+Record fields start with lowercase names. After the name, either write `:
+value` or omit the value to use field punning.
 
+For example:
+    { name: "Ada", age }
+
+I found `:` here.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,Int,Comma,Comma,LowerIdent,OpColon,Comma,LowerIdent,UpperIdent,NoSpaceDotLowerIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,Int,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,CloseCurly,

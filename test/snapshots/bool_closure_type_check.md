@@ -11,18 +11,17 @@ type=expr
 MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  (|x| !x)(True)                                                            │
- │       ‾‾                                                                   │
- └──────────────────────────────────────────── bool_closure_type_check.md:1:6 ┘
+── ✗ missing method ───────────────────────────── bool_closure_type_check.md:1:6
 
-    The value's type, which does not have a method named `not`, is:
+This `not` method is being called on a value whose type doesn't have that
+method.
 
-        [True, ..]
+(|x| !x)(True)
+     ^^
 
+The value's type, which does not have a method named `not`, is:
+
+    [True, ..]
 # TOKENS
 ~~~zig
 OpenRound,OpBar,LowerIdent,OpBar,OpBang,LowerIdent,CloseRound,NoSpaceOpenRound,UpperIdent,CloseRound,

@@ -15,23 +15,21 @@ InternalType := [Some, Other]
 PRIVATE TYPE IN EXPOSED FIELD - type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13:2:25
 # PROBLEMS
 
-┌───────────────────────────────┐
-│ PRIVATE TYPE IN EXPOSED FIELD ├─ The `field` field of `ModType` refers to ──┐
-└┬──────────────────────────────┘  `InternalType`, but `InternalType` is      │
- │                                 private to this mod.                    │
- │                                                                            │
- │  field : InternalType,                                                     │
- │          ‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └── type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13 ┘
+── ⚠ private type in exposed field ───── type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13
 
-    Other mods can see this field because ModType is exposed and not opaque,
-    but they cannot name this private type.
+The `field` field of `ModType` refers to `InternalType`, but `InternalType` is
+private to this mod.
 
+field : InternalType,
+        ^^^^^^^^^^^^
+
+Other mods can see this field because ModType is exposed and not opaque, but
+they cannot name this private type.
 
 
-    Hint: Expose the referenced type, make ModType opaque with `::`, or move
-    the type into ModType's associated block.
 
+Hint: Expose the referenced type, make ModType opaque with `::`, or move the
+type into ModType's associated block.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,

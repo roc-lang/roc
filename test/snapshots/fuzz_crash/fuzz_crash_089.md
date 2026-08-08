@@ -12,17 +12,14 @@ e={0#
 UNRECOGNIZED SYNTAX - fuzz_crash_089.md:1:4:2:4
 # PROBLEMS
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  e={0#                                                                     │
- │  .{}}                                                                      │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_089.md:1:4 ┘
+── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_089.md:1:4
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I don't recognize this syntax.
 
+e={0#
+.{}}
+
+This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,Int,

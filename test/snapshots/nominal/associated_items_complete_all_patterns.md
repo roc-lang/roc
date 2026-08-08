@@ -807,7175 +807,6418 @@ POLYMORPHIC VALUE - associated_items_complete_all_patterns.md:51:9:51:13
 MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │  ‾‾‾‾‾‾‾‾‾‾                                                                │
- └───────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
+── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:2:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d1_forward := [A].{
+^^^^^^^^^^
 
-    I found `d1_forward` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │             ‾‾                                                             │
- └──────────────────────────── associated_items_complete_all_patterns.md:2:12 ┘
+I found `d1_forward` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:12
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:=` here.
+d1_forward := [A].{
+           ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │                ‾                                                           │
- └──────────────────────────── associated_items_complete_all_patterns.md:2:15 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `:=` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:15
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d1_forward := [A].{
+              ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │                  ‾                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:2:17 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `[` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:2:17
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │                   ‾                                                        │
- └──────────────────────────── associated_items_complete_all_patterns.md:2:18 ┘
+d1_forward := [A].{
+                ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `.` here.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:18
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │                    ‾                                                       │
- └──────────────────────────── associated_items_complete_all_patterns.md:2:19 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d1_forward := [A].{
+                 ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └───────────────────────────── associated_items_complete_all_patterns.md:5:1 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:19
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d1_forward := [A].{
+                  ^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └───────────────────────────── associated_items_complete_all_patterns.md:8:1 ┘
+I found `{` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:5:1
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `d1_scope` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │           ‾‾                                                               │
- └──────────────────────────── associated_items_complete_all_patterns.md:8:10 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:8:1
 
-    I found `:=` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d1_scope := [B].{
+^^^^^^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │              ‾                                                             │
- └──────────────────────────── associated_items_complete_all_patterns.md:8:13 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `d1_scope` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `[` here.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:10
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │                ‾                                                           │
- └──────────────────────────── associated_items_complete_all_patterns.md:8:15 ┘
+d1_scope := [B].{
+         ^^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        List(U8)
+For example:
+    answer = 42
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `:=` here.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:13
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │                 ‾                                                          │
- └──────────────────────────── associated_items_complete_all_patterns.md:8:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d1_scope := [B].{
+            ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.` here.
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │                  ‾                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:8:17 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:8:15
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+d1_scope := [B].{
+              ^
 
-    I found `{` here.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:10:1 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:16
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d1_scope := [B].{
+               ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:13:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:17
 
-    I found `d2_inner_first` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+d1_scope := [B].{
+                ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │                 ‾‾                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:13:16 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `{` here.
 
-    I found `:=` here.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:10:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │                    ‾                                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:13:19 ┘
+}
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:13:1
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │                      ‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:13:21 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d2_inner_first := [C].{
+^^^^^^^^^^^^^^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `d2_inner_first` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │                       ‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:13:22 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:16
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d2_inner_first := [C].{
+               ^^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │                        ‾                                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:13:23 ┘
+I found `:=` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:19
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `{` here.
+d2_inner_first := [C].{
+                  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:19:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `[` here.
 
-    For example:
-        answer = 42
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:13:21
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d2_inner_first := [C].{
+                    ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d2_2 = d2_inner_first.Inner.inner_val                                     │
- │                       ‾‾‾‾‾‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:21:22 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    List(U8)
 
-    For example:
-        person.name
-        pair.0
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `.Inner` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:22
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └──────────────────────────── associated_items_complete_all_patterns.md:23:1 ┘
+d2_inner_first := [C].{
+                     ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `d2_outer_val_middle` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `.` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:23
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │                      ‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:23:21 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d2_inner_first := [C].{
+                      ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │                         ‾                                                  │
- └─────────────────────────── associated_items_complete_all_patterns.md:23:24 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:19:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+}
+^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:23:26 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:21:22
 
-    For example:
-        List(U8)
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d2_2 = d2_inner_first.Inner.inner_val
+                     ^^^^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │                            ‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:23:27 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.Inner` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:23:1
 
-    I found `.` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d2_outer_val_middle := [G].{
+^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │                             ‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:23:28 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `d2_outer_val_middle` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `{` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:21
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:29:1 ┘
+d2_outer_val_middle := [G].{
+                    ^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `:=` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:24
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d2_3 = d2_outer_val_middle.Inner.inner_val                                │
- │                            ‾‾‾‾‾‾                                          │
- └─────────────────────────── associated_items_complete_all_patterns.md:30:27 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d2_outer_val_middle := [G].{
+                       ^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.Inner` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └──────────────────────────── associated_items_complete_all_patterns.md:32:1 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:23:26
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+d2_outer_val_middle := [G].{
+                         ^
 
-    I found `d2_outer_refs_inner` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │                      ‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:32:21 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:27
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:=` here.
+d2_outer_val_middle := [G].{
+                          ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │                         ‾                                                  │
- └─────────────────────────── associated_items_complete_all_patterns.md:32:24 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:28
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d2_outer_val_middle := [G].{
+                           ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:32:26 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `{` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:29:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │                            ‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:32:27 ┘
+}
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `.` here.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:30:27
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │                             ‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:32:28 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d2_3 = d2_outer_val_middle.Inner.inner_val
+                          ^^^^^^
 
-    For example:
-        answer = 42
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    I found `{` here.
+For example:
+    person.name
+    pair.0
 
+I found `.Inner` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  outer_val = d2_outer_refs_inner.Inner.inner_val                           │
- │                                 ‾‾‾‾‾‾                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:33:36 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:32:1
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+d2_outer_refs_inner := [I].{
+^^^^^^^^^^^^^^^^^^^
 
-    I found `.Inner` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:38:1 ┘
+I found `d2_outer_refs_inner` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:21
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d2_outer_refs_inner := [I].{
+                    ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └──────────────────────────── associated_items_complete_all_patterns.md:41:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `:=` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:24
 
-    I found `d2_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+d2_outer_refs_inner := [I].{
+                       ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │                     ‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:41:20 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `[` here.
 
-    I found `:=` here.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:32:26
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │                        ‾                                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:41:23 ┘
+d2_outer_refs_inner := [I].{
+                         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `[` here.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:27
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │                          ‾                                                 │
- └─────────────────────────── associated_items_complete_all_patterns.md:41:25 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d2_outer_refs_inner := [I].{
+                          ^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:41:26 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:28
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d2_outer_refs_inner := [I].{
+                           ^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │                            ‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:41:27 ┘
+I found `{` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:33:36
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `{` here.
+outer_val = d2_outer_refs_inner.Inner.inner_val
+                               ^^^^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:47:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.Inner` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:38:1
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+}
+^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
- └──────────────────────────── associated_items_complete_all_patterns.md:49:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `d2_siblings` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:41:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │              ‾‾                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:49:13 ┘
+d2_scope_violation := [K].{
+^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `:=` here.
+I found `d2_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:20
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │                 ‾                                                          │
- └─────────────────────────── associated_items_complete_all_patterns.md:49:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d2_scope_violation := [K].{
+                   ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `[` here.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │                   ‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:49:18 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:23
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        List(U8)
+d2_scope_violation := [K].{
+                      ^
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │                    ‾                                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:49:19 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:41:25
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `.` here.
+d2_scope_violation := [K].{
+                        ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │                     ‾                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:49:20 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:26
 
-    I found `{` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d2_scope_violation := [K].{
+                         ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  valA = d2_siblings.InnerB.valB + 1                                        │
- │                    ‾‾‾‾‾‾‾                                                 │
- └─────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `.` here.
 
-    I found `.InnerB` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:27
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:57:1 ┘
+d2_scope_violation := [K].{
+                          ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `{` here.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:47:1
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d2_5 = d2_siblings.InnerA.valA                                            │
- │                    ‾‾‾‾‾‾‾                                                 │
- └─────────────────────────── associated_items_complete_all_patterns.md:58:19 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+}
+^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.InnerA` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └──────────────────────────── associated_items_complete_all_patterns.md:60:1 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:49:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d2_siblings := [M].{
+^^^^^^^^^^^
 
-    I found `d3_types_then_vals` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │                     ‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:60:20 ┘
+I found `d2_siblings` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:13
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:=` here.
+d2_siblings := [M].{
+            ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │                        ‾                                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:60:23 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `:=` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:16
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d2_siblings := [M].{
+               ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │                          ‾                                                 │
- └─────────────────────────── associated_items_complete_all_patterns.md:60:25 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `[` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:49:18
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:60:26 ┘
+d2_siblings := [M].{
+                 ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `.` here.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:19
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │                            ‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:60:27 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d2_siblings := [M].{
+                  ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:70:1 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:20
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d2_siblings := [M].{
+                   ^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_2 = d3_types_then_vals.L2.val2                                         │
- │                           ‾‾‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:72:26 ┘
+I found `{` here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:51:27
 
-    For example:
-        person.name
-        pair.0
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+valA = d2_siblings.InnerB.valB + 1
+                  ^^^^^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_3 = d3_types_then_vals.L2.L3.val3                                      │
- │                           ‾‾‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:73:26 ┘
+For example:
+    person.name
+    pair.0
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `.InnerB` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:57:1
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+}
+^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_3 = d3_types_then_vals.L2.L3.val3                                      │
- │                              ‾‾‾                                           │
- └─────────────────────────── associated_items_complete_all_patterns.md:73:29 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:58:19
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └──────────────────────────── associated_items_complete_all_patterns.md:75:1 ┘
+d2_5 = d2_siblings.InnerA.valA
+                  ^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `d3_vals_then_types` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `.InnerA` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:60:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │                     ‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:75:20 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d3_types_then_vals := [P].{
+^^^^^^^^^^^^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `d3_types_then_vals` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │                        ‾                                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:75:23 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:20
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d3_types_then_vals := [P].{
+                   ^^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │                          ‾                                                 │
- └─────────────────────────── associated_items_complete_all_patterns.md:75:25 ┘
+I found `:=` here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:23
 
-    For example:
-        List(U8)
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d3_types_then_vals := [P].{
+                      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:75:26 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `[` here.
 
-    For example:
-        answer = 42
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:60:25
 
-    I found `.` here.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d3_types_then_vals := [P].{
+                        ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │                            ‾                                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:75:27 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    List(U8)
 
-    For example:
-        answer = 42
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `{` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:26
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:85:1 ┘
+d3_types_then_vals := [P].{
+                         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `.` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:27
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_5 = d3_vals_then_types.L2.val2                                         │
- │                           ‾‾‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:87:26 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d3_types_then_vals := [P].{
+                          ^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_6 = d3_vals_then_types.L2.L3.val3                                      │
- │                           ‾‾‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:88:26 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:70:1
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+}
+^
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_6 = d3_vals_then_types.L2.L3.val3                                      │
- │                              ‾‾‾                                           │
- └─────────────────────────── associated_items_complete_all_patterns.md:88:29 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:72:26
 
-    For example:
-        person.name
-        pair.0
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d3_2 = d3_types_then_vals.L2.val2
+                         ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────── associated_items_complete_all_patterns.md:90:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:73:26
 
-    I found `d3_l1_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d3_3 = d3_types_then_vals.L2.L3.val3
+                         ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │                        ‾‾                                                  │
- └─────────────────────────── associated_items_complete_all_patterns.md:90:23 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `:=` here.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:73:29
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │                           ‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:90:26 ┘
+d3_3 = d3_types_then_vals.L2.L3.val3
+                            ^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `[` here.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:75:1
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │                             ‾                                              │
- └─────────────────────────── associated_items_complete_all_patterns.md:90:28 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d3_vals_then_types := [S].{
+^^^^^^^^^^^^^^^^^^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `d3_vals_then_types` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │                              ‾                                             │
- └─────────────────────────── associated_items_complete_all_patterns.md:90:29 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:20
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d3_vals_then_types := [S].{
+                   ^^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │                               ‾                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:90:30 ┘
+I found `:=` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:23
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `{` here.
+d3_vals_then_types := [S].{
+                      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:98:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `[` here.
 
-    For example:
-        answer = 42
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:75:25
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d3_vals_then_types := [S].{
+                        ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:100:1 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    List(U8)
 
-    For example:
-        answer = 42
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `d3_l2_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:26
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:100:23 ┘
+d3_vals_then_types := [S].{
+                         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `:=` here.
+I found `.` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:27
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:100:26 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d3_vals_then_types := [S].{
+                          ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `[` here.
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:100:28 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:85:1
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        List(U8)
+}
+^
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:100:29 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:87:26
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.` here.
+d3_5 = d3_vals_then_types.L2.val2
+                         ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:100:30 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:88:26
 
-    I found `{` here.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d3_6 = d3_vals_then_types.L2.L3.val3
+                         ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:108:1 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ expected record accessor ── associated_items_complete_all_patterns.md:88:29
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:110:1 ┘
+d3_6 = d3_vals_then_types.L2.L3.val3
+                            ^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `d3_val_after_nested` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:90:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │                      ‾‾                                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:110:21 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d3_l1_scope_violation := [V].{
+^^^^^^^^^^^^^^^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `d3_l1_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │                         ‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:110:24 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:23
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d3_l1_scope_violation := [V].{
+                      ^^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:110:27 ┘
+I found `:=` here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:26
 
-    For example:
-        List(U8)
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d3_l1_scope_violation := [V].{
+                         ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:110:28 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `[` here.
 
-    For example:
-        answer = 42
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:90:28
 
-    I found `.` here.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d3_l1_scope_violation := [V].{
+                           ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:110:29 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    List(U8)
 
-    For example:
-        answer = 42
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `{` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:29
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:120:1 ┘
+d3_l1_scope_violation := [V].{
+                            ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `.` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:30
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_8 = d3_val_after_nested.L2.val2                                        │
- │                            ‾‾‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:122:27 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d3_l1_scope_violation := [V].{
+                             ^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_9 = d3_val_after_nested.L2.L3.val3                                     │
- │                            ‾‾‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:123:27 ┘
+── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:98:1
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+}
+^
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d3_9 = d3_val_after_nested.L2.L3.val3                                     │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:123:30 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:100:1
 
-    For example:
-        person.name
-        pair.0
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d3_l2_scope_violation := [Y].{
+^^^^^^^^^^^^^^^^^^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:125:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `d3_l2_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:23
 
-    I found `d4_all_types_then_vals` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+d3_l2_scope_violation := [Y].{
+                      ^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │                         ‾‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:125:24 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `:=` here.
 
-    I found `:=` here.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:26
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:125:27 ┘
+d3_l2_scope_violation := [Y].{
+                         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `[` here.
 
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:100:28
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:125:30 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d3_l2_scope_violation := [Y].{
+                           ^
 
-    For example:
-        List(U8)
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    List(U8)
 
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:125:31 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:29
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d3_l2_scope_violation := [Y].{
+                            ^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │                                 ‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:125:32 ┘
+I found `.` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:30
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `{` here.
+d3_l2_scope_violation := [Y].{
+                             ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:139:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `{` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:108:1
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+}
+^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:140:30 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:110:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
- │                                  ‾‾‾                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:140:33 ┘
+d3_val_after_nested := [AB].{
+^^^^^^^^^^^^^^^^^^^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `d3_val_after_nested` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:21
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
- │                                     ‾‾‾                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:140:36 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d3_val_after_nested := [AB].{
+                    ^^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:142:1 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:24
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d3_val_after_nested := [AB].{
+                       ^
 
-    I found `d4_all_vals_then_types` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │                         ‾‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:142:24 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:110:27
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `:=` here.
+d3_val_after_nested := [AB].{
+                          ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:142:27 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:28
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d3_val_after_nested := [AB].{
+                           ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:142:30 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `.` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:29
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:142:31 ┘
+d3_val_after_nested := [AB].{
+                            ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `.` here.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:120:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │                                 ‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:142:32 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+}
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:156:1 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:122:27
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d3_8 = d3_val_after_nested.L2.val2
+                          ^^^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:157:30 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:123:27
 
-    For example:
-        person.name
-        pair.0
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d3_9 = d3_val_after_nested.L2.L3.val3
+                          ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
- │                                  ‾‾‾                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:157:33 ┘
+For example:
+    person.name
+    pair.0
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        person.name
-        pair.0
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:123:30
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d3_9 = d3_val_after_nested.L2.L3.val3
+                             ^^^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
- │                                     ‾‾‾                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:157:36 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        person.name
-        pair.0
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:125:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └─────────────────────────── associated_items_complete_all_patterns.md:159:1 ┘
+d4_all_types_then_vals := [AE].{
+^^^^^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `d4_reverse_types` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `d4_all_types_then_vals` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:24
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │                   ‾‾                                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:159:18 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d4_all_types_then_vals := [AE].{
+                       ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │                      ‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:159:21 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:27
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_all_types_then_vals := [AE].{
+                          ^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │                         ‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:159:24 ┘
+I found `[` here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:125:30
 
-    For example:
-        List(U8)
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d4_all_types_then_vals := [AE].{
+                             ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │                          ‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:159:25 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:31
 
-    I found `.` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_all_types_then_vals := [AE].{
+                              ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:159:26 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `.` here.
 
-    I found `{` here.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:32
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:173:1 ┘
+d4_all_types_then_vals := [AE].{
+                               ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:139:1
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
- │                         ‾‾‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:174:24 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+}
+^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
- │                            ‾‾‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:174:27 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:30
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+                             ^^^
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:174:30 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:33
 
-    For example:
-        person.name
-        pair.0
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+                                ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:176:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:36
 
-    I found `d4_interleaved` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+                                   ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │                 ‾‾                                                         │
- └────────────────────────── associated_items_complete_all_patterns.md:176:16 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `:=` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:142:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │                    ‾                                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:176:19 ┘
+d4_all_vals_then_types := [AI].{
+^^^^^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `d4_all_vals_then_types` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:24
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │                       ‾                                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:176:22 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d4_all_vals_then_types := [AI].{
+                       ^^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:176:23 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:27
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_all_vals_then_types := [AI].{
+                          ^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │                         ‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:176:24 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:142:30
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `{` here.
+d4_all_vals_then_types := [AI].{
+                             ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:190:1 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:31
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_all_vals_then_types := [AI].{
+                              ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
- │                       ‾‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:191:22 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `.` here.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:32
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
- │                          ‾‾‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:191:25 ┘
+d4_all_vals_then_types := [AI].{
+                               ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:156:1
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
- │                             ‾‾‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:191:28 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+}
+^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:193:1 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:30
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+                             ^^^
 
-    I found `d4_l3_val_after_l4` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:193:20 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:33
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `:=` here.
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+                                ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:193:23 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:36
 
-    I found `[` here.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+                                   ^^^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:193:26 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        List(U8)
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:159:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:193:27 ┘
+d4_reverse_types := [AM].{
+^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `.` here.
+I found `d4_reverse_types` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:18
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:193:28 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d4_reverse_types := [AM].{
+                 ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:202:1 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:21
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_reverse_types := [AM].{
+                    ^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:203:26 ┘
+I found `[` here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:159:24
 
-    For example:
-        person.name
-        pair.0
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d4_reverse_types := [AM].{
+                       ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:203:29 ┘
+For example:
+    List(U8)
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:25
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_reverse_types := [AM].{
+                        ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:203:32 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `.` here.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:26
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:205:1 ┘
+d4_reverse_types := [AM].{
+                         ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `d4_l2_val_after_l3` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:173:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:205:20 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+}
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:205:23 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:24
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+                       ^^^
 
-    I found `[` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:205:26 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:27
 
-    For example:
-        List(U8)
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+                          ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:205:27 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:30
 
-    I found `.` here.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+                             ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:205:28 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `{` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:176:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:217:1 ┘
+d4_interleaved := [AQ].{
+^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `d4_interleaved` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:16
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:218:26 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d4_interleaved := [AQ].{
+               ^^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:218:29 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:19
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+d4_interleaved := [AQ].{
+                  ^
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:218:32 ┘
+I found `[` here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:176:22
 
-    For example:
-        person.name
-        pair.0
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d4_interleaved := [AQ].{
+                     ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:220:1 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:23
 
-    I found `d4_l1_val_after_l2` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_interleaved := [AQ].{
+                      ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:220:20 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `.` here.
 
-    I found `:=` here.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:24
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:220:23 ┘
+d4_interleaved := [AQ].{
+                       ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:190:1
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:220:26 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+}
+^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:220:27 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:22
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d4_4 = d4_interleaved.L2.L3.L4.val4
+                     ^^^
 
-    I found `.` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:220:28 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:25
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `{` here.
+d4_4 = d4_interleaved.L2.L3.L4.val4
+                        ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:234:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:28
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_4 = d4_interleaved.L2.L3.L4.val4
+                           ^^^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:235:26 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        person.name
-        pair.0
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:193:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:235:29 ┘
+d4_l3_val_after_l4 := [BA].{
+^^^^^^^^^^^^^^^^^^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `d4_l3_val_after_l4` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:20
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:235:32 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d4_l3_val_after_l4 := [BA].{
+                   ^^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:237:1 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:23
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_l3_val_after_l4 := [BA].{
+                      ^
 
-    I found `d4_l1_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:237:23 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:193:26
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `:=` here.
+d4_l3_val_after_l4 := [BA].{
+                         ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:237:26 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:27
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l3_val_after_l4 := [BA].{
+                          ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:237:29 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `.` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:28
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:237:30 ┘
+d4_l3_val_after_l4 := [BA].{
+                           ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `.` here.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:202:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:237:31 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+}
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:247:1 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:26
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+                         ^^^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:249:1 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:29
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `d4_l2_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+                            ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:249:23 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:32
 
-    I found `:=` here.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+                               ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:249:26 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `[` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:205:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:249:29 ┘
+d4_l2_val_after_l3 := [BE].{
+^^^^^^^^^^^^^^^^^^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        List(U8)
+For example:
+    answer = 42
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `d4_l2_val_after_l3` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:20
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:249:30 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d4_l2_val_after_l3 := [BE].{
+                   ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.` here.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:249:31 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:23
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_l2_val_after_l3 := [BE].{
+                      ^
 
-    I found `{` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:259:1 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:205:26
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d4_l2_val_after_l3 := [BE].{
+                         ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:261:1 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:27
 
-    I found `d4_l3_scope_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l2_val_after_l3 := [BE].{
+                          ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:261:23 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `.` here.
 
-    I found `:=` here.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:28
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:261:26 ┘
+d4_l2_val_after_l3 := [BE].{
+                           ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:217:1
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:261:29 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+}
+^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:261:30 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:26
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
+                         ^^^
 
-    I found `.` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:261:31 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:29
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `{` here.
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
+                            ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:271:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:32
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
+                               ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:273:1 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `d5_all_types_then_vals` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:220:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │                         ‾‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:273:24 ┘
+d4_l1_val_after_l2 := [BI].{
+^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `:=` here.
+I found `d4_l1_val_after_l2` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:20
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:273:27 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d4_l1_val_after_l2 := [BI].{
+                   ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `[` here.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:273:30 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:23
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        List(U8)
+d4_l1_val_after_l2 := [BI].{
+                      ^
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:273:31 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:220:26
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `.` here.
+d4_l1_val_after_l2 := [BI].{
+                         ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │                                 ‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:273:32 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:27
 
-    I found `{` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l1_val_after_l2 := [BI].{
+                          ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:291:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `.` here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:28
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:292:30 ┘
+d4_l1_val_after_l2 := [BI].{
+                           ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:234:1
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │                                  ‾‾‾                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:292:33 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+}
+^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │                                     ‾‾‾                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:292:36 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:26
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+                         ^^^
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │                                        ‾‾‾                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:292:39 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:29
 
-    For example:
-        person.name
-        pair.0
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+                            ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
- └─────────────────────────── associated_items_complete_all_patterns.md:294:1 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:32
 
-    I found `d5_all_vals_then_types` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+                               ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │                         ‾‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:294:24 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `:=` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:237:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:294:27 ┘
+d4_l1_scope_violation := [BM].{
+^^^^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `[` here.
+I found `d4_l1_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:23
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:294:30 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+d4_l1_scope_violation := [BM].{
+                      ^^
 
-    For example:
-        List(U8)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:294:31 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:26
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_l1_scope_violation := [BM].{
+                         ^
 
-    I found `.` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │                                 ‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:294:32 ┘
+I found `[` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:237:29
 
-    For example:
-        answer = 42
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    I found `{` here.
+d4_l1_scope_violation := [BM].{
+                            ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:312:1 ┘
+For example:
+    List(U8)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:30
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l1_scope_violation := [BM].{
+                             ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │                               ‾‾‾                                          │
- └────────────────────────── associated_items_complete_all_patterns.md:313:30 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `.` here.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:31
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │                                  ‾‾‾                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:313:33 ┘
+d4_l1_scope_violation := [BM].{
+                              ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:247:1
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │                                     ‾‾‾                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:313:36 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+}
+^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │                                        ‾‾‾                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:313:39 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:249:1
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+d4_l2_scope_violation := [BQ].{
+^^^^^^^^^^^^^^^^^^^^^
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:315:1 ┘
+I found `d4_l2_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:23
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `d5_deep_interleave` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+d4_l2_scope_violation := [BQ].{
+                      ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:315:20 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `:=` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:26
 
-    I found `:=` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l2_scope_violation := [BQ].{
+                         ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:315:23 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `[` here.
 
-    I found `[` here.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:249:29
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:315:26 ┘
+d4_l2_scope_violation := [BQ].{
+                            ^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    For example:
-        List(U8)
+For example:
+    List(U8)
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:30
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:315:27 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d4_l2_scope_violation := [BQ].{
+                             ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.` here.
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:315:28 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:31
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d4_l2_scope_violation := [BQ].{
+                              ^
 
-    I found `{` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:333:1 ┘
+I found `{` here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:259:1
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:334:26 ┘
+For example:
+    answer = 42
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:261:1
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l3_scope_violation := [BU].{
+^^^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:334:29 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `d4_l3_scope_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:334:32 ┘
+d4_l3_scope_violation := [BU].{
+                      ^^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `:=` here.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:26
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │                                    ‾‾‾                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:334:35 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d4_l3_scope_violation := [BU].{
+                         ^
 
-    For example:
-        person.name
-        pair.0
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:336:1 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:261:29
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+d4_l3_scope_violation := [BU].{
+                            ^
 
-    I found `d5_l4_val_after_l5` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:336:20 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:30
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `:=` here.
+d4_l3_scope_violation := [BU].{
+                             ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:336:23 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:31
 
-    I found `[` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d4_l3_scope_violation := [BU].{
+                              ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:336:26 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found `{` here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:271:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:336:27 ┘
+}
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `.` here.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:273:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:336:28 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_all_types_then_vals := [BY].{
+^^^^^^^^^^^^^^^^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found `d5_all_types_then_vals` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:348:1 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:24
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d5_all_types_then_vals := [BY].{
+                       ^^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:349:26 ┘
+I found `:=` here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:27
 
-    For example:
-        person.name
-        pair.0
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d5_all_types_then_vals := [BY].{
+                          ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:349:29 ┘
+For example:
+    answer = 42
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `[` here.
 
-    For example:
-        person.name
-        pair.0
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:273:30
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d5_all_types_then_vals := [BY].{
+                             ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:349:32 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    List(U8)
 
-    For example:
-        person.name
-        pair.0
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:31
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │                                    ‾‾‾                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:349:35 ┘
+d5_all_types_then_vals := [BY].{
+                              ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `.` here.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:32
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:351:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_all_types_then_vals := [BY].{
+                               ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `d5_l3_val_after_l4` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │                     ‾‾                                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:351:20 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:291:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+}
+^
 
-    I found `:=` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:351:23 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:30
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `[` here.
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+                             ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:351:26 ┘
+For example:
+    person.name
+    pair.0
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        List(U8)
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:33
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+                                ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │                            ‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:351:27 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `.` here.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:36
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │                             ‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:351:28 ┘
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+                                   ^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `{` here.
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:39
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:365:1 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+                                      ^^^
 
-    For example:
-        answer = 42
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    person.name
+    pair.0
 
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:366:26 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:294:1
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+d5_all_vals_then_types := [CD].{
+^^^^^^^^^^^^^^^^^^^^^^
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:366:29 ┘
+I found `d5_all_vals_then_types` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:24
 
-    For example:
-        person.name
-        pair.0
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d5_all_vals_then_types := [CD].{
+                       ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:366:32 ┘
+For example:
+    answer = 42
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `:=` here.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:27
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_all_vals_then_types := [CD].{
+                          ^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │                                    ‾‾‾                                     │
- └────────────────────────── associated_items_complete_all_patterns.md:366:35 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `[` here.
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:294:30
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:368:1 ┘
+d5_all_vals_then_types := [CD].{
+                             ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `d5_l1_val_last` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:31
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │                 ‾‾                                                         │
- └────────────────────────── associated_items_complete_all_patterns.md:368:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_all_vals_then_types := [CD].{
+                              ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │                    ‾                                                       │
- └────────────────────────── associated_items_complete_all_patterns.md:368:19 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:32
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+d5_all_vals_then_types := [CD].{
+                               ^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │                       ‾                                                    │
- └────────────────────────── associated_items_complete_all_patterns.md:368:22 ┘
+I found `{` here.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:312:1
 
-    For example:
-        List(U8)
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │                        ‾                                                   │
- └────────────────────────── associated_items_complete_all_patterns.md:368:23 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:30
 
-    I found `.` here.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+                             ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │                         ‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:368:24 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `{` here.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:33
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:386:1 ┘
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+                                ^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:36
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_7 = d5_l1_val_last.L2.val2                                             │
- │                       ‾‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:388:22 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+                                   ^^^
 
-    For example:
-        person.name
-        pair.0
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    person.name
+    pair.0
 
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_8 = d5_l1_val_last.L2.L3.val3                                          │
- │                       ‾‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:389:22 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:39
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        person.name
-        pair.0
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+                                      ^^^
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_8 = d5_l1_val_last.L2.L3.val3                                          │
- │                          ‾‾‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:389:25 ┘
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:315:1
 
-    For example:
-        person.name
-        pair.0
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d5_deep_interleave := [CI].{
+^^^^^^^^^^^^^^^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
- │                       ‾‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:390:22 ┘
+For example:
+    answer = 42
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `d5_deep_interleave` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:20
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_deep_interleave := [CI].{
+                   ^^
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
- │                          ‾‾‾                                               │
- └────────────────────────── associated_items_complete_all_patterns.md:390:25 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+For example:
+    answer = 42
 
-    For example:
-        person.name
-        pair.0
+I found `:=` here.
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
- │                             ‾‾‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:390:28 ┘
+d5_deep_interleave := [CI].{
+                      ^
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        person.name
-        pair.0
+For example:
+    answer = 42
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I found `[` here.
 
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:315:26
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │                        ‾‾‾                                                 │
- └────────────────────────── associated_items_complete_all_patterns.md:391:23 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+d5_deep_interleave := [CI].{
+                         ^
 
-    For example:
-        person.name
-        pair.0
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    I found `.L2` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    List(U8)
 
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │                           ‾‾‾                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:391:26 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:27
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        person.name
-        pair.0
+d5_deep_interleave := [CI].{
+                          ^
 
-    I found `.L3` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │                              ‾‾‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:391:29 ┘
+I found `.` here.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:28
 
-    For example:
-        person.name
-        pair.0
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.L4` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+d5_deep_interleave := [CI].{
+                           ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │                                 ‾‾‾                                        │
- └────────────────────────── associated_items_complete_all_patterns.md:391:32 ┘
+For example:
+    answer = 42
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+I found `{` here.
 
-    For example:
-        person.name
-        pair.0
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:333:1
 
-    I found `.L5` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+I was parsing a statement, and this token cannot start a statement here.
 
+}
+^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:393:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `d5_l1_to_l5_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:26
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:393:23 ┘
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+                         ^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    For example:
-        answer = 42
+For example:
+    person.name
+    pair.0
 
-    I found `:=` here.
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:29
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:393:26 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+                            ^^^
 
-    For example:
-        answer = 42
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    I found `[` here.
+For example:
+    person.name
+    pair.0
 
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:393:29 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:32
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        List(U8)
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+                               ^^^
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:393:30 ┘
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:35
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `.` here.
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+                                  ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:393:31 ┘
+For example:
+    person.name
+    pair.0
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:336:1
 
-    I found `{` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l4_val_after_l5 := [CN].{
+^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:405:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `d5_l4_val_after_l5` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:20
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:407:1 ┘
+d5_l4_val_after_l5 := [CN].{
+                   ^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `d5_l3_to_l5_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `:=` here.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:23
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:407:23 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_l4_val_after_l5 := [CN].{
+                      ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `:=` here.
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:407:26 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:336:26
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        answer = 42
+d5_l4_val_after_l5 := [CN].{
+                         ^
 
-    I found `[` here.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:407:29 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:27
 
-    For example:
-        List(U8)
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+d5_l4_val_after_l5 := [CN].{
+                          ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:407:30 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `.` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:28
 
-    I found `.` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l4_val_after_l5 := [CN].{
+                           ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:407:31 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `{` here.
 
-    I found `{` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:348:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:419:1 ┘
+}
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:26
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:421:1 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+                         ^^^
 
-    For example:
-        answer = 42
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    I found `d5_l4_to_l5_violation` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    person.name
+    pair.0
 
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │                        ‾‾                                                  │
- └────────────────────────── associated_items_complete_all_patterns.md:421:23 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:29
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    For example:
-        answer = 42
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+                            ^^^
 
-    I found `:=` here.
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │                           ‾                                                │
- └────────────────────────── associated_items_complete_all_patterns.md:421:26 ┘
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:32
 
-    For example:
-        answer = 42
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    I found `[` here.
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+                               ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │                              ‾                                             │
- └────────────────────────── associated_items_complete_all_patterns.md:421:29 ┘
+For example:
+    person.name
+    pair.0
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    For example:
-        List(U8)
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:35
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+                                  ^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │                               ‾                                            │
- └────────────────────────── associated_items_complete_all_patterns.md:421:30 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    person.name
+    pair.0
 
-    For example:
-        answer = 42
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    I found `.` here.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:351:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │                                ‾                                           │
- └────────────────────────── associated_items_complete_all_patterns.md:421:31 ┘
+d5_l3_val_after_l4 := [CS].{
+^^^^^^^^^^^^^^^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `{` here.
+I found `d5_l3_val_after_l4` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:20
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  }                                                                         │
- │  ‾                                                                         │
- └─────────────────────────── associated_items_complete_all_patterns.md:433:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+d5_l3_val_after_l4 := [CS].{
+                   ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d1_forward` in this scope. ──────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d1_1 = d1_forward.first                                                   │
- │         ‾‾‾‾‾‾‾‾‾‾                                                         │
- └───────────────────────────── associated_items_complete_all_patterns.md:6:8 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:23
 
-    Is it misspelled, or is there an import missing?
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l3_val_after_l4 := [CS].{
+                      ^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d1_scope` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d1_2 = d1_scope.inner                                                     │
- │         ‾‾‾‾‾‾‾‾                                                           │
- └──────────────────────────── associated_items_complete_all_patterns.md:11:8 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Is it misspelled, or is there an import missing?
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d2_inner_first` in this scope. ──────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d2_1 = d2_inner_first.outer_val                                           │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────── associated_items_complete_all_patterns.md:20:8 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:351:26
 
-    Is it misspelled, or is there an import missing?
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
+d5_l3_val_after_l4 := [CS].{
+                         ^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d2_2 = d2_inner_first.Inner.inner_val                                     │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └──────────────────────────── associated_items_complete_all_patterns.md:21:8 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    List(U8)
 
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Inner := [H].{                                                            │
- │      inner_val = outer_val                                                 │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:24:5 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:27
 
-    The redeclaration is here:
+I was parsing a statement, and this token cannot start a statement here.
 
-    But Inner was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    14 │      Inner := [D].{                                                  │
-    15 │          inner_val = outer_val                                       │
-    16 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:14:5 ┘
+d5_l3_val_after_l4 := [CS].{
+                          ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `outer_val` is being redeclared here. ─────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  outer_val = 500                                                           │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────── associated_items_complete_all_patterns.md:28:5 ┘
+For example:
+    answer = 42
 
-    In this scope, `outer_val` was already defined here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    15 │          inner_val = outer_val                                       │
-       │                      ‾‾‾‾‾‾‾‾‾                                       │
-       └───────────────────── associated_items_complete_all_patterns.md:15:21 ┘
+I found `.` here.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:28
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d2_3 = d2_outer_val_middle.Inner.inner_val                                │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └──────────────────────────── associated_items_complete_all_patterns.md:30:8 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+d5_l3_val_after_l4 := [CS].{
+                           ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `outer_val` is being redeclared here. ─────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  outer_val = d2_outer_refs_inner.Inner.inner_val                           │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────── associated_items_complete_all_patterns.md:33:5 ┘
+For example:
+    answer = 42
 
-    In this scope, `outer_val` was already defined here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    28 │      outer_val = 500                                                 │
-       │      ‾‾‾‾‾‾‾‾‾                                                       │
-       └────────────────────── associated_items_complete_all_patterns.md:28:5 ┘
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:365:1
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  outer_val = d2_outer_refs_inner.Inner.inner_val                           │
- │              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
- └─────────────────────────── associated_items_complete_all_patterns.md:33:17 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Inner := [J].{                                                            │
- │      inner_val = 600                                                       │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:35:5 ┘
+For example:
+    answer = 42
 
-    The redeclaration is here:
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    But Inner was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    14 │      Inner := [D].{                                                  │
-    15 │          inner_val = outer_val                                       │
-    16 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:14:5 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:26
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d2_outer_refs_inner` in this scope. ─┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d2_4 = d2_outer_refs_inner.outer_val                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └──────────────────────────── associated_items_complete_all_patterns.md:39:8 ┘
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+                         ^^^
 
-    Is it misspelled, or is there an import missing?
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Inner` is being redeclared. ───────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Inner := [L].{                                                            │
- │      inner_private = 700                                                   │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:42:5 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    The redeclaration is here:
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:29
 
-    But Inner was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    14 │      Inner := [D].{                                                  │
-    15 │          inner_val = outer_val                                       │
-    16 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:14:5 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+                            ^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `inner_private` in this scope. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  outer_trying_inner = inner_private                                        │
- │                       ‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:46:26 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    Is it misspelled, or is there an import missing?
+For example:
+    person.name
+    pair.0
 
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  valA = d2_siblings.InnerB.valB + 1                                        │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:51:16 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:32
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+                               ^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d2_5 = d2_siblings.InnerA.valA                                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:58:8 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    person.name
+    pair.0
 
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d3_types_then_vals` in this scope. ──┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d3_1 = d3_types_then_vals.val1                                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
- └──────────────────────────── associated_items_complete_all_patterns.md:71:8 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:35
 
-    Is it misspelled, or is there an import missing?
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+                                  ^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_2 = d3_types_then_vals.L2.val2                                         │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:72:8 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    person.name
+    pair.0
 
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_3 = d3_types_then_vals.L2.L3.val3                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
- └──────────────────────────── associated_items_complete_all_patterns.md:73:8 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:368:1
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l1_val_last := [DC].{
+^^^^^^^^^^^^^^
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 30                                                                 │
- │  ‾‾‾‾                                                                      │
- └──────────────────────────── associated_items_complete_all_patterns.md:76:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    In this scope, `val1` was already defined here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    63 │              val3 = val1 + val2                                      │
-       │                     ‾‾‾‾                                             │
-       └───────────────────── associated_items_complete_all_patterns.md:63:20 ┘
+For example:
+    answer = 42
 
+I found `d5_l1_val_last` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [T].{                                                               │
- │      val2 = val1 + 5                                                       │
- │                                                                            │
- │      L3 := [U].{                                                           │
- │          val3 = val1 + val2                                                │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:78:5 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:16
 
-    The redeclaration is here:
+I was parsing a statement, and this token cannot start a statement here.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+d5_l1_val_last := [DC].{
+               ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d3_vals_then_types` in this scope. ──┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d3_4 = d3_vals_then_types.val1                                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                 │
- └──────────────────────────── associated_items_complete_all_patterns.md:86:8 ┘
+For example:
+    answer = 42
 
-    Is it misspelled, or is there an import missing?
+I found `:=` here.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:19
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_5 = d3_vals_then_types.L2.val2                                         │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └──────────────────────────── associated_items_complete_all_patterns.md:87:8 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+d5_l1_val_last := [DC].{
+                  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_6 = d3_vals_then_types.L2.L3.val3                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
- └──────────────────────────── associated_items_complete_all_patterns.md:88:8 ┘
+For example:
+    answer = 42
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I found `[` here.
 
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:368:22
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [W].{                                                               │
- │      L3 := [X].{                                                           │
- │          l3_private = 999                                                  │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── associated_items_complete_all_patterns.md:91:5 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    The redeclaration is here:
+d5_l1_val_last := [DC].{
+                     ^
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `l3_private` in this scope. ──────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  bad_l1 = l3_private                                                       │
- │           ‾‾‾‾‾‾‾‾‾‾                                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:97:14 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Is it misspelled, or is there an import missing?
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [Z].{                                                               │
- │      L3 := [AA].{                                                          │
- │          l3_secret = 888                                                   │
- │      }                                                                     │
- │                                                                            │
- │      bad_l2 = l3_secret                                                    │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:101:5 ┘
+d5_l1_val_last := [DC].{
+                      ^
 
-    The redeclaration is here:
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [AC].{                                                              │
- │      L3 := [AD].{                                                          │
- │          val3 = val2 * 2                                                   │
- │      }                                                                     │
- │                                                                            │
- │      val2 = val1 * 3                                                       │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:111:5 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:24
 
-    The redeclaration is here:
+I was parsing a statement, and this token cannot start a statement here.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+d5_l1_val_last := [DC].{
+                       ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 5                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:119:5 ┘
+For example:
+    answer = 42
 
-    In this scope, `val1` was already defined here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    76 │      val1 = 30                                                       │
-       │      ‾‾‾‾                                                            │
-       └────────────────────── associated_items_complete_all_patterns.md:76:5 ┘
+I found `{` here.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:386:1
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d3_val_after_nested` in this scope. ─┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d3_7 = d3_val_after_nested.val1                                           │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:121:8 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Is it misspelled, or is there an import missing?
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_8 = d3_val_after_nested.L2.val2                                        │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
- └─────────────────────────── associated_items_complete_all_patterns.md:122:8 ┘
+For example:
+    answer = 42
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:388:22
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d3_9 = d3_val_after_nested.L2.L3.val3                                     │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:123:8 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+d5_7 = d5_l1_val_last.L2.val2
+                     ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [AF].{                                                              │
- │      L3 := [AG].{                                                          │
- │          L4 := [AH].{                                                      │
- │              val4 = val1 + val2 + val3                                     │
- │          }                                                                 │
- │                                                                            │
- │          val3 = 3                                                          │
- │      }                                                                     │
- │                                                                            │
- │      val2 = 2                                                              │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:126:5 ┘
+For example:
+    person.name
+    pair.0
 
-    The redeclaration is here:
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:389:22
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 1                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:138:5 ┘
+d5_8 = d5_l1_val_last.L2.L3.val3
+                     ^^^
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    119 │      val1 = 5                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:119:5 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:140:8 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:389:25
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 10                                                                 │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:143:5 ┘
+d5_8 = d5_l1_val_last.L2.L3.val3
+                        ^^^
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    138 │      val1 = 1                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:138:5 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [AJ].{                                                              │
- │      val2 = val1 + 1                                                       │
- │                                                                            │
- │      L3 := [AK].{                                                          │
- │          val3 = val1 + val2                                                │
- │                                                                            │
- │          L4 := [AL].{                                                      │
- │              val4 = val1 + val2 + val3                                     │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:145:5 ┘
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    The redeclaration is here:
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:22
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_9 = d5_l1_val_last.L2.L3.L4.val4
+                     ^^^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └─────────────────────────── associated_items_complete_all_patterns.md:157:8 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    person.name
+    pair.0
 
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [AN].{                                                              │
- │      L3 := [AO].{                                                          │
- │          L4 := [AP].{                                                      │
- │              val4 = val3 + 1                                               │
- │          }                                                                 │
- │                                                                            │
- │          val3 = val2 + 1                                                   │
- │      }                                                                     │
- │                                                                            │
- │      val2 = val1 + 1                                                       │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:160:5 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:25
 
-    The redeclaration is here:
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+d5_9 = d5_l1_val_last.L2.L3.L4.val4
+                        ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 7                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:172:5 ┘
+For example:
+    person.name
+    pair.0
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    143 │      val1 = 10                                                      │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:143:5 ┘
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:28
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:174:8 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+d5_9 = d5_l1_val_last.L2.L3.L4.val4
+                           ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 15                                                                 │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:177:5 ┘
+For example:
+    person.name
+    pair.0
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    172 │      val1 = 7                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:172:5 ┘
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:23
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [AR].{                                                              │
- │      L3 := [AS].{                                                          │
- │          val3 = val1 + val2                                                │
- │                                                                            │
- │          L4 := [AT].{                                                      │
- │              val4 = val1 + val2 + val3                                     │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      val2 = val1 + 5                                                       │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:179:5 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    The redeclaration is here:
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+                      ^^^
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
+For example:
+    person.name
+    pair.0
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:191:8 ┘
+I found `.L2` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:26
 
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BB].{                                                              │
- │      L3 := [BC].{                                                          │
- │          L4 := [BD].{                                                      │
- │              val4 = val3 * 3                                               │
- │          }                                                                 │
- │          val3 = 12                                                         │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:194:5 ┘
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+                         ^^^
 
-    The redeclaration is here:
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+For example:
+    person.name
+    pair.0
 
+I found `.L3` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:203:8 ┘
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:29
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I was parsing access after `.`, and I expected a field name or tuple index.
 
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+                            ^^^
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BF].{                                                              │
- │      L3 := [BG].{                                                          │
- │          L4 := [BH].{                                                      │
- │              val4 = val2 + val3                                            │
- │          }                                                                 │
- │                                                                            │
- │          val3 = 8                                                          │
- │      }                                                                     │
- │                                                                            │
- │      val2 = 4                                                              │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:206:5 ┘
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-    The redeclaration is here:
+For example:
+    person.name
+    pair.0
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+I found `.L4` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
+── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:32
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:218:8 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+                               ^^^
 
+Record access uses a lowercase field name like `.name`. Tuple access uses a
+number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+valid accessors.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BJ].{                                                              │
- │      L3 := [BK].{                                                          │
- │          L4 := [BL].{                                                      │
- │              val4 = val1 + 100                                             │
- │          }                                                                 │
- │                                                                            │
- │          val3 = val1 + 50                                                  │
- │      }                                                                     │
- │                                                                            │
- │      val2 = val1 + 10                                                      │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:221:5 ┘
+For example:
+    person.name
+    pair.0
 
-    The redeclaration is here:
+I found `.L5` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:393:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 3                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:233:5 ┘
+d5_l1_to_l5_violation := [DH].{
+^^^^^^^^^^^^^^^^^^^^^
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    177 │      val1 = 15                                                      │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:177:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:235:8 ┘
+I found `d5_l1_to_l5_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BN].{                                                              │
- │      L3 := [BO].{                                                          │
- │          L4 := [BP].{                                                      │
- │              l4_val = 444                                                  │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:238:5 ┘
+d5_l1_to_l5_violation := [DH].{
+                      ^^
 
-    The redeclaration is here:
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+For example:
+    answer = 42
 
+I found `:=` here.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `l4_val` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  bad = l4_val                                                              │
- │        ‾‾‾‾‾‾                                                              │
- └────────────────────────── associated_items_complete_all_patterns.md:246:11 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:26
 
-    Is it misspelled, or is there an import missing?
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l1_to_l5_violation := [DH].{
+                         ^
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BR].{                                                              │
- │      L3 := [BS].{                                                          │
- │          L4 := [BT].{                                                      │
- │              l4_secret = 333                                               │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      bad = l4_secret                                                       │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:250:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    The redeclaration is here:
+For example:
+    answer = 42
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+I found `[` here.
 
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:393:29
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BV].{                                                              │
- │      L3 := [BW].{                                                          │
- │          L4 := [BX].{                                                      │
- │              l4_private = 555                                              │
- │          }                                                                 │
- │                                                                            │
- │          attempt = l4_private                                              │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:262:5 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    The redeclaration is here:
+d5_l1_to_l5_violation := [DH].{
+                            ^
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [BZ].{                                                              │
- │      L3 := [CA].{                                                          │
- │          L4 := [CB].{                                                      │
- │              L5 := [CC].{                                                  │
- │                  val5 = val1 + val2 + val3 + val4                          │
- │              }                                                             │
- │                                                                            │
- │              val4 = 4                                                      │
- │          }                                                                 │
- │                                                                            │
- │          val3 = 3                                                          │
- │      }                                                                     │
- │                                                                            │
- │      val2 = 2                                                              │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:274:5 ┘
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    The redeclaration is here:
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:30
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l1_to_l5_violation := [DH].{
+                             ^
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 1                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:290:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    233 │      val1 = 3                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:233:5 ┘
+For example:
+    answer = 42
 
+I found `.` here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:292:8 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:31
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l1_to_l5_violation := [DH].{
+                              ^
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 100                                                                │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:295:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    290 │      val1 = 1                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:290:5 ┘
+For example:
+    answer = 42
 
+I found `{` here.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [CE].{                                                              │
- │      val2 = val1 + 10                                                      │
- │                                                                            │
- │      L3 := [CF].{                                                          │
- │          val3 = val1 + val2                                                │
- │                                                                            │
- │          L4 := [CG].{                                                      │
- │              val4 = val1 + val2 + val3                                     │
- │                                                                            │
- │              L5 := [CH].{                                                  │
- │                  val5 = val1 + val2 + val3 + val4                          │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:297:5 ┘
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:405:1
 
-    The redeclaration is here:
+I was parsing a statement, and this token cannot start a statement here.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+}
+^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:313:8 ┘
+For example:
+    answer = 42
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:407:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 2                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:316:5 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    295 │      val1 = 100                                                     │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:295:5 ┘
+d5_l3_to_l5_violation := [DM].{
+^^^^^^^^^^^^^^^^^^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [CJ].{                                                              │
- │      L3 := [CK].{                                                          │
- │          val3 = val1 + val2                                                │
- │                                                                            │
- │          L4 := [CL].{                                                      │
- │              L5 := [CM].{                                                  │
- │                  val5 = val1 + val2 + val3 + val4                          │
- │              }                                                             │
- │                                                                            │
- │              val4 = val1 + val2 + val3                                     │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      val2 = val1 + 1                                                       │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:318:5 ┘
+For example:
+    answer = 42
 
-    The redeclaration is here:
+I found `d5_l3_to_l5_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:23
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:334:8 ┘
+d5_l3_to_l5_violation := [DM].{
+                      ^^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [CO].{                                                              │
- │      L3 := [CP].{                                                          │
- │          L4 := [CQ].{                                                      │
- │              L5 := [CR].{                                                  │
- │                  val5 = val4 * 5                                           │
- │              }                                                             │
- │                                                                            │
- │              val4 = 6                                                      │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:337:5 ┘
+I found `:=` here.
 
-    The redeclaration is here:
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:26
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
+d5_l3_to_l5_violation := [DM].{
+                         ^
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:349:8 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+For example:
+    answer = 42
 
+I found `[` here.
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [CT].{                                                              │
- │      L3 := [CU].{                                                          │
- │          L4 := [CV].{                                                      │
- │              L5 := [CW].{                                                  │
- │                  val5 = val3 + val4                                        │
- │              }                                                             │
- │                                                                            │
- │              val4 = 7                                                      │
- │          }                                                                 │
- │                                                                            │
- │          val3 = 3                                                          │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:352:5 ┘
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:407:29
 
-    The redeclaration is here:
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+d5_l3_to_l5_violation := [DM].{
+                            ^
 
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └─────────────────────────── associated_items_complete_all_patterns.md:366:8 ┘
+For example:
+    List(U8)
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:30
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [DD].{                                                              │
- │      val2 = val1 + 10                                                      │
- │                                                                            │
- │      L3 := [DE].{                                                          │
- │          val3 = val1 + val2                                                │
- │                                                                            │
- │          L4 := [DF].{                                                      │
- │              val4 = val1 + val2 + val3                                     │
- │                                                                            │
- │              L5 := [DG].{                                                  │
- │                  val5 = val1 + val2 + val3 + val4                          │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:369:5 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    The redeclaration is here:
+d5_l3_to_l5_violation := [DM].{
+                             ^
 
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `val1` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  val1 = 5                                                                  │
- │  ‾‾‾‾                                                                      │
- └─────────────────────────── associated_items_complete_all_patterns.md:385:5 ┘
+I found `.` here.
 
-    In this scope, `val1` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    316 │      val1 = 2                                                       │
-        │      ‾‾‾‾                                                           │
-        └──────────────────── associated_items_complete_all_patterns.md:316:5 ┘
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:31
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `d5_l1_val_last` in this scope. ──────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  d5_6 = d5_l1_val_last.val1                                                │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────── associated_items_complete_all_patterns.md:387:8 ┘
+d5_l3_to_l5_violation := [DM].{
+                              ^
 
-    Is it misspelled, or is there an import missing?
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_7 = d5_l1_val_last.L2.val2                                             │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └─────────────────────────── associated_items_complete_all_patterns.md:388:8 ┘
+I found `{` here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:419:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_8 = d5_l1_val_last.L2.L3.val3                                          │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └─────────────────────────── associated_items_complete_all_patterns.md:389:8 ┘
+}
+^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:390:8 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:421:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────── associated_items_complete_all_patterns.md:391:9 ┘
+d5_l4_to_l5_violation := [DR].{
+^^^^^^^^^^^^^^^^^^^^^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [DI].{                                                              │
- │      L3 := [DJ].{                                                          │
- │          L4 := [DK].{                                                      │
- │              L5 := [DL].{                                                  │
- │                  deep_secret = 12345                                       │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:394:5 ┘
-
-    The redeclaration is here:
-
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
-
-
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `bad` is being redeclared here. ───────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  bad = deep_secret                                                         │
- │  ‾‾‾                                                                       │
- └─────────────────────────── associated_items_complete_all_patterns.md:404:5 ┘
-
-    In this scope, `bad` was already defined here:
-        ┌─────────────────────────────────────────────────────────────────────┐
-    246 │      bad = l4_val                                                   │
-        │      ‾‾‾                                                            │
-        └──────────────────── associated_items_complete_all_patterns.md:246:5 ┘
-
-
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `deep_secret` in this scope. ─────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  bad = deep_secret                                                         │
- │        ‾‾‾‾‾‾‾‾‾‾‾                                                         │
- └────────────────────────── associated_items_complete_all_patterns.md:404:11 ┘
-
-    Is it misspelled, or is there an import missing?
-
-
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [DN].{                                                              │
- │      L3 := [DO].{                                                          │
- │          L4 := [DP].{                                                      │
- │              L5 := [DQ].{                                                  │
- │                  l5_secret = 9999                                          │
- │              }                                                             │
- │          }                                                                 │
- │                                                                            │
- │          bad = l5_secret                                                   │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:408:5 ┘
-
-    The redeclaration is here:
-
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
-
-
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `L2` is being redeclared. ──────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  L2 := [DS].{                                                              │
- │      L3 := [DT].{                                                          │
- │          L4 := [DU].{                                                      │
- │              L5 := [DV].{                                                  │
- │                  l5_only = 8888                                            │
- │              }                                                             │
- │                                                                            │
- │              bad = l5_only                                                 │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:422:5 ┘
-
-    The redeclaration is here:
-
-    But L2 was already declared here:
-       ┌──────────────────────────────────────────────────────────────────────┐
-    61 │      L2 := [Q].{                                                     │
-    62 │          L3 := [R].{                                                 │
-    63 │              val3 = val1 + val2                                      │
-    64 │          }                                                           │
-    65 │                                                                      │
-    66 │          val2 = 20                                                   │
-    67 │      }                                                               │
-       └────────────────────── associated_items_complete_all_patterns.md:61:5 ┘
-
-
-┌───────────────────────────────────┐
-│ TYPE MOD MISSING MATCHING TYPE ├─ Type mods must have a nominal ──────┐
-└┬──────────────────────────────────┘  type declaration matching the mod   │
- │                                     name.                                  │
- │                                                                            │
- │  d1_forward := [A].{                                                       │
- │      first = second                                                        │
- │      second = 100                                                          │
- │  }                                                                         │
- │  d1_1 = d1_forward.first                                                   │
- │                                                                            │
- │  d1_scope := [B].{                                                         │
- │      inner = 200                                                           │
- │  }                                                                         │
- │  d1_2 = d1_scope.inner                                                     │
- │                                                                            │
- │  d2_inner_first := [C].{                                                   │
- │      Inner := [D].{                                                        │
- │          inner_val = outer_val                                             │
- │      }                                                                     │
- │                                                                            │
- │      outer_val = 300                                                       │
- │  }                                                                         │
- │  d2_1 = d2_inner_first.outer_val                                           │
- │  d2_2 = d2_inner_first.Inner.inner_val                                     │
- │                                                                            │
- │  d2_outer_val_middle := [G].{                                              │
- │      Inner := [H].{                                                        │
- │          inner_val = outer_val                                             │
- │      }                                                                     │
- │                                                                            │
- │      outer_val = 500                                                       │
- │  }                                                                         │
- │  d2_3 = d2_outer_val_middle.Inner.inner_val                                │
- │                                                                            │
- │  d2_outer_refs_inner := [I].{                                              │
- │      outer_val = d2_outer_refs_inner.Inner.inner_val                       │
- │                                                                            │
- │      Inner := [J].{                                                        │
- │          inner_val = 600                                                   │
- │      }                                                                     │
- │  }                                                                         │
- │  d2_4 = d2_outer_refs_inner.outer_val                                      │
- │                                                                            │
- │  d2_scope_violation := [K].{                                               │
- │      Inner := [L].{                                                        │
- │          inner_private = 700                                               │
- │      }                                                                     │
- │                                                                            │
- │      outer_trying_inner = inner_private                                    │
- │  }                                                                         │
- │                                                                            │
- │  d2_siblings := [M].{                                                      │
- │      InnerA := [N].{                                                       │
- │          valA = d2_siblings.InnerB.valB + 1                                │
- │      }                                                                     │
- │                                                                            │
- │      InnerB := [O].{                                                       │
- │          valB = 800                                                        │
- │      }                                                                     │
- │  }                                                                         │
- │  d2_5 = d2_siblings.InnerA.valA                                            │
- │                                                                            │
- │  d3_types_then_vals := [P].{                                               │
- │      L2 := [Q].{                                                           │
- │          L3 := [R].{                                                       │
- │              val3 = val1 + val2                                            │
- │          }                                                                 │
- │                                                                            │
- │          val2 = 20                                                         │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 10                                                             │
- │  }                                                                         │
- │  d3_1 = d3_types_then_vals.val1                                            │
- │  d3_2 = d3_types_then_vals.L2.val2                                         │
- │  d3_3 = d3_types_then_vals.L2.L3.val3                                      │
- │                                                                            │
- │  d3_vals_then_types := [S].{                                               │
- │      val1 = 30                                                             │
- │                                                                            │
- │      L2 := [T].{                                                           │
- │          val2 = val1 + 5                                                   │
- │                                                                            │
- │          L3 := [U].{                                                       │
- │              val3 = val1 + val2                                            │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d3_4 = d3_vals_then_types.val1                                            │
- │  d3_5 = d3_vals_then_types.L2.val2                                         │
- │  d3_6 = d3_vals_then_types.L2.L3.val3                                      │
- │                                                                            │
- │  d3_l1_scope_violation := [V].{                                            │
- │      L2 := [W].{                                                           │
- │          L3 := [X].{                                                       │
- │              l3_private = 999                                              │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      bad_l1 = l3_private                                                   │
- │  }                                                                         │
- │                                                                            │
- │  d3_l2_scope_violation := [Y].{                                            │
- │      L2 := [Z].{                                                           │
- │          L3 := [AA].{                                                      │
- │              l3_secret = 888                                               │
- │          }                                                                 │
- │                                                                            │
- │          bad_l2 = l3_secret                                                │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- │  d3_val_after_nested := [AB].{                                             │
- │      L2 := [AC].{                                                          │
- │          L3 := [AD].{                                                      │
- │              val3 = val2 * 2                                               │
- │          }                                                                 │
- │                                                                            │
- │          val2 = val1 * 3                                                   │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 5                                                              │
- │  }                                                                         │
- │  d3_7 = d3_val_after_nested.val1                                           │
- │  d3_8 = d3_val_after_nested.L2.val2                                        │
- │  d3_9 = d3_val_after_nested.L2.L3.val3                                     │
- │                                                                            │
- │  d4_all_types_then_vals := [AE].{                                          │
- │      L2 := [AF].{                                                          │
- │          L3 := [AG].{                                                      │
- │              L4 := [AH].{                                                  │
- │                  val4 = val1 + val2 + val3                                 │
- │              }                                                             │
- │                                                                            │
- │              val3 = 3                                                      │
- │          }                                                                 │
- │                                                                            │
- │          val2 = 2                                                          │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 1                                                              │
- │  }                                                                         │
- │  d4_1 = d4_all_types_then_vals.L2.L3.L4.val4                               │
- │                                                                            │
- │  d4_all_vals_then_types := [AI].{                                          │
- │      val1 = 10                                                             │
- │                                                                            │
- │      L2 := [AJ].{                                                          │
- │          val2 = val1 + 1                                                   │
- │                                                                            │
- │          L3 := [AK].{                                                      │
- │              val3 = val1 + val2                                            │
- │                                                                            │
- │              L4 := [AL].{                                                  │
- │                  val4 = val1 + val2 + val3                                 │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d4_2 = d4_all_vals_then_types.L2.L3.L4.val4                               │
- │                                                                            │
- │  d4_reverse_types := [AM].{                                                │
- │      L2 := [AN].{                                                          │
- │          L3 := [AO].{                                                      │
- │              L4 := [AP].{                                                  │
- │                  val4 = val3 + 1                                           │
- │              }                                                             │
- │                                                                            │
- │              val3 = val2 + 1                                               │
- │          }                                                                 │
- │                                                                            │
- │          val2 = val1 + 1                                                   │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 7                                                              │
- │  }                                                                         │
- │  d4_3 = d4_reverse_types.L2.L3.L4.val4                                     │
- │                                                                            │
- │  d4_interleaved := [AQ].{                                                  │
- │      val1 = 15                                                             │
- │                                                                            │
- │      L2 := [AR].{                                                          │
- │          L3 := [AS].{                                                      │
- │              val3 = val1 + val2                                            │
- │                                                                            │
- │              L4 := [AT].{                                                  │
- │                  val4 = val1 + val2 + val3                                 │
- │              }                                                             │
- │          }                                                                 │
- │                                                                            │
- │          val2 = val1 + 5                                                   │
- │      }                                                                     │
- │  }                                                                         │
- │  d4_4 = d4_interleaved.L2.L3.L4.val4                                       │
- │                                                                            │
- │  d4_l3_val_after_l4 := [BA].{                                              │
- │      L2 := [BB].{                                                          │
- │          L3 := [BC].{                                                      │
- │              L4 := [BD].{                                                  │
- │                  val4 = val3 * 3                                           │
- │              }                                                             │
- │              val3 = 12                                                     │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4                                   │
- │                                                                            │
- │  d4_l2_val_after_l3 := [BE].{                                              │
- │      L2 := [BF].{                                                          │
- │          L3 := [BG].{                                                      │
- │              L4 := [BH].{                                                  │
- │                  val4 = val2 + val3                                        │
- │              }                                                             │
- │                                                                            │
- │              val3 = 8                                                      │
- │          }                                                                 │
- │                                                                            │
- │          val2 = 4                                                          │
- │      }                                                                     │
- │  }                                                                         │
- │  d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4                                   │
- │                                                                            │
- │  d4_l1_val_after_l2 := [BI].{                                              │
- │      L2 := [BJ].{                                                          │
- │          L3 := [BK].{                                                      │
- │              L4 := [BL].{                                                  │
- │                  val4 = val1 + 100                                         │
- │              }                                                             │
- │                                                                            │
- │              val3 = val1 + 50                                              │
- │          }                                                                 │
- │                                                                            │
- │          val2 = val1 + 10                                                  │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 3                                                              │
- │  }                                                                         │
- │  d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4                                   │
- │                                                                            │
- │  d4_l1_scope_violation := [BM].{                                           │
- │      L2 := [BN].{                                                          │
- │          L3 := [BO].{                                                      │
- │              L4 := [BP].{                                                  │
- │                  l4_val = 444                                              │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      bad = l4_val                                                          │
- │  }                                                                         │
- │                                                                            │
- │  d4_l2_scope_violation := [BQ].{                                           │
- │      L2 := [BR].{                                                          │
- │          L3 := [BS].{                                                      │
- │              L4 := [BT].{                                                  │
- │                  l4_secret = 333                                           │
- │              }                                                             │
- │          }                                                                 │
- │                                                                            │
- │          bad = l4_secret                                                   │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- │  d4_l3_scope_violation := [BU].{                                           │
- │      L2 := [BV].{                                                          │
- │          L3 := [BW].{                                                      │
- │              L4 := [BX].{                                                  │
- │                  l4_private = 555                                          │
- │              }                                                             │
- │                                                                            │
- │              attempt = l4_private                                          │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- │  d5_all_types_then_vals := [BY].{                                          │
- │      L2 := [BZ].{                                                          │
- │          L3 := [CA].{                                                      │
- │              L4 := [CB].{                                                  │
- │                  L5 := [CC].{                                              │
- │                      val5 = val1 + val2 + val3 + val4                      │
- │                  }                                                         │
- │                                                                            │
- │                  val4 = 4                                                  │
- │              }                                                             │
- │                                                                            │
- │              val3 = 3                                                      │
- │          }                                                                 │
- │                                                                            │
- │          val2 = 2                                                          │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 1                                                              │
- │  }                                                                         │
- │  d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5                            │
- │                                                                            │
- │  d5_all_vals_then_types := [CD].{                                          │
- │      val1 = 100                                                            │
- │                                                                            │
- │      L2 := [CE].{                                                          │
- │          val2 = val1 + 10                                                  │
- │                                                                            │
- │          L3 := [CF].{                                                      │
- │              val3 = val1 + val2                                            │
- │                                                                            │
- │              L4 := [CG].{                                                  │
- │                  val4 = val1 + val2 + val3                                 │
- │                                                                            │
- │                  L5 := [CH].{                                              │
- │                      val5 = val1 + val2 + val3 + val4                      │
- │                  }                                                         │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5                            │
- │                                                                            │
- │  d5_deep_interleave := [CI].{                                              │
- │      val1 = 2                                                              │
- │                                                                            │
- │      L2 := [CJ].{                                                          │
- │          L3 := [CK].{                                                      │
- │              val3 = val1 + val2                                            │
- │                                                                            │
- │              L4 := [CL].{                                                  │
- │                  L5 := [CM].{                                              │
- │                      val5 = val1 + val2 + val3 + val4                      │
- │                  }                                                         │
- │                                                                            │
- │                  val4 = val1 + val2 + val3                                 │
- │              }                                                             │
- │          }                                                                 │
- │                                                                            │
- │          val2 = val1 + 1                                                   │
- │      }                                                                     │
- │  }                                                                         │
- │  d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5                                │
- │                                                                            │
- │  d5_l4_val_after_l5 := [CN].{                                              │
- │      L2 := [CO].{                                                          │
- │          L3 := [CP].{                                                      │
- │              L4 := [CQ].{                                                  │
- │                  L5 := [CR].{                                              │
- │                      val5 = val4 * 5                                       │
- │                  }                                                         │
- │                                                                            │
- │                  val4 = 6                                                  │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5                                │
- │                                                                            │
- │  d5_l3_val_after_l4 := [CS].{                                              │
- │      L2 := [CT].{                                                          │
- │          L3 := [CU].{                                                      │
- │              L4 := [CV].{                                                  │
- │                  L5 := [CW].{                                              │
- │                      val5 = val3 + val4                                    │
- │                  }                                                         │
- │                                                                            │
- │                  val4 = 7                                                  │
- │              }                                                             │
- │                                                                            │
- │              val3 = 3                                                      │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │  d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5                                │
- │                                                                            │
- │  d5_l1_val_last := [DC].{                                                  │
- │      L2 := [DD].{                                                          │
- │          val2 = val1 + 10                                                  │
- │                                                                            │
- │          L3 := [DE].{                                                      │
- │              val3 = val1 + val2                                            │
- │                                                                            │
- │              L4 := [DF].{                                                  │
- │                  val4 = val1 + val2 + val3                                 │
- │                                                                            │
- │                  L5 := [DG].{                                              │
- │                      val5 = val1 + val2 + val3 + val4                      │
- │                  }                                                         │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      val1 = 5                                                              │
- │  }                                                                         │
- │  d5_6 = d5_l1_val_last.val1                                                │
- │  d5_7 = d5_l1_val_last.L2.val2                                             │
- │  d5_8 = d5_l1_val_last.L2.L3.val3                                          │
- │  d5_9 = d5_l1_val_last.L2.L3.L4.val4                                       │
- │  d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5                                   │
- │                                                                            │
- │  d5_l1_to_l5_violation := [DH].{                                           │
- │      L2 := [DI].{                                                          │
- │          L3 := [DJ].{                                                      │
- │              L4 := [DK].{                                                  │
- │                  L5 := [DL].{                                              │
- │                      deep_secret = 12345                                   │
- │                  }                                                         │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │                                                                            │
- │      bad = deep_secret                                                     │
- │  }                                                                         │
- │                                                                            │
- │  d5_l3_to_l5_violation := [DM].{                                           │
- │      L2 := [DN].{                                                          │
- │          L3 := [DO].{                                                      │
- │              L4 := [DP].{                                                  │
- │                  L5 := [DQ].{                                              │
- │                      l5_secret = 9999                                      │
- │                  }                                                         │
- │              }                                                             │
- │                                                                            │
- │              bad = l5_secret                                               │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- │  d5_l4_to_l5_violation := [DR].{                                           │
- │      L2 := [DS].{                                                          │
- │          L3 := [DT].{                                                      │
- │              L4 := [DU].{                                                  │
- │                  L5 := [DV].{                                              │
- │                      l5_only = 8888                                        │
- │                  }                                                         │
- │                                                                            │
- │                  bad = l5_only                                             │
- │              }                                                             │
- │          }                                                                 │
- │      }                                                                     │
- │  }                                                                         │
- │                                                                            │
- └───────────────────────────── associated_items_complete_all_patterns.md:2:1 ┘
-
-    This file is named `Test`.roc, but no top-level nominal type named `Test`
-    was found.
-
-    Add a nominal type like:
-    `Test := ...`
-    or:
-    `Test :: ...` (opaque nominal type)
-
-
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  valA = d2_siblings.InnerB.valB + 1                                        │
- │  ‾‾‾‾                                                                      │
- └──────────────────────────── associated_items_complete_all_patterns.md:51:9 ┘
-
-    Its type is:
-    a where [a.plus : a, Dec -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
-
-
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to use the `+` operator on a value whose ──┐
-└┬───────────────┘  type is an unresolved type variable, which has no         │
- │                  methods.                                                  │
- │                                                                            │
- │  valA = d2_siblings.InnerB.valB + 1                                        │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────── associated_items_complete_all_patterns.md:51:16 ┘
-
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+I found `d5_l4_to_l5_violation` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:23
+
+I was parsing a statement, and this token cannot start a statement here.
+
+d5_l4_to_l5_violation := [DR].{
+                      ^^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `:=` here.
+
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:26
+
+I was parsing a statement, and this token cannot start a statement here.
+
+d5_l4_to_l5_violation := [DR].{
+                         ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `[` here.
+
+── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:421:29
+
+I was parsing a type annotation, and I found a type argument without
+parentheses.
+
+d5_l4_to_l5_violation := [DR].{
+                            ^
+
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
+
+For example:
+    List(U8)
+
+I found `]` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:30
+
+I was parsing a statement, and this token cannot start a statement here.
+
+d5_l4_to_l5_violation := [DR].{
+                             ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `.` here.
+
+── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:31
+
+I was parsing a statement, and this token cannot start a statement here.
+
+d5_l4_to_l5_violation := [DR].{
+                              ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `{` here.
+
+── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:433:1
+
+I was parsing a statement, and this token cannot start a statement here.
+
+}
+^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+── ✗ name not in scope ─────────── associated_items_complete_all_patterns.md:6:8
+
+Nothing is named `d1_forward` in this scope.
+
+d1_1 = d1_forward.first
+       ^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:11:8
+
+Nothing is named `d1_scope` in this scope.
+
+d1_2 = d1_scope.inner
+       ^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:20:8
+
+Nothing is named `d2_inner_first` in this scope.
+
+d2_1 = d2_inner_first.outer_val
+       ^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:21:8
+
+I don't recognize this syntax.
+
+d2_2 = d2_inner_first.Inner.inner_val
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:24:5
+
+The type `Inner` is being redeclared.
+
+Inner := [H].{
+    inner_val = outer_val
+}
+
+
+The redeclaration is here:
+
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
+
+Inner := [D].{
+    inner_val = outer_val
+}
+
+── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:28:5
+
+The name `outer_val` is being redeclared here:
+
+outer_val = 500
+^^^^^^^^^
+
+
+In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:15:21):
+
+inner_val = outer_val
+            ^^^^^^^^^
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:30:8
+
+I don't recognize this syntax.
+
+d2_3 = d2_outer_val_middle.Inner.inner_val
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:33:5
+
+The name `outer_val` is being redeclared here:
+
+outer_val = d2_outer_refs_inner.Inner.inner_val
+^^^^^^^^^
+
+
+In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:28:5):
+
+outer_val = 500
+^^^^^^^^^
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:33:17
+
+I don't recognize this syntax.
+
+outer_val = d2_outer_refs_inner.Inner.inner_val
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:35:5
+
+The type `Inner` is being redeclared.
+
+Inner := [J].{
+    inner_val = 600
+}
+
+
+The redeclaration is here:
+
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
+
+Inner := [D].{
+    inner_val = outer_val
+}
+
+── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:39:8
+
+Nothing is named `d2_outer_refs_inner` in this scope.
+
+d2_4 = d2_outer_refs_inner.outer_val
+       ^^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:42:5
+
+The type `Inner` is being redeclared.
+
+Inner := [L].{
+    inner_private = 700
+}
+
+
+The redeclaration is here:
+
+But Inner was already declared here (associated_items_complete_all_patterns.md:14:5):
+
+Inner := [D].{
+    inner_val = outer_val
+}
+
+── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:46:26
+
+Nothing is named `inner_private` in this scope.
+
+outer_trying_inner = inner_private
+                     ^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:51:16
+
+I don't recognize this syntax.
+
+valA = d2_siblings.InnerB.valB + 1
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:58:8
+
+I don't recognize this syntax.
+
+d2_5 = d2_siblings.InnerA.valA
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:71:8
+
+Nothing is named `d3_types_then_vals` in this scope.
+
+d3_1 = d3_types_then_vals.val1
+       ^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:72:8
+
+I don't recognize this syntax.
+
+d3_2 = d3_types_then_vals.L2.val2
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:73:8
+
+I don't recognize this syntax.
+
+d3_3 = d3_types_then_vals.L2.L3.val3
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:76:5
+
+The name `val1` is being redeclared here:
+
+val1 = 30
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:63:20):
+
+val3 = val1 + val2
+       ^^^^
+
+── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:78:5
+
+The type `L2` is being redeclared.
+
+L2 := [T].{
+    val2 = val1 + 5
+
+    L3 := [U].{
+        val3 = val1 + val2
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:86:8
+
+Nothing is named `d3_vals_then_types` in this scope.
+
+d3_4 = d3_vals_then_types.val1
+       ^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:87:8
+
+I don't recognize this syntax.
+
+d3_5 = d3_vals_then_types.L2.val2
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:88:8
+
+I don't recognize this syntax.
+
+d3_6 = d3_vals_then_types.L2.L3.val3
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:91:5
+
+The type `L2` is being redeclared.
+
+L2 := [W].{
+    L3 := [X].{
+        l3_private = 999
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:97:14
+
+Nothing is named `l3_private` in this scope.
+
+bad_l1 = l3_private
+         ^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:101:5
+
+The type `L2` is being redeclared.
+
+L2 := [Z].{
+    L3 := [AA].{
+        l3_secret = 888
+    }
+
+    bad_l2 = l3_secret
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:111:5
+
+The type `L2` is being redeclared.
+
+L2 := [AC].{
+    L3 := [AD].{
+        val3 = val2 * 2
+    }
+
+    val2 = val1 * 3
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:119:5
+
+The name `val1` is being redeclared here:
+
+val1 = 5
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:76:5):
+
+val1 = 30
+^^^^
+
+── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:121:8
+
+Nothing is named `d3_val_after_nested` in this scope.
+
+d3_7 = d3_val_after_nested.val1
+       ^^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:122:8
+
+I don't recognize this syntax.
+
+d3_8 = d3_val_after_nested.L2.val2
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:123:8
+
+I don't recognize this syntax.
+
+d3_9 = d3_val_after_nested.L2.L3.val3
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:126:5
+
+The type `L2` is being redeclared.
+
+L2 := [AF].{
+    L3 := [AG].{
+        L4 := [AH].{
+            val4 = val1 + val2 + val3
+        }
+
+        val3 = 3
+    }
+
+    val2 = 2
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:138:5
+
+The name `val1` is being redeclared here:
+
+val1 = 1
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:119:5):
+
+val1 = 5
+^^^^
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:140:8
+
+I don't recognize this syntax.
+
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:143:5
+
+The name `val1` is being redeclared here:
+
+val1 = 10
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:138:5):
+
+val1 = 1
+^^^^
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:145:5
+
+The type `L2` is being redeclared.
+
+L2 := [AJ].{
+    val2 = val1 + 1
+
+    L3 := [AK].{
+        val3 = val1 + val2
+
+        L4 := [AL].{
+            val4 = val1 + val2 + val3
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:157:8
+
+I don't recognize this syntax.
+
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:160:5
+
+The type `L2` is being redeclared.
+
+L2 := [AN].{
+    L3 := [AO].{
+        L4 := [AP].{
+            val4 = val3 + 1
+        }
+
+        val3 = val2 + 1
+    }
+
+    val2 = val1 + 1
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:172:5
+
+The name `val1` is being redeclared here:
+
+val1 = 7
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:143:5):
+
+val1 = 10
+^^^^
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:174:8
+
+I don't recognize this syntax.
+
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:177:5
+
+The name `val1` is being redeclared here:
+
+val1 = 15
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:172:5):
+
+val1 = 7
+^^^^
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:179:5
+
+The type `L2` is being redeclared.
+
+L2 := [AR].{
+    L3 := [AS].{
+        val3 = val1 + val2
+
+        L4 := [AT].{
+            val4 = val1 + val2 + val3
+        }
+    }
+
+    val2 = val1 + 5
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:191:8
+
+I don't recognize this syntax.
+
+d4_4 = d4_interleaved.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:194:5
+
+The type `L2` is being redeclared.
+
+L2 := [BB].{
+    L3 := [BC].{
+        L4 := [BD].{
+            val4 = val3 * 3
+        }
+        val3 = 12
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:203:8
+
+I don't recognize this syntax.
+
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:206:5
+
+The type `L2` is being redeclared.
+
+L2 := [BF].{
+    L3 := [BG].{
+        L4 := [BH].{
+            val4 = val2 + val3
+        }
+
+        val3 = 8
+    }
+
+    val2 = 4
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:218:8
+
+I don't recognize this syntax.
+
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:221:5
+
+The type `L2` is being redeclared.
+
+L2 := [BJ].{
+    L3 := [BK].{
+        L4 := [BL].{
+            val4 = val1 + 100
+        }
+
+        val3 = val1 + 50
+    }
+
+    val2 = val1 + 10
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:233:5
+
+The name `val1` is being redeclared here:
+
+val1 = 3
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:177:5):
+
+val1 = 15
+^^^^
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:235:8
+
+I don't recognize this syntax.
+
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:238:5
+
+The type `L2` is being redeclared.
+
+L2 := [BN].{
+    L3 := [BO].{
+        L4 := [BP].{
+            l4_val = 444
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ name not in scope ──────── associated_items_complete_all_patterns.md:246:11
+
+Nothing is named `l4_val` in this scope.
+
+bad = l4_val
+      ^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:250:5
+
+The type `L2` is being redeclared.
+
+L2 := [BR].{
+    L3 := [BS].{
+        L4 := [BT].{
+            l4_secret = 333
+        }
+    }
+
+    bad = l4_secret
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:262:5
+
+The type `L2` is being redeclared.
+
+L2 := [BV].{
+    L3 := [BW].{
+        L4 := [BX].{
+            l4_private = 555
+        }
+
+        attempt = l4_private
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:274:5
+
+The type `L2` is being redeclared.
+
+L2 := [BZ].{
+    L3 := [CA].{
+        L4 := [CB].{
+            L5 := [CC].{
+                val5 = val1 + val2 + val3 + val4
+            }
+
+            val4 = 4
+        }
+
+        val3 = 3
+    }
+
+    val2 = 2
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:290:5
+
+The name `val1` is being redeclared here:
+
+val1 = 1
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:233:5):
+
+val1 = 3
+^^^^
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:292:8
+
+I don't recognize this syntax.
+
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:295:5
+
+The name `val1` is being redeclared here:
+
+val1 = 100
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:290:5):
+
+val1 = 1
+^^^^
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:297:5
+
+The type `L2` is being redeclared.
+
+L2 := [CE].{
+    val2 = val1 + 10
+
+    L3 := [CF].{
+        val3 = val1 + val2
+
+        L4 := [CG].{
+            val4 = val1 + val2 + val3
+
+            L5 := [CH].{
+                val5 = val1 + val2 + val3 + val4
+            }
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:313:8
+
+I don't recognize this syntax.
+
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:316:5
+
+The name `val1` is being redeclared here:
+
+val1 = 2
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:295:5):
+
+val1 = 100
+^^^^
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:318:5
+
+The type `L2` is being redeclared.
+
+L2 := [CJ].{
+    L3 := [CK].{
+        val3 = val1 + val2
+
+        L4 := [CL].{
+            L5 := [CM].{
+                val5 = val1 + val2 + val3 + val4
+            }
+
+            val4 = val1 + val2 + val3
+        }
+    }
+
+    val2 = val1 + 1
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:334:8
+
+I don't recognize this syntax.
+
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:337:5
+
+The type `L2` is being redeclared.
+
+L2 := [CO].{
+    L3 := [CP].{
+        L4 := [CQ].{
+            L5 := [CR].{
+                val5 = val4 * 5
+            }
+
+            val4 = 6
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:349:8
+
+I don't recognize this syntax.
+
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:352:5
+
+The type `L2` is being redeclared.
+
+L2 := [CT].{
+    L3 := [CU].{
+        L4 := [CV].{
+            L5 := [CW].{
+                val5 = val3 + val4
+            }
+
+            val4 = 7
+        }
+
+        val3 = 3
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:366:8
+
+I don't recognize this syntax.
+
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:369:5
+
+The type `L2` is being redeclared.
+
+L2 := [DD].{
+    val2 = val1 + 10
+
+    L3 := [DE].{
+        val3 = val1 + val2
+
+        L4 := [DF].{
+            val4 = val1 + val2 + val3
+
+            L5 := [DG].{
+                val5 = val1 + val2 + val3 + val4
+            }
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:385:5
+
+The name `val1` is being redeclared here:
+
+val1 = 5
+^^^^
+
+
+In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:316:5):
+
+val1 = 2
+^^^^
+
+── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:387:8
+
+Nothing is named `d5_l1_val_last` in this scope.
+
+d5_6 = d5_l1_val_last.val1
+       ^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:388:8
+
+I don't recognize this syntax.
+
+d5_7 = d5_l1_val_last.L2.val2
+       ^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:389:8
+
+I don't recognize this syntax.
+
+d5_8 = d5_l1_val_last.L2.L3.val3
+       ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:390:8
+
+I don't recognize this syntax.
+
+d5_9 = d5_l1_val_last.L2.L3.L4.val4
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:391:9
+
+I don't recognize this syntax.
+
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:394:5
+
+The type `L2` is being redeclared.
+
+L2 := [DI].{
+    L3 := [DJ].{
+        L4 := [DK].{
+            L5 := [DL].{
+                deep_secret = 12345
+            }
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:404:5
+
+The name `bad` is being redeclared here:
+
+bad = deep_secret
+^^^
+
+
+In this scope, `bad` was already defined here (associated_items_complete_all_patterns.md:246:5):
+
+bad = l4_val
+^^^
+
+── ✗ name not in scope ──────── associated_items_complete_all_patterns.md:404:11
+
+Nothing is named `deep_secret` in this scope.
+
+bad = deep_secret
+      ^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:408:5
+
+The type `L2` is being redeclared.
+
+L2 := [DN].{
+    L3 := [DO].{
+        L4 := [DP].{
+            L5 := [DQ].{
+                l5_secret = 9999
+            }
+        }
+
+        bad = l5_secret
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:422:5
+
+The type `L2` is being redeclared.
+
+L2 := [DS].{
+    L3 := [DT].{
+        L4 := [DU].{
+            L5 := [DV].{
+                l5_only = 8888
+            }
+
+            bad = l5_only
+        }
+    }
+}
+
+
+The redeclaration is here:
+
+But L2 was already declared here (associated_items_complete_all_patterns.md:61:5):
+
+L2 := [Q].{
+    L3 := [R].{
+        val3 = val1 + val2
+    }
+
+    val2 = 20
+}
+
+── ✗ type mod missing matching type ───── associated_items_complete_all_patterns.md:2:1
+
+Type mods must have a nominal type declaration matching the mod name.
+
+d1_forward := [A].{
+    first = second
+    second = 100
+}
+d1_1 = d1_forward.first
+
+d1_scope := [B].{
+    inner = 200
+}
+d1_2 = d1_scope.inner
+
+d2_inner_first := [C].{
+    Inner := [D].{
+        inner_val = outer_val
+    }
+
+    outer_val = 300
+}
+d2_1 = d2_inner_first.outer_val
+d2_2 = d2_inner_first.Inner.inner_val
+
+d2_outer_val_middle := [G].{
+    Inner := [H].{
+        inner_val = outer_val
+    }
+
+    outer_val = 500
+}
+d2_3 = d2_outer_val_middle.Inner.inner_val
+
+d2_outer_refs_inner := [I].{
+    outer_val = d2_outer_refs_inner.Inner.inner_val
+
+    Inner := [J].{
+        inner_val = 600
+    }
+}
+d2_4 = d2_outer_refs_inner.outer_val
+
+d2_scope_violation := [K].{
+    Inner := [L].{
+        inner_private = 700
+    }
+
+    outer_trying_inner = inner_private
+}
+
+d2_siblings := [M].{
+    InnerA := [N].{
+        valA = d2_siblings.InnerB.valB + 1
+    }
+
+    InnerB := [O].{
+        valB = 800
+    }
+}
+d2_5 = d2_siblings.InnerA.valA
+
+d3_types_then_vals := [P].{
+    L2 := [Q].{
+        L3 := [R].{
+            val3 = val1 + val2
+        }
+
+        val2 = 20
+    }
+
+    val1 = 10
+}
+d3_1 = d3_types_then_vals.val1
+d3_2 = d3_types_then_vals.L2.val2
+d3_3 = d3_types_then_vals.L2.L3.val3
+
+d3_vals_then_types := [S].{
+    val1 = 30
+
+    L2 := [T].{
+        val2 = val1 + 5
+
+        L3 := [U].{
+            val3 = val1 + val2
+        }
+    }
+}
+d3_4 = d3_vals_then_types.val1
+d3_5 = d3_vals_then_types.L2.val2
+d3_6 = d3_vals_then_types.L2.L3.val3
+
+d3_l1_scope_violation := [V].{
+    L2 := [W].{
+        L3 := [X].{
+            l3_private = 999
+        }
+    }
+
+    bad_l1 = l3_private
+}
+
+d3_l2_scope_violation := [Y].{
+    L2 := [Z].{
+        L3 := [AA].{
+            l3_secret = 888
+        }
+
+        bad_l2 = l3_secret
+    }
+}
+
+d3_val_after_nested := [AB].{
+    L2 := [AC].{
+        L3 := [AD].{
+            val3 = val2 * 2
+        }
+
+        val2 = val1 * 3
+    }
+
+    val1 = 5
+}
+d3_7 = d3_val_after_nested.val1
+d3_8 = d3_val_after_nested.L2.val2
+d3_9 = d3_val_after_nested.L2.L3.val3
+
+d4_all_types_then_vals := [AE].{
+    L2 := [AF].{
+        L3 := [AG].{
+            L4 := [AH].{
+                val4 = val1 + val2 + val3
+            }
+
+            val3 = 3
+        }
+
+        val2 = 2
+    }
+
+    val1 = 1
+}
+d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
+
+d4_all_vals_then_types := [AI].{
+    val1 = 10
+
+    L2 := [AJ].{
+        val2 = val1 + 1
+
+        L3 := [AK].{
+            val3 = val1 + val2
+
+            L4 := [AL].{
+                val4 = val1 + val2 + val3
+            }
+        }
+    }
+}
+d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
+
+d4_reverse_types := [AM].{
+    L2 := [AN].{
+        L3 := [AO].{
+            L4 := [AP].{
+                val4 = val3 + 1
+            }
+
+            val3 = val2 + 1
+        }
+
+        val2 = val1 + 1
+    }
+
+    val1 = 7
+}
+d4_3 = d4_reverse_types.L2.L3.L4.val4
+
+d4_interleaved := [AQ].{
+    val1 = 15
+
+    L2 := [AR].{
+        L3 := [AS].{
+            val3 = val1 + val2
+
+            L4 := [AT].{
+                val4 = val1 + val2 + val3
+            }
+        }
+
+        val2 = val1 + 5
+    }
+}
+d4_4 = d4_interleaved.L2.L3.L4.val4
+
+d4_l3_val_after_l4 := [BA].{
+    L2 := [BB].{
+        L3 := [BC].{
+            L4 := [BD].{
+                val4 = val3 * 3
+            }
+            val3 = 12
+        }
+    }
+}
+d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
+
+d4_l2_val_after_l3 := [BE].{
+    L2 := [BF].{
+        L3 := [BG].{
+            L4 := [BH].{
+                val4 = val2 + val3
+            }
+
+            val3 = 8
+        }
+
+        val2 = 4
+    }
+}
+d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
+
+d4_l1_val_after_l2 := [BI].{
+    L2 := [BJ].{
+        L3 := [BK].{
+            L4 := [BL].{
+                val4 = val1 + 100
+            }
+
+            val3 = val1 + 50
+        }
+
+        val2 = val1 + 10
+    }
+
+    val1 = 3
+}
+d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
+
+d4_l1_scope_violation := [BM].{
+    L2 := [BN].{
+        L3 := [BO].{
+            L4 := [BP].{
+                l4_val = 444
+            }
+        }
+    }
+
+    bad = l4_val
+}
+
+d4_l2_scope_violation := [BQ].{
+    L2 := [BR].{
+        L3 := [BS].{
+            L4 := [BT].{
+                l4_secret = 333
+            }
+        }
+
+        bad = l4_secret
+    }
+}
+
+d4_l3_scope_violation := [BU].{
+    L2 := [BV].{
+        L3 := [BW].{
+            L4 := [BX].{
+                l4_private = 555
+            }
+
+            attempt = l4_private
+        }
+    }
+}
+
+d5_all_types_then_vals := [BY].{
+    L2 := [BZ].{
+        L3 := [CA].{
+            L4 := [CB].{
+                L5 := [CC].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = 4
+            }
+
+            val3 = 3
+        }
+
+        val2 = 2
+    }
+
+    val1 = 1
+}
+d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
+
+d5_all_vals_then_types := [CD].{
+    val1 = 100
+
+    L2 := [CE].{
+        val2 = val1 + 10
+
+        L3 := [CF].{
+            val3 = val1 + val2
+
+            L4 := [CG].{
+                val4 = val1 + val2 + val3
+
+                L5 := [CH].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+        }
+    }
+}
+d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
+
+d5_deep_interleave := [CI].{
+    val1 = 2
+
+    L2 := [CJ].{
+        L3 := [CK].{
+            val3 = val1 + val2
+
+            L4 := [CL].{
+                L5 := [CM].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+
+                val4 = val1 + val2 + val3
+            }
+        }
+
+        val2 = val1 + 1
+    }
+}
+d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
+
+d5_l4_val_after_l5 := [CN].{
+    L2 := [CO].{
+        L3 := [CP].{
+            L4 := [CQ].{
+                L5 := [CR].{
+                    val5 = val4 * 5
+                }
+
+                val4 = 6
+            }
+        }
+    }
+}
+d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
+
+d5_l3_val_after_l4 := [CS].{
+    L2 := [CT].{
+        L3 := [CU].{
+            L4 := [CV].{
+                L5 := [CW].{
+                    val5 = val3 + val4
+                }
+
+                val4 = 7
+            }
+
+            val3 = 3
+        }
+    }
+}
+d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
+
+d5_l1_val_last := [DC].{
+    L2 := [DD].{
+        val2 = val1 + 10
+
+        L3 := [DE].{
+            val3 = val1 + val2
+
+            L4 := [DF].{
+                val4 = val1 + val2 + val3
+
+                L5 := [DG].{
+                    val5 = val1 + val2 + val3 + val4
+                }
+            }
+        }
+    }
+
+    val1 = 5
+}
+d5_6 = d5_l1_val_last.val1
+d5_7 = d5_l1_val_last.L2.val2
+d5_8 = d5_l1_val_last.L2.L3.val3
+d5_9 = d5_l1_val_last.L2.L3.L4.val4
+d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
+
+d5_l1_to_l5_violation := [DH].{
+    L2 := [DI].{
+        L3 := [DJ].{
+            L4 := [DK].{
+                L5 := [DL].{
+                    deep_secret = 12345
+                }
+            }
+        }
+    }
+
+    bad = deep_secret
+}
+
+d5_l3_to_l5_violation := [DM].{
+    L2 := [DN].{
+        L3 := [DO].{
+            L4 := [DP].{
+                L5 := [DQ].{
+                    l5_secret = 9999
+                }
+            }
+
+            bad = l5_secret
+        }
+    }
+}
+
+d5_l4_to_l5_violation := [DR].{
+    L2 := [DS].{
+        L3 := [DT].{
+            L4 := [DU].{
+                L5 := [DV].{
+                    l5_only = 8888
+                }
+
+                bad = l5_only
+            }
+        }
+    }
+}
+
+This file is named `Test`.roc, but no top-level nominal type named `Test` was
+found.
+
+Add a nominal type like:
+`Test := ...`
+or:
+`Test :: ...` (opaque nominal type)
+
+── ✗ polymorphic value ────────── associated_items_complete_all_patterns.md:51:9
+
+This top-level value still has an unresolved polymorphic type.
+
+valA = d2_siblings.InnerB.valB + 1
+^^^^
+
+Its type is:
+a where [a.plus : a, Dec -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
+
+── ✗ missing method ──────────── associated_items_complete_all_patterns.md:51:16
+
+This is trying to use the `+` operator on a value whose type is an unresolved
+type variable, which has no methods.
+
+valA = d2_siblings.InnerB.valB + 1
+       ^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 # TOKENS
 ~~~zig
 LowerIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

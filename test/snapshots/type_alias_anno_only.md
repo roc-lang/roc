@@ -13,17 +13,15 @@ hey : MyType
 DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  hey : MyType                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── type_alias_anno_only.md:3:1 ┘
+── ⚠ declaration has no value ────────────────────── type_alias_anno_only.md:3:1
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This declaration has a type annotation but no implementation.
 
+hey : MyType
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

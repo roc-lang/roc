@@ -41,50 +41,44 @@ UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  transform : _a -> _b -> _b                                                │
- │                       ‾‾                                                   │
- └──────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
+── ✗ ambiguous function type ──────── underscore_in_regular_annotations.md:28:22
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+I was parsing a function type, and multiple arrows need parentheses.
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+transform : _a -> _b -> _b
+                     ^^
 
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  transform : _a -> _b -> _b                                                │
- │                          ‾‾                                                │
- └──────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────── underscore_in_regular_annotations.md:28:25
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `_b` here.
+transform : _a -> _b -> _b
+                        ^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `list` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  process = |list| "processed"                                              │
- │             ‾‾‾‾                                                           │
- └───────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
+For example:
+    answer = 42
 
-    If you don't need this variable, prefix it with an underscore like `_list`
-    to suppress this warning.
+I found `_b` here.
 
+── ⚠ unused variable ───────────────── underscore_in_regular_annotations.md:9:12
+
+Variable `list` is defined here and then never used:
+
+process = |list| "processed"
+           ^^^^
+
+If you don't need this variable, prefix it with an underscore like `_list` to
+suppress this warning.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

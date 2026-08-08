@@ -13,35 +13,31 @@ MISSING METHOD - fuzz_crash_097.md:1:4:1:5
 TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  a=(0(0->X)                                                                │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_097.md:1:4 ┘
+── ✗ missing method ────────────────────────────────────── fuzz_crash_097.md:1:4
 
-    The value's type, which does not have a method named `from_numeral`, is:
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
 
-        [X(b), ..] -> _ret
-          where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+a=(0(0->X)
+   ^
 
+The value's type, which does not have a method named `from_numeral`, is:
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This is not a record, so it does not have any fields to ───┐
-└┬──────────────┘  access.                                                    │
- │                                                                            │
- │  a=(0(0->X)                                                                │
- │  ->X .a)                                                                   │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_097.md:1:4 ┘
+    [X(b), ..] -> _ret
+      where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
 
-    It is:
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_097.md:1:4
 
-        [X(_b), ..]
+This is not a record, so it does not have any fields to access.
 
-    But I need a record with a `a` field.
+a=(0(0->X)
+->X .a)
 
+It is:
+
+    [X(_b), ..]
+
+But I need a record with a `a` field.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,NoSpaceOpenRound,Int,OpArrow,UpperIdent,CloseRound,

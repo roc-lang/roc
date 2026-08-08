@@ -15,35 +15,31 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
 TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  r=|()|(()())                                                              │
- │         ‾‾                                                                 │
- └───────────────────────────────────────────────────── fuzz_crash_101.md:2:8 ┘
+── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_101.md:2:8
 
-    If you want to represent nothing, try using an empty record: `{}`.
+I am part way through parsing this tuple, but it is empty.
 
+r=|()|(()())
+       ^^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  r=|()|(()())                                                              │
- │    ‾‾‾‾‾‾‾‾‾‾                                                              │
- └───────────────────────────────────────────────────── fuzz_crash_101.md:2:3 ┘
+If you want to represent nothing, try using an empty record: `{}`.
 
-    It has the type:
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_101.md:2:3
 
-        () -> Error
+This expression is used in an unexpected way.
 
-    But the annotation says it should be:
+r=|()|(()())
+  ^^^^^^^^^^
 
-        (), (({}) -> Error), (({}) -> d) -> Error
+It has the type:
 
-    Hint: This function expects 3 arguments but got 1.
+    () -> Error
 
+But the annotation says it should be:
+
+    (), (({}) -> Error), (({}) -> d) -> Error
+
+Hint: This function expects 3 arguments but got 1.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,NoSpaceOpenRound,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,OpArrow,NoSpaceOpenRound,LowerIdent,Comma,CloseRound,

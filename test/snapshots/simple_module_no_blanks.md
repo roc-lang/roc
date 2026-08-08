@@ -14,16 +14,14 @@ world = "World"
 NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  hello! = Stdout.line!("Hello")                                            │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────────────────────── simple_mod_no_blanks.md:2:10 ┘
+── ✗ name not in scope ───────────────────────── simple_mod_no_blanks.md:2:10
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `line!` in this scope.
 
+hello! = Stdout.line!("Hello")
+         ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

@@ -17,31 +17,27 @@ UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
 TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  BadBase := _                                                              │
- │  ‾                                                                         │
- └───────────────────────────────────────────── test_error_propagation.md:1:1 ┘
+── ✗ underscore in type alias ──────────────────── test_error_propagation.md:1:1
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+BadBase := _
+^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  value = "test"                                                            │
- │          ‾‾‾‾‾‾                                                            │
- └───────────────────────────────────────────── test_error_propagation.md:6:9 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    The type was determined to be:
+── ✗ type mismatch ─────────────────────────────── test_error_propagation.md:6:9
 
-        GoodAlias
+This string literal is being used where a non-string type is needed.
 
+value = "test"
+        ^^^^^^
+
+The type was determined to be:
+
+    GoodAlias
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

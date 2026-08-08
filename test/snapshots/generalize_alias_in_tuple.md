@@ -18,18 +18,16 @@ main = {
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  (a(1), a("x"), b(2))                                                      │
- │           ‾‾‾                                                              │
- └───────────────────────────────────────── generalize_alias_in_tuple.md:7:14 ┘
+── ✗ type mismatch ─────────────────────────── generalize_alias_in_tuple.md:7:14
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+(a(1), a("x"), b(2))
+         ^^^
 
+The type was determined to be:
+
+    Dec
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

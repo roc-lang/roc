@@ -11,24 +11,22 @@ type=expr
 EXPECTED RECORD FIELD - fuzz_crash_033.md:1:6:1:14
 # PROBLEMS
 
-┌───────────────────────┐
-│ EXPECTED RECORD FIELD ├─ I was parsing a record expression, and I ──────────┐
-└┬──────────────────────┘  expected a lowercase field name.                   │
- │                                                                            │
- │  { i, Complete]                                                            │
- │       ‾‾‾‾‾‾‾‾                                                             │
- └───────────────────────────────────────────────────── fuzz_crash_033.md:1:6 ┘
+── ✗ expected record field ─────────────────────────────── fuzz_crash_033.md:1:6
 
-    Record fields start with lowercase names. After the name, either write `:
-    value` or omit the value to use field punning.
+I was parsing a record expression, and I expected a lowercase field name.
 
-    For example:
-        { name: "Ada", age }
+{ i, Complete]
+     ^^^^^^^^
 
-    I found `Complete` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+Record fields start with lowercase names. After the name, either write `:
+value` or omit the value to use field punning.
 
+For example:
+    { name: "Ada", age }
+
+I found `Complete` here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,UpperIdent,CloseSquare,

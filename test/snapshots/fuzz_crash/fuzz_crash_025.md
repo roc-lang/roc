@@ -42,143 +42,127 @@ UNEXPECTED STATEMENT - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  d = 18446744073709551615                                                  │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_025.md:9:1 ┘
+── ✗ type application needs parentheses ────────────────── fuzz_crash_025.md:9:1
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        List(U8)
+d = 18446744073709551615
+^
 
-    I found `d` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d = 18446744073709551615                                                  │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_025.md:9:3 ┘
+I found `d` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:3
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `=` here.
+d = 18446744073709551615
+  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  d = 18446744073709551615                                                  │
- │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_025.md:9:5 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `=` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
 
-    I found `18446744073709551615` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+d = 18446744073709551615
+    ^^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  e = 3402823669209384634633746074317682114553.14: I8                       │
- │                                                 ‾                          │
- └─────────────────────────────────────────────────── fuzz_crash_025.md:12:48 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found `18446744073709551615` here.
 
-    I found `:` here.
+── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  f =8                                                                      │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_025.md:13:1 ┘
+e = 3402823669209384634633746074317682114553.14: I8
+                                               ^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        List(U8)
+For example:
+    answer = 42
 
-    I found `f` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found `:` here.
 
+── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  f =8                                                                      │
- │    ‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_025.md:13:3 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+f =8
+^
 
-    For example:
-        answer = 42
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
-    I found `=` here.
+For example:
+    List(U8)
 
+I found `f` here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  f =8                                                                      │
- │     ‾                                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_025.md:13:4 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:3
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+f =8
+  ^
 
-    I found `8` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  e = 3402823669209384634633746074317682114553.14: I8                       │
- │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                           │
- └──────────────────────────────────────────────────── fuzz_crash_025.md:12:5 ┘
+I found `=` here.
 
-    The inferred type is:
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
 
-        U128
+I was parsing a statement, and this token cannot start a statement here.
 
+f =8
+   ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `8` here.
+
+── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
+
+This number literal does not fit in the inferred type.
+
+e = 3402823669209384634633746074317682114553.14: I8
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The inferred type is:
+
+    U128
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

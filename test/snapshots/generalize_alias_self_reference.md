@@ -13,19 +13,17 @@ main = x
 INVALID ASSIGNMENT TO ITSELF - generalize_alias_self_reference.md:1:5:1:6
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `x` is assigned to itself, ───────┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  x = x                                                                     │
- │      ‾                                                                     │
- └──────────────────────────────────── generalize_alias_self_reference.md:1:5 ┘
+── ✗ invalid assignment to itself ─────── generalize_alias_self_reference.md:1:5
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+The value `x` is assigned to itself, which would cause an infinite loop at
+runtime.
 
+x = x
+    ^
+
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,

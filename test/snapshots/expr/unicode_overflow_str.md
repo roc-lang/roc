@@ -11,14 +11,12 @@ type=expr
 INVALID UNICODE ESCAPE SEQUENCE - unicode_overflow_str.md:1:2:1:12
 # PROBLEMS
 
-┌─────────────────────────────────┐
-│ INVALID UNICODE ESCAPE SEQUENCE ├─ This Unicode escape sequence is not ─────┐
-└┬────────────────────────────────┘  valid.                                   │
- │                                                                            │
- │  "\u(FFFFFF)"                                                              │
- │   ‾‾‾‾‾‾‾‾‾‾                                                               │
- └─────────────────────────────────────────────── unicode_overflow_str.md:1:2 ┘
+── ✗ invalid unicode escape sequence ─────────────── unicode_overflow_str.md:1:2
 
+This Unicode escape sequence is not valid.
+
+"\u(FFFFFF)"
+ ^^^^^^^^^^
 
 # TOKENS
 ~~~zig

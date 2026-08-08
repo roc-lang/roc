@@ -15,28 +15,24 @@ NAME NOT IN SCOPE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `y` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  y + 1                                                                     │
- │  ‾                                                                         │
- └───────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
+── ✗ name not in scope ─────── canon_revamp_block_value_forward_ref_error.md:2:5
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `y` in this scope.
 
+y + 1
+^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `y` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  y = 5                                                                     │
- │  ‾                                                                         │
- └───────────────────────── canon_revamp_block_value_forward_ref_error.md:3:5 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like `_y` to
-    suppress this warning.
+── ⚠ unused variable ───────── canon_revamp_block_value_forward_ref_error.md:3:5
 
+Variable `y` is defined here and then never used:
+
+y = 5
+^
+
+If you don't need this variable, prefix it with an underscore like `_y` to
+suppress this warning.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,

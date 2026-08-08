@@ -12,23 +12,21 @@ S
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_052.md:2:1:2:2
 # PROBLEMS
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  0                                                                         │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_052.md:2:1 ┘
+── ✗ type application needs parentheses ────────────────── fuzz_crash_052.md:2:1
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    For example:
-        List(U8)
+0
+^
 
-    I found `0` here.
+Roc type applications use parentheses around their arguments. Write `List(U8)`,
+not `List U8`.
 
+For example:
+    List(U8)
+
+I found `0` here.
 # TOKENS
 ~~~zig
 UpperIdent,

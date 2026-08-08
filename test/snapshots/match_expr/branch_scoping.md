@@ -16,29 +16,26 @@ match result {
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match result {                                                            │
- │      Ok(value) => value + 1                                                │
- │      Err(value) => value - 1                                               │
- │      Ok(different) => different * 2                                        │
- │      Err(different) => different / 2                                       │
- │  }                                                                         │
- │                                                                            │
- └───────────────────────────────────────────────────── branch_scoping.md:1:1 ┘
+── ✗ polymorphic value ─────────────────────────────────── branch_scoping.md:1:1
 
-    Its type is:
-    a
-      where [
-        a.div_by : a, Dec -> a,
-        a.minus : a, Dec -> a,
-        a.plus : a, Dec -> a,
-        a.times : a, Dec -> a,
-      ]
-    Add an annotation or use this value in a way that fixes its concrete type.
+This top-level value still has an unresolved polymorphic type.
 
+match result {
+    Ok(value) => value + 1
+    Err(value) => value - 1
+    Ok(different) => different * 2
+    Err(different) => different / 2
+}
+
+Its type is:
+a
+  where [
+    a.div_by : a, Dec -> a,
+    a.minus : a, Dec -> a,
+    a.plus : a, Dec -> a,
+    a.times : a, Dec -> a,
+  ]
+Add an annotation or use this value in a way that fixes its concrete type.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

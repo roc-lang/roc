@@ -16,24 +16,22 @@ main = 123.Foo
 TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The `from_numeral` method on `Foo` has an incompatible ────┐
-└┬──────────────┘  type.                                                      │
- │                                                                            │
- │  main = 123.Foo                                                            │
- │         ‾‾‾‾‾‾‾                                                            │
- └────────────────────────────────────────── number_suffix_custom_type.md:6:8 ┘
+── ✗ type mismatch ──────────────────────────── number_suffix_custom_type.md:6:8
 
-    The method `from_numeral` has the type:
+The `from_numeral` method on `Foo` has an incompatible type.
 
-        I64, U8 -> Foo
+main = 123.Foo
+       ^^^^^^^
 
-    But I need it to have the type:
+The method `from_numeral` has the type:
 
-        Numeral -> Try(Foo, [InvalidNumeral(Str)])
+    I64, U8 -> Foo
 
-    Hint: This function expects 1 argument but got 2.
+But I need it to have the type:
 
+    Numeral -> Try(Foo, [InvalidNumeral(Str)])
+
+Hint: This function expects 1 argument but got 2.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

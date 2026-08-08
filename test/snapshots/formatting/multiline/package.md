@@ -26,53 +26,47 @@ DECLARATION HAS NO VALUE - package.md:11:1:11:16
 DECLARATION HAS NO VALUE - package.md:13:1:13:16
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  a!,                                                                       │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────────── package.md:3:3 ┘
+── ✗ exposed but not defined ──────────────────────────────────── package.md:3:3
 
-    You can fix this by either defining `a!` in this mod, or by removing it
-    from the list of exposed values.
+The mod header says that `a!` is exposed, but it is not defined anywhere in
+this mod.
 
+a!,
+^^
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `b!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  b!,                                                                       │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────────── package.md:4:3 ┘
+You can fix this by either defining `a!` in this mod, or by removing it from
+the list of exposed values.
 
-    You can fix this by either defining `b!` in this mod, or by removing it
-    from the list of exposed values.
+── ✗ exposed but not defined ──────────────────────────────────── package.md:4:3
 
+The mod header says that `b!` is exposed, but it is not defined anywhere in
+this mod.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  a! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────────────── package.md:11:1 ┘
+b!,
+^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+You can fix this by either defining `b!` in this mod, or by removing it from
+the list of exposed values.
 
+── ⚠ declaration has no value ────────────────────────────────── package.md:11:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  b! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────────────── package.md:13:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+a! : Str => Str
+^^^^^^^^^^^^^^^
 
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ⚠ declaration has no value ────────────────────────────────── package.md:13:1
+
+This declaration has a type annotation but no implementation.
+
+b! : Str => Str
+^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwPackage,

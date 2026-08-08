@@ -11,15 +11,13 @@ if 5 > 3 1 else 2
 UNCONDITIONAL CONDITION - if_numeric_comparison.md:1:4:1:9
 # PROBLEMS
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
-└┬────────────────────────┘  this conditional will always make the same       │
- │                           choice.                                          │
- │                                                                            │
- │  if 5 > 3 1 else 2                                                         │
- │     ‾‾‾‾‾                                                                  │
- └────────────────────────────────────────────── if_numeric_comparison.md:1:4 ┘
+── ⚠ unconditional condition ────────────────────── if_numeric_comparison.md:1:4
 
+This if condition is known at compile time, so this conditional will always
+make the same choice.
+
+if 5 > 3 1 else 2
+   ^^^^^
 
 # TOKENS
 ~~~zig

@@ -11,21 +11,18 @@ d=(0->X .a)
 TYPE MISMATCH - fuzz_crash_092.md:1:4:1:8
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This is not a record, so it does not have any fields to ───┐
-└┬──────────────┘  access.                                                    │
- │                                                                            │
- │  d=(0->X .a)                                                               │
- │     ‾‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_092.md:1:4 ┘
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_092.md:1:4
 
-    It is:
+This is not a record, so it does not have any fields to access.
 
-        [X(b), ..] where [b.from_numeral : Numeral -> Try(b,
-        [InvalidNumeral(Str)])]
+d=(0->X .a)
+   ^^^^
 
-    But I need a record with a `a` field.
+It is:
 
+    [X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+
+But I need a record with a `a` field.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpArrow,UpperIdent,DotLowerIdent,CloseRound,

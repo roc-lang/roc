@@ -15,27 +15,24 @@ classify = |n| match n {
 TYPE MISMATCH - issue_10134_typed_frac_pattern_suffix_mismatch.md:2:16:2:16
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  classify = |n| match n {                                                  │
- │      1.5.F32 => 1                                                          │
- │      _ => 0                                                                │
- │  }                                                                         │
- │                                                                            │
- └───────────────────── issue_10134_typed_frac_pattern_suffix_mismatch.md:2:2 ┘
+── ✗ type mismatch ─────── issue_10134_typed_frac_pattern_suffix_mismatch.md:2:2
 
-    The first pattern is trying to match:
+The first pattern in this `match` is incompatible.
 
-        F32
+classify = |n| match n {
+    1.5.F32 => 1
+    _ => 0
+}
 
-    But the expression between the `match` parenthesis has the type:
+The first pattern is trying to match:
 
-        F64
+    F32
 
-    These can never match! Either the pattern or expression has a problem.
+But the expression between the `match` parenthesis has the type:
 
+    F64
+
+These can never match! Either the pattern or expression has a problem.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

@@ -19,27 +19,23 @@ EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:1:1:
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:4:5:4:10
 # PROBLEMS
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  topThunk = || echo!("top")                                                │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └───────────────────── repro_issue_9962_effectful_local_function_name.md:1:1 ┘
+── ⚠ effectful function name ───── repro_issue_9962_effectful_local_function_name.md:1:1
 
-    Add a trailing `!` to this function name.
+This function performs an effect, so its name must end in `!`.
 
+topThunk = || echo!("top")
+^^^^^^^^
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  thunk = || echo!("local")                                                 │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────── repro_issue_9962_effectful_local_function_name.md:4:5 ┘
+Add a trailing `!` to this function name.
 
-    Add a trailing `!` to this function name.
+── ⚠ effectful function name ───── repro_issue_9962_effectful_local_function_name.md:4:5
 
+This function performs an effect, so its name must end in `!`.
+
+thunk = || echo!("local")
+^^^^^
+
+Add a trailing `!` to this function name.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,

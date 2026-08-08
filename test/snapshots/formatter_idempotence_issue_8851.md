@@ -11,16 +11,14 @@ a = 0->b().c()
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851.md:1:8:1:9
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  a = 0->b().c()                                                            │
- │         ‾                                                                  │
- └─────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
+── ✗ name not in scope ───────────────── formatter_idempotence_issue_8851.md:1:8
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `b` in this scope.
 
+a = 0->b().c()
+       ^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,

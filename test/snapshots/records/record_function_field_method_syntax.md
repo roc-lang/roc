@@ -13,18 +13,16 @@ result = r.f(1)
 MISSING METHOD - record_function_field_method_syntax.md:3:12:3:13
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `f` method is being called on a value whose type ────┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  result = r.f(1)                                                           │
- │             ‾                                                              │
- └─────────────────────────────── record_function_field_method_syntax.md:3:12 ┘
+── ✗ missing method ──────────────── record_function_field_method_syntax.md:3:12
 
-    The value's type, which does not have a method named `f`, is:
+This `f` method is being called on a value whose type doesn't have that method.
 
-        { f: a -> a }
+result = r.f(1)
+           ^
 
+The value's type, which does not have a method named `f`, is:
+
+    { f: a -> a }
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,

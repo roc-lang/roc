@@ -13,14 +13,13 @@ match [] {
 UNCONDITIONAL CONDITION - let_polymorphism_expr.md:1:7:1:9
 # PROBLEMS
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match [] {                                                                │
- │        ‾‾                                                                  │
- └────────────────────────────────────────────── let_polymorphism_expr.md:1:7 ┘
+── ⚠ unconditional condition ────────────────────── let_polymorphism_expr.md:1:7
 
+This match value is known at compile time, so this match will always inspect
+the same value.
+
+match [] {
+      ^^
 
 # TOKENS
 ~~~zig

@@ -18,81 +18,71 @@ UNUSED VARIABLE - fuzz_crash_099.md:3:5:3:8
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 # PROBLEMS
 
-┌────────────────────────┐
-│ DUPLICATE RECORD FIELD ├─ The record field `a` appears more than once in ───┐
-└┬───────────────────────┘  this record.                                      │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                         ‾                                                  │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:28 ┘
+── ✗ duplicate record field ───────────────────────────── fuzz_crash_099.md:3:28
 
-    This field is duplicated here:
+The record field `a` appears more than once in this record.
 
-    The field `a` was first defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    3 │      fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})           │
-      │                       ‾                                               │
-      └─────────────────────────────────────────────── fuzz_crash_099.md:3:22 ┘
-    Record fields must have unique names. Consider renaming one of these fields
-    or removing the duplicate.
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                       ^
 
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `insert` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │           ‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:14 ┘
+This field is duplicated here:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_insert` to suppress this warning.
+The field `a` was first defined here (fuzz_crash_099.md:3:22):
 
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                 ^
+Record fields must have unique names. Consider renaming one of these fields or
+removing the duplicate.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `nt` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                                  ‾‾                                        │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:37 ┘
+── ⚠ unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
 
-    If you don't need this variable, prefix it with an underscore like `_nt` to
-    suppress this warning.
+Variable `insert` is defined here and then never used:
 
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+         ^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `fn1` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_099.md:3:5 ┘
+If you don't need this variable, prefix it with an underscore like `_insert` to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_fn1`
-    to suppress this warning.
+── ⚠ unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
+Variable `nt` is defined here and then never used:
 
-┌────────────────────────────┐
-│ NON EXHAUSTIVE DESTRUCTURE ├─ This destructuring pattern doesn't cover ─────┐
-└┬───────────────────────────┘  all possible cases.                           │
- │                                                                            │
- │  fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})                    │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────────────── fuzz_crash_099.md:3:20 ┘
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+                                ^^
 
-    The value being destructured has type:
-            ({ a: c }, d)
-      where [
-        c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        c.is_eq : c, c -> Bool,
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_eq : d, d -> Bool,
-      ]
+If you don't need this variable, prefix it with an underscore like `_nt` to
+suppress this warning.
 
-    Missing patterns:
-            ({ a: _ }, _)
+── ⚠ unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
+Variable `fn1` is defined here and then never used:
+
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+^^^
+
+If you don't need this variable, prefix it with an underscore like `_fn1` to
+suppress this warning.
+
+── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
+
+This destructuring pattern doesn't cover all possible cases.
+
+fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
+               ^^^^^^^^^^^^^^^^^
+
+The value being destructured has type:
+        ({ a: c }, d)
+  where [
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    c.is_eq : c, c -> Bool,
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+    d.is_eq : d, d -> Bool,
+  ]
+
+Missing patterns:
+        ({ a: _ }, _)
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

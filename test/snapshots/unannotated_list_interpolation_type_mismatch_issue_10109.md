@@ -16,22 +16,20 @@ expect f(["a"]) == "x"
 TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12:3:17
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  "<tr>${inner}</tr>"                                                       │
- │         ‾‾‾‾‾                                                              │
- └────────── unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12 ┘
+── ✗ type mismatch ───── unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        List(b) where [b.from_interpolation : Str, Iter((_field, Str)) -> b]
+"<tr>${inner}</tr>"
+       ^^^^^
 
-    But you are trying to use it as:
+It has the type:
 
-        Str
+    List(b) where [b.from_interpolation : Str, Iter((_field, Str)) -> b]
 
+But you are trying to use it as:
+
+    Str
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

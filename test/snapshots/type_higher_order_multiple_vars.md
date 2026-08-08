@@ -21,107 +21,95 @@ UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:46:3:48
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                     ‾‾                                     │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:36 ┘
+── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:36
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+I was parsing a function type, and multiple arrows need parentheses.
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                   ^^
 
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                        ‾                                   │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:39 ┘
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:39
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `(` here.
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                         ‾‾                                 │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:40 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found `(` here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:40
 
-    I found `_a` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                       ^^
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                            ‾‾                              │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:43 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+For example:
+    answer = 42
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+I found `_a` here.
 
+── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:43
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                               ‾‾                           │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:46 ┘
+I was parsing a function type, and multiple arrows need parentheses.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                          ^^
 
-    For example:
-        answer = 42
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
-    I found `_c` here.
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
+── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:46
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
- │                                                 ‾                          │
- └─────────────────────────────────── type_higher_order_multiple_vars.md:3:48 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                             ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found `_c` here.
+
+── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:48
+
+I was parsing a statement, and this token cannot start a statement here.
+
+compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)
+                                               ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

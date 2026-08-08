@@ -16,31 +16,28 @@ TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
 MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  foo = if 1 A                                                              │
- │           ‾                                                                │
- └────────────────────────────────────────── if_then_else_simple_file.md:1:10 ┘
+── ✗ type mismatch ──────────────────────────── if_then_else_simple_file.md:1:10
 
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        Bool
+foo = if 1 A
+         ^
 
+Other code expects this to have the type:
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "hello"                                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── if_then_else_simple_file.md:4:2 ┘
+    Bool
 
-    The value's type, which does not have a method named `from_quote`, is:
+── ✗ missing method ──────────────────────────── if_then_else_simple_file.md:4:2
 
-        [A, ..]
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
 
+"hello"
+^^^^^^^
+
+The value's type, which does not have a method named `from_quote`, is:
+
+    [A, ..]
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,KwIf,Int,UpperIdent,

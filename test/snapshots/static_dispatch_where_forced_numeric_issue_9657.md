@@ -31,20 +31,17 @@ use_it = {
 MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `encode` on ────┐
-└┬───────────────┘  an unresolved type variable, but unresolved type          │
- │                  variables have no methods.                                │
- │                                                                            │
- │  output.encode()                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────── static_dispatch_where_forced_numeric_issue_9657.md:12:9 ┘
+── ✗ missing method ──── static_dispatch_where_forced_numeric_issue_9657.md:12:9
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+This is trying to dispatch a method named `encode` on an unresolved type
+variable, but unresolved type variables have no methods.
 
+output.encode()
+^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,OpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

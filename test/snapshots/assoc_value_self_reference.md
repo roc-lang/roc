@@ -13,19 +13,17 @@ SelfRef := [].{
 INVALID ASSIGNMENT TO ITSELF - assoc_value_self_reference.md:2:16:2:24
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `with_uri` is assigned to ────────┐
-└┬─────────────────────────────┘  itself, which would cause an infinite       │
- │                                loop at runtime.                            │
- │                                                                            │
- │  with_uri = with_uri                                                       │
- │             ‾‾‾‾‾‾‾‾                                                       │
- └──────────────────────────────────────── assoc_value_self_reference.md:2:16 ┘
+── ✗ invalid assignment to itself ─────────── assoc_value_self_reference.md:2:16
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+The value `with_uri` is assigned to itself, which would cause an infinite loop
+at runtime.
 
+with_uri = with_uri
+           ^^^^^^^^
+
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

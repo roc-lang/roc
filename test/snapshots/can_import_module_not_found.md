@@ -13,16 +13,14 @@ main = Mod.something
 NAME NOT IN SCOPE - can_import_mod_not_found.md:3:8:3:21
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `something` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main = Mod.something                                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────── can_import_mod_not_found.md:3:8 ┘
+── ✗ name not in scope ────────────────────── can_import_mod_not_found.md:3:8
 
-    Is it misspelled, or is there an import missing?
+Nothing is named `something` in this scope.
 
+main = Mod.something
+       ^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

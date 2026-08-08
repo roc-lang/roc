@@ -13,46 +13,40 @@ MOD NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  import u.R}g:r->R.a.E                                                     │
- │            ‾                                                               │
- └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_042.md:1:11
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+import u.R}g:r->R.a.E
+          ^
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
-└┬─────────────────┘  does not exist.                                         │
- │                                                                            │
- │  import u.R}g:r->R.a.E                                                     │
- │                     ‾‾                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_042.md:1:20 ┘
+I found `}` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
+
+── ✗ mod not found ─────────────────────────────────── fuzz_crash_042.md:1:20
+
+This `a.E` type is declared to be in `u.R`, which does not exist.
+
+import u.R}g:r->R.a.E
+                   ^^
 
 
+── ⚠ declaration has no value ─────────────────────────── fuzz_crash_042.md:1:12
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  import u.R}g:r->R.a.E                                                     │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+import u.R}g:r->R.a.E
+           ^^^^^^^^^^
 
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,CloseCurly,LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceDotUpperIdent,

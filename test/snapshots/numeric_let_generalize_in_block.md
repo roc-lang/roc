@@ -16,22 +16,20 @@ type=expr
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  b = Dec.to_str(n)                                                         │
- │                 ‾                                                          │
- └─────────────────────────────────── numeric_let_generalize_in_block.md:4:20 ┘
+── ✗ type mismatch ───────────────────── numeric_let_generalize_in_block.md:4:20
 
-    This argument has the type:
+The first argument being passed to this function has the wrong type.
 
-        I64
+b = Dec.to_str(n)
+               ^
 
-    But the function needs the first argument to be:
+This argument has the type:
 
-        Dec
+    I64
 
+But the function needs the first argument to be:
+
+    Dec
 # TOKENS
 ~~~zig
 OpenCurly,

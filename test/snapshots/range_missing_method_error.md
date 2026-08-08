@@ -11,22 +11,20 @@ r = "a"..<"z"
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ The value before this `..<` operator has a type that ─────┐
-└┬───────────────┘  doesn't have a `range_exclusive` method.                  │
- │                                                                            │
- │  r = "a"..<"z"                                                             │
- │      ‾‾‾‾‾‾‾‾‾                                                             │
- └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+── ✗ missing method ────────────────────────── range_missing_method_error.md:1:5
 
-    The value's type, which does not have a method named `range_exclusive`, is:
+The value before this `..<` operator has a type that doesn't have a
+`range_exclusive` method.
 
-        Str
+r = "a"..<"z"
+    ^^^^^^^^^
 
-    Hint: The `..<` operator calls a method named `range_exclusive` on the
-    value preceding it, passing the value after the operator as the one
-    argument.
+The value's type, which does not have a method named `range_exclusive`, is:
 
+    Str
+
+Hint: The `..<` operator calls a method named `range_exclusive` on the value
+preceding it, passing the value after the operator as the one argument.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,OpDoubleDotLessThan,StringStart,StringPart,StringEnd,

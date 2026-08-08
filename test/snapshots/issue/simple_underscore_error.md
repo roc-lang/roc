@@ -15,31 +15,27 @@ UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  BadType := _                                                              │
- │  ‾                                                                         │
- └──────────────────────────────────────────── simple_underscore_error.md:1:1 ┘
+── ✗ underscore in type alias ─────────────────── simple_underscore_error.md:1:1
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+BadType := _
+^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  foo = 42                                                                  │
- │        ‾‾                                                                  │
- └──────────────────────────────────────────── simple_underscore_error.md:4:7 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    Other code expects this to have the type:
+── ✗ type mismatch ────────────────────────────── simple_underscore_error.md:4:7
 
-        BadType
+This number is being used where a non-number type is needed.
 
+foo = 42
+      ^^
+
+Other code expects this to have the type:
+
+    BadType
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

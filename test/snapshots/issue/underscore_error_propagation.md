@@ -25,44 +25,38 @@ TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
 TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  BadBase := _                                                              │
- │  ‾                                                                         │
- └─────────────────────────────────────── underscore_error_propagation.md:1:1 ┘
+── ✗ underscore in type alias ────────────── underscore_error_propagation.md:1:1
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+BadBase := _
+^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  value = "test"                                                            │
- │          ‾‾‾‾‾‾                                                            │
- └─────────────────────────────────────── underscore_error_propagation.md:6:9 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    The type was determined to be:
+── ✗ type mismatch ───────────────────────── underscore_error_propagation.md:6:9
 
-        BadDerived
+This string literal is being used where a non-string type is needed.
 
+value = "test"
+        ^^^^^^
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  goodValue = "test"                                                        │
- │              ‾‾‾‾‾‾                                                        │
- └───────────────────────────────────── underscore_error_propagation.md:13:13 ┘
+The type was determined to be:
 
-    The type was determined to be:
+    BadDerived
 
-        GoodDerived
+── ✗ type mismatch ─────────────────────── underscore_error_propagation.md:13:13
 
+This string literal is being used where a non-string type is needed.
+
+goodValue = "test"
+            ^^^^^^
+
+The type was determined to be:
+
+    GoodDerived
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

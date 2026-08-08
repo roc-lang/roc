@@ -26,17 +26,15 @@ main! = |_| {}
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `item` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  item = 42                                                                 │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────── type_var_namespace.md:7:5 ┘
+── ⚠ unused variable ───────────────────────────────── type_var_namespace.md:7:5
 
-    If you don't need this variable, prefix it with an underscore like `_item`
-    to suppress this warning.
+Variable `item` is defined here and then never used:
 
+item = 42
+^^^^
+
+If you don't need this variable, prefix it with an underscore like `_item` to
+suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

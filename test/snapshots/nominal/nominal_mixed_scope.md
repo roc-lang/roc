@@ -28,65 +28,54 @@ UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
 
-┌──────────────────────────┐
-│ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
-└┬─────────────────────────┘  allowed at the top level.                       │
- │                                                                            │
- │  import Color.RGB                                                          │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
+── ✗ import must be top level ─────────────────────── nominal_mixed_scope.md:7:5
 
-    Move this import after the mod header and before declarations or
-    executable statements.
+I was parsing an import, but imports are only allowed at the top level.
 
-    For example:
-        import Json
+import Color.RGB
+^^^^^^
 
-        main = 1
+Move this import after the mod header and before declarations or executable
+statements.
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+For example:
+    import Json
 
+    main = 1
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  import Color.RGB                                                          │
- │         ‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:7:12 ┘
+I found `import` here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
+
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
+
+The type `Color` is not declared in this scope.
+
+import Color.RGB
+       ^^^^^
 
 
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:10:9
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Red => LocalStatus.Pending                                            │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:10:9 ┘
+The type `RGB` is not declared in this scope.
+
+RGB.Red => LocalStatus.Pending
+^^^
 
 
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:11:9
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Green => LocalStatus.Complete                                         │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:11:9 ┘
+The type `RGB` is not declared in this scope.
+
+RGB.Green => LocalStatus.Complete
+^^^
 
 
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:12:9
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Blue => LocalStatus.Pending                                           │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:12:9 ┘
+The type `RGB` is not declared in this scope.
 
+RGB.Blue => LocalStatus.Pending
+^^^
 
 # TOKENS
 ~~~zig

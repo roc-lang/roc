@@ -21,22 +21,21 @@ main = {
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
 # PROBLEMS
 
-┌────────────────────┐
-│ RECURSIVE DISPATCH ├─ This `from_interpolation` dispatch would have to ─────┐
-└┬───────────────────┘  call itself to satisfy its own type.                  │
- │                                                                            │
- │  url = "https://${domain}.com"                                             │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └─────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
+── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:9:11
 
-    The dispatcher type is:
+This `from_interpolation` dispatch would have to call itself to satisfy its own
+type.
 
-        Try(Url, [InvalidUrl])
+url = "https://${domain}.com"
+      ^^^^^^^^^^^^^^^^^^^^^^^
 
-    Hint: Use a more specific result type, or add an associated function whose
-    `from_interpolation` implementation does not require the same dispatch on
-    the same type.
+The dispatcher type is:
 
+    Try(Url, [InvalidUrl])
+
+Hint: Use a more specific result type, or add an associated function whose
+`from_interpolation` implementation does not require the same dispatch on the
+same type.
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

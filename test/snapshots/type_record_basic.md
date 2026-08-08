@@ -16,28 +16,26 @@ main! = |_| getName({namee: "luke", age:21})
 TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  main! = |_| getName({namee: "luke", age:21})                              │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └───────────────────────────────────────────────── type_record_basic.md:6:21 ┘
+── ✗ type mismatch ─────────────────────────────────── type_record_basic.md:6:21
 
-    This argument has the type:
+The first argument being passed to this function has the wrong type.
 
-        { age: a, namee: b }
-          where [
-            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-            b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
-          ]
+main! = |_| getName({namee: "luke", age:21})
+                    ^^^^^^^^^^^^^^^^^^^^^^^
 
-    But `getName` needs the first argument to be:
+This argument has the type:
 
-        { age: U64, name: Str }
+    { age: a, namee: b }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+      ]
 
-    Hint: Maybe `namee` should be `name`?
+But `getName` needs the first argument to be:
 
+    { age: U64, name: Str }
+
+Hint: Maybe `namee` should be `name`?
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

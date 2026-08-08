@@ -12,24 +12,22 @@ type=snippet
 UNEXPECTED STATEMENT - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  )                                                                         │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_050.md:1:1 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_050.md:1:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+)
+^
 
-    I found `)` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
+
+I found `)` here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 # TOKENS
 ~~~zig
 CloseRound,

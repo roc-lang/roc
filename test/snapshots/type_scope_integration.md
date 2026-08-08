@@ -22,31 +22,27 @@ TYPE REDECLARED - type_scope_integration.md:5:1:5:10
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
 
-┌─────────────────┐
-│ TYPE REDECLARED ├─ The type `Foo` is being redeclared. ─────────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : Str                                                                 │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └───────────────────────────────────────────── type_scope_integration.md:5:1 ┘
+── ✗ type redeclared ───────────────────────────── type_scope_integration.md:5:1
 
-    The redeclaration is here:
+The type `Foo` is being redeclared.
 
-    But Foo was already declared here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    2 │  Foo : U64                                                            │
-      │  ‾‾‾‾‾‾‾‾‾                                                            │
-      └──────────────────────────────────────── type_scope_integration.md:2:1 ┘
+Foo : Str
+^^^^^^^^^
 
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `SomeUndeclaredType` is not declared in this ───┐
-└┬────────────────┘  scope.                                                   │
- │                                                                            │
- │  Bar : SomeUndeclaredType                                                  │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └───────────────────────────────────────────── type_scope_integration.md:8:7 ┘
+The redeclaration is here:
 
+But Foo was already declared here (type_scope_integration.md:2:1):
+
+Foo : U64
+^^^^^^^^^
+
+── ✗ undeclared type ───────────────────────────── type_scope_integration.md:8:7
+
+The type `SomeUndeclaredType` is not declared in this scope.
+
+Bar : SomeUndeclaredType
+      ^^^^^^^^^^^^^^^^^^
 
 # TOKENS
 ~~~zig

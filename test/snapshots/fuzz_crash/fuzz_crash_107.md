@@ -12,18 +12,16 @@ e={{e:\\
 NOT IMPLEMENTED - fuzz_crash_107.md:1:4:2:4
 # PROBLEMS
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: single-field ───────┐
-└┬────────────────┘  record builder (minimum 2 fields required).              │
- │                                                                            │
- │  e={{e:\\                                                                  │
- │  }.U{}}                                                                    │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_107.md:1:4 ┘
+── ✗ not implemented ───────────────────────────────────── fuzz_crash_107.md:1:4
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+This feature is not yet implemented: single-field record builder (minimum 2
+fields required).
 
+e={{e:\\
+}.U{}}
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,OpenCurly,LowerIdent,OpColon,MultilineStringStart,StringPart,
