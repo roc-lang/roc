@@ -59,18 +59,15 @@ pub fn extractPublicSurface(
     var result: PublicSurface = .{};
     errdefer result.deinit(gpa);
 
+    const collection = ast.store.getCollection(exposes);
+    const exposed_items = ast.store.exposedItemSlice(.{ .span = collection.span });
+    if (exposed_items.len == 0) return result;
+
     var module_imports: std.StringHashMapUnmanaged(usize) = .{};
     defer module_imports.deinit(gpa);
-    for (ast.decl_index.imports.items, 0..) |import, import_idx| {
-        if (import.origin != .local) continue;
-        if (import.nested_type_path != null) continue;
-        const binding = import.module_binding orelse continue;
-        const entry = try module_imports.getOrPut(gpa, ast.env.getIdent(binding));
-        if (!entry.found_existing) entry.value_ptr.* = import_idx;
-    }
+    var imports_indexed = false;
 
-    const collection = ast.store.getCollection(exposes);
-    for (ast.store.exposedItemSlice(.{ .span = collection.span })) |item_idx| {
+    for (exposed_items) |item_idx| {
         const item = ast.store.getExposedItem(item_idx);
         const token_idx = switch (item) {
             .upper_ident => |upper| upper.ident,
@@ -84,6 +81,16 @@ pub fn extractPublicSurface(
             .malformed => continue,
         };
         const exposed_name = ast.resolve(token_idx);
+        if (!imports_indexed) {
+            for (ast.decl_index.imports.items, 0..) |import, import_idx| {
+                if (import.origin != .local) continue;
+                if (import.nested_type_path != null) continue;
+                const binding = import.module_binding orelse continue;
+                const entry = try module_imports.getOrPut(gpa, ast.env.getIdent(binding));
+                if (!entry.found_existing) entry.value_ptr.* = import_idx;
+            }
+            imports_indexed = true;
+        }
         const import_idx = module_imports.get(exposed_name);
 
         if (kind == .platform and import_idx == null) {

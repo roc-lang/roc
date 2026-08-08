@@ -276,7 +276,9 @@ pub fn extractModuleDocsWithOptions(
     // For documentation purposes, show all accessible definitions, not just
     // what's explicitly exported. Exports control compilation/linking (what
     // other modules can import), but docs should be comprehensive.
-    const defs_slice = switch (module_env.module_kind) {
+    const defs_slice = if (options.exposed_names != null)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else switch (module_env.module_kind) {
         .platform, .hosted => blk: {
             // Platforms and hosted modules: only document explicitly provided items
             const exports_slice = module_env.store.sliceDefs(module_env.exports);

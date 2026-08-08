@@ -46,6 +46,7 @@ pub const OriginMap = struct {
         kind: Kind,
         /// The module's bare (unqualified) name. Paths are built from this so
         /// they stay stable when the root package renames a dependency alias.
+        /// Platform roots use an empty name because their items are unqualified.
         module_name: []const u8,
 
         pub const Kind = union(enum) {
@@ -538,7 +539,7 @@ fn qualifiedPath(
             type_name;
         return try alloc.dupe(u8, bare);
     }
-    if (origin_module.len == 0) return try alloc.dupe(u8, type_name);
+    if (origin == .self and origin_module.len == 0) return try alloc.dupe(u8, type_name);
     if (nameIsPublic(type_name, origin_module)) return try alloc.dupe(u8, type_name);
     return try std.fmt.allocPrint(alloc, "{s}.{s}", .{ origin_module, type_name });
 }
