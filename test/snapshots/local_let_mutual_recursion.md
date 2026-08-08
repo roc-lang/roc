@@ -140,21 +140,21 @@ EndOfFile,
 								(builtin)
 								(e-tag (name "False")))))
 					(if-else
-						(e-call (constraint-fn-var 291)
+						(e-call (constraint-fn-var 290)
 							(e-lookup-local
 								(p-assign (ident "is_even")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 289)
+							(e-dispatch-call (method "minus") (constraint-fn-var 288)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
 								(args
 									(e-num (value "1")))))))))
-		(e-call (constraint-fn-var 309)
+		(e-call (constraint-fn-var 307)
 			(e-lookup-local
 				(p-assign (ident "is_even")))
 			(e-num (value "4")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_arg -> Error"))
+(expr (type "_arg -> Bool"))
 ~~~

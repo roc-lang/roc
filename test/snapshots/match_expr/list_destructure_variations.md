@@ -15,9 +15,63 @@ match list {
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - list_destructure_variations.md:4:24:4:38
+MISSING METHOD - list_destructure_variations.md:2:11:2:12
+MISSING METHOD - list_destructure_variations.md:6:31:6:32
+MISSING METHOD - list_destructure_variations.md:7:30:7:35
 # PROBLEMS
-NIL
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  [first, second] => first + second                                         │
+ │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
+ └─────────────────────────────────────── list_destructure_variations.md:4:24 ┘
+
+    The value's type, which does not have a method named `plus`, is:
+
+        [One, Two, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  [] => 0                                                                   │
+ │        ‾                                                                   │
+ └─────────────────────────────────────── list_destructure_variations.md:2:11 ┘
+
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        [One, Two, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
+└┬───────────────┘  whose type doesn't have that method.                      │
+ │                                                                            │
+ │  [One, Two, .. as rest] => 3                                               │
+ │                            ‾                                               │
+ └─────────────────────────────────────── list_destructure_variations.md:6:31 ┘
+
+    The value's type, which does not have a method named `from_numeral`, is:
+
+        [One, Two, ..]
+
+
+┌────────────────┐
+│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
+└┬───────────────┘  type doesn't have that method.                            │
+ │                                                                            │
+ │  [x, y, z, .. as more] => x + y + z                                        │
+ │                           ‾‾‾‾‾                                            │
+ └─────────────────────────────────────── list_destructure_variations.md:7:30 ┘
+
+    The value's type, which does not have a method named `plus`, is:
+
+        [One, Two, ..]
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -96,7 +150,7 @@ match list {
 						(p-list
 							(patterns))))
 				(value
-					(e-num (value "0"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -114,13 +168,7 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 246)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "second")))))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -142,7 +190,7 @@ match list {
 							(rest-at (index 2)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-num (value "3"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -154,20 +202,9 @@ match list {
 							(rest-at (index 3)
 								(p-assign (ident "more"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 262)
-						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 260)
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "x"))))
-								(args
-									(e-lookup-local
-										(p-assign (ident "y"))))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "z"))))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "[One, Two, ..]"))
 ~~~
