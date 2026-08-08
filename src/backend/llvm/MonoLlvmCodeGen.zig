@@ -5123,6 +5123,10 @@ pub const MonoLlvmCodeGen = struct {
                 return;
             }
         }
+        if (args.len >= 1 and isDecToIntTrunc(op)) {
+            try self.emitDecToIntTruncConversion(target, GuardedList.at(args, 0));
+            return;
+        }
         if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
             std.mem.find(u8, name, "_try") == null and
             std.mem.find(u8, name, "_str") == null)
@@ -5146,6 +5150,38 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    fn isDecToIntTrunc(op: lir.LowLevel) bool {
+        const DecToIntTrunc = enum {
+            dec_to_i8_trunc,
+            dec_to_u8_trunc,
+            dec_to_i16_trunc,
+            dec_to_u16_trunc,
+            dec_to_i32_trunc,
+            dec_to_u32_trunc,
+            dec_to_i64_trunc,
+            dec_to_u64_trunc,
+            dec_to_i128_trunc,
+            dec_to_u128_trunc,
+        };
+        return std.meta.stringToEnum(DecToIntTrunc, @tagName(op)) != null;
+    }
+
+    /// A Dec's payload is its value scaled by 10^18, so recovering the whole
+    /// part means dividing the payload by that scale before wrapping it into
+    /// the destination width. The quotient is divided at the full i128 width so
+    /// whole parts beyond i64 wrap rather than trap, and dividing by a constant
+    /// keeps the sequence foldable instead of calling into the builtins.
+    fn emitDecToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const payload = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const scale = builder.intValue(.i128, builtins.dec.RocDec.one_point_zero_i128) catch return error.OutOfMemory;
+        const whole = wip.bin(.sdiv, payload, scale, "") catch return error.OutOfMemory;
+        const target_layout = self.localLayout(target);
+        const wrapped = try self.coerceScalar(whole, self.scalarType(target_layout), true);
+        try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
     }
 
     const FloatToIntTruncInfo = struct {
