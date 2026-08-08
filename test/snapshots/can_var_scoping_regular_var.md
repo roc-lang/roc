@@ -133,13 +133,68 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "processItems"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-assign (ident "items")))
+			(e-block
+				(s-var
+					(p-assign (ident "count_"))
+					(e-num (value "0")))
+				(s-var
+					(p-assign (ident "total_"))
+					(e-num (value "0")))
+				(s-reassign
+					(p-assign (ident "count_"))
+					(e-dispatch-call (method "plus") (constraint-fn-var 253)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "count_"))))
+						(args
+							(e-num (value "1")))))
+				(s-reassign
+					(p-assign (ident "total_"))
+					(e-dispatch-call (method "plus") (constraint-fn-var 262)
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "total_"))))
+						(args
+							(e-num (value "10")))))
+				(s-let
+					(p-assign (ident "nestedFunc"))
+					(e-closure
+						(captures
+							(capture (ident "count_")))
+						(e-lambda
+							(args
+								(p-underscore))
+							(e-block
+								(s-reassign
+									(p-assign (ident "count_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(s-reassign
+									(p-assign (ident "total_"))
+									(e-runtime-error (tag "var_across_function_boundary")))
+								(e-lookup-local
+									(p-assign (ident "count_")))))))
+				(s-let
+					(p-assign (ident "result"))
+					(e-call (constraint-fn-var 266)
+						(e-lookup-local
+							(p-assign (ident "nestedFunc")))
+						(e-empty_record)))
+				(e-dispatch-call (method "plus") (constraint-fn-var 267)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "total_"))))
+					(args
+						(e-lookup-local
+							(p-assign (ident "result")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, c -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
 ~~~
