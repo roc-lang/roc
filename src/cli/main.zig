@@ -15084,17 +15084,25 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
 /// breakdown rather than a row in it: relation production runs inside several
 /// of those phases, so adding it to them would double-count. Reported in
 /// microseconds because the counter channel carries integers.
-fn monotypeGraphCostCounters(snapshot: lir.CheckedPipeline.TimingSnapshot) [5]progress.Counter {
+fn monotypeGraphCostCounters(snapshot: lir.CheckedPipeline.TimingSnapshot) [10]progress.Counter {
     const graph_setup_ns = snapshot.monotype_procedure_body_graph_setup_ns;
     const type_graph_ns = snapshot.monotype_procedure_body_type_graph_ns;
-    const seal_ns = snapshot.monotype_procedure_body_finalization_ns;
+    const finalization_ns = snapshot.monotype_procedure_body_finalization_ns;
     const relation_ns = snapshot.monotype_graph_relation_ns;
+    const seal_ns = snapshot.monotype_graph_seal_ns;
+    const snapshot_ns = snapshot.monotype_graph_snapshot_ns;
+    const directed_ns = snapshot.monotype_directed_read_ns;
     return .{
         .{ .name = "Graph setup (us)", .count = graph_setup_ns / 1000 },
         .{ .name = "Graph reads (us)", .count = type_graph_ns / 1000 },
+        .{ .name = "Snapshot materialization (us)", .count = snapshot_ns / 1000 },
         .{ .name = "Relation production (us)", .count = relation_ns / 1000 },
-        .{ .name = "Sealing + commit (us)", .count = seal_ns / 1000 },
+        .{ .name = "Committed sealing (us)", .count = seal_ns / 1000 },
+        .{ .name = "Seals committed", .count = snapshot.monotype_graph_seal_calls },
+        .{ .name = "Body finalization (us)", .count = finalization_ns / 1000 },
         .{ .name = "Relations produced", .count = snapshot.monotype_graph_relation_calls },
+        .{ .name = "Directed reads (us)", .count = directed_ns / 1000 },
+        .{ .name = "Directed reads", .count = snapshot.monotype_directed_read_calls },
     };
 }
 

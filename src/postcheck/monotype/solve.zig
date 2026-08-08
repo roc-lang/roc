@@ -310,27 +310,37 @@ const GeneratedIteratorDepthFrame = struct {
 /// change. Cross-specialization edges import final Monotypes as closed
 /// structure, so a specialization that tries to exceed its requested type is a
 /// unification conflict, not a silent divergence.
-/// Accumulates the wall time spent inside the instantiation graph's relation
-/// production, so the cost of the worksheet itself can be weighed against the
-/// rest of compilation. Opt-in: timestamping every relation is measurable
-/// overhead, so the pointer is null unless a measurement run set it. Nested
-/// relations are folded into the outermost one, which keeps the total a sum of
-/// disjoint intervals rather than a multiple of them.
-pub const RelationClock = struct {
+/// Accumulates the wall time Monotype lowering spends in each of the parts that
+/// are being weighed against one another: the instantiation graph's relation
+/// production, its two kinds of seal, and directed instantiation's reads. A
+/// phase row cannot answer this, because a phase runs several of them and also
+/// runs work none of them owns. Opt-in: timestamping every relation is
+/// measurable overhead, so the pointer is null unless a measurement run set it.
+/// Within a bucket, nested intervals fold into the outermost one, which keeps
+/// each total a sum of disjoint intervals rather than a multiple of them.
+pub const LoweringCostClock = struct {
     std_io: std.Io,
     ns: u64 = 0,
     calls: u64 = 0,
     depth: u32 = 0,
+    seal_ns: u64 = 0,
+    seal_calls: u64 = 0,
+    seal_depth: u32 = 0,
+    snapshot_ns: u64 = 0,
+    snapshot_calls: u64 = 0,
+    directed_ns: u64 = 0,
+    directed_calls: u64 = 0,
+    directed_depth: u32 = 0,
 
-    pub fn init(std_io: std.Io) RelationClock {
+    pub fn init(std_io: std.Io) LoweringCostClock {
         return .{ .std_io = std_io };
     }
 
-    fn now(self: *const RelationClock) i64 {
+    fn now(self: *const LoweringCostClock) i64 {
         return @intCast(@max(0, std.Io.Timestamp.now(self.std_io, .awake).nanoseconds));
     }
 
-    fn enter(self: *RelationClock) ?i64 {
+    fn enter(self: *LoweringCostClock) ?i64 {
         self.calls +%= 1;
         if (self.depth != 0) {
             self.depth += 1;
@@ -340,17 +350,59 @@ pub const RelationClock = struct {
         return self.now();
     }
 
-    fn leave(self: *RelationClock, started: ?i64) void {
+    fn leave(self: *LoweringCostClock, started: ?i64) void {
         self.depth -= 1;
         const start_ns = started orelse return;
         self.ns +%= @intCast(@max(0, self.now() - start_ns));
+    }
+
+    /// An active-snapshot seal is a read materializing a view; a committed
+    /// seal is the body's final type reaching the program. They are separate
+    /// costs on separate deletion paths, so they get separate buckets.
+    fn enterSeal(self: *LoweringCostClock, mode: SealMode) ?i64 {
+        switch (mode) {
+            .committed => self.seal_calls +%= 1,
+            .active_snapshot => self.snapshot_calls +%= 1,
+        }
+        if (self.seal_depth != 0) {
+            self.seal_depth += 1;
+            return null;
+        }
+        self.seal_depth = 1;
+        return self.now();
+    }
+
+    fn leaveSeal(self: *LoweringCostClock, mode: SealMode, started: ?i64) void {
+        self.seal_depth -= 1;
+        const start_ns = started orelse return;
+        const elapsed: u64 = @intCast(@max(0, self.now() - start_ns));
+        switch (mode) {
+            .committed => self.seal_ns +%= elapsed,
+            .active_snapshot => self.snapshot_ns +%= elapsed,
+        }
+    }
+
+    pub fn enterDirected(self: *LoweringCostClock) ?i64 {
+        self.directed_calls +%= 1;
+        if (self.directed_depth != 0) {
+            self.directed_depth += 1;
+            return null;
+        }
+        self.directed_depth = 1;
+        return self.now();
+    }
+
+    pub fn leaveDirected(self: *LoweringCostClock, started: ?i64) void {
+        self.directed_depth -= 1;
+        const start_ns = started orelse return;
+        self.directed_ns +%= @intCast(@max(0, self.now() - start_ns));
     }
 };
 
 pub const InstGraph = struct {
     allocator: Allocator,
-    /// Set only by a measurement run; see `RelationClock`.
-    relation_clock: ?*RelationClock = null,
+    /// Set only by a measurement run; see `LoweringCostClock`.
+    cost_clock: ?*LoweringCostClock = null,
     relation_state: RelationState,
     types: *Type.Store,
     name_store: *const names.NameStore,
@@ -2657,7 +2709,7 @@ pub const InstGraph = struct {
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
         var clock_start: ?i64 = null;
-        const clock = self.relation_clock;
+        const clock = self.cost_clock;
         if (clock) |active| clock_start = active.enter();
         defer if (clock) |active| active.leave(clock_start);
         // Debug-only: whether this relation states anything. A relation whose
@@ -4079,6 +4131,13 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const clock = self.graph.cost_clock;
+        const started = if (clock) |active| active.enterSeal(self.mode) else null;
+        defer if (clock) |active| active.leaveSeal(self.mode, started);
+        return try self.sealTypeInner(ty);
+    }
+
+    fn sealTypeInner(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
             if (self.graph.node_snapshots.get(raw_node)) |views| {
                 for (views.items) |view| {
@@ -4091,6 +4150,9 @@ pub const GraphTypeFinals = struct {
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
+        const clock = self.graph.cost_clock;
+        const started = if (clock) |active| active.enterSeal(self.mode) else null;
+        defer if (clock) |active| active.leaveSeal(self.mode, started);
         return try self.sealNodeInner(raw_node);
     }
 

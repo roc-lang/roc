@@ -86,7 +86,7 @@ pub const Timing = struct {
             .monotype_graph_setup_ns = lowering.monotype_procedure_body_graph_setup_ns,
             .monotype_graph_reads_ns = lowering.monotype_procedure_body_type_graph_ns,
             .monotype_graph_relation_ns = lowering.monotype_graph_relation_ns,
-            .monotype_graph_seal_ns = lowering.monotype_procedure_body_finalization_ns,
+            .monotype_graph_seal_ns = lowering.monotype_graph_seal_ns,
             .monotype_graph_relation_calls = lowering.monotype_graph_relation_calls,
             .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
             .lir_passes_ns = lowering.lir_passes_ns,
@@ -106,7 +106,7 @@ pub const Timing = struct {
             .monotype_procedure_body_graph_setup_ns = snapshot_value.monotype_graph_setup_ns,
             .monotype_procedure_body_type_graph_ns = snapshot_value.monotype_graph_reads_ns,
             .monotype_graph_relation_ns = snapshot_value.monotype_graph_relation_ns,
-            .monotype_procedure_body_finalization_ns = snapshot_value.monotype_graph_seal_ns,
+            .monotype_graph_seal_ns = snapshot_value.monotype_graph_seal_ns,
             .monotype_graph_relation_calls = snapshot_value.monotype_graph_relation_calls,
             // The compile-time evaluation report shows lowering as one
             // category; re-attribute the merged span to its first stage.

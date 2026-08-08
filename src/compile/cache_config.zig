@@ -146,7 +146,9 @@ pub const Constants = struct {
     /// 63: a specialized static-dispatch plan callable keeps the identity every
     ///     variable the target's signature does not substitute already had,
     ///     instead of reserving a fresh root the artifact names nowhere.
-    pub const CACHE_VERSION = 63;
+    /// 64: a deferred specialization is keyed by its sealed request type, so two
+    ///     requests with one sealed request share one specialization.
+    pub const CACHE_VERSION = 64;
 };
 
 /// Configuration for the Roc cache system.

@@ -79,6 +79,13 @@ pub const CheckedAddress = struct {
     type_id: u32,
 };
 
+/// A checked position named for the variable-presence memo. It is `CheckedAddress`
+/// by content, kept separate so the memo's key type states what it keys.
+const VariablePresenceKey = struct {
+    module_bytes: [32]u8,
+    type_id: u32,
+};
+
 /// One side of a body-lowering constraint-replay site, described in the terms
 /// directed translation reads (reunify.md sections 9, 13 Slice 7): a checked
 /// position the site instantiates into the graph, or an immutable type the site
@@ -1419,9 +1426,20 @@ pub const Rehearsal = struct {
     /// One worked example per constraint-replay site that came out informative,
     /// so its classification is read against a concrete disagreeing pair.
     unify_details: [census.unify_site_count]?UnifyDetail,
+    /// Whether a checked position holds a variable at all, per position. The
+    /// leveled read below searches for a FREE one on every read, and that
+    /// search traverses the whole position; a position holding no variable can
+    /// hold no free one under any environment, so the answer is settled once.
+    variable_presence: std.AutoHashMapUnmanaged(VariablePresenceKey, bool),
+    /// Which scheme generalizes a given variable, per variable. The search is a
+    /// scan of every scheme in the module crossed with its binders, and the
+    /// module's schemes do not change while a lowering runs.
+    binder_owners: std.AutoHashMapUnmanaged(VariablePresenceKey, ?u32),
     disabled: bool,
-    /// Whether the transitional graph comparison runs. Debug measurement only:
-    /// it selects nothing, and the emission below is the same either way.
+    /// Set only by a measurement run; see `solve.LoweringCostClock`. Directed
+    /// instantiation is what the graph is being replaced with, so its own read
+    /// cost has to be weighable against the graph's on the same terms.
+    cost_clock: ?*solve.LoweringCostClock,
 
     /// Build the instantiation state for one lowering run.
     pub fn create(
@@ -1459,7 +1477,10 @@ pub const Rehearsal = struct {
             .details = .empty,
             .unresolved_details = .empty,
             .unify_details = @splat(null),
+            .variable_presence = .empty,
+            .binder_owners = .empty,
             .disabled = false,
+            .cost_clock = null,
         };
         self.translator = direct_translate.Translator.init(allocator, self.types, program_names, resolver);
         return self;
@@ -1477,6 +1498,8 @@ pub const Rehearsal = struct {
         self.slot_descriptors.deinit(self.allocator);
         self.slot_types.deinit(self.allocator);
         self.class_finals.deinit(self.allocator);
+        self.variable_presence.deinit(self.allocator);
+        self.binder_owners.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.logical_tokens.deinit(self.allocator);
         var indexes = self.site_index.valueIterator();
@@ -1699,13 +1722,6 @@ pub const Rehearsal = struct {
         self.slots.append(self.allocator, slot) catch return null;
         self.slot_descriptors.put(self.allocator, @intFromEnum(slot), declared) catch return null;
         return slot;
-    }
-
-    /// The requesting context's own emission of the innermost open
-    /// specialization's instantiated callable, when its frame resolved one.
-    pub fn currentFrameRequestRoot(self: *const Rehearsal) ?Type.TypeId {
-        if (self.frames.items.len == 0) return null;
-        return self.frames.items[self.frames.items.len - 1].request_root;
     }
 
     /// The frame's request emission with everything its body produced: a mint
@@ -5760,18 +5776,9 @@ pub const Rehearsal = struct {
         edge: ?RequestEdgeName,
     ) ?Type.TypeId {
         const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
+        if (!self.positionHoldsVariable(cursor, @enumFromInt(address.type_id))) return null;
         const free = self.firstFreeVariable(cursor.view, @enumFromInt(address.type_id), base_env) orelse return null;
-        var owner_node: ?u32 = null;
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    owner_node = scheme.owner_node;
-                    break;
-                }
-            }
-            if (owner_node != null) break;
-        }
-        const owner = owner_node orelse return null;
+        const owner = self.schemeOwnerGeneralizing(cursor, free) orelse return null;
         const scheme_id = cursor.view.schemeIdForOwnerNode(owner) orelse return null;
         const scheme = cursor.view.schemeById(scheme_id) orelse return null;
         if (scheme.captured_len != 0) return null;
@@ -5970,6 +5977,9 @@ pub const Rehearsal = struct {
         under_callee: bool,
         edge: ?RequestEdgeName,
     ) Allocator.Error!Type.TypeId {
+        const clock = self.cost_clock;
+        const started = if (clock) |active| active.enterDirected() else null;
+        defer if (clock) |active| active.leaveDirected(started);
         if (self.disabled) {
             Common.invariant("directed instantiation state was disabled while holding production authority");
         }
@@ -6022,6 +6032,9 @@ pub const Rehearsal = struct {
         under_callee: bool,
         edge: ?RequestEdgeName,
     ) Allocator.Error!?Type.TypeId {
+        const clock = self.cost_clock;
+        const started = if (clock) |active| active.enterDirected() else null;
+        defer if (clock) |active| active.leaveDirected(started);
         if (self.disabled) {
             Common.invariant("directed instantiation state was disabled while holding production authority");
         }
@@ -6524,6 +6537,49 @@ pub const Rehearsal = struct {
             }
             return;
         }
+    }
+
+    /// Which scheme's generalization names this variable, if any.
+    fn schemeOwnerGeneralizing(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        free: checked.CheckedTypeId,
+    ) ?u32 {
+        const key = VariablePresenceKey{
+            .module_bytes = cursor.module_bytes,
+            .type_id = @intFromEnum(free),
+        };
+        if (self.binder_owners.get(key)) |known| return known;
+        var owner_node: ?u32 = null;
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder == free) {
+                    owner_node = scheme.owner_node;
+                    break;
+                }
+            }
+            if (owner_node != null) break;
+        }
+        self.binder_owners.put(self.allocator, key, owner_node) catch return owner_node;
+        return owner_node;
+    }
+
+    /// Whether this checked position holds any variable at all. With no
+    /// environment nothing is bound, so the first-free search answers exactly
+    /// that question, and its answer is a property of the checked store alone.
+    fn positionHoldsVariable(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const key = VariablePresenceKey{
+            .module_bytes = cursor.module_bytes,
+            .type_id = @intFromEnum(root),
+        };
+        if (self.variable_presence.get(key)) |known| return known;
+        const holds = self.firstFreeVariable(cursor.view, root, null) != null;
+        self.variable_presence.put(self.allocator, key, holds) catch return holds;
+        return holds;
     }
 
     /// The first checked variable reachable from `root` that no level of `env`

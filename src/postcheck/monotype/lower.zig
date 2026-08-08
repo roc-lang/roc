@@ -155,6 +155,12 @@ pub const Timing = struct {
     /// many relations produced it. Zero unless a measurement run set the clock.
     graph_relation_ns: u64 = 0,
     graph_relation_calls: u64 = 0,
+    graph_seal_ns: u64 = 0,
+    graph_seal_calls: u64 = 0,
+    graph_snapshot_ns: u64 = 0,
+    graph_snapshot_calls: u64 = 0,
+    directed_read_ns: u64 = 0,
+    directed_read_calls: u64 = 0,
     body_work_timing_enabled: bool = false,
     active_procedure_phase: ?ProcedureTimingPhase = null,
     active_procedure_phase_started_ns: i64 = 0,
@@ -187,6 +193,12 @@ pub const Timing = struct {
             .finalization_ns = self.finalization_ns,
             .graph_relation_ns = self.graph_relation_ns,
             .graph_relation_calls = self.graph_relation_calls,
+            .graph_seal_ns = self.graph_seal_ns,
+            .graph_seal_calls = self.graph_seal_calls,
+            .graph_snapshot_ns = self.graph_snapshot_ns,
+            .graph_snapshot_calls = self.graph_snapshot_calls,
+            .directed_read_ns = self.directed_read_ns,
+            .directed_read_calls = self.directed_read_calls,
         };
     }
 
@@ -276,6 +288,12 @@ pub const TimingSnapshot = struct {
     finalization_ns: u64 = 0,
     graph_relation_ns: u64 = 0,
     graph_relation_calls: u64 = 0,
+    graph_seal_ns: u64 = 0,
+    graph_seal_calls: u64 = 0,
+    graph_snapshot_ns: u64 = 0,
+    graph_snapshot_calls: u64 = 0,
+    directed_read_ns: u64 = 0,
+    directed_read_calls: u64 = 0,
 };
 
 const TimingPhase = enum {
@@ -438,15 +456,21 @@ pub fn run(
     // A measurement run weighs the worksheet's relation production against the
     // rest of compilation. Enabled by the same flag as the detailed body rows,
     // because the timestamping costs the same kind of overhead they do.
-    var relation_clock: ?solve.RelationClock = if (options.timing) |timing|
-        if (timing.body_work_timing_enabled) solve.RelationClock.init(timing.std_io) else null
+    var cost_clock: ?solve.LoweringCostClock = if (options.timing) |timing|
+        if (timing.body_work_timing_enabled) solve.LoweringCostClock.init(timing.std_io) else null
     else
         null;
-    if (relation_clock != null) builder.relation_clock = &relation_clock.?;
+    if (cost_clock != null) builder.cost_clock = &cost_clock.?;
     defer if (options.timing) |timing| {
-        if (relation_clock) |clock| {
+        if (cost_clock) |clock| {
             timing.graph_relation_ns = clock.ns;
             timing.graph_relation_calls = clock.calls;
+            timing.graph_seal_ns = clock.seal_ns;
+            timing.graph_seal_calls = clock.seal_calls;
+            timing.graph_snapshot_ns = clock.snapshot_ns;
+            timing.graph_snapshot_calls = clock.snapshot_calls;
+            timing.directed_read_ns = clock.directed_ns;
+            timing.directed_read_calls = clock.directed_calls;
         }
     };
 
@@ -2104,8 +2128,8 @@ const Builder = struct {
     /// checked data alone and compares them against what this builder's graphs
     /// seal. Null unless `ROC_REUNIFY_SHADOW` is set; it selects no behavior.
     rehearsal: ?*spec_rehearsal.Rehearsal = null,
-    /// Set only by a measurement run; see `solve.RelationClock`.
-    relation_clock: ?*solve.RelationClock = null,
+    /// Set only by a measurement run; see `solve.LoweringCostClock`.
+    cost_clock: ?*solve.LoweringCostClock = null,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
@@ -2272,7 +2296,7 @@ const Builder = struct {
         }
         // A measurement run weighs the worksheet's own relation production
         // against the rest of compilation; ordinary runs carry no clock.
-        if (self.relation_clock) |clock| graph.relation_clock = clock;
+        if (self.cost_clock) |clock| graph.cost_clock = clock;
         return graph;
     }
 
@@ -4982,7 +5006,7 @@ const Builder = struct {
     /// Build the per-specialization instantiation state this lowering run reads
     /// checked positions through (reunify.md sections 9, 11).
     fn createRehearsal(self: *Builder) Allocator.Error!*spec_rehearsal.Rehearsal {
-        return spec_rehearsal.Rehearsal.create(
+        const rehearsal = try spec_rehearsal.Rehearsal.create(
             self.allocator,
             &self.program.types,
             &self.program.names,
@@ -4994,6 +5018,8 @@ const Builder = struct {
                 .iterator_topology = rehearsalIteratorTopology,
             },
         );
+        rehearsal.cost_clock = self.cost_clock;
+        return rehearsal;
     }
 
     /// Whether a sealed Monotype type carries iterator or generated
@@ -6977,22 +7003,7 @@ const Builder = struct {
                 .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
                 .head = draft_fn.source.const_evidence_frame_head,
             };
-            const sealed_request_digest = self.specializationTypeDigest(fn_ty);
-            const request_digest = digest: {
-                // The directed request identity keys the specialization where
-                // the frame resolved one (reunify.md 11.5: the identity is
-                // what is known before lowering; the sealed body is the
-                // value). The representation-erased mode keeps the digest
-                // independent of producer declarations, so one request
-                // digests identically however its mints resolved.
-                if (self.rehearsal) |rehearsal| {
-                    if (rehearsal.currentFrameRequestRoot()) |directed_root| {
-                        break :digest self.specializationTypeDigest(directed_root);
-                    }
-                }
-                break :digest sealed_request_digest;
-            };
-            spec.directed_request_digest = request_digest;
+            const request_digest = self.specializationTypeDigest(fn_ty);
             const identity = templateSpecIdentity(
                 spec.template_ref,
                 spec.method_scope,
@@ -7154,7 +7165,7 @@ const Builder = struct {
                         spec.source_fn_key,
                         sealed_template.evidence_digest,
                         fn_ty,
-                        spec.directed_request_digest orelse digest,
+                        digest,
                     );
                 }
                 lexical_owner = spec.lexical_owner;
@@ -10460,10 +10471,6 @@ const DraftTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    /// The directed request-emission digest this specialization was keyed by
-    /// at its deferred probe, so its stored record registers under the same
-    /// key the probe reads.
-    directed_request_digest: ?names.TypeDigest = null,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,

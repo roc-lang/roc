@@ -105,6 +105,12 @@ pub const Timing = struct {
     monotype_procedure_body_type_graph_ns: TimingCounter = .{},
     monotype_graph_relation_ns: TimingCounter = .{},
     monotype_graph_relation_calls: TimingCounter = .{},
+    monotype_graph_seal_ns: TimingCounter = .{},
+    monotype_graph_seal_calls: TimingCounter = .{},
+    monotype_graph_snapshot_ns: TimingCounter = .{},
+    monotype_graph_snapshot_calls: TimingCounter = .{},
+    monotype_directed_read_ns: TimingCounter = .{},
+    monotype_directed_read_calls: TimingCounter = .{},
     monotype_procedure_body_call_dispatch_ns: TimingCounter = .{},
     monotype_procedure_body_draft_ir_ns: TimingCounter = .{},
     monotype_procedure_body_reachability_ns: TimingCounter = .{},
@@ -160,6 +166,12 @@ pub const Timing = struct {
             .monotype_procedure_body_type_graph_ns = self.monotype_procedure_body_type_graph_ns.load(),
             .monotype_graph_relation_ns = self.monotype_graph_relation_ns.load(),
             .monotype_graph_relation_calls = self.monotype_graph_relation_calls.load(),
+            .monotype_graph_seal_ns = self.monotype_graph_seal_ns.load(),
+            .monotype_graph_seal_calls = self.monotype_graph_seal_calls.load(),
+            .monotype_graph_snapshot_ns = self.monotype_graph_snapshot_ns.load(),
+            .monotype_graph_snapshot_calls = self.monotype_graph_snapshot_calls.load(),
+            .monotype_directed_read_ns = self.monotype_directed_read_ns.load(),
+            .monotype_directed_read_calls = self.monotype_directed_read_calls.load(),
             .monotype_procedure_body_call_dispatch_ns = self.monotype_procedure_body_call_dispatch_ns.load(),
             .monotype_procedure_body_draft_ir_ns = self.monotype_procedure_body_draft_ir_ns.load(),
             .monotype_procedure_body_reachability_ns = self.monotype_procedure_body_reachability_ns.load(),
@@ -193,6 +205,12 @@ pub const Timing = struct {
         self.monotype_procedure_body_type_graph_ns.add(snapshot_value.monotype_procedure_body_type_graph_ns);
         self.monotype_graph_relation_ns.add(snapshot_value.monotype_graph_relation_ns);
         self.monotype_graph_relation_calls.add(snapshot_value.monotype_graph_relation_calls);
+        self.monotype_graph_seal_ns.add(snapshot_value.monotype_graph_seal_ns);
+        self.monotype_graph_seal_calls.add(snapshot_value.monotype_graph_seal_calls);
+        self.monotype_graph_snapshot_ns.add(snapshot_value.monotype_graph_snapshot_ns);
+        self.monotype_graph_snapshot_calls.add(snapshot_value.monotype_graph_snapshot_calls);
+        self.monotype_directed_read_ns.add(snapshot_value.monotype_directed_read_ns);
+        self.monotype_directed_read_calls.add(snapshot_value.monotype_directed_read_calls);
         self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.monotype_procedure_body_call_dispatch_ns);
         self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.monotype_procedure_body_draft_ir_ns);
         self.monotype_procedure_body_reachability_ns.add(snapshot_value.monotype_procedure_body_reachability_ns);
@@ -243,6 +261,12 @@ pub const Timing = struct {
         self.monotype_procedure_body_type_graph_ns.add(snapshot_value.procedure_body_type_graph_ns);
         self.monotype_graph_relation_ns.add(snapshot_value.graph_relation_ns);
         self.monotype_graph_relation_calls.add(snapshot_value.graph_relation_calls);
+        self.monotype_graph_seal_ns.add(snapshot_value.graph_seal_ns);
+        self.monotype_graph_seal_calls.add(snapshot_value.graph_seal_calls);
+        self.monotype_graph_snapshot_ns.add(snapshot_value.graph_snapshot_ns);
+        self.monotype_graph_snapshot_calls.add(snapshot_value.graph_snapshot_calls);
+        self.monotype_directed_read_ns.add(snapshot_value.directed_read_ns);
+        self.monotype_directed_read_calls.add(snapshot_value.directed_read_calls);
         self.monotype_procedure_body_call_dispatch_ns.add(snapshot_value.procedure_body_call_dispatch_ns);
         self.monotype_procedure_body_draft_ir_ns.add(snapshot_value.procedure_body_draft_ir_ns);
         self.monotype_procedure_body_reachability_ns.add(snapshot_value.procedure_body_reachability_ns);
@@ -284,6 +308,12 @@ pub const TimingSnapshot = struct {
     monotype_procedure_body_type_graph_ns: u64 = 0,
     monotype_graph_relation_ns: u64 = 0,
     monotype_graph_relation_calls: u64 = 0,
+    monotype_graph_seal_ns: u64 = 0,
+    monotype_graph_seal_calls: u64 = 0,
+    monotype_graph_snapshot_ns: u64 = 0,
+    monotype_graph_snapshot_calls: u64 = 0,
+    monotype_directed_read_ns: u64 = 0,
+    monotype_directed_read_calls: u64 = 0,
     monotype_procedure_body_call_dispatch_ns: u64 = 0,
     monotype_procedure_body_draft_ir_ns: u64 = 0,
     monotype_procedure_body_reachability_ns: u64 = 0,
