@@ -14976,10 +14976,9 @@ fn staticDispatchBindingIsDerivedMarker(lookup: StaticDispatchMethodBinding) boo
 
 fn staticDispatchBindingIsUnsupportedGeneratedMethod(lookup: StaticDispatchMethodBinding) bool {
     const def = lookup.env.store.getDef(lookup.binding.def_idx);
-    return switch (lookup.env.store.getExpr(def.expr)) {
-        .e_anno_only => |anno| anno.kind == .unsupported_generated_method,
-        else => false,
-    };
+    const expr = lookup.env.store.getExpr(def.expr);
+    if (expr != .e_anno_only) return false;
+    return expr.e_anno_only.kind == .unsupported_generated_method;
 }
 
 fn rejectUnsupportedGeneratedMethodDispatch(

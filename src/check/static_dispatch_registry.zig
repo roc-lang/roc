@@ -554,10 +554,9 @@ fn unsupportedGeneratedMethodBinding(
     binding: ModuleEnv.MethodBinding,
 ) bool {
     const expr_idx = methodBindingExpr(module, binding) orelse return false;
-    return switch (module.expr(expr_idx).data) {
-        .e_anno_only => |anno| anno.kind == .unsupported_generated_method,
-        else => false,
-    };
+    const expr = module.expr(expr_idx).data;
+    if (expr != .e_anno_only) return false;
+    return expr.e_anno_only.kind == .unsupported_generated_method;
 }
 
 fn localProcedureTargetForMethodBinding(
