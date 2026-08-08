@@ -417,6 +417,7 @@ pub const MethodRegistry = struct {
                 unreachable;
             };
             const def_idx = entry.value.def_idx;
+            if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
             const method_owner = try methodOwnerForRegistryEntry(
                 module,
                 names,
@@ -546,6 +547,17 @@ fn methodBindingExpr(
     const statement_data = module.getStatement(statement);
     if (std.meta.activeTag(statement_data) != .s_decl) return null;
     return statement_data.s_decl.expr;
+}
+
+fn unsupportedGeneratedMethodBinding(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+) bool {
+    const expr_idx = methodBindingExpr(module, binding) orelse return false;
+    return switch (module.expr(expr_idx).data) {
+        .e_anno_only => |anno| anno.kind == .unsupported_generated_method,
+        else => false,
+    };
 }
 
 fn localProcedureTargetForMethodBinding(
