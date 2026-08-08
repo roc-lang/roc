@@ -625,6 +625,13 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) TestEnvError!voi
     try testing.expectEqualStrings(expected, report.title);
 }
 
+/// Assert that checking produced exactly one warning with the expected title.
+pub fn assertOneTypeWarning(self: *TestEnv, expected: []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertOnlyTypeWarnings(&.{expected});
+}
+
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {

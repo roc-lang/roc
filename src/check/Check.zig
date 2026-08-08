@@ -14577,12 +14577,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // Builtin.roc has a small explicit set of compiler-owned intrinsic
                 // wrappers that post-check lowering handles from checked data.
             } else {
-                _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
-                    .region = if (expected.annotation) |annotation_idx|
-                        self.cir.store.getAnnotationRegion(annotation_idx)
-                    else
-                        expr_region,
-                } });
+                const annotation_region = if (expected.annotation) |annotation_idx|
+                    self.cir.store.getAnnotationRegion(annotation_idx)
+                else
+                    expr_region;
+                switch (anno.kind) {
+                    .ordinary => _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value = .{
+                        .region = annotation_region,
+                    } }),
+                    .unsupported_generated_method => _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_generated_method = .{
+                        .method_name = anno.ident,
+                        .region = annotation_region,
+                    } }),
+                }
                 // e_anno_only is its own non-executable artifact state; preserve the declared graph.
                 if (expected.annotation == null) {
                     try self.markErroneous(expr_var);
@@ -14965,6 +14972,27 @@ const AssociatedLookupResolution = struct {
 
 fn staticDispatchBindingIsDerivedMarker(lookup: StaticDispatchMethodBinding) bool {
     return generatedDerivedMethodDef(lookup.env, lookup.binding.def_idx);
+}
+
+fn staticDispatchBindingIsUnsupportedGeneratedMethod(lookup: StaticDispatchMethodBinding) bool {
+    const def = lookup.env.store.getDef(lookup.binding.def_idx);
+    const expr = lookup.env.store.getExpr(def.expr);
+    if (expr != .e_anno_only) return false;
+    return expr.e_anno_only.kind == .unsupported_generated_method;
+}
+
+fn rejectUnsupportedGeneratedMethodDispatch(
+    self: *Self,
+    lookup: StaticDispatchMethodBinding,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!bool {
+    if (!staticDispatchBindingIsUnsupportedGeneratedMethod(lookup)) return false;
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
+    try self.markStaticDispatchRejected(constraint);
+    return true;
 }
 
 fn lookupStaticDispatchMethodBinding(
@@ -21045,6 +21073,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         unreachable;
                     }
+                    if (try self.rejectUnsupportedGeneratedMethodDispatch(
+                        method_lookup,
+                        deferred_constraint.var_,
+                        constraint,
+                        env,
+                        failure_expr,
+                    )) continue;
                     if (constraint.fn_name.eql(self.cir.idents.from_numeral) and
                         !self.nominalIsBuiltinNumberType(nominal_type))
                     {
@@ -21366,6 +21401,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
+                    if (try self.rejectUnsupportedGeneratedMethodDispatch(
+                        method_lookup,
+                        deferred_constraint.var_,
+                        constraint,
+                        env,
+                        failure_expr,
+                    )) continue;
                     const method_env = method_lookup.env;
                     const method_is_this_module = method_lookup.is_this_module;
                     const method_binding = method_lookup.binding;
