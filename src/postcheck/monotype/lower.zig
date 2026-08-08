@@ -19827,6 +19827,7 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(
                         .custom,
                         request_fn.ret,
+                        null,
                         &.{ request_fn.args[0], request_fn.args[2] },
                         if (checked_args) |args| try self.callableArgumentEvidenceDigest(args[2]) else null,
                     ),
@@ -19840,10 +19841,8 @@ const BodyContext = struct {
                     request_fn.args,
                     try self.generatedIteratorNode(
                         .list,
-                        try self.publicIteratorNodeWithItem(
-                            public_fn.ret,
-                            try self.graph.listElementNode(request_fn.args[0]),
-                        ),
+                        public_fn.ret,
+                        try self.graph.listElementNode(request_fn.args[0]),
                         &.{request_fn.args[0]},
                         null,
                     ),
@@ -19855,7 +19854,13 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.str, request_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(
+                        .str,
+                        request_fn.ret,
+                        null,
+                        &.{request_fn.args[0]},
+                        null,
+                    ),
                 );
             },
             .iter_single => {
@@ -19864,19 +19869,25 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.single, request_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(
+                        .single,
+                        request_fn.ret,
+                        null,
+                        &.{request_fn.args[0]},
+                        null,
+                    ),
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, &.{}, null),
+                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, null, &.{}, null),
                 );
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, &.{}, null),
+                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, null, &.{}, null),
                 );
             },
             .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, request_fn.ret, request_fn.args, checked_args, 1),
@@ -19893,7 +19904,7 @@ const BodyContext = struct {
                 {
                     return try self.graphFunctionNode(
                         request_fn.args,
-                        try self.generatedIteratorNode(.concat, request_fn.ret, request_fn.args, null),
+                        try self.generatedIteratorNode(.concat, request_fn.ret, null, request_fn.args, null),
                     );
                 }
             },
@@ -19901,32 +19912,6 @@ const BodyContext = struct {
             .iter_from_step, .range_done => {},
         }
         return null;
-    }
-
-    /// Rebuild the checked-public `Iter` constructor with the item selected by
-    /// a producer's explicit result rule. The declaration and public backing
-    /// remain the checked contract; only the nominal type argument comes from
-    /// the exact produced input.
-    fn publicIteratorNodeWithItem(
-        self: *BodyContext,
-        public_iterator: NodeId,
-        item_node: NodeId,
-    ) Allocator.Error!NodeId {
-        var named = switch (self.graph.content(public_iterator)) {
-            .named => |value| value,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("iterator producer public result was not a named Iter type"),
-        };
-        if (named.generated_iterator != null or
-            named.def.iterator_representation != .none or
-            named.backing == null or
-            named.backing.?.authority != .checked_public)
-        {
-            Common.invariant("iterator producer public result lacked its checked-public contract");
-        }
-        const args = try self.graph.arena().alloc(NodeId, 1);
-        args[0] = item_node;
-        named.args = args;
-        return try self.graph.newNode(.{ .named = named });
     }
 
     fn generatedIteratorAdapterFunctionNode(
@@ -19947,7 +19932,7 @@ const BodyContext = struct {
             null else null;
         return try self.graphFunctionNode(
             args,
-            try self.generatedIteratorNode(kind, public_ret, args, callable_evidence),
+            try self.generatedIteratorNode(kind, public_ret, null, args, callable_evidence),
         );
     }
 
@@ -19996,16 +19981,23 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: Type.IteratorKind,
         public_iterator: NodeId,
+        explicit_item_node: ?NodeId,
         components: []const NodeId,
         callable_evidence: ?names.TypeDigest,
     ) Allocator.Error!NodeId {
-        const public_named = switch (self.graph.content(public_iterator)) {
+        var public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
         };
+        if (public_named.args.len == 0) {
+            Common.invariant("generated iterator requested a public type without an item argument");
+        }
+        const item_node = explicit_item_node orelse public_named.args[0];
+        var lookup_args = [_]NodeId{item_node};
+        public_named.args = &lookup_args;
         const owner = public_named.builtin_owner orelse
             Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
-        if (!static_dispatch.isIteratorOwner(owner) or public_named.args.len == 0) {
+        if (!static_dispatch.isIteratorOwner(owner)) {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
         const public_source: solve.InstIteratorPublicSource = if (public_named.generated_iterator) |generated|
@@ -20030,7 +20022,12 @@ const BodyContext = struct {
         };
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
-        const lookup = try self.graph.lookupGeneratedIterator(public_iterator, kind, components, callable_evidence);
+        const lookup = try self.graph.lookupGeneratedIteratorFromNamed(
+            public_named,
+            kind,
+            components,
+            callable_evidence,
+        );
         if (lookup.existing) |existing| {
             return existing;
         }
@@ -30766,6 +30763,7 @@ const BodyContext = struct {
         return try self.generatedIteratorNode(
             .custom,
             request_node,
+            null,
             &.{ len_node, step_node },
             generatedInterpolationStepKey(self.current_fn_key, expr_id, 0),
         );

@@ -288,6 +288,9 @@ const FunctionRequestSubstitution = struct {
     /// This closes recursive edges without merging completed sibling copies.
     active_materialized: [materialization_mode_count]collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
+    /// Whether collecting produced inputs added or changed a replacement
+    /// after an existing request span was seeded.
+    changed_after_seed: bool = false,
 
     fn init(allocator: Allocator) FunctionRequestSubstitution {
         return .{
@@ -706,7 +709,7 @@ pub const InstGraph = struct {
         );
     }
 
-    fn lookupGeneratedIteratorFromNamed(
+    pub fn lookupGeneratedIteratorFromNamed(
         self: *InstGraph,
         public_named: InstNamed,
         kind: Type.IteratorKind,
@@ -3014,7 +3017,12 @@ pub const InstGraph = struct {
         else
             current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_source_root);
-        try self.recordRequestSubstitutions(request_fn, &substitution);
+        if (request_fn != current_request_fn_node or
+            !stored.isInitialized() or
+            substitution.changed_after_seed)
+        {
+            try self.recordRequestSubstitutions(request_fn, &substitution);
+        }
         const components = try self.arena().alloc(NodeId, checked_components.len);
         for (checked_components, components) |checked_component, *component| {
             component.* = try self.materializeFunctionRequestNode(
@@ -3242,11 +3250,18 @@ pub const InstGraph = struct {
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
-            if (count_discovery) self.countDiagnostic("function_request_replacements");
+            if (count_discovery) {
+                substitution.changed_after_seed = true;
+                self.countDiagnostic("function_request_replacements");
+            }
             return;
         }
         if (self.sameClass(entry.value_ptr.*, produced_node)) return;
-        entry.value_ptr.* = try self.joinProducedTypeRepresentations(entry.value_ptr.*, produced_node);
+        const previous = entry.value_ptr.*;
+        entry.value_ptr.* = try self.joinProducedTypeRepresentations(previous, produced_node);
+        if (count_discovery and !self.sameClass(previous, entry.value_ptr.*)) {
+            substitution.changed_after_seed = true;
+        }
     }
 
     fn materializeFunctionRequestNode(
@@ -8234,6 +8249,14 @@ test "function request follows checked occurrence identity and keeps independent
     const unique_concrete_request_fn = try graph.functionNodes(unique_concrete_request);
     try std.testing.expect(graph.sameClass(unique_concrete_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, exact));
+    const substitutions_before_noop = graph.request_substitutions.items.len;
+    const repeated_unique_request = try graph.functionRequestFromProducedArguments(
+        unique_concrete_fn,
+        unique_concrete_request,
+        &.{exact},
+    );
+    try std.testing.expectEqual(unique_concrete_request, repeated_unique_request);
+    try std.testing.expectEqual(substitutions_before_noop, graph.request_substitutions.items.len);
 
     const independent_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const independent_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });

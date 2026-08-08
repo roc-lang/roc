@@ -445,9 +445,16 @@ test "Monotype lowering carries exact produced types without containment scans" 
         ".list_iter => {",
         ".str_iter_utf8 => {",
     );
-    try expectContains(list_iterator_producer, "publicIteratorNodeWithItem(");
+    try expectContains(list_iterator_producer, "generatedIteratorNode(");
     try expectContains(list_iterator_producer, "public_fn.ret,");
     try expectContains(list_iterator_producer, "self.graph.listElementNode(request_fn.args[0])");
+    try expectNotContains(lower_source, "publicIteratorNodeWithItem(");
+    const generated_iterator_producer = sourceSliceBetween(
+        lower_source,
+        "fn generatedIteratorNode(",
+        "const max_minted_iterator_chain_depth",
+    );
+    try expectContains(generated_iterator_producer, "lookupGeneratedIteratorFromNamed(");
 
     const checked_request = sourceSliceBetween(
         lower_source,

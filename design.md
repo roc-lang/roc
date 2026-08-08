@@ -2693,7 +2693,9 @@ identity from its explicit inputs, then applies that output to the request.
 An iterator producer also names the checked-public `Iter` declaration and the
 exact source of its output item independently. For example, `List.iter` takes
 the declaration contract from the checked builtin return and the item cell
-from the exact list operand. It never treats a destination cell—or a structural
+from the exact list operand. The producer passes those two authorities directly
+to generated-type interning; it does not allocate a temporary public nominal
+merely to combine them. It never treats a destination cell—or a structural
 projection of that destination's public backing—as the declaration or item
 authority.
 
