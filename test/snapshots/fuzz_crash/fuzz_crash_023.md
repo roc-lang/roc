@@ -1080,7 +1080,8 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
 
     The `match_time` function has the type:
 
-        [Blue, Green, Red, ..], _arg -> Error
+        [Blue, Green, Red, ..], _arg -> d
+          where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
 
     Are there any missing commas?
 
@@ -2130,7 +2131,11 @@ expect {
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "qux"))
 		(e-anno-only)
@@ -2173,7 +2178,8 @@ expect {
 					(p-assign (ident "tag_with_payload"))
 					(e-tag (name "Ok")
 						(args
-							(e-runtime-error (tag "erroneous_value_use")))))
+							(e-lookup-local
+								(p-assign (ident "number"))))))
 				(s-let
 					(p-assign (ident "interpolated"))
 					(e-block
@@ -2181,7 +2187,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1535) (dispatcher-var 376)
+						(e-interpolation (constraint-fn-var 1572) (dispatcher-var 376)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2199,9 +2205,10 @@ expect {
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1617)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1654)
 								(receiver
-									(e-runtime-error (tag "erroneous_value_use")))
+									(e-lookup-local
+										(p-assign (ident "number"))))
 								(args
 									(e-runtime-error (tag "erroneous_value_use")))))
 						(e-empty_record)))
@@ -2224,11 +2231,11 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1741)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1777)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1738)
+										(e-dispatch-call (method "times") (constraint-fn-var 1774)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2243,18 +2250,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1774)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1810)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1764)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1800)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1801)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1837)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1791)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1827)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2269,11 +2276,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1838)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1874)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1835)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1871)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2288,12 +2295,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1896)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1932)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1867)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1903)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
@@ -2519,7 +2526,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
@@ -2566,7 +2573,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
