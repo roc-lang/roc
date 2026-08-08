@@ -62,7 +62,9 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:28:3
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾            │
  └───────────────────────────────────────────────────────── everything.md:6:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌──────────────────────────────────────────────┐
@@ -74,7 +76,9 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:28:3
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾            │
  └───────────────────────────────────────────────────────── everything.md:7:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌─────────────────┐

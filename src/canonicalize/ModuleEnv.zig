@@ -2728,7 +2728,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("where");
             try report.headline.addReflowingText(" clause inside a type declaration.");
 
-            try report.document.addReflowingText("You're attempting do this here:");
+            try report.document.addReflowingText("You're attempting to do this here:");
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2738,6 +2738,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+            try report.document.addLineBreak();
+
+            // Hint
+            try report.document.addReflowingText("Hint: ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clauses can only go on function type annotations.");
 
             break :blk report;
         },

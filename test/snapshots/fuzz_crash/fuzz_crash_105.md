@@ -38,7 +38,9 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └───────────────────────────────────────────────────── fuzz_crash_105.md:2:1 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌──────────────────────────┐
@@ -62,7 +64,9 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
  │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
  └──────────────────────────────────────────────────── fuzz_crash_105.md:2:28 ┘
 
-    You're attempting do this here:
+    You're attempting to do this here:
+
+    Hint: `where` clauses can only go on function type annotations.
 
 
 ┌──────────────────────────┐
