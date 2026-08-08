@@ -873,7 +873,12 @@ pub const BuildEnv = struct {
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
             try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
             for (pkg.public_modules.items) |public_module| {
-                try coord_pkg.addPublicModule(self.gpa, public_module.name, public_module.target);
+                try coord_pkg.addPublicModule(
+                    self.gpa,
+                    public_module.name,
+                    public_module.target,
+                    public_module.nested_type,
+                );
             }
             coord_pkg.finishPublicModules();
 
@@ -1100,6 +1105,7 @@ pub const BuildEnv = struct {
             for (self.public_modules.items) |module| {
                 freeConstSlice(gpa, module.name);
                 freeConstSlice(gpa, module.target);
+                if (module.nested_type) |nested_type| freeConstSlice(gpa, nested_type);
             }
             self.public_modules.deinit(gpa);
             for (self.provides_entries.items) |entry| {
@@ -1137,6 +1143,7 @@ pub const BuildEnv = struct {
             for (self.public_modules.items) |module| {
                 freeConstSlice(gpa, module.name);
                 freeConstSlice(gpa, module.target);
+                if (module.nested_type) |nested_type| freeConstSlice(gpa, nested_type);
             }
             self.public_modules.deinit(gpa);
             for (self.provides_entries.items) |entry| {
@@ -1151,6 +1158,7 @@ pub const BuildEnv = struct {
         for (pkg.public_modules.items) |module| {
             freeConstSlice(self.gpa, module.name);
             freeConstSlice(self.gpa, module.target);
+            if (module.nested_type) |nested_type| freeConstSlice(self.gpa, nested_type);
         }
         pkg.public_modules.deinit(self.gpa);
         pkg.public_modules = .empty;

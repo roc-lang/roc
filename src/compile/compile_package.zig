@@ -358,6 +358,22 @@ fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     };
 }
 
+fn importedSelectedType(
+    gpa: Allocator,
+    sibling_env: *const ModuleEnv,
+    nested_type: []const u8,
+) Allocator.Error!?ImportedTypeModule {
+    const qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ sibling_env.module_name, nested_type });
+    defer gpa.free(qualified_name);
+
+    const source_ident = sibling_env.common.findIdent(qualified_name) orelse return null;
+    const type_node_idx = sibling_env.getExposedTypeNodeIndexById(source_ident) orelse return null;
+    return .{
+        .source_ident = source_ident,
+        .statement_idx = @enumFromInt(type_node_idx),
+    };
+}
+
 /// Canonicalization function that also discovers sibling .roc files in the same directory
 /// and includes additional known modules (e.g., from platform exposes).
 /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
@@ -381,12 +397,21 @@ pub fn canonicalizeModuleWithSiblings(
     // source import name. Package qualification is part of that identity:
     // `first.Random` and `second.Random` may name different modules even
     // though both end in `Random`.
-    var resolved_import_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    const ResolvedImport = struct {
+        env: *const ModuleEnv,
+        nested_type: ?[]const u8,
+    };
+    var resolved_import_envs = std.StringHashMap(ResolvedImport).init(gpa);
     defer resolved_import_envs.deinit();
     for (pre_resolved_imports) |pre| {
         const result = try resolved_import_envs.getOrPut(pre.import_name);
         if (result.found_existing) {
-            if (result.value_ptr.* != pre.module_env) {
+            const existing = result.value_ptr.*;
+            const same_nested_type = if (existing.nested_type) |existing_nested|
+                if (pre.nested_type) |nested| std.mem.eql(u8, existing_nested, nested) else false
+            else
+                pre.nested_type == null;
+            if (existing.env != pre.module_env or !same_nested_type) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "canonicalization received conflicting environments for exact import '{s}'",
@@ -396,7 +421,7 @@ pub fn canonicalizeModuleWithSiblings(
                 unreachable;
             }
         } else {
-            result.value_ptr.* = pre.module_env;
+            result.value_ptr.* = .{ .env = pre.module_env, .nested_type = pre.nested_type };
         }
     }
 
@@ -417,7 +442,8 @@ pub fn canonicalizeModuleWithSiblings(
         // Check pre-resolved imports first (e.g., from coordinator's built dependency list)
         const pre_resolved_env = resolved_import_envs.get(sibling_name);
 
-        if (pre_resolved_env) |sibling_env| {
+        if (pre_resolved_env) |resolved| {
+            const sibling_env = resolved.env;
             const type_module = importedTypeModule(sibling_env);
             const qualified_type_name = if (type_module) |info|
                 sibling_env.getIdent(info.source_ident)
@@ -448,10 +474,15 @@ pub fn canonicalizeModuleWithSiblings(
         const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
         const import_ident = try env.insertIdent(base.Ident.for_text(km.import_name));
 
-        const actual_env = resolved_import_envs.get(km.import_name) orelse continue;
+        const resolved = resolved_import_envs.get(km.import_name) orelse continue;
+        const actual_env = resolved.env;
 
-        // Type-module identity already carries the exact declaration ident.
-        const type_module = importedTypeModule(actual_env);
+        // Public entries may project a nested type from one source module.
+        // Resolve that selection once and carry the exact declaration index.
+        const type_module = if (resolved.nested_type) |nested_type|
+            try importedSelectedType(gpa, actual_env, nested_type)
+        else
+            importedTypeModule(actual_env);
         const qualified_type_ident = if (type_module) |info|
             try env.insertIdent(base.Ident.for_text(actual_env.getIdent(info.source_ident)))
         else

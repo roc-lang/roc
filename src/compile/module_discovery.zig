@@ -21,6 +21,9 @@ pub const LocalImport = struct {
 pub const PublicModule = struct {
     name: []const u8,
     target: []const u8,
+    /// Type selected from `target`, or null when the public entry exposes the
+    /// source module's main type.
+    nested_type: ?[]const u8,
 };
 
 /// Errors produced while deriving public source targets from a package header.
@@ -39,6 +42,7 @@ pub fn extractPublicModules(
         for (result.items) |module| {
             gpa.free(module.name);
             gpa.free(module.target);
+            if (module.nested_type) |nested_type| gpa.free(nested_type);
         }
         result.deinit(gpa);
     }
@@ -46,18 +50,29 @@ pub fn extractPublicModules(
     const collection = ast.store.getCollection(exposes);
     for (ast.store.exposedItemSlice(.{ .span = collection.span })) |item_idx| {
         const item = ast.store.getExposedItem(item_idx);
-        const token_idx = switch (item) {
-            .upper_ident => |upper| upper.ident,
-            .upper_ident_star => |upper| upper.ident,
+        const token_idx, const qualifiers, const alias_tok = switch (item) {
+            .upper_ident => |upper| .{ upper.ident, upper.qualifiers, upper.as },
+            .upper_ident_star => |upper| .{ upper.ident, upper.qualifiers, null },
             .lower_ident, .malformed => continue,
         };
-        const exposed_name = ast.resolve(token_idx);
-        var target_text = exposed_name;
+
+        const qualifier_tokens = ast.store.tokenSlice(qualifiers);
+        const source_name_tok: AST.Token.Idx = if (qualifier_tokens.len > 0)
+            @intCast(qualifier_tokens[0])
+        else
+            token_idx;
+        const source_name = identifierTokenText(ast, source_name_tok);
+        const exposed_name = if (alias_tok) |alias|
+            identifierTokenText(ast, alias)
+        else
+            identifierTokenText(ast, token_idx);
+
+        var target_text = source_name;
         for (ast.decl_index.imports.items) |import| {
             if (import.origin != .local) continue;
             if (import.nested_type_path != null) continue;
             const binding = import.module_binding orelse continue;
-            if (!std.mem.eql(u8, ast.env.getIdent(binding), exposed_name)) continue;
+            if (!std.mem.eql(u8, ast.env.getIdent(binding), source_name)) continue;
             target_text = ast.env.getIdent(import.module_name);
             target_text = switch (import.base) {
                 .importer => if (std.mem.startsWith(u8, target_text, "./")) target_text[2..] else target_text,
@@ -71,8 +86,36 @@ pub fn extractPublicModules(
         errdefer gpa.free(name);
         const target = try gpa.dupe(u8, target_text);
         errdefer gpa.free(target);
-        try result.append(gpa, .{ .name = name, .target = target });
+        const nested_type = if (qualifier_tokens.len > 0)
+            try qualifiedNestedTypeText(ast, qualifier_tokens[1..], token_idx, gpa)
+        else
+            null;
+        errdefer if (nested_type) |nested| gpa.free(nested);
+        try result.append(gpa, .{ .name = name, .target = target, .nested_type = nested_type });
     }
+    return result.toOwnedSlice(gpa);
+}
+
+fn identifierTokenText(ast: *const AST, token_idx: AST.Token.Idx) []const u8 {
+    const raw = ast.resolve(token_idx);
+    return if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
+}
+
+fn qualifiedNestedTypeText(
+    ast: *const AST,
+    intermediate_tokens: []const u32,
+    final_token: AST.Token.Idx,
+    gpa: Allocator,
+) Allocator.Error![]const u8 {
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(gpa);
+
+    for (intermediate_tokens) |raw_token| {
+        try result.appendSlice(gpa, identifierTokenText(ast, @intCast(raw_token)));
+        try result.append(gpa, '.');
+    }
+    try result.appendSlice(gpa, identifierTokenText(ast, final_token));
+
     return result.toOwnedSlice(gpa);
 }
 
@@ -81,6 +124,7 @@ pub fn freePublicModules(gpa: Allocator, modules: []PublicModule) void {
     for (modules) |module| {
         gpa.free(module.name);
         gpa.free(module.target);
+        if (module.nested_type) |nested_type| gpa.free(nested_type);
     }
     gpa.free(modules);
 }
@@ -331,6 +375,30 @@ test "package public modules map explicit aliases to internal logical paths" {
     try std.testing.expectEqualStrings("Internal/Parsing/Parser", modules[0].target);
     try std.testing.expectEqualStrings("Direct", modules[1].name);
     try std.testing.expectEqualStrings("Direct", modules[1].target);
+}
+
+test "qualified public type keeps its source module and nested selection" {
+    const gpa = std.testing.allocator;
+    var env = try @import("base").CommonEnv.init(gpa,
+        \\package [Container.Blub] {}
+        \\import Container
+    );
+    defer env.deinit(gpa);
+
+    const ast = try parse.file(gpa, &env);
+    defer ast.deinit();
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const header = ast.store.getHeader(ast.store.getFile().header);
+    try std.testing.expect(header == .package);
+    const modules = try extractPublicModules(ast, header.package.exposes, gpa);
+    defer freePublicModules(gpa, modules);
+
+    try std.testing.expectEqual(@as(usize, 1), modules.len);
+    try std.testing.expectEqualStrings("Blub", modules[0].name);
+    try std.testing.expectEqualStrings("Container", modules[0].target);
+    try std.testing.expectEqualStrings("Blub", modules[0].nested_type.?);
 }
 
 test "package public module aliases cannot traverse above package root" {
