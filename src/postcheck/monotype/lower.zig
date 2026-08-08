@@ -694,11 +694,15 @@ fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_
     _ = try graph.applyProducedTypeToRequest(request_node, produced_node);
 }
 
-/// Relate an already-lowered operand before it can be wrapped in the explicit
-/// nominal constructor required by its request. Ordinary definition-private
-/// backings use their checked declaration mapping; every other value is an
-/// exact producer-owned request.
+/// Relate an already-lowered operand at a call's explicit storage boundary.
+/// Compound cells select their common representation; ordinary
+/// definition-private backings use their checked declaration mapping; every
+/// other nominal value remains an exact producer-owned request.
 fn prepareProducedOperandForRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
+    if (graph.content(request_node) != .named and graph.content(produced_node) != .named) {
+        try graph.applyCompoundStorageRepresentation(request_node, produced_node);
+        return;
+    }
     if (graph.content(request_node) == .named and graph.content(produced_node) != .named) {
         const named = graph.content(request_node).named;
         if (named.kind != .alias and
@@ -12541,12 +12545,12 @@ const InterfaceReplayStatus = enum { expanding, ready };
 const InterfaceReplayAddress = struct {
     family: DraftTemplateFamilyAddress,
     evidence_digest: [32]u8,
-    provisional_digest: [32]u8,
+    request_digest: [32]u8,
 };
 
 const InterfaceReplayEntry = struct {
     evidence: StoredConstFnEvidence,
-    provisional_ty: Type.TypeId,
+    request_shape: solve.OpenFunctionInterfaceShape,
     representative: NodeId,
     duplicates: std.ArrayList(NodeId) = .empty,
     status: InterfaceReplayStatus = .expanding,
@@ -16285,7 +16289,7 @@ const BodyContext = struct {
             target: checked.ResolvedValueId,
             source_fn_ty: checked.CheckedTypeId,
             request_fn_node: NodeId,
-            provisional_ty: Type.TypeId,
+            request_shape: solve.OpenFunctionInterfaceShape,
         };
         var pending_dependencies = std.ArrayList(PendingDependency).empty;
         defer pending_dependencies.deinit(self.allocator);
@@ -16330,7 +16334,7 @@ const BodyContext = struct {
                             .target = target,
                             .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
-                            .provisional_ty = undefined,
+                            .request_shape = undefined,
                         });
                     }
                 },
@@ -16388,14 +16392,14 @@ const BodyContext = struct {
         }
 
         for (pending_dependencies.items) |*pending| {
-            pending.provisional_ty = try self.graph.provisionalTypeViewForNode(pending.request_fn_node);
+            pending.request_shape = try self.graph.openFunctionInterfaceShape(pending.request_fn_node);
         }
         for (pending_dependencies.items) |pending| {
             try self.applyDirectCalleeInterfaceRelations(
                 pending.target,
                 pending.source_fn_ty,
                 pending.request_fn_node,
-                pending.provisional_ty,
+                pending.request_shape,
                 replay_state,
             );
         }
@@ -16418,7 +16422,7 @@ const BodyContext = struct {
         target: checked.ResolvedValueId,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
-        provisional_ty: Type.TypeId,
+        request_shape: solve.OpenFunctionInterfaceShape,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
         const record = self.view.resolved_refs.records[@intFromEnum(target)];
@@ -16466,21 +16470,16 @@ const BodyContext = struct {
             stored_evidence.head,
         );
         const source_fn_key = self.view.types.rootKey(source_fn_ty);
-        const provisional_digest = self.builder.specializationTypeDigest(provisional_ty);
         const address = InterfaceReplayAddress{
             .family = DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, source_fn_key),
             .evidence_digest = evidence_digest.bytes,
-            .provisional_digest = provisional_digest.bytes,
+            .request_digest = request_shape.digest.bytes,
         };
 
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = &replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or
-                !try self.builder.program.types.typeEql(
-                    &self.builder.program.names,
-                    entry.provisional_ty,
-                    provisional_ty,
-                ))
+                !std.mem.eql(u8, entry.request_shape.bytes, request_shape.bytes))
             {
                 continue;
             }
@@ -16498,7 +16497,7 @@ const BodyContext = struct {
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .evidence = stored_evidence,
-            .provisional_ty = provisional_ty,
+            .request_shape = request_shape,
             .representative = request_fn_node,
         });
         const bucket = try replay_state.buckets.getOrPut(address);
@@ -16547,19 +16546,14 @@ const BodyContext = struct {
         self: *BodyContext,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!void {
-        const final_types = try self.allocator.alloc(Type.TypeId, replay_state.entries.items.len);
-        defer self.allocator.free(final_types);
-        for (replay_state.entries.items, final_types) |entry, *final_ty| {
+        for (replay_state.entries.items) |entry| {
             if (entry.status != .ready) {
                 Common.invariant("checked specialization interface replay did not finish");
             }
-            final_ty.* = try self.graph.provisionalTypeViewForNode(entry.representative);
-        }
-        for (replay_state.entries.items, final_types) |entry, final_ty| {
             for (entry.duplicates.items) |duplicate| {
                 try relateFunctionRequestInterface(
                     self.graph,
-                    try self.graph.importMono(final_ty),
+                    entry.representative,
                     duplicate,
                 );
             }
@@ -19844,7 +19838,15 @@ const BodyContext = struct {
                 }
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.list, request_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(
+                        .list,
+                        try self.publicIteratorNodeWithItem(
+                            public_fn.ret,
+                            try self.graph.listElementNode(request_fn.args[0]),
+                        ),
+                        &.{request_fn.args[0]},
+                        null,
+                    ),
                 );
             },
             .str_iter_utf8 => {
@@ -19899,6 +19901,32 @@ const BodyContext = struct {
             .iter_from_step, .range_done => {},
         }
         return null;
+    }
+
+    /// Rebuild the checked-public `Iter` constructor with the item selected by
+    /// a producer's explicit result rule. The declaration and public backing
+    /// remain the checked contract; only the nominal type argument comes from
+    /// the exact produced input.
+    fn publicIteratorNodeWithItem(
+        self: *BodyContext,
+        public_iterator: NodeId,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        var named = switch (self.graph.content(public_iterator)) {
+            .named => |value| value,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("iterator producer public result was not a named Iter type"),
+        };
+        if (named.generated_iterator != null or
+            named.def.iterator_representation != .none or
+            named.backing == null or
+            named.backing.?.authority != .checked_public)
+        {
+            Common.invariant("iterator producer public result lacked its checked-public contract");
+        }
+        const args = try self.graph.arena().alloc(NodeId, 1);
+        args[0] = item_node;
+        named.args = args;
+        return try self.graph.newNode(.{ .named = named });
     }
 
     fn generatedIteratorAdapterFunctionNode(
@@ -30086,6 +30114,21 @@ const BodyContext = struct {
         try self.graph.unify(expected_node, try self.instNode(expr.ty));
     }
 
+    /// A call argument is an explicit storage boundary. A direct local lookup
+    /// exposes its stable cell before the use is emitted, so compound request
+    /// and stored cells can select their common representation. Other
+    /// expressions retain the ordinary producer-to-request relation while
+    /// their exact output is being constructed.
+    fn relateCallArgumentAtNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        request_node: NodeId,
+    ) Allocator.Error!void {
+        if (!try self.relateStoredLocalAtCompoundBoundary(checked_expr, request_node)) {
+            try self.relateExprAtNode(checked_expr, request_node);
+        }
+    }
+
     fn relateExprAtNode(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -30252,7 +30295,7 @@ const BodyContext = struct {
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
         _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
-        for (call.args, fn_nodes.args) |arg, arg_node| try self.relateExprAtNode(arg, arg_node);
+        for (call.args, fn_nodes.args) |arg, arg_node| try self.relateCallArgumentAtNode(arg, arg_node);
         if (call.direct_target == null) try self.relateExprAtNode(call.func, fn_node);
     }
 
@@ -30281,7 +30324,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         node: NodeId,
     ) Allocator.Error!void {
-        if (!try self.relateStoredConstructorChildAtNode(checked_expr, node)) {
+        if (!try self.relateStoredLocalAtCompoundBoundary(checked_expr, node)) {
             try self.relateExprAtNode(checked_expr, node);
         }
     }
@@ -30290,7 +30333,7 @@ const BodyContext = struct {
     /// with a narrower structural row enters a wider payload cell, select the
     /// common representation on both live cells before either is sealed. This
     /// is distinct from an ordinary local read, which remains directional.
-    fn relateStoredConstructorChildAtNode(
+    fn relateStoredLocalAtCompoundBoundary(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
         request_node: NodeId,
@@ -30306,18 +30349,18 @@ const BodyContext = struct {
 
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_cell = self.localTypeCell(binding.local);
-            try self.applyStoredConstructorLocal(request_node, try local_cell.toGraphNode(self.graph));
+            try self.applyStoredLocalAtCompoundBoundary(request_node, try local_cell.toGraphNode(self.graph));
             return true;
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local| {
             const local_cell = self.localTypeCell(local);
-            try self.applyStoredConstructorLocal(request_node, try local_cell.toGraphNode(self.graph));
+            try self.applyStoredLocalAtCompoundBoundary(request_node, try local_cell.toGraphNode(self.graph));
             return true;
         }
         return false;
     }
 
-    fn applyStoredConstructorLocal(
+    fn applyStoredLocalAtCompoundBoundary(
         self: *BodyContext,
         request_node: NodeId,
         local_node: NodeId,
@@ -30354,7 +30397,7 @@ const BodyContext = struct {
         self.builder.countBodyDiagnostic("argument_spans_prepared");
         self.builder.countBodyDiagnosticBy("arguments_prepared", checked_exprs.len);
         for (checked_exprs, nodes) |checked_expr, node| {
-            try self.relateExprAtNode(checked_expr, node);
+            try self.relateCallArgumentAtNode(checked_expr, node);
         }
         try self.ensureNestedCallablesAtNodes(checked_exprs, nodes);
     }
@@ -30452,6 +30495,7 @@ const BodyContext = struct {
                 .lambda, .closure => continue,
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
+            try self.relateCallArgumentAtNode(checked_expr, node);
             const lowered = try self.lowerExprAtTypeCell(
                 checked_expr,
                 DraftTypeCell.fromGraphNode(node),
@@ -30492,7 +30536,7 @@ const BodyContext = struct {
                     try self.exprTypeCell(pre).toGraphNode(self.graph),
                 );
             } else {
-                try self.relateExprAtNode(checked_expr, node);
+                try self.relateCallArgumentAtNode(checked_expr, node);
             }
         }
         for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
@@ -30545,7 +30589,7 @@ const BodyContext = struct {
                 continue;
             }
             switch (operand) {
-                .checked_expr => |expr| try self.relateExprAtNode(expr, node),
+                .checked_expr => |expr| try self.relateCallArgumentAtNode(expr, node),
                 .generated_interpolation_iter,
                 .generated_numeral,
                 .generated_quote,
@@ -32805,7 +32849,7 @@ const BodyContext = struct {
         defer pre_lowered.deinit(self.allocator);
         for (plan_args, 0..) |operand, index| switch (operand) {
             .checked_expr => |expr| {
-                try self.relateExprAtNode(expr, callable_graph.args[index]);
+                try self.relateCallArgumentAtNode(expr, callable_graph.args[index]);
             },
             .generated_interpolation_iter,
             .generated_numeral,

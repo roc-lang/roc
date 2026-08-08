@@ -2690,6 +2690,12 @@ producer may recover adapter inputs, state, callable evidence, or a prior
 function interface. This remains true when the expected result is an imported
 finished generated nominal: the current producer constructs its own exact
 identity from its explicit inputs, then applies that output to the request.
+An iterator producer also names the checked-public `Iter` declaration and the
+exact source of its output item independently. For example, `List.iter` takes
+the declaration contract from the checked builtin return and the item cell
+from the exact list operand. It never treats a destination cell—or a structural
+projection of that destination's public backing—as the declaration or item
+authority.
 
 Representation-sensitive low-level operations define one explicit
 `ProducedTypeFlow` alongside the shared low-level vocabulary. The flow says
@@ -4149,18 +4155,18 @@ making source syntax or body-lowering order part of type meaning.
 
 Repeated open dependency requests are memoized by the complete procedure
 family (template, method scope, and checked source-function key), exact evidence
-topology, and an immutable provisional Monotype view of the function request
-after the caller-owned relations have been applied. Digests select an expected
-O(1) bucket only; exact evidence equality and exact structural type equality are
-the collision authorities. The first request computes the transitive relation
-closure. Equivalent requests retain independent graph cells while relations
-are still being produced, then independently consume the representative's
-final interface after the whole closure is known. An active exact memo entry is
-a recursive edge and joins the active representative. Requests with different
-concrete interfaces, checked source identities, method scopes, or evidence can
-never share an entry. Work is therefore proportional to relation sites plus
-unique exact provisional requests, rather than to the number of duplicate call
-paths through the same interface problem.
+topology, and an immutable alpha-normalized graph-native shape captured from
+the function request after the caller-owned relations have been applied.
+Digests select an expected O(1) bucket only; exact evidence equality and exact
+shape bytes are the collision authorities. The first request computes the
+transitive relation closure. Equivalent requests retain independent graph cells
+while relations are still being produced, then relate directly to the live
+representative's final interface after the whole closure is known. An active
+exact memo entry is a recursive edge and joins the active representative.
+Requests with different concrete interfaces, checked source identities, method
+scopes, or evidence can never share an entry. Work is therefore proportional to
+relation sites plus unique exact graph requests, rather than to the number of
+duplicate call paths through the same interface problem.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -4310,11 +4316,11 @@ inspection clears it once before performing any lookup. Multiple mutations with
 no intervening inspection therefore do not repeatedly clear the same cache, and
 no inspection may consume an entry produced before the most recent mutation.
 
-Interface-replay memo lookup has one narrower inspection operation. It may
-materialize an unresolved request as an immutable provisional scratch view,
-applying defaults in that view only. The digest is only a bucket index; exact
-structural equality is collision authority, the scratch type is never emitted,
-and subsequent relations still act on the original graph node.
+Interface replay never materializes a provisional `TypeId`. Its graph-native
+shape preserves unresolved-variable aliasing, defaults, recursion, and exact
+generated-producer evidence directly. Memo hits relate duplicate request nodes
+to the representative node after replay finishes; they do not serialize and
+re-import the representative interface.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every

@@ -5760,20 +5760,6 @@ pub const InstGraph = struct {
         return out;
     }
 
-    /// Materialize an immutable Monotype-shaped view of a node under the
-    /// relations produced so far, applying defaults to unresolved leaves in
-    /// the view only. The live graph is unchanged. This is collision authority
-    /// for provisional relation-replay memos and finalization probes; the
-    /// returned graph-owned scratch TypeId must not be emitted as output.
-    pub fn provisionalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        if (self.imported_monos.get(node)) |imported| return imported;
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
-        var snapshot = GraphTypeFinals.initActiveSnapshot(self);
-        defer snapshot.deinit();
-        return try snapshot.sealNode(self.find(node));
-    }
-
     /// Materialize a read-only Monotype-shaped view of a fully resolved graph
     /// node. Open rows and unresolved checked variables have no TypeId view:
     /// callers must continue to use their graph nodes until explicit evidence

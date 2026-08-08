@@ -415,6 +415,40 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
+    const interface_replay = sourceSliceBetween(
+        lower_source,
+        "fn applyCheckedTemplateInterfaceScopeRelations(",
+        "fn lowerEntryWrapperAtCell(",
+    );
+    try expectContains(interface_replay, "openFunctionInterfaceShape(pending.request_fn_node)");
+    try expectContains(interface_replay, "std.mem.eql(u8, entry.request_shape.bytes, request_shape.bytes)");
+    try expectContains(interface_replay, "entry.representative,");
+    try expectNotContains(interface_replay, "provisionalTypeViewForNode");
+    try expectNotContains(interface_replay, "importMono(final_ty)");
+    try expectNotContains(solve_source, "pub fn provisionalTypeViewForNode");
+
+    const call_argument_relation = sourceSliceBetween(
+        lower_source,
+        "fn relateCallArgumentAtNode(",
+        "fn relateExprAtNode(",
+    );
+    try expectContains(call_argument_relation, "relateStoredLocalAtCompoundBoundary");
+    const stored_boundary = sourceSliceBetween(
+        lower_source,
+        "fn applyStoredLocalAtCompoundBoundary(",
+        "fn lowerExprSpan(",
+    );
+    try expectContains(stored_boundary, "applyCompoundStorageRepresentation(request_node, local_node)");
+
+    const list_iterator_producer = sourceSliceBetween(
+        lower_source,
+        ".list_iter => {",
+        ".str_iter_utf8 => {",
+    );
+    try expectContains(list_iterator_producer, "publicIteratorNodeWithItem(");
+    try expectContains(list_iterator_producer, "public_fn.ret,");
+    try expectContains(list_iterator_producer, "self.graph.listElementNode(request_fn.args[0])");
+
     const checked_request = sourceSliceBetween(
         lower_source,
         "fn checkedMonoRequestNode(",
