@@ -6614,16 +6614,10 @@ fn buildBoxyRuntimeObject(
         b.fmt("shim_io_{s}", .{name}),
         .{ .root_source_file = b.path("src/shim_io.zig") },
     ));
-    // Bundle compiler-rt so any math libcalls the runtime lowers resolve inside
-    // the -nostdlib executable. Excluded: wasm32, macOS (resolves them against
-    // -lSystem at the final link, and `-fcompiler-rt` crashes the Zig compiler
-    // for macOS targets under --listen), and BSD (Zig 0.16.0 segfaults when
-    // compiling compiler_rt for x86_64-*-bsd-none targets).
-    const os_class = roc_target.classifyOs(target.result.os.tag);
-    obj.bundle_compiler_rt = !target.result.cpu.arch.isWasm() and switch (os_class) {
-        .macos, .freebsd, .openbsd, .netbsd => false,
-        .windows, .linux, .other => true,
-    };
+    // The builtins object linked into the same program is the compiler-rt
+    // carrier, so this object must not bundle its own copy: COFF rejects the
+    // duplicate definitions of `memcpy` and the integer libcalls outright.
+    obj.bundle_compiler_rt = false;
     configureBackend(obj, target);
     return obj;
 }
