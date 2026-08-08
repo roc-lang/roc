@@ -4080,6 +4080,24 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
+        .name = "inspect: list replace relates equal exact iterator list occurrences",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    replaced = Try.ok_or(
+        \\        List.replace([[1.I64].iter()], 0, [2.I64, 3].iter()),
+        \\        { list: [], prev: [].iter() },
+        \\    )
+        \\    current = replaced.list.get(0).ok_or([].iter())
+        \\    (
+        \\        Iter.fold(replaced.prev, [], |out, value| out.append(value)),
+        \\        Iter.fold(current, [], |out, value| out.append(value)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1], [2, 3])" },
+    },
+    .{
         .name = "inspect: list map preserves an exact iterator result item",
         .source_kind = .module,
         .source =

@@ -1469,6 +1469,15 @@ const Solver = struct {
         Common.invariant("low-level record result was missing a required field");
     }
 
+    fn monoRecordFieldByLabel(self: *Solver, ty: MonoType.TypeId, label: []const u8) MonoType.TypeId {
+        const content = self.lifted.types.get(ty);
+        if (std.meta.activeTag(content) != .record) Common.invariant("low-level record result had a non-record Monotype");
+        for (self.lifted.types.fieldSpan(content.record)) |field| {
+            if (std.mem.eql(u8, self.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
+        }
+        Common.invariant("low-level record result Monotype was missing a required field");
+    }
+
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
@@ -1600,6 +1609,12 @@ const Solver = struct {
                 expectLowLevelArity(op, args, flow.arity);
                 const input_elem = try self.listElem(args[flow.list_arg]);
                 const result_list = try self.recordFieldByLabel(expected, "list");
+                try self.relateSameMonotypeOccurrences(
+                    result_list,
+                    self.monoRecordFieldByLabel(expected_mono, "list"),
+                    args[flow.list_arg],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[flow.list_arg])].ty,
+                );
                 try self.unify(args[flow.item_arg], try self.listElem(result_list));
                 try self.unify(try self.recordFieldByLabel(expected, "prev"), input_elem);
             },

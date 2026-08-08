@@ -20000,26 +20000,7 @@ const BodyContext = struct {
         if (!static_dispatch.isIteratorOwner(owner)) {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
-        const public_source: solve.InstIteratorPublicSource = if (public_named.generated_iterator) |generated|
-            generated.public_source
-        else blk: {
-            if (public_named.def.iterator_representation != .none or public_named.args.len != 1) {
-                Common.invariant("generated iterator source lacked its producer-owned public contract");
-            }
-            const public_backing = public_named.backing orelse
-                Common.invariant("generated iterator requested a public Iter without backing");
-            if (public_backing.authority != .checked_public) {
-                Common.invariant("generated iterator public source had private backing authority");
-            }
-            break :blk .{
-                .named_type = public_named.named_type,
-                .def = public_named.def,
-                .kind = public_named.kind,
-                .builtin_owner = owner,
-                .backing = public_backing,
-                .declared_order = public_named.declared_order,
-            };
-        };
+        const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
         const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
             return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
         const lookup = try self.graph.lookupGeneratedIteratorFromNamed(
@@ -20087,7 +20068,7 @@ const BodyContext = struct {
         return generated;
     }
 
-    const max_minted_iterator_chain_depth: u8 = 16;
+    const max_minted_iterator_chain_depth: u8 = std.math.maxInt(u8) - 1;
 
     fn generatedIteratorMintDepth(
         self: *BodyContext,
@@ -20110,6 +20091,7 @@ const BodyContext = struct {
             .concat,
             .append,
             => {},
+            .join => Common.invariant("generated iterator join is authored only by representation selection"),
             .forced_dynamic => return null,
             .none => Common.invariant("generated iterator mint requested without a producer kind"),
         }
@@ -26629,6 +26611,7 @@ const BodyContext = struct {
         );
         const previous_view = self.view;
         const previous_source_file_id = self.source_file_id;
+        const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
         const local_source_file_id = try self.draft.sourceFileIdFor(local_view.module_identity.module_idx, local_view.module_env.module_name);
         self.view = local_view;
         self.source_file_id = local_source_file_id;
@@ -26636,8 +26619,19 @@ const BodyContext = struct {
             self.view = previous_view;
             self.source_file_id = previous_source_file_id;
         }
+        const previous_instantiation = self.instantiation;
+        if (crosses_module) {
+            self.instantiation = TypeInstantiationContext.init(
+                self.allocator,
+                self.builder.allocateInstantiationScope(),
+                local_view.key.bytes,
+            );
+        }
+        defer if (crosses_module) {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+        };
         try self.relateCheckedFunctionSourceToRequest(source_fn_ty, request_fn_node);
-        const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
         const previous_binders = self.binders;
         const previous_typed_binders = self.typed_binders;
         if (crosses_module) {
@@ -30478,6 +30472,13 @@ const BodyContext = struct {
         return null;
     }
 
+    fn isNestedCallableExpr(self: *BodyContext, checked_expr: checked.CheckedExprId) bool {
+        return switch (self.view.bodies.expr(checked_expr).data) {
+            .lambda, .closure => true,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
     fn preLowerDirectCallOperands(
         self: *BodyContext,
         checked_exprs: []const checked.CheckedExprId,
@@ -30488,10 +30489,7 @@ const BodyContext = struct {
             Common.invariant("direct-call argument arity differed from function graph node");
         }
         for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            switch (self.view.bodies.expr(checked_expr).data) {
-                .lambda, .closure => continue,
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-            }
+            if (self.isNestedCallableExpr(checked_expr)) continue;
             try self.relateCallArgumentAtNode(checked_expr, node);
             const lowered = try self.lowerExprAtTypeCell(
                 checked_expr,
@@ -32847,15 +32845,9 @@ const BodyContext = struct {
         defer pre_lowered.deinit(self.allocator);
         for (plan_args, 0..) |operand, index| switch (operand) {
             .checked_expr => |expr| {
+                if (self.isNestedCallableExpr(expr)) continue;
                 try self.relateCallArgumentAtNode(expr, callable_graph.args[index]);
             },
-            .generated_interpolation_iter,
-            .generated_numeral,
-            .generated_quote,
-            => {},
-        };
-        for (plan_args, 0..) |operand, index| switch (operand) {
-            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
             .generated_interpolation_iter,
             .generated_numeral,
             .generated_quote,
@@ -32868,6 +32860,7 @@ const BodyContext = struct {
         )) |uninhabited| return uninhabited;
         for (plan_args, 0..) |operand, index| switch (operand) {
             .checked_expr => |expr| {
+                if (self.isNestedCallableExpr(expr)) continue;
                 const lowered = try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(callable_graph.args[index]));
                 try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
             },
@@ -35456,10 +35449,11 @@ const BodyContext = struct {
         );
         try relateFunctionRequestInterface(self.graph, target_node, callable_node);
         const initial = try self.graph.functionNodes(callable_node);
+        const initial_produced_args = try arg_ctx.producedCallArgumentNodes(initial.args, pre_lowered);
         const prepared_callable = try self.graph.functionRequestFromProducedArguments(
             target_node,
             callable_node,
-            initial.args,
+            initial_produced_args,
         );
         const fn_nodes = try self.graph.functionNodes(prepared_callable);
         var args = try arg_ctx.lowerDispatchOperandsAtNodes(
@@ -35534,10 +35528,11 @@ const BodyContext = struct {
             callable_node = private_node;
         }
         const initial = try self.graph.functionNodes(callable_node);
+        const initial_produced_args = try arg_ctx.producedCallArgumentNodes(initial.args, pre_lowered);
         const prepared_callable = try self.graph.functionRequestFromProducedArguments(
             target_node,
             callable_node,
-            initial.args,
+            initial_produced_args,
         );
         const fn_nodes = try self.graph.functionNodes(prepared_callable);
         var args = try arg_ctx.lowerDispatchOperandsAtNodes(

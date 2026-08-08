@@ -1149,7 +1149,7 @@ pub const InstGraph = struct {
         try self.recursive_argument_slots.put(slot, {});
     }
 
-    const generated_iterator_mint_depth_limit: u8 = 16;
+    const generated_iterator_mint_depth_limit: u8 = std.math.maxInt(u8) - 1;
     const generated_iterator_forced_depth: u8 = generated_iterator_mint_depth_limit + 1;
 
     /// Decide every graph-owned iterator representation after relation
@@ -1524,6 +1524,16 @@ pub const InstGraph = struct {
                             break :adapter .{ .children = .{
                                 .count = provenance.components.len,
                                 .increment = 1,
+                            } };
+                        },
+                        .join => join: {
+                            const provenance = named.generated_iterator orelse unreachable;
+                            if (provenance.components.len != 2) {
+                                Common.invariant("generated iterator join did not retain two exact inputs");
+                            }
+                            break :join .{ .children = .{
+                                .count = provenance.components.len,
+                                .increment = 0,
                             } };
                         },
                         .forced_dynamic => .{ .fixed = generated_iterator_forced_depth },
@@ -2137,14 +2147,20 @@ pub const InstGraph = struct {
     /// its live graph nodes. The bytes are graph-arena owned and must not escape
     /// draft specialization lookup.
     pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
+        var sizing_finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer sizing_finalizer.deinit();
         var sizing = OpenFunctionInterfaceShapeWriter.init(self);
         defer sizing.deinit();
+        sizing.generated_identity_finalizer = &sizing_finalizer;
         try sizing.writeFunctionInterface(node);
         const digest: names.TypeDigest = .{ .bytes = sizing.hasher.finalResult() };
 
         const bytes = try self.arena().alloc(u8, sizing.output_len);
+        var output_finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer output_finalizer.deinit();
         var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, bytes);
         defer writer.deinit();
+        writer.generated_identity_finalizer = &output_finalizer;
         try writer.writeFunctionInterface(node);
         if (writer.output_len != bytes.len) {
             Common.invariant("open function-interface shape changed while being captured");
@@ -4154,6 +4170,11 @@ pub const InstGraph = struct {
             },
             .cycle => |placeholder| blk: {
                 try self.writeProducedTypeSelection(placeholder, built);
+                if (isGeneratedPrivateRootContent(self.content(placeholder)) and
+                    self.content(placeholder).named.generated_iterator != null)
+                {
+                    try self.registerGeneratedIterator(placeholder);
+                }
                 entry.* = .{ .done = placeholder };
                 break :blk self.find(placeholder);
             },
@@ -4176,10 +4197,9 @@ pub const InstGraph = struct {
                 if (self.sameExactGeneratedPrivateIdentity(left_content.named, right_content.named)) {
                     const pair = orderedNodePair(left, right);
                     try self.union_(pair.left, pair.right);
-                } else {
-                    try self.unify(left, right);
+                    return self.find(left);
                 }
-                return self.find(left);
+                return try self.joinGeneratedIteratorRepresentations(left, right, joined);
             }
             const exact = if (left_generated) left else right;
             const public = if (left_generated) right else left;
@@ -4392,6 +4412,179 @@ pub const InstGraph = struct {
                 left
             else
                 Common.invariant("produced representation join received different type structure"),
+        };
+    }
+
+    fn joinGeneratedIteratorRepresentations(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        joined: *std.AutoHashMap(NodePair, ProducedJoinMemo),
+    ) Allocator.Error!NodeId {
+        const left_named = self.content(left).named;
+        const right_named = self.content(right).named;
+        if (left_named.def.iterator_representation == .none or
+            right_named.def.iterator_representation == .none or
+            !sameTypeDef(left_named.def, right_named.def) or
+            left_named.kind != right_named.kind or
+            left_named.builtin_owner == null or
+            right_named.builtin_owner == null or
+            !static_dispatch.isIteratorOwner(left_named.builtin_owner.?) or
+            left_named.builtin_owner.? != right_named.builtin_owner.? or
+            left_named.args.len != 1 or
+            right_named.args.len != 1)
+        {
+            Common.invariant("generated representation join received incompatible exact nominals");
+        }
+        const left_backing = left_named.backing orelse
+            Common.invariant("generated iterator join found no left backing");
+        const right_backing = right_named.backing orelse
+            Common.invariant("generated iterator join found no right backing");
+        if (left_backing.authority != .generated_private or
+            right_backing.authority != .generated_private)
+        {
+            Common.invariant("generated iterator join received a non-private backing");
+        }
+
+        // The forced-dynamic representation is already the declared common
+        // representation for every minted peer with the same public item.
+        // Select it before descending into either backing: its Monotype
+        // backing shape is universal, and Lambda Solved later joins the
+        // concrete callable members carried by the two occurrences.
+        if (left_named.def.iterator_representation == .forced_dynamic or
+            right_named.def.iterator_representation == .forced_dynamic)
+        {
+            const dynamic_node = if (left_named.def.iterator_representation == .forced_dynamic) left else right;
+            const dynamic = self.content(dynamic_node).named;
+            const item = try self.joinProducedTypeNodes(left_named.args[0], right_named.args[0], joined);
+            if (!self.sameClass(item, dynamic.args[0])) {
+                Common.invariant("forced-dynamic iterator did not absorb an exact minted item join");
+            }
+            return dynamic_node;
+        }
+
+        const item = try self.joinProducedTypeNodes(left_named.args[0], right_named.args[0], joined);
+        const backing = try self.joinProducedTypeNodes(left_backing.node, right_backing.node, joined);
+
+        const ordered_inputs = try self.orderedGeneratedIteratorJoinInputs(left, right);
+        const source = self.generatedIteratorSourceFromNamed(self.content(ordered_inputs[0]).named);
+        var public_named = InstNamed{
+            .named_type = source.named_type,
+            .def = source.def,
+            .kind = source.kind,
+            .builtin_owner = source.builtin_owner,
+            .args = try self.arena().dupe(NodeId, &.{item}),
+            .backing = source.backing,
+            .declared_order = source.declared_order,
+        };
+        public_named.def.generated = null;
+        public_named.def.iterator_representation = .none;
+        public_named.def.iterator_kind = .none;
+        public_named.def.iterator_depth = 0;
+
+        const lookup = try self.lookupGeneratedIteratorFromNamed(
+            public_named,
+            .join,
+            &ordered_inputs,
+            null,
+        );
+        if (lookup.existing) |existing| return existing;
+
+        var def = public_named.def;
+        def.iterator_representation = .minted;
+        def.iterator_kind = .join;
+        def.iterator_depth = @max(left_named.def.iterator_depth, right_named.def.iterator_depth);
+        if (def.iterator_depth == 0) {
+            Common.invariant("generated iterator join received an unfinished input depth");
+        }
+        const result = try self.newNode(.{ .named = .{
+            .named_type = source.named_type,
+            .def = def,
+            .kind = source.kind,
+            .builtin_owner = source.builtin_owner,
+            .args = try self.arena().dupe(NodeId, &.{item}),
+            .backing = .{
+                .node = backing,
+                .use = if (left_backing.use == .runtime_layout_only or right_backing.use == .runtime_layout_only)
+                    .runtime_layout_only
+                else
+                    .inspectable,
+                .authority = .generated_private,
+            },
+            .generated_iterator = .{
+                .callable_evidence = null,
+                .components = try self.arena().dupe(NodeId, &ordered_inputs),
+                .public_source = source,
+            },
+            .declared_order = source.declared_order,
+        } });
+        try self.registerGeneratedIteratorAtDigest(result, lookup.digest);
+        return result;
+    }
+
+    fn orderedGeneratedIteratorJoinInputs(self: *InstGraph, left: NodeId, right: NodeId) Allocator.Error![2]NodeId {
+        const left_digest = try self.generatedIteratorJoinOrderDigest(left);
+        const right_digest = try self.generatedIteratorJoinOrderDigest(right);
+        return if (std.mem.order(u8, &left_digest.bytes, &right_digest.bytes) == .gt)
+            .{ right, left }
+        else
+            .{ left, right };
+    }
+
+    fn generatedIteratorJoinOrderDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
+        const named = self.content(node).named;
+        if (named.generated_iterator == null) {
+            return named.def.generated orelse
+                Common.invariant("finished generated iterator join input had no stable identity");
+        }
+        var finalizer = GeneratedIteratorIdentityFinalizer.init(self);
+        defer finalizer.deinit();
+        return try finalizer.digestFor(node);
+    }
+
+    pub fn generatedIteratorPublicSource(self: *InstGraph, raw_node: NodeId) InstIteratorPublicSource {
+        const named = switch (self.content(raw_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("iterator public source requested from a non-named node"),
+        };
+        return self.generatedIteratorSourceFromNamed(named);
+    }
+
+    fn generatedIteratorSourceFromNamed(_: *InstGraph, named: InstNamed) InstIteratorPublicSource {
+        if (named.generated_iterator) |generated| return generated.public_source;
+        const backing = named.backing orelse
+            Common.invariant("iterator representation source had no backing");
+        const owner = named.builtin_owner orelse
+            Common.invariant("iterator representation source had no builtin owner");
+        if (!static_dispatch.isIteratorOwner(owner)) {
+            Common.invariant("iterator representation source had a non-iterator owner");
+        }
+        if (named.def.iterator_representation == .none and backing.authority != .checked_public) {
+            Common.invariant("public iterator representation source had private backing authority");
+        }
+        if (named.def.iterator_representation != .none and backing.authority != .generated_private) {
+            Common.invariant("finished iterator representation source had public backing authority");
+        }
+        var public_def = named.def;
+        public_def.generated = null;
+        public_def.iterator_representation = .none;
+        public_def.iterator_kind = .none;
+        public_def.iterator_depth = 0;
+        return .{
+            .named_type = named.named_type,
+            .def = public_def,
+            .kind = named.kind,
+            .builtin_owner = owner,
+            // Finished generated iterator backings retain the checker-declared
+            // outer iterator topology. The explicit topology IDs—not
+            // field-name inference—authorize the exact backing as the
+            // structural source for another adapter or a forced-dynamic join.
+            .backing = .{
+                .node = backing.node,
+                .use = backing.use,
+                .authority = .checked_public,
+            },
+            .declared_order = named.declared_order,
         };
     }
 
@@ -6286,6 +6479,7 @@ const GeneratedIteratorIdentityFinalizer = struct {
     graph: *InstGraph,
     digests: collections.DenseMap(NodeId, names.TypeDigest),
     active: collections.DenseMap(NodeId, void),
+    inputs_resolved: bool = true,
 
     fn init(graph: *InstGraph) GeneratedIteratorIdentityFinalizer {
         return .{
@@ -6347,9 +6541,23 @@ const GeneratedIteratorIdentityFinalizer = struct {
             hasher.update(&.{@intFromEnum(named.def.iterator_kind)});
             hasher.update(&item_digest.bytes);
             updateGeneratedIteratorInternU32(&hasher, @intCast(provenance.components.len));
-            for (provenance.components) |component| {
-                const component_digest = try self.graph.generatedIteratorIdentityInputDigest(self, component);
-                hasher.update(&component_digest.bytes);
+            if (named.def.iterator_kind == .join) {
+                if (provenance.components.len != 2) {
+                    Common.invariant("generated iterator join identity did not retain two exact inputs");
+                }
+                var component_digests = [2]names.TypeDigest{
+                    try self.graph.generatedIteratorIdentityInputDigest(self, provenance.components[0]),
+                    try self.graph.generatedIteratorIdentityInputDigest(self, provenance.components[1]),
+                };
+                if (std.mem.order(u8, &component_digests[0].bytes, &component_digests[1].bytes) == .gt) {
+                    std.mem.swap(names.TypeDigest, &component_digests[0], &component_digests[1]);
+                }
+                for (component_digests) |component_digest| hasher.update(&component_digest.bytes);
+            } else {
+                for (provenance.components) |component| {
+                    const component_digest = try self.graph.generatedIteratorIdentityInputDigest(self, component);
+                    hasher.update(&component_digest.bytes);
+                }
             }
             if (provenance.callable_evidence) |evidence| {
                 hasher.update("callable_evidence");
@@ -6372,10 +6580,14 @@ const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
     unresolved_ids: collections.DenseMap(NodeId, u32),
+    generated_ids: collections.DenseMap(NodeId, u32),
+    recursive_value_slot_classes: collections.DenseMap(NodeId, bool),
+    forced_dynamic_iterator_classes: collections.DenseMap(NodeId, bool),
     visiting: std.ArrayList(NodeId),
     mode: Mode,
     generated_identity_finalizer: ?*GeneratedIteratorIdentityFinalizer = null,
     next_unresolved: u32 = 0,
+    next_generated: u32 = 0,
     output: ?[]u8 = null,
     output_len: usize = 0,
     primary_resolved: bool = true,
@@ -6385,6 +6597,9 @@ const OpenFunctionInterfaceShapeWriter = struct {
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
+            .generated_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
+            .recursive_value_slot_classes = collections.DenseMap(NodeId, bool).init(graph.allocator),
+            .forced_dynamic_iterator_classes = collections.DenseMap(NodeId, bool).init(graph.allocator),
             .visiting = .empty,
             .mode = .open_interface,
         };
@@ -6414,13 +6629,17 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
     fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
         self.visiting.deinit(self.graph.allocator);
+        self.forced_dynamic_iterator_classes.deinit();
+        self.recursive_value_slot_classes.deinit();
+        self.generated_ids.deinit();
         self.unresolved_ids.deinit();
     }
 
     fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v2");
+        self.writeBytes("roc.monotype.open_function_interface_shape.v4");
         try self.writeFunctionNodes(try self.graph.functionNodes(node));
-        self.primary_resolved = self.next_unresolved == 0;
+        self.primary_resolved = self.next_unresolved == 0 and
+            (if (self.generated_identity_finalizer) |finalizer| finalizer.inputs_resolved else true);
         if (self.graph.requestCheckedSource(node)) |source| {
             self.writeBytes("source-interface");
             try self.writeFunctionNodes(try self.graph.functionNodes(source));
@@ -6438,6 +6657,36 @@ const OpenFunctionInterfaceShapeWriter = struct {
     fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
+        if (self.mode == .open_interface and content == .named) {
+            const named = content.named;
+            const generated_digest = if (named.generated_iterator != null)
+                try (self.generated_identity_finalizer orelse
+                    Common.invariant("open generated nominal shape lacked an identity finalizer")).digestFor(node)
+            else
+                InstGraph.sealedGeneratedIteratorDigest(named);
+            if (generated_digest) |digest| {
+                self.writeU8(if (try self.hasRecursiveValueSlot(node)) 1 else 0);
+                self.writeU8(if (try self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+                self.writeBytes("generated-iterator-nominal");
+                self.writeBytes(&digest.bytes);
+                return;
+            }
+        }
+        if (self.mode == .generated_lookup and
+            content == .named and
+            content.named.generated_iterator != null)
+        {
+            const entry = try self.generated_ids.getOrPut(node);
+            if (entry.found_existing) {
+                self.writeBytes("generated-node-ref");
+                self.writeU32(entry.value_ptr.*);
+                return;
+            }
+            entry.value_ptr.* = self.next_generated;
+            self.next_generated += 1;
+            self.writeBytes("generated-node-def");
+            self.writeU32(entry.value_ptr.*);
+        }
         if (self.mode == .generated_lookup and content == .named) {
             const named = content.named;
             if (named.generated_iterator) |generated| {
@@ -6486,12 +6735,14 @@ const OpenFunctionInterfaceShapeWriter = struct {
             }
         }
         if (self.mode == .open_interface) {
-            self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
-            self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+            self.writeU8(if (try self.hasRecursiveValueSlot(node)) 1 else 0);
+            self.writeU8(if (try self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
         }
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
             if (self.mode == .generated_identity) {
+                (self.generated_identity_finalizer orelse
+                    Common.invariant("generated identity writer lacked its finalizer")).inputs_resolved = false;
                 self.writeMaterializedVariable(content.unresolved);
                 return;
             }
@@ -6597,12 +6848,33 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        return self.graph.classContainsMarkedNode(node, &self.graph.recursive_argument_slots);
+    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!bool {
+        return try self.classContainsMarkedNodeCached(
+            node,
+            &self.graph.recursive_argument_slots,
+            &self.recursive_value_slot_classes,
+        );
     }
 
-    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        return self.graph.classContainsMarkedNode(node, &self.graph.forced_dynamic_iterator_roots);
+    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!bool {
+        return try self.classContainsMarkedNodeCached(
+            node,
+            &self.graph.forced_dynamic_iterator_roots,
+            &self.forced_dynamic_iterator_classes,
+        );
+    }
+
+    fn classContainsMarkedNodeCached(
+        self: *OpenFunctionInterfaceShapeWriter,
+        raw_node: NodeId,
+        marked: *const collections.DenseMap(NodeId, void),
+        cache: *collections.DenseMap(NodeId, bool),
+    ) Allocator.Error!bool {
+        const node = self.graph.find(raw_node);
+        const entry = try cache.getOrPut(node);
+        if (entry.found_existing) return entry.value_ptr.*;
+        entry.value_ptr.* = self.graph.classContainsMarkedNode(node, marked);
+        return entry.value_ptr.*;
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
@@ -9323,6 +9595,14 @@ test "generated iterator identity hashes a nested producer chain linearly" {
     for (chain) |node| try std.testing.expect(graph.content(node).named.def.generated != null);
     try std.testing.expect(diagnostics.generated_identity_nodes_hashed <= chain_len * 3);
     try std.testing.expect(diagnostics.generated_identity_cache_hits >= chain_len - 1);
+
+    const request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{chain[chain.len - 1]}),
+        .ret = item,
+    } });
+    const shape = try graph.openFunctionInterfaceShape(request);
+    try std.testing.expect(shape.resolved);
+    try std.testing.expect(shape.bytes.len < 256);
 }
 
 test "generated iterator depth visits wide graphs without a size cutoff" {

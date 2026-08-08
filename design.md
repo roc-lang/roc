@@ -3065,6 +3065,7 @@ const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    join,
     forced_dynamic,
 };
 
@@ -3087,6 +3088,12 @@ The fields have these meanings:
 - `forced_dynamic` is the explicit fixed-point representation selected at the
   mint-depth boundary. It retains the public declaration identity while the
   representation field keeps it distinct from the ordinary public nominal.
+- `join` is the explicit common representation of two distinct exact minted
+  identities at a declared storage or control-flow meeting point. Its ordered
+  runtime backing is produced by the representation join, while its stable
+  identity hashes the two input identities in digest order. Reversing source
+  branches therefore cannot change the joined nominal. A join contributes the
+  maximum input mint depth; it is not another adapter layer.
 
 These fields participate in named-type equality, cross-store equality, and type
 digests. Every type-store translation copies them. A later stage never derives a
@@ -3114,7 +3121,8 @@ before any durable Monotype type is sealed. Together they compute:
 - source depth 1;
 - adapter depth as one plus the maximum minted depth reachable by value through
   its components;
-- a hard minted depth limit of 16.
+- exact minted depths 1 through 254, with 255 reserved as the
+  forced-dynamic sentinel in the serialized `u8` metadata.
 
 A public `Iter` expected type has already constrained the expression during
 checking. The checked producer identity and checked item arguments direct
@@ -3128,7 +3136,7 @@ arguments, records, tuples, tag payloads, lists, and boxes propagate the maximum
 depth of values they contain. Function types do not contribute stored chain
 depth, and named backings are not traversed.
 
-If the next chain would exceed the limit, Monotype interns one
+If the next finite chain would exceed the representable minted depth, Monotype interns one
 `forced_dynamic` iterator type per item-type digest. Its public-shaped backing
 is recursively rewritten to its own type, giving recursive construction a
 finite type fixed point. An exact memoized walk over the finite instantiation
@@ -3168,6 +3176,14 @@ that side as the class authority. Representation finalization then consumes its
 explicit public source and producer topology. It must not depend on operand
 order or keep the imported root and thereby discard the only data capable of
 authoring a forced-dynamic representation.
+
+A finished generated iterator still retains the checker-declared outer
+iterator topology, public declaration identity, public item argument, and exact
+backing. When a later adapter or join needs a producer source, Monotype consumes
+those explicit fields directly: it clears only the generated tier fields from
+the declaration identity and follows the recorded topology roles through the
+exact backing. It does not import a second public backing tree, search by field
+text, or reconstruct an iterator contract from lowered function shape.
 
 The recursive edge itself is also producer-authored. Every draft function and
 globally reserved root records the owner that created it, forming an explicit
@@ -3287,7 +3303,8 @@ explicitly:
 - a forced-dynamic iterator wins an explicit exact join with a minted iterator
   that has the same public source declaration and item type;
 - distinct minted iterator identities join their item and backing information
-  without discarding callable members;
+  without discarding callable members, and mint a content-addressed `join`
+  identity over the two exact input identities;
 - equal generated identities are ordinary named-type equality;
 - an ordinary public iterator never participates in a runtime representation
   join.
@@ -3297,6 +3314,10 @@ the minted peer's callable members into the dynamic backing. Callable evidence
 already resides in the exact produced Monotype; Lambda Solved does not perform a
 second public-to-generated structural walk. A SpecConstr-authored callable
 worker becomes visible by updating the callable slots of that exact type.
+Monotype therefore selects the existing forced-dynamic fixed point after
+joining its item cell; it does not recursively join the minted and dynamic
+backings, because the dynamic backing is the declared universal
+representation and its callable membership is owned by Lambda Solved.
 Encountering a checked-public iterator beside an exact generated iterator in
 Lambda Solved is an invariant violation: it means an earlier producer, call
 signature, binder, or join discarded its exact Monotype. Lambda Solved must not
@@ -4172,6 +4193,19 @@ Requests with different concrete interfaces, checked source identities, method
 scopes, or evidence can never share an entry. Work is therefore proportional to
 relation sites plus unique exact graph requests, rather than to the number of
 duplicate call paths through the same interface problem.
+
+The alpha-normalized shape stream writes a graph-owned generated iterator as
+the same content-addressed nominal identity that representation finalization
+will stamp on the type. The identity hashes the public source, item type,
+producer kind, ordered component identities, and callable evidence; nested
+generated producers contribute their memoized identities. The stream never
+expands the generated iterator's runtime backing or producer history. A live
+identity with unresolved inputs keeps the interface open, while a finished
+imported generated type uses its stored identity directly. Generated-lookup
+keys that precede durable identity finalization encode graph-owned generated
+nodes as first-encounter definitions and dense references so shared producer
+history is still traversed linearly without turning graph ids into durable
+type identity.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked

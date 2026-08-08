@@ -115,6 +115,9 @@ pub const IteratorKind = enum(u8) {
     drop_first,
     concat,
     append,
+    /// Deterministic common representation of two distinct exact iterator
+    /// identities meeting at one explicit storage or control-flow boundary.
+    join,
     forced_dynamic,
 };
 
