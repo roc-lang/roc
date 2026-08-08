@@ -2919,8 +2919,11 @@ the answer from type shape or perform a generated-private containment query.
 Checked output also records `produces_exact_graph` on every pattern.
 Lambda parameters and iterator-item patterns are explicit exact sources;
 declarations, reassignments, and match patterns retain the exact source
-expression and its record-field, tuple-item, list-item, tag-payload, or
-nominal-backing steps. Pattern lowering therefore
+expression and its record-field, tuple-item, list-item, list-rest, tag-payload,
+or nominal-backing steps. Consecutive list-rest and list-item steps compose
+their source offsets, so selecting one item from a rest value visits only that
+original item; selecting the whole rest visits only the remaining items.
+Pattern lowering therefore
 isolates only the occurrences whose producer edge can carry an exact graph,
 without scanning the value's Monotype. Once a binder has been assigned a local
 cell at that boundary, the cell is its exact type authority. Reads, captures,

@@ -15313,9 +15313,29 @@ const ExactGraphProducerAnalysis = struct {
                     false,
                 .list_rest => |start| blk: {
                     if (start >= items.len) break :blk false;
-                    // A whole rest value contains every remaining item. A
-                    // further projection is uncommon and remains conservative
-                    // until checked list-pattern output records its shape.
+                    if (rest.len != 0) switch (rest[0]) {
+                        .list_item => |index| {
+                            const source_index = std.math.add(u32, start, index) catch
+                                return checkedArtifactInvariant("exact list-rest projection index overflowed", .{});
+                            if (source_index >= items.len) break :blk false;
+                            break :blk try self.exprProjectionProduces(items[source_index], rest[1..]);
+                        },
+                        .list_rest => |nested_start| {
+                            const source_start = std.math.add(u32, start, nested_start) catch
+                                return checkedArtifactInvariant("exact nested list-rest projection index overflowed", .{});
+                            break :blk try self.exprProjectionStepProduces(
+                                expr_id,
+                                .{ .list_rest = source_start },
+                                rest[1..],
+                            );
+                        },
+                        .record_field, .tuple_item, .tag_arg, .nominal_backing => return checkedArtifactInvariant(
+                            "checked list-rest value carried a non-list projection",
+                            .{},
+                        ),
+                    };
+                    // The whole rest value carries an exact graph precisely
+                    // when one of the remaining item values does.
                     for (items[start..]) |item| {
                         if (try self.exprProduces(item)) break :blk true;
                     }
