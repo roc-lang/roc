@@ -3535,7 +3535,7 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => try self.emitNumericConversionOrCrash(target, op, arg_locals),
+            => try self.emitNumericConversion(target, op, arg_locals),
         }
     }
 
@@ -5013,7 +5013,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
-    fn emitNumericConversionOrCrash(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
+    fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
         const name = @tagName(op);
         const SpecialConversion = enum {
             f32_to_i8_try_unsafe,
@@ -5052,6 +5052,16 @@ pub const MonoLlvmCodeGen = struct {
             dec_to_u32_try_unsafe,
             dec_to_u64_try_unsafe,
             dec_to_u128_try_unsafe,
+            dec_to_i8_trunc,
+            dec_to_i16_trunc,
+            dec_to_i32_trunc,
+            dec_to_i64_trunc,
+            dec_to_i128_trunc,
+            dec_to_u8_trunc,
+            dec_to_u16_trunc,
+            dec_to_u32_trunc,
+            dec_to_u64_trunc,
+            dec_to_u128_trunc,
         };
         if (std.meta.stringToEnum(SpecialConversion, name)) |conversion| switch (conversion) {
             .f32_to_i8_try_unsafe,
@@ -5094,6 +5104,20 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
                 return;
             },
+            .dec_to_i8_trunc,
+            .dec_to_i16_trunc,
+            .dec_to_i32_trunc,
+            .dec_to_i64_trunc,
+            .dec_to_u8_trunc,
+            .dec_to_u16_trunc,
+            .dec_to_u32_trunc,
+            .dec_to_u64_trunc,
+            .dec_to_i128_trunc,
+            .dec_to_u128_trunc,
+            => {
+                try self.emitDecToIntTrunc(target, op, GuardedList.at(args, 0));
+                return;
+            },
             .dec_to_i8_try_unsafe,
             .dec_to_i16_try_unsafe,
             .dec_to_i32_try_unsafe,
@@ -5123,16 +5147,45 @@ pub const MonoLlvmCodeGen = struct {
                 return;
             }
         }
-        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.find(u8, name, "_try") == null and
-            std.mem.find(u8, name, "_str") == null)
-        {
-            const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0)));
-            const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(GuardedList.at(args, 0)).isSigned());
-            try self.storeScalar(self.slot(target).ptr, self.localLayout(target), coerced);
-            return;
+        // Coerce the operand if the layouts allow.
+        if (args.len >= 1) {
+            const src_layout = self.localLayout(GuardedList.at(args, 0));
+            const target_layout = self.localLayout(target);
+
+            const src_is_int = isIntegerLayout(src_layout);
+            const src_is_float = isFloatLayout(src_layout);
+            const dest_is_int = isIntegerLayout(target_layout);
+            const dest_is_float = isFloatLayout(target_layout);
+
+            // coerceScalar emits a single LLVM conversion instruction, chosen from
+            // the source and target types. These are the three cases where that
+            // instruction is also the semantics Roc wants.
+
+            // sext, zext, or trunc. Wrapping to N bits means keeping the low N
+            // bits, which is what trunc does.
+            const int_to_int = src_is_int and dest_is_int;
+
+            // sitofp or uitofp, defined for every integer, rounding to the nearest
+            // float or to infinity.
+            const int_to_float = src_is_int and dest_is_float;
+
+            // fpext or fptrunc, rounding as required.
+            const float_to_float = src_is_float and dest_is_float;
+
+            // The other cases would coerce too, just wrongly:
+            // - A Dec is an i128 scaled by 10^18, so you would get the stored payload
+            //   instead of the value.
+            // - Float-to-int would get fptosi or fptoui, which give poison out of
+            //   range rather than wrapping.
+
+            if (int_to_int or int_to_float or float_to_float) {
+                const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, src_layout);
+                const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
+                try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+                return;
+            }
         }
-        try self.emitCrashBytes(name);
+        return error.UnsupportedLowLevel;
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
@@ -5146,6 +5199,40 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    /// Dec to integer, truncating the fractional part toward zero and wrapping
+    /// the integer part to the target width.
+    fn emitDecToIntTrunc(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(dec_value);
+
+        const bytes: u8 = if (op == .dec_to_i8_trunc or op == .dec_to_u8_trunc)
+            1
+        else if (op == .dec_to_i16_trunc or op == .dec_to_u16_trunc)
+            2
+        else if (op == .dec_to_i32_trunc or op == .dec_to_u32_trunc)
+            4
+        else if (op == .dec_to_i64_trunc or op == .dec_to_u64_trunc)
+            8
+        else if (op == .dec_to_i128_trunc or op == .dec_to_u128_trunc)
+            16
+        else
+            unreachable;
+
+        // The builtin divides at 128 bits, then wraps to the requested width.
+        try self.callBuiltinVoid(
+            builtinSymbol(.dec_to_int_wrap),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                self.slot(target).ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, @as(u32, bytes) * 8) catch return error.OutOfMemory,
+                builder.intValue(.i32, bytes) catch return error.OutOfMemory,
+            },
+        );
     }
 
     const FloatToIntTruncInfo = struct {

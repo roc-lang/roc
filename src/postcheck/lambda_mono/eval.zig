@@ -2840,7 +2840,7 @@ pub const Evaluator = struct {
 
     fn decToIntWrap(_: *Evaluator, comptime dst: Primitive, dec_num: i128) EvalError!Value {
         const T = intType(dst);
-        return makeInt(T, builtins.dec.toIntWrap(T, .{ .num = dec_num }));
+        return makeInt(T, builtins.numeric_conversions.decToIntWrap(T, dec_num));
     }
 
     fn zeroValue(self: *Evaluator, comptime prim: Primitive) Value {
