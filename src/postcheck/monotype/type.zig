@@ -273,6 +273,12 @@ pub const Store = struct {
     type_digest_generations: StoreList(u64, "type_digest_generations"),
     specialization_digest_generations: StoreList(u64, "specialization_digest_generations"),
     digest_cache_generation: u64,
+    /// Unfolded digests already taken under `digest_cache_generation`. The
+    /// interner buckets a cyclic type on its unfolding, which no per-node
+    /// digest cache holds, and that unfolding is the same every time until a
+    /// filled slot retires the generation or a rollback recycles the ids.
+    unfolded_digests: std.AutoHashMapUnmanaged(TypeId, names.TypeDigest) = .empty,
+    unfolded_digests_generation: u64 = 0,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -350,6 +356,7 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        self.unfolded_digests.deinit(self.allocator);
         self.dedup_excluded.deinit();
         if (self.intern_buckets) |*buckets| {
             var lists = buckets.valueIterator();
@@ -1206,6 +1213,9 @@ pub const Store = struct {
 
     fn restore(self: *Store, mark_: Mark) void {
         self.assertMutable();
+        // Rolling back hands the ids above the mark to different content, so
+        // an answer remembered for one of them names the wrong type now.
+        self.unfolded_digests.clearRetainingCapacity();
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
@@ -1485,7 +1495,15 @@ pub const Store = struct {
         const digest = self.cachedDigestInner(name_store, ty, .full, &ctx, null);
         if (ctx.cycle_count == 0) return InternerLookupDigest.from(digest);
 
-        return .{ .bytes = self.unfoldedDigest(name_store, ty).bytes };
+        if (self.unfolded_digests_generation != self.digest_cache_generation) {
+            self.unfolded_digests.clearRetainingCapacity();
+            self.unfolded_digests_generation = self.digest_cache_generation;
+        } else if (self.unfolded_digests.get(ty)) |remembered| {
+            return .{ .bytes = remembered.bytes };
+        }
+        const unfolded = self.unfoldedDigest(name_store, ty);
+        self.unfolded_digests.put(self.allocator, ty, unfolded) catch {};
+        return .{ .bytes = unfolded.bytes };
     }
 
     /// The digest of the infinite tree `ty` denotes, taken over a budgeted prefix
