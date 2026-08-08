@@ -3661,6 +3661,121 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
+// Every spelling below must lower to the same scalar loop a bare list gets. A
+// user-defined collection delegating `iter` to `List.iter` is the pattern
+// docs/langref/static-dispatch.md recommends to package authors; the numeric
+// cases are method-syntax rather than the qualified `U8.until(0, n)` form the
+// issue-10429 test already covers. A regression in any of them would step
+// through the public `Iter` boundary with a callable per item.
+test "iterator fusion survives aliases, wrappers, and method-syntax ranges" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, src: []const u8 }{
+        .{ .name = "direct List (baseline)", .src =
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : List(U64) -> U64
+        \\main = |xs| sum_it(xs)
+        },
+        .{ .name = "type alias of List", .src =
+        \\Nums : List(U64)
+        \\
+        \\sum_it : Nums -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : Nums -> U64
+        \\main = |xs| sum_it(xs)
+        },
+        .{ .name = "method-syntax ascending range", .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in n.until(0) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U8 -> U64
+        \\main = |n| sum_it(n)
+        },
+        .{ .name = "method-syntax descending range", .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in n.down_to(1) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U8 -> U64
+        \\main = |n| sum_it(n)
+        },
+        .{ .name = "user nominal, tag payload, match + qualified List.iter", .src =
+        \\Bag := [Items({ entries : List(U64) })].{
+        \\    iter : Bag -> Iter(U64)
+        \\    iter = |bag| match bag {
+        \\        Items(data) => List.iter(data.entries)
+        \\    }
+        \\}
+        \\
+        \\sum_it : Bag -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : Bag -> U64
+        \\main = |bag| sum_it(bag)
+        },
+        .{ .name = "user nominal delegating to List.iter (langref pattern)", .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : Rows -> U64
+        \\main = |rows| sum_it(rows)
+        },
+    };
+
+    for (cases) |c| {
+        var opt = try lowerModuleWithOptions(allocator, c.src, .wrappers, .{ .tag_reachability = true });
+        defer opt.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next")) {
+            std.debug.print("iterator fusion lost for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &opt.lowered);
+    }
+}
+
 fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     iter_source: []const u8,
     list_source: []const u8,
