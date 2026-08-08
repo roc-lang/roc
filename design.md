@@ -2922,7 +2922,13 @@ declarations, reassignments, and match patterns retain the exact source
 expression and its record-field, tuple-item, list-item, list-rest, tag-payload,
 or nominal-backing steps. Consecutive list-rest and list-item steps compose
 their source offsets, so selecting one item from a rest value visits only that
-original item; selecting the whole rest visits only the remaining items.
+original item; selecting the whole rest visits only the remaining items. A
+record-rest step explicitly records the field labels consumed by its surrounding
+destructure. Selecting from that rest therefore follows the original field only
+when it was retained, and selecting the whole rest visits only retained logical
+fields. Explicit fields in a record extension hide same-named fields from the
+extended record for this purpose; a hidden exact field is not part of the
+produced value and cannot make that value an exact producer.
 Pattern lowering therefore
 isolates only the occurrences whose producer edge can carry an exact graph,
 without scanning the value's Monotype. Once a binder has been assigned a local

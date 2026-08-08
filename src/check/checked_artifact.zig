@@ -14510,6 +14510,10 @@ const ExactGraphProducerAnalysis = struct {
         nominal_backing,
         list_item: u32,
         list_rest: u32,
+        /// The record produced by a rest pattern. The range names every field
+        /// consumed by the surrounding destructure, so this projection keeps
+        /// precisely the other fields.
+        record_rest: CheckedBodyRange,
     };
     const BinderValue = struct {
         expr: CheckedExprId,
@@ -14520,6 +14524,10 @@ const ExactGraphProducerAnalysis = struct {
     const TemplateDependency = struct {
         caller: canonical.CheckedProcedureTemplateId,
         next: ?u32,
+    };
+    const RecordFieldShadow = struct {
+        fields: []const CheckedRecordExprField,
+        parent: ?*const RecordFieldShadow,
     };
 
     allocator: Allocator,
@@ -14538,6 +14546,7 @@ const ExactGraphProducerAnalysis = struct {
     pattern_exact_sources: []bool,
     pattern_values: std.ArrayList(BinderValue),
     projection_steps: std.ArrayList(ProjectionStep),
+    record_rest_exclusions: std.ArrayList(canonical.RecordFieldLabelId),
     dependency_heads: []?u32,
     dependency_caller_by_callee: []?canonical.CheckedProcedureTemplateId,
     dependencies: std.ArrayList(TemplateDependency),
@@ -14607,6 +14616,7 @@ const ExactGraphProducerAnalysis = struct {
             .pattern_exact_sources = pattern_exact_sources,
             .pattern_values = .empty,
             .projection_steps = .empty,
+            .record_rest_exclusions = .empty,
             .dependency_heads = dependency_heads,
             .dependency_caller_by_callee = dependency_caller_by_callee,
             .dependencies = .empty,
@@ -14615,6 +14625,7 @@ const ExactGraphProducerAnalysis = struct {
         errdefer self.binder_values.deinit(allocator);
         errdefer self.pattern_values.deinit(allocator);
         errdefer self.projection_steps.deinit(allocator);
+        errdefer self.record_rest_exclusions.deinit(allocator);
         errdefer self.dependencies.deinit(allocator);
         try self.indexBinderValues();
         return self;
@@ -14625,6 +14636,7 @@ const ExactGraphProducerAnalysis = struct {
         self.dependencies.deinit(self.allocator);
         self.allocator.free(self.dependency_caller_by_callee);
         self.allocator.free(self.dependency_heads);
+        self.record_rest_exclusions.deinit(self.allocator);
         self.projection_steps.deinit(self.allocator);
         self.pattern_values.deinit(self.allocator);
         self.allocator.free(self.pattern_exact_sources);
@@ -14878,16 +14890,31 @@ const ExactGraphProducerAnalysis = struct {
                 defer _ = projection.pop();
                 try self.indexPatternValue(nominal.backing_pattern, expr, projection);
             },
-            .record_destructure => |fields| for (fields) |field| switch (field.kind) {
-                .required, .sub_pattern => |child| {
-                    try projection.append(self.allocator, .{ .record_field = field.label });
-                    defer _ = projection.pop();
-                    try self.indexPatternValue(child, expr, projection);
-                },
-                // A record-rest pattern produces a new record assembled from
-                // several possible fields. Until checked output records
-                // that complete field set, retain the conservative root fact.
-                .rest => |child| try self.indexPatternValue(child, expr, projection),
+            .record_destructure => |fields| {
+                const exclusion_start: u32 = @intCast(self.record_rest_exclusions.items.len);
+                const has_rest = for (fields) |field| {
+                    if (field.kind == .rest) break true;
+                } else false;
+                if (has_rest) for (fields) |field| switch (field.kind) {
+                    .required, .sub_pattern => try self.record_rest_exclusions.append(self.allocator, field.label),
+                    .rest => {},
+                };
+                const exclusions = CheckedBodyRange{
+                    .start = exclusion_start,
+                    .len = @intCast(self.record_rest_exclusions.items.len - exclusion_start),
+                };
+                for (fields) |field| switch (field.kind) {
+                    .required, .sub_pattern => |child| {
+                        try projection.append(self.allocator, .{ .record_field = field.label });
+                        defer _ = projection.pop();
+                        try self.indexPatternValue(child, expr, projection);
+                    },
+                    .rest => |child| {
+                        try projection.append(self.allocator, .{ .record_rest = exclusions });
+                        defer _ = projection.pop();
+                        try self.indexPatternValue(child, expr, projection);
+                    },
+                };
             },
             .list => |list| {
                 for (list.patterns, 0..) |child, index| {
@@ -15285,13 +15312,17 @@ const ExactGraphProducerAnalysis = struct {
     ) Allocator.Error!bool {
         const expr = self.bodies.expr(expr_id);
         return switch (expr.data) {
-            .record => |record| if (step == .record_field) blk: {
-                for (record.fields) |field| {
-                    if (field.label == step.record_field) break :blk try self.exprProjectionProduces(field.value, rest);
-                }
-                if (record.ext) |ext| break :blk try self.exprProjectionStepProduces(ext, step, rest);
-                break :blk false;
-            } else try self.exprProduces(expr_id),
+            .record => |record| switch (step) {
+                .record_field => |field_name| blk: {
+                    for (record.fields) |field| {
+                        if (field.label == field_name) break :blk try self.exprProjectionProduces(field.value, rest);
+                    }
+                    if (record.ext) |ext| break :blk try self.exprProjectionStepProduces(ext, step, rest);
+                    break :blk false;
+                },
+                .record_rest => |exclusions| try self.recordRestProjectionProduces(expr_id, exclusions, rest),
+                .tuple_item, .tag_arg, .nominal_backing, .list_item, .list_rest => try self.exprProduces(expr_id),
+            },
             .tuple => |items| if (step == .tuple_item and step.tuple_item < items.len)
                 try self.exprProjectionProduces(items[step.tuple_item], rest)
             else
@@ -15329,7 +15360,7 @@ const ExactGraphProducerAnalysis = struct {
                                 rest[1..],
                             );
                         },
-                        .record_field, .tuple_item, .tag_arg, .nominal_backing => return checkedArtifactInvariant(
+                        .record_field, .record_rest, .tuple_item, .tag_arg, .nominal_backing => return checkedArtifactInvariant(
                             "checked list-rest value carried a non-list projection",
                             .{},
                         ),
@@ -15341,7 +15372,7 @@ const ExactGraphProducerAnalysis = struct {
                     }
                     break :blk false;
                 },
-                .record_field, .tuple_item, .tag_arg, .nominal_backing => try self.exprProduces(expr_id),
+                .record_field, .record_rest, .tuple_item, .tag_arg, .nominal_backing => try self.exprProduces(expr_id),
             },
             .if_ => |if_| blk: {
                 for (if_.branches) |branch| {
@@ -15398,6 +15429,212 @@ const ExactGraphProducerAnalysis = struct {
             .hosted_lambda,
             .run_low_level,
             => try self.exprProduces(expr_id),
+        };
+    }
+
+    fn recordRestProjectionProduces(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+        first_exclusions: CheckedBodyRange,
+        rest: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        var rest_count: usize = 0;
+        while (rest_count < rest.len and rest[rest_count] == .record_rest) : (rest_count += 1) {}
+
+        const tail = rest[rest_count..];
+        if (tail.len != 0) return switch (tail[0]) {
+            .record_field => |field_name| blk: {
+                if (self.recordFieldExcludedByRest(first_exclusions, rest[0..rest_count], field_name)) {
+                    return checkedArtifactInvariant("checked record-rest projection selected a consumed field", .{});
+                }
+                break :blk try self.exprProjectionStepProduces(expr_id, tail[0], tail[1..]);
+            },
+            .record_rest => unreachable,
+            .tuple_item, .tag_arg, .nominal_backing, .list_item, .list_rest => checkedArtifactInvariant(
+                "checked record-rest value carried a non-record projection",
+                .{},
+            ),
+        };
+
+        return self.recordValueProducesExcluding(
+            expr_id,
+            first_exclusions,
+            rest[0..rest_count],
+            null,
+        );
+    }
+
+    fn recordRestExcludesField(
+        self: *const ExactGraphProducerAnalysis,
+        exclusions: CheckedBodyRange,
+        field_name: canonical.RecordFieldLabelId,
+    ) bool {
+        const start: usize = exclusions.start;
+        const len: usize = exclusions.len;
+        const end = std.math.add(usize, start, len) catch
+            return checkedArtifactInvariant("checked record-rest exclusion range overflowed", .{});
+        if (end > self.record_rest_exclusions.items.len) {
+            return checkedArtifactInvariant("checked record-rest exclusion range was outside its pool", .{});
+        }
+        for (self.record_rest_exclusions.items[start..end]) |excluded| {
+            if (excluded == field_name) return true;
+        }
+        return false;
+    }
+
+    fn recordFieldExcludedByRest(
+        self: *const ExactGraphProducerAnalysis,
+        first_exclusions: ?CheckedBodyRange,
+        additional_rest: []const ProjectionStep,
+        field_name: canonical.RecordFieldLabelId,
+    ) bool {
+        if (first_exclusions) |exclusions| {
+            if (self.recordRestExcludesField(exclusions, field_name)) return true;
+        }
+        for (additional_rest) |step| switch (step) {
+            .record_rest => |exclusions| if (self.recordRestExcludesField(exclusions, field_name)) return true,
+            .record_field, .tuple_item, .tag_arg, .nominal_backing, .list_item, .list_rest => return checkedArtifactInvariant(
+                "non-record-rest step reached record-rest exclusion lookup",
+                .{},
+            ),
+        };
+        return false;
+    }
+
+    fn recordFieldShadowed(
+        _: *const ExactGraphProducerAnalysis,
+        shadow: ?*const RecordFieldShadow,
+        field_name: canonical.RecordFieldLabelId,
+    ) bool {
+        var current = shadow;
+        while (current) |entry| : (current = entry.parent) {
+            for (entry.fields) |field| {
+                if (field.label == field_name) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Follow the logical value of a record constructor. Explicit fields hide
+    /// same-named fields in its extension, and record-rest projections remove
+    /// their checker-recorded consumed fields.
+    fn recordValueProducesExcluding(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+        first_exclusions: ?CheckedBodyRange,
+        additional_rest: []const ProjectionStep,
+        shadow: ?*const RecordFieldShadow,
+    ) Allocator.Error!bool {
+        return switch (self.bodies.expr(expr_id).data) {
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (self.recordFieldShadowed(shadow, field.label) or
+                        self.recordFieldExcludedByRest(first_exclusions, additional_rest, field.label)) continue;
+                    if (try self.exprProduces(field.value)) break :blk true;
+                }
+                const ext = record.ext orelse break :blk false;
+                const next_shadow = RecordFieldShadow{ .fields = record.fields, .parent = shadow };
+                break :blk try self.recordValueProducesExcluding(
+                    ext,
+                    first_exclusions,
+                    additional_rest,
+                    &next_shadow,
+                );
+            },
+            .if_ => |if_| blk: {
+                for (if_.branches) |branch| {
+                    if (try self.recordValueProducesExcluding(
+                        branch.body,
+                        first_exclusions,
+                        additional_rest,
+                        shadow,
+                    )) break :blk true;
+                }
+                break :blk try self.recordValueProducesExcluding(
+                    if_.final_else,
+                    first_exclusions,
+                    additional_rest,
+                    shadow,
+                );
+            },
+            .match_ => |match_| blk: {
+                for (match_.branches) |branch| {
+                    if (try self.recordValueProducesExcluding(
+                        branch.value,
+                        first_exclusions,
+                        additional_rest,
+                        shadow,
+                    )) break :blk true;
+                }
+                break :blk false;
+            },
+            .block => |block| self.recordValueProducesExcluding(
+                block.final_expr,
+                first_exclusions,
+                additional_rest,
+                shadow,
+            ),
+            .dbg, .expect => |child| self.recordValueProducesExcluding(
+                child,
+                first_exclusions,
+                additional_rest,
+                shadow,
+            ),
+            .expect_err => |expect_err| self.recordValueProducesExcluding(
+                expect_err.expr,
+                first_exclusions,
+                additional_rest,
+                shadow,
+            ),
+            .return_ => |return_| self.recordValueProducesExcluding(
+                return_.expr,
+                first_exclusions,
+                additional_rest,
+                shadow,
+            ),
+            // The checked producer fact for calls and parameters describes the
+            // whole returned value. A later field projection can refine direct
+            // constructors, while an opaque result must retain that explicit
+            // producer fact because no field path was published for it.
+            .pending,
+            .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .list,
+            .empty_list,
+            .tuple,
+            .call,
+            .empty_record,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .unary_not,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => self.exprProduces(expr_id),
         };
     }
 
@@ -15665,11 +15902,7 @@ const ExactGraphProducerAnalysis = struct {
                 for (items) |item| if (try self.exprProduces(item)) break :blk true;
                 break :blk false;
             },
-            .record => |record| blk: {
-                for (record.fields) |field| if (try self.exprProduces(field.value)) break :blk true;
-                if (record.ext) |ext| break :blk try self.exprProduces(ext);
-                break :blk false;
-            },
+            .record => try self.recordValueProducesExcluding(expr_id, null, &.{}, null),
             .tag => |tag| blk: {
                 for (tag.args) |arg| if (try self.exprProduces(arg)) break :blk true;
                 break :blk false;
@@ -33123,6 +33356,111 @@ test "nested procedure sites inherit exact producer-recorded lexical scopes" {
     const inner = nestedProcLexicalScope(inherited, @enumFromInt(31), &by_checked_expr, &scopes);
     try std.testing.expect(std.meta.eql(DispatchScope{ .generalized = @enumFromInt(1) }, inner));
     try std.testing.expect(@hasField(NestedProcSite, "lexical_scope"));
+}
+
+test "record rest exact flow excludes consumed and shadowed fields" {
+    const allocator = std.testing.allocator;
+    const ty = testIndexId(CheckedTypeId, 0);
+    const exact_ref = testIndexId(ResolvedValueRefId, 0);
+    const exact_expr = testIndexId(CheckedExprId, 0);
+    const ordinary_expr = testIndexId(CheckedExprId, 1);
+    const removed_exact_record = testIndexId(CheckedExprId, 2);
+    const retained_exact_record = testIndexId(CheckedExprId, 3);
+    const hidden_exact_ext = testIndexId(CheckedExprId, 4);
+    const shadowing_record = testIndexId(CheckedExprId, 5);
+    const removed_name: canonical.RecordFieldLabelId = @enumFromInt(1);
+    const retained_name: canonical.RecordFieldLabelId = @enumFromInt(2);
+    const shadowed_name: canonical.RecordFieldLabelId = @enumFromInt(3);
+    const rest_name: canonical.RecordFieldLabelId = @enumFromInt(4);
+
+    const removed_root = testIndexId(CheckedPatternId, 0);
+    const removed_field = testIndexId(CheckedPatternId, 1);
+    const removed_rest = testIndexId(CheckedPatternId, 2);
+    const retained_root = testIndexId(CheckedPatternId, 3);
+    const retained_field = testIndexId(CheckedPatternId, 4);
+    const retained_rest = testIndexId(CheckedPatternId, 5);
+    const removed_binder = testIndexId(PatternBinderId, 0);
+    const retained_binder = testIndexId(PatternBinderId, 1);
+
+    const removed_destructs = [_]CheckedRecordDestruct{
+        .{ .label = removed_name, .kind = .{ .required = removed_field } },
+        .{ .label = rest_name, .kind = .{ .rest = removed_rest } },
+    };
+    const retained_destructs = [_]CheckedRecordDestruct{
+        .{ .label = removed_name, .kind = .{ .required = retained_field } },
+        .{ .label = rest_name, .kind = .{ .rest = retained_rest } },
+    };
+    const patterns = [_]CheckedPattern{
+        .{ .id = removed_root, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record_destructure = &removed_destructs } },
+        .{ .id = removed_field, .ty = ty, .source_region = base.Region.zero(), .data = .underscore },
+        .{ .id = removed_rest, .ty = ty, .source_region = base.Region.zero(), .data = .{ .assign = removed_binder } },
+        .{ .id = retained_root, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record_destructure = &retained_destructs } },
+        .{ .id = retained_field, .ty = ty, .source_region = base.Region.zero(), .data = .underscore },
+        .{ .id = retained_rest, .ty = ty, .source_region = base.Region.zero(), .data = .{ .assign = retained_binder } },
+    };
+
+    const removed_exact_fields = [_]CheckedRecordExprField{
+        .{ .label = removed_name, .value = exact_expr },
+        .{ .label = retained_name, .value = ordinary_expr },
+    };
+    const retained_exact_fields = [_]CheckedRecordExprField{
+        .{ .label = removed_name, .value = ordinary_expr },
+        .{ .label = retained_name, .value = exact_expr },
+    };
+    const hidden_exact_fields = [_]CheckedRecordExprField{
+        .{ .label = shadowed_name, .value = exact_expr },
+    };
+    const shadowing_fields = [_]CheckedRecordExprField{
+        .{ .label = shadowed_name, .value = ordinary_expr },
+    };
+    const exprs = [_]CheckedExpr{
+        .{ .id = exact_expr, .ty = ty, .source_region = base.Region.zero(), .data = .{ .lookup_local = .{ .pattern = removed_rest, .resolved = exact_ref } } },
+        .{ .id = ordinary_expr, .ty = ty, .source_region = base.Region.zero(), .data = .empty_record },
+        .{ .id = removed_exact_record, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &removed_exact_fields, .ext = null } } },
+        .{ .id = retained_exact_record, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &retained_exact_fields, .ext = null } } },
+        .{ .id = hidden_exact_ext, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &hidden_exact_fields, .ext = null } } },
+        .{ .id = shadowing_record, .ty = ty, .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &shadowing_fields, .ext = hidden_exact_ext } } },
+    };
+    const statements = [_]CheckedStatement{
+        .{ .id = testIndexId(CheckedStatementId, 0), .source_region = base.Region.zero(), .data = .{ .decl = .{ .pattern = removed_root, .expr = removed_exact_record } } },
+        .{ .id = testIndexId(CheckedStatementId, 1), .source_region = base.Region.zero(), .data = .{ .decl = .{ .pattern = retained_root, .expr = retained_exact_record } } },
+    };
+
+    var bodies = CheckedBodyStore{};
+    defer bodies.deinit(allocator);
+    try bodies.commitExprs(allocator, &exprs);
+    try bodies.commitPatterns(allocator, &patterns);
+    try bodies.commitStatements(allocator, &statements);
+    try bodies.pattern_binders.appendSlice(allocator, &.{
+        .{ .id = removed_binder, .pattern = removed_rest, .reassignable = false },
+        .{ .id = retained_binder, .pattern = retained_rest, .reassignable = false },
+    });
+
+    var ref_records = [_]ResolvedValueRefRecord{.{
+        .expr = exact_expr,
+        .ref = .{ .local_param = .{ .binder = removed_binder } },
+        .checked_ty = ty,
+        .scope_depth = 0,
+    }};
+    const refs = ResolvedValueRefTable{ .records = &ref_records };
+    const plans = static_dispatch.StaticDispatchPlanTable{};
+    const procedure_bindings = TopLevelProcedureBindingTable{};
+    var templates = CheckedProcedureTemplateTable{};
+    var analysis = try ExactGraphProducerAnalysis.init(
+        allocator,
+        .{},
+        &bodies,
+        &templates,
+        &plans,
+        &refs,
+        &procedure_bindings,
+    );
+    defer analysis.deinit();
+
+    try std.testing.expect(!try analysis.patternProduces(removed_rest));
+    try std.testing.expect(try analysis.patternProduces(retained_rest));
+    try std.testing.expect(try analysis.exprProduces(hidden_exact_ext));
+    try std.testing.expect(!try analysis.exprProduces(shadowing_record));
 }
 
 test "synthetic expression capacity is exact for selected hoisted roots" {
