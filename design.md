@@ -3271,6 +3271,54 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
+### Outer-Rooted Dispatch Chain Demotion
+
+Boundary literal defaulting is rank-keyed: it commits the declared default for
+every still-flex literal in the generalizing rank's pool that nothing at that
+boundary constrains. A dispatch constraint deferred on a flex receiver owned by
+an *outer* scope—a weak top-level value's still-open literal, an enclosing
+function's local—breaks that keying. The chain's own vars were created at the
+inner rank, so they sit in this boundary's pool, but what will eventually
+constrain them is the outer receiver, which does not resolve until an outer
+boundary or module finalize. Defaulting them here commits a type the pending
+chain then contradicts: `top_str.split_on(",").get(0)` defaulted its index `0`
+to `Dec` while the chain, once `top_str` resolved to `Str`, demanded the `U64`
+that `List.get` takes.
+
+The declared rule is that such a chain belongs to its receiver's scope, not to
+the boundary that happens to contain its syntax. Before a generalization
+boundary defaults anything, every still-flex var reachable from the constraint
+signatures of an outer-owned flex receiver in this rank's pool is demoted to
+that receiver's rank (`demoteOuterRootedDispatchChains`). Demotion is exactly
+the min-ranking an eagerly-fired dispatch would have performed through ordinary
+unification; the rewrite restores that rank discipline for the deferred case
+rather than inventing a new one. Ranks only ever lower, so a var reachable from
+several outer roots settles at the minimum regardless of scan order, and the
+pass terminates. A receiver whose only constraint is its own literal conversion
+is not a chain root and is never demoted, so weak literal defaulting is
+unchanged. Generalized receivers are per-use-instantiated schemes rather than
+outer open vars, and are left alone.
+
+This is a policy rewrite on both counts. It changes checked output for
+error-free programs—the trapped literal leaves the boundary open and is later
+pinned by the chain instead of by the boundary default, so no `LITERAL
+DEFAULTED` warning is reported for it—and it makes programs check that the
+checker previously rejected, the repro above among them. What it does not do is
+weaken unification: it adds no constraint and drops none, and every demoted var
+is still solved by ordinary unification, one rank later, at the boundary that
+owns the receiver. A chain that genuinely conflicts still reports its mismatch
+there.
+
+Both sides are pinned by tests in
+src/check/test/type_checking_integration.zig: accepted—"literal behind
+dispatch chain rooted at weak top-level value" and "literal behind dispatch
+chain rooted in enclosing frame" (the trapped index resolves to the chain's
+`U64` at the outer boundary, from a top-level weak root and a nested frame
+root respectively); unaffected—"weak top-level literal pinned by cross-def
+use" and "weak top-level literal rejects second use at different type" (a
+chainless weak literal still stays open for exactly one module-wide type, and
+a second use at another type is still a mismatch).
+
 ### Rewrite Inventory
 
 Every solver-mutating rewrite in checking, classified. A change that adds a
@@ -3327,6 +3375,12 @@ Other solved-graph mutations:
 - `constrainInterpolationPartToStr`—policy: Builtin Str Interpolation Part
   Compatibility (above). One commit-probe unifies the part with `Str` and
   validates every attached dispatch constraint; only full success is committed.
+- `demoteOuterRootedDispatchChains` (`setDescRank` + `addVarToRank`)—policy:
+  Outer-Rooted Dispatch Chain Demotion (above). A probe of this rank's pool for
+  outer-owned flex receivers carrying non-literal constraints demotes their
+  reachable chain vars to the receiver's rank before boundary literal
+  defaulting runs. It rewrites rank metadata only; no descriptor content, no
+  redirect.
 - Literal defaulting (`commitLiteralDefault`, `commitLiteralGroupDefault`)
 —policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
