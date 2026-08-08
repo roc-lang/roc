@@ -5554,6 +5554,11 @@ pub fn build(b: *std.Build) void {
         }),
         .filters = test_filters,
     });
+    // Drives the interpreter thousands of frames deep to prove the Debug
+    // call-depth guard fires first, which needs the same native stack the other
+    // interpreter-driving binaries get; otherwise the stack runs out before the
+    // guard does and the fault replaces the deterministic crash under test.
+    trmc_lir_test.stack_size = 64 * 1024 * 1024;
     roc_modules.addAll(trmc_lir_test);
     trmc_lir_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
     trmc_lir_test.step.dependOn(&write_compiled_builtins.step);

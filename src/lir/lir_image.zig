@@ -1307,18 +1307,45 @@ test "LIR image copies and round-trips every populated store field" {
             const slice = try distinct(T, alloc, count, seed);
             return .{ .items = .{ .items = slice, .capacity = count } };
         }
-        /// Build a populated `SafeMultiList(T)` backed by the fixed buffer.
+        /// A per-field-and-index distinctive *value* of `T`. Filling raw bytes
+        /// instead would write bit patterns no value of the type can hold—an
+        /// `Idx` is 28 bits in a four-byte slot and a `bool` is one of two
+        /// bytes—and a copy that moves values, as the MultiArrayList columns
+        /// do, is free not to reproduce them.
+        fn distinctValue(comptime T: type, ordinal: usize) T {
+            if (T == bool) return ordinal & 1 == 1;
+            const info = @typeInfo(T);
+            if (info == .int) return @truncate(ordinal);
+            if (info == .@"enum") return @enumFromInt(@as(info.@"enum".tag_type, @truncate(ordinal)));
+            @compileError("distinctValue: unhandled field type " ++ @typeName(T));
+        }
+        /// Build a populated `SafeMultiList(T)` backed by the fixed buffer,
+        /// giving every column its own value sequence so a dropped or swapped
+        /// field is detectable after view.
         fn multiList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeMultiList(T) {
             var mal: std.MultiArrayList(T) = .{};
             try mal.resize(alloc, count);
-            const total = std.MultiArrayList(T).capacityInBytes(mal.capacity);
-            for (mal.bytes[0..total], 0..) |*b, i| b.* = seed +% @as(u8, @truncate(i));
+            const slice = mal.slice();
+            inline for (std.meta.fields(T), 0..) |field, field_index| {
+                const column = slice.items(@field(std.MultiArrayList(T).Field, field.name));
+                for (column, 0..) |*value, i| {
+                    value.* = distinctValue(field.type, seed + field_index * 64 + i);
+                }
+            }
             return .{ .items = mal };
         }
         /// Assert two byte spans are equal and non-empty.
         fn expectBytesEq(a: []const u8, b: []const u8) error{ TestExpectedEqual, TestUnexpectedResult }!void {
             try std.testing.expect(a.len > 0);
             try std.testing.expectEqualSlices(u8, a, b);
+        }
+        /// Assert two spans hold equal values and are non-empty. Used for a
+        /// column whose element type has padding bits: `Idx` is 28 bits in a
+        /// four-byte slot, so the bytes the fill wrote above bit 27 are not
+        /// part of any value and a copy is free to drop them.
+        fn expectValuesEq(comptime T: type, a: []const T, b: []const T) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+            try std.testing.expect(a.len > 0);
+            try std.testing.expectEqualSlices(T, a, b);
         }
     };
 
@@ -1416,17 +1443,19 @@ test "LIR image copies and round-trips every populated store field" {
         std.mem.sliceAsBytes(layouts.struct_fields.field(.index)),
         std.mem.sliceAsBytes(view.layouts.struct_fields.field(.index)),
     );
-    try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.struct_fields.field(.layout)),
-        std.mem.sliceAsBytes(view.layouts.struct_fields.field(.layout)),
+    try h.expectValuesEq(
+        layout_mod.Idx,
+        layouts.struct_fields.field(.layout),
+        view.layouts.struct_fields.field(.layout),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.struct_fields.field(.is_padding)),
         std.mem.sliceAsBytes(view.layouts.struct_fields.field(.is_padding)),
     );
-    try h.expectBytesEq(
-        std.mem.sliceAsBytes(layouts.tag_union_variants.field(.payload_layout)),
-        std.mem.sliceAsBytes(view.layouts.tag_union_variants.field(.payload_layout)),
+    try h.expectValuesEq(
+        layout_mod.Idx,
+        layouts.tag_union_variants.field(.payload_layout),
+        view.layouts.tag_union_variants.field(.payload_layout),
     );
     try std.testing.expectEqual(target_usize, view.layouts.target_usize);
     try std.testing.expectEqual(target_usize, view.target_usize);
