@@ -17468,6 +17468,10 @@ const BodyContext = struct {
         switch (expr.data) {
             .match_ => |match| return try self.lowerMatchExprAtCheckedNode(expr_id, match, expr_node),
             .if_ => |if_| return try self.lowerIfExprAtCheckedNode(expr_id, if_, expr_node),
+            .block => |block| return try self.lowerBlockAtTypeCell(
+                block,
+                DraftTypeCell.fromGraphNode(expr_node),
+            ),
             .dispatch_call => |plan| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
                 return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
@@ -17484,7 +17488,7 @@ const BodyContext = struct {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
                 return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
@@ -28178,15 +28182,16 @@ const BodyContext = struct {
                 request_node,
                 static_data_const_locator,
             ),
-            .tag, .record, .tuple => try self.addConstructorExprAtNode(
+            .record => |items| try self.restoreConstRecordExprAtNode(
+                store_view,
+                type_view,
                 request_node,
-                try self.restoreConstDataAtNode(
-                    store_view,
-                    type_view,
-                    value,
-                    request_node,
-                    static_data_const_locator,
-                ),
+                items,
+                static_data_const_locator,
+            ),
+            .tag, .tuple => try self.addConstructorExprAtNode(
+                request_node,
+                try self.restoreConstDataAtNode(store_view, type_view, value, request_node, static_data_const_locator),
             ),
             .nominal => |nominal| blk: {
                 const representation_node = self.constructorRepresentationNode(request_node);
@@ -28412,6 +28417,54 @@ const BodyContext = struct {
             };
         }
         return try self.addFieldExprSpan(lowered);
+    }
+
+    /// Restore a ConstStore record from the exact cells produced by its stored
+    /// children. A function value can specialize to a generated-private return
+    /// type while it is being restored, so the checked-public field node is only
+    /// the request for that child; it is not the record value's resulting field
+    /// type.
+    fn restoreConstRecordExprAtNode(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        request_node: NodeId,
+        items: []const checked.ConstNodeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
+        const fields_span = try self.restoreConstRecordAtNode(
+            store_view,
+            type_view,
+            request_node,
+            items,
+            static_data_const_locator,
+        );
+        const fields = self.fieldExprSpan(fields_span);
+        const request_fields = (try self.graph.recordConstructionNodes(request_node)).fields;
+        if (request_fields.len != fields.len) {
+            Common.invariant("restored ConstStore record field count changed during exact construction");
+        }
+
+        const produced_fields = try self.graph.arena().alloc(InstField, fields.len);
+        var changed = false;
+        for (fields, request_fields, produced_fields) |field, request_field, *produced_field| {
+            if (field.name != request_field.name) {
+                Common.invariant("restored ConstStore record field order differed from its request");
+            }
+            const produced_ty = try self.exprTypeCell(field.value).toGraphNode(self.graph);
+            produced_field.* = .{ .name = field.name, .ty = produced_ty };
+            changed = changed or !self.graph.sameClass(request_field.ty, produced_ty);
+        }
+
+        const structural_node = if (changed)
+            try self.graph.newNode(.{ .record = .{
+                .fields = produced_fields,
+                .ext = try self.graph.newNode(.empty_record),
+            } })
+        else
+            self.recordConstructionRootNode(request_node);
+        const produced_node = try self.producedConstructorNode(request_node, structural_node);
+        return try self.addConstructorExprAtNode(produced_node, .{ .record = fields_span });
     }
 
     fn restoreConstTagPayloadsAtNode(
@@ -28854,10 +28907,7 @@ const BodyContext = struct {
             retained_evidence,
             request_fn_node,
         );
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .{ .fn_def = .{ .fn_id = restored_fn } },
-        );
+        return try self.addRestoredFnDefAtNode(restored_fn, .empty(), request_fn_node);
     }
 
     fn restoreConstFnTemplateAtNode(
@@ -29087,12 +29137,10 @@ const BodyContext = struct {
             capture_values[index] = .{ .local = capture.local, .value = capture.value };
         }
 
-        return try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .{ .fn_def = .{
-                .fn_id = restored_fn_id,
-                .captures = try fn_ctx.addFnDefCaptureSpan(capture_values),
-            } },
+        return try fn_ctx.addRestoredFnDefAtNode(
+            restored_fn_id,
+            try fn_ctx.addFnDefCaptureSpan(capture_values),
+            request_fn_node,
         );
     }
 
@@ -29125,10 +29173,7 @@ const BodyContext = struct {
         }
         const request_fn_node = try self.activeNodeFromType(ty);
         const restored_fn = try self.restoreConstFnTemplate(fn_value, template, retained_evidence, request_fn_node);
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .{ .fn_def = .{ .fn_id = restored_fn } },
-        );
+        return try self.addRestoredFnDefAtNode(restored_fn, .empty(), request_fn_node);
     }
 
     fn restoreConstFnTemplate(
@@ -29320,12 +29365,27 @@ const BodyContext = struct {
             capture_values[index] = .{ .local = capture.local, .value = capture.value };
         }
 
-        return try fn_ctx.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(request_fn_node),
-            .{ .fn_def = .{
-                .fn_id = restored_fn_id,
-                .captures = try fn_ctx.addFnDefCaptureSpan(capture_values),
-            } },
+        return try fn_ctx.addRestoredFnDefAtNode(
+            restored_fn_id,
+            try fn_ctx.addFnDefCaptureSpan(capture_values),
+            request_fn_node,
+        );
+    }
+
+    /// A restored function's body specialization owns its exact signature.
+    /// The surrounding ConstStore type is only the checked-public request and
+    /// may differ at a generated-private return nested inside the function.
+    fn addRestoredFnDefAtNode(
+        self: *BodyContext,
+        fn_id: DraftFnTarget,
+        captures: DraftSpan(DraftFnDefCapture),
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const produced_fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
+        try applyExpressionValueToRequest(self.graph, request_fn_node, produced_fn_node);
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(produced_fn_node),
+            .{ .fn_def = .{ .fn_id = fn_id, .captures = captures } },
         );
     }
 
@@ -31757,6 +31817,15 @@ const BodyContext = struct {
                     try self.activeNodeFromType(ty),
                 );
             },
+            // A block is representation-transparent. Even when its checked
+            // result is closed, its final expression may produce a narrower
+            // generated-private representation. Keep that exact child cell in
+            // the graph instead of stamping the checked-public `ty` onto the
+            // enclosing block.
+            .block => |block| return try self.lowerBlockAtTypeCell(
+                block,
+                DraftTypeCell.fromGraphNode(try self.activeNodeFromType(ty)),
+            ),
             .lambda,
             .closure,
             => {
@@ -31766,7 +31835,7 @@ const BodyContext = struct {
                 }
                 return lowered;
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         try self.constrainKnownType(expr.ty, ty);
         const lowered = try self.lowerExprWithType(checked_expr, ty);

@@ -15059,6 +15059,7 @@ const ExactGraphProducerAnalysis = struct {
             .lookup_local => |lookup| try self.callableResolvedRefProduces(lookup.resolved),
             .lookup_external => |resolved| try self.callableResolvedRefProduces(resolved),
             .lookup_required => |resolved| try self.callableResolvedRefProduces(resolved),
+            .call => try self.exprProduces(expr_id),
             .if_ => |if_| blk: {
                 for (if_.branches) |branch| if (try self.callableExprProduces(branch.body)) break :blk true;
                 break :blk try self.callableExprProduces(if_.final_else);
@@ -15068,6 +15069,19 @@ const ExactGraphProducerAnalysis = struct {
                 break :blk false;
             },
             .block => |block| try self.callableExprProduces(block.final_expr),
+            .field_access => |field| try self.exprProjectionStepProduces(
+                field.receiver,
+                .{ .record_field = field.field_name },
+                &.{},
+            ),
+            .tuple_access => |tuple| try self.exprProjectionStepProduces(
+                tuple.tuple,
+                .{ .tuple_item = tuple.elem_index },
+                &.{},
+            ),
+            .dbg, .expect => |child| try self.callableExprProduces(child),
+            .expect_err => |expect_err| try self.callableExprProduces(expect_err.expr),
+            .return_ => |return_| try self.callableExprProduces(return_.expr),
             .pending,
             .numeral,
             .str_from_quote,
@@ -15077,7 +15091,6 @@ const ExactGraphProducerAnalysis = struct {
             .list,
             .empty_list,
             .tuple,
-            .call,
             .record,
             .empty_record,
             .tag,
@@ -15086,23 +15099,17 @@ const ExactGraphProducerAnalysis = struct {
             .binop,
             .unary_minus,
             .unary_not,
-            .field_access,
             .dispatch_call,
             .interpolation,
             .structural_eq,
             .structural_hash,
             .method_eq,
             .type_dispatch_call,
-            .tuple_access,
             .runtime_error,
             .crash,
-            .dbg,
-            .expect_err,
-            .expect,
             .ellipsis,
             .anno_only,
             .break_,
-            .return_,
             .for_,
             .hosted_lambda,
             .run_low_level,
@@ -15125,11 +15132,9 @@ const ExactGraphProducerAnalysis = struct {
             // is therefore an exact-result producer even though checking only
             // records the public function type.
             .local_param => true,
+            .local_value, .local_mutable_version, .pattern_binder => |local| try self.binderProduces(local.binder),
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
             .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
             .selected_hoisted_const,
             .top_level_const,
             .imported_const,
@@ -15337,6 +15342,21 @@ const ExactGraphProducerAnalysis = struct {
                 try self.exprProjectionProduces(nominal.backing_expr, rest)
             else
                 try self.exprProduces(expr_id),
+            .lookup_local => |lookup| try self.lookupProjectionProduces(lookup.resolved, step, rest),
+            .lookup_external => |resolved| try self.lookupProjectionProduces(resolved, step, rest),
+            .lookup_required => |resolved| try self.lookupProjectionProduces(resolved, step, rest),
+            .field_access => |field| try self.exprProjectionWithPrefixProduces(
+                field.receiver,
+                &.{.{ .record_field = field.field_name }},
+                step,
+                rest,
+            ),
+            .tuple_access => |tuple| try self.exprProjectionWithPrefixProduces(
+                tuple.tuple,
+                &.{.{ .tuple_item = tuple.elem_index }},
+                step,
+                rest,
+            ),
             .list => |items| switch (step) {
                 .list_item => |index| if (index < items.len)
                     try self.exprProjectionProduces(items[index], rest)
@@ -15398,11 +15418,6 @@ const ExactGraphProducerAnalysis = struct {
             .dispatch_call,
             .interpolation,
             .type_dispatch_call,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .field_access,
-            .tuple_access,
             .pending,
             .numeral,
             .str_from_quote,
@@ -15430,6 +15445,76 @@ const ExactGraphProducerAnalysis = struct {
             .run_low_level,
             => try self.exprProduces(expr_id),
         };
+    }
+
+    fn exprProjectionWithPrefixProduces(
+        self: *ExactGraphProducerAnalysis,
+        expr_id: CheckedExprId,
+        prefix: []const ProjectionStep,
+        step: ProjectionStep,
+        rest: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        const projection = try self.allocator.alloc(ProjectionStep, prefix.len + 1 + rest.len);
+        defer self.allocator.free(projection);
+        @memcpy(projection[0..prefix.len], prefix);
+        projection[prefix.len] = step;
+        @memcpy(projection[prefix.len + 1 ..], rest);
+        return self.exprProjectionProduces(expr_id, projection);
+    }
+
+    fn lookupProjectionProduces(
+        self: *ExactGraphProducerAnalysis,
+        maybe_ref: ?ResolvedValueRefId,
+        step: ProjectionStep,
+        rest: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        const ref_id = maybe_ref orelse return false;
+        const raw = @intFromEnum(ref_id);
+        if (raw >= self.refs.records.len) {
+            return checkedArtifactInvariant("exact projection referenced a missing lookup", .{});
+        }
+        return switch (self.refs.records[raw].ref) {
+            .local_param => true,
+            .local_value, .local_mutable_version, .pattern_binder => |local| self.binderProjectionProduces(
+                local.binder,
+                step,
+                rest,
+            ),
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => false,
+        };
+    }
+
+    fn binderProjectionProduces(
+        self: *ExactGraphProducerAnalysis,
+        binder: PatternBinderId,
+        step: ProjectionStep,
+        rest: []const ProjectionStep,
+    ) Allocator.Error!bool {
+        const raw = @intFromEnum(binder);
+        if (raw >= self.binder_value_heads.len) {
+            return checkedArtifactInvariant("exact projection referenced a missing binder", .{});
+        }
+        if (self.binder_exact_sources[raw]) return true;
+        var current = self.binder_value_heads[raw];
+        while (current) |edge| {
+            const value = self.binder_values.items[edge];
+            const prefix = self.projection_steps.items[value.projection_start..][0..value.projection_len];
+            if (try self.exprProjectionWithPrefixProduces(value.expr, prefix, step, rest)) return true;
+            current = value.next;
+        }
+        return false;
     }
 
     fn recordRestProjectionProduces(
@@ -15650,18 +15735,19 @@ const ExactGraphProducerAnalysis = struct {
             // caller's exact argument cell.
             .local_param => true,
             .local_value, .local_mutable_version, .pattern_binder => |local| try self.binderProduces(local.binder),
-            .local_proc,
+            // A procedure value carries the exact ABI produced by its body. If
+            // that value is stored in a record, tuple, tag, or other compound
+            // result, the compound result must retain the callable's exact
+            // argument and return cells just like any other child value.
+            .local_proc => |local| try self.callableExprProduces(local.expr),
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| try self.procedureUseProduces(procedure),
+            .platform_required_proc => |required| try self.procedureUseProduces(required.procedure),
             .selected_hoisted_const,
             .top_level_const,
             .imported_const,
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
             .platform_required_declaration,
             .platform_required_checked_error,
             .platform_required_const,
-            .platform_required_proc,
-            .promoted_top_level_proc,
             => false,
         };
     }
@@ -15945,8 +16031,6 @@ const ExactGraphProducerAnalysis = struct {
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .closure,
-            .lambda,
             .binop,
             .unary_minus,
             .unary_not,
@@ -15960,6 +16044,7 @@ const ExactGraphProducerAnalysis = struct {
             .break_,
             .hosted_lambda,
             => false,
+            .closure, .lambda => try self.callableExprProduces(expr_id),
         };
         self.expr_states[raw] = if (produces)
             .yes

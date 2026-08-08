@@ -3962,6 +3962,49 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3, 4]" },
     },
     .{
+        .name = "inspect: callable returned by a procedure preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\choose = |callable| callable
+        \\
+        \\main = {
+        \\    make_iter = choose(|values| values.iter())
+        \\    Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: callable selected from a record preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter : List(I64) -> Iter(I64)
+        \\make_iter = |values| values.iter()
+        \\
+        \\main = {
+        \\    operations = { make_iter: make_iter }
+        \\    Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: callable selected from a returned record preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter : List(I64) -> Iter(I64)
+        \\make_iter = |values| values.iter()
+        \\
+        \\make_operations = || { make_iter: make_iter }
+        \\
+        \\main = {
+        \\    operations = make_operations()
+        \\    Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: record rest preserves an exact iterator field",
         .source_kind = .module,
         .source =
