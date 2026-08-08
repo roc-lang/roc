@@ -40,10 +40,11 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-arrow-call
-						(e-int (raw "0"))
-						(e-tag (raw "X")))
-					(e-ident (raw ".a")))))))
+					(receiver
+						(e-arrow-call
+							(e-int (raw "0"))
+							(e-tag (raw "X"))))
+					(segment (mode "required") (field "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -54,11 +55,13 @@ a = ((0 |> X).a)
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "a")
+		(e-field-access
 			(receiver
 				(e-tag (name "X")
 					(args
-						(e-num (value "0"))))))))
+						(e-num (value "0")))))
+			(segments
+				(segment (name "a") (mode "required"))))))
 ~~~
 # TYPES
 ~~~clojure

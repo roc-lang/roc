@@ -76,6 +76,10 @@ pub fn run(
     errdefer program.deinit();
 
     const solved_view = movedSolvedView(&owned, &program);
+    try program.field_access_segments.ensureUnusedCapacity(allocator, solved_view.lifted.field_access_segments.len);
+    for (solved_view.lifted.field_access_segments) |segment| {
+        program.field_access_segments.appendAssumeCapacity(.{ .field = segment.field });
+    }
     var lowerer = try Lowerer.init(allocator, solved_view, &program, options);
     defer lowerer.folded_matches.deinit(allocator);
     for (folded_matches) |folded| {
@@ -114,6 +118,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .typed_locals = lifted.typed_locals,
             .stmt_ids = lifted.stmt_ids,
             .field_exprs = lifted.field_exprs,
+            .field_access_segments = lifted.field_access_segments,
             .fn_def_captures = lifted.fn_def_captures,
             .capture_operands = lifted.capture_operands,
             .record_destructs = lifted.record_destructs,
@@ -707,7 +712,7 @@ const Lowerer = struct {
             } },
             .field_access => |field| .{ .field_access = .{
                 .receiver = try self.lowerExpr(field.receiver),
-                .field = field.field,
+                .segments = self.lowerFieldAccessSegmentSpan(field.segments),
             } },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = try self.lowerExpr(access.tuple),
@@ -1198,7 +1203,12 @@ const Lowerer = struct {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
                 for (self.solved.types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
+                    lowered[i] = .{
+                        .name = field.name,
+                        .ty = try self.lowerType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lowerType(value_ty) else null,
+                        .default = field.default,
+                    };
                 }
                 break :blk .{ .record = try self.program.types.addFields(lowered) };
             },
@@ -1430,6 +1440,14 @@ const Lowerer = struct {
             };
         }
         return try self.program.addFieldExprSpan(lowered);
+    }
+
+    fn lowerFieldAccessSegmentSpan(
+        _: *Lowerer,
+        span: Lifted.Span(Lifted.FieldAccessSegment),
+    ) Ast.Span(Ast.FieldAccessSegment) {
+        if (span.len == 0) Common.invariant("field access path had no segments");
+        return .{ .start = span.start, .len = span.len };
     }
 
     fn lowerRecordDestructSpan(self: *Lowerer, span: Lifted.Span(Lifted.RecordDestruct)) Allocator.Error!Ast.Span(Ast.RecordDestruct) {

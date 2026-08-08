@@ -1963,7 +1963,10 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
 
     const counters = try monotypeCountersForModule(allocator, source);
     try std.testing.expect(counters.template_misses <= 20);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 300);
+    // Generalized record fields retain distinct source-value/runtime-slot
+    // cells until specialization freeze. Keep that fixed linear bookkeeping
+    // bounded while guarding against the former exponential Try-chain growth.
+    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {

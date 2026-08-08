@@ -280,6 +280,8 @@ pub const TypeAnno = union(enum) {
                     const field_begin = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ir.getIdentText(field.name));
+                    if (field.is_optional) try tree.pushBoolPair("optional", true);
+                    if (field.default_value != null) try tree.pushBoolPair("defaulted", true);
                     const field_attrs = tree.beginNode();
 
                     try ir.store.getTypeAnno(field.ty).pushToSExprTree(ir, tree, field.ty);
@@ -332,12 +334,19 @@ pub const TypeAnno = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         ty: TypeAnno.Idx,
+        /// Whether the field may be absent from a runtime record value.
+        is_optional: bool,
         /// True for unnamed fields (`_` / `_name`), which are only permitted in
         /// nominal record declarations and act as layout padding rather than
         /// real fields. Such fields are kept in the declaration's canonical
         /// record annotation (preserving declared order) but excluded from the
         /// backing record row, so they are never name-resolved or constructed.
         is_unnamed: bool = false,
+        /// The canonicalized default value expression for a DEFAULTED field
+        /// (`a : U8 ?? 10`), or `null` (design.md "Defaulted Fields").
+        /// Mutually exclusive with `is_optional` and `is_unnamed` (rejected
+        /// at canonicalization).
+        default_value: ?CIR.Expr.Idx = null,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: DataSpan };

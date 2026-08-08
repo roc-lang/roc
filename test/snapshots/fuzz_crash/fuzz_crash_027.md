@@ -331,12 +331,13 @@ Numbers cannot have leading zeros.
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `...` here.
@@ -1874,7 +1875,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1107) (dispatcher-var 318)
+						(e-interpolation (constraint-fn-var 1169) (dispatcher-var 318)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

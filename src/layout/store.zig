@@ -35,7 +35,7 @@ const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
 const Var = types.Var;
-const TypeScope = types.TypeScope;
+const VarMap = types.VarMap;
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
@@ -2549,50 +2549,6 @@ pub const Store = struct {
         return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
-    /// Note: the caller must verify ahead of time that the given variable does not
-    /// resolve to a flex var or rigid var, unless that flex var or rigid var is
-    /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
-    ///
-    /// For example, when checking types that are exposed to the host, they should
-    /// all have been verified to be either monomorphic or boxed. Same with repl
-    /// code like this:
-    ///
-    /// ```
-    /// val : a
-    ///
-    /// val
-    /// ```
-    ///
-    /// This flex var should be replaced by an Error type before calling this function.
-    ///
-    /// The module_idx parameter specifies which module the type variable belongs to.
-    /// This is essential for cross-module layout computation where different modules
-    /// may have type variables with the same numeric value referring to different types.
-    ///
-    /// The caller_module_idx parameter specifies the module that owns the type variables
-    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
-    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
-    /// for cross-module polymorphic function calls.
-    pub fn fromTypeVar(
-        self: *Self,
-        module_idx: u32,
-        unresolved_var: Var,
-        type_scope: *const TypeScope,
-        caller_module_idx: ?u32,
-    ) std.mem.Allocator.Error!Idx {
-        // Shared ordinary-data layout resolution now lives in TypeLayoutResolver.
-        // Keep the legacy store-owned implementation below only as transitional
-        // dead code until the remaining store-owned state is fully removed.
-        if (self.layouts.len() >= num_primitives) {
-            const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-
-            var resolver = TypeLayoutResolver.init(self);
-            defer resolver.deinit();
-            return resolver.resolve(module_idx, unresolved_var, type_scope, caller_module_idx);
-        }
-        unreachable;
-    }
-
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
         defer trace.end();
@@ -2636,6 +2592,36 @@ pub const Store = struct {
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
         return self.resolved_list_layouts.items[@intFromEnum(layout_idx)];
+    }
+};
+
+/// TypeScope represents nested type scopes for resolving polymorphic type variables.
+/// Each HashMap in the list represents a scope level, mapping polymorphic type variables
+/// to their resolved monomorphic equivalents.
+pub const TypeScope = struct {
+    scopes: std.array_list.Managed(VarMap),
+
+    pub fn init(allocator: std.mem.Allocator) TypeScope {
+        return .{
+            .scopes = std.array_list.Managed(VarMap).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TypeScope) void {
+        for (self.scopes.items) |*scope| {
+            scope.deinit();
+        }
+        self.scopes.deinit();
+    }
+
+    /// Look up a type variable in all nested scopes, returning the mapped variable if found
+    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
+        for (self.scopes.items) |*scope| {
+            if (scope.get(var_to_find)) |mapped_var| {
+                return mapped_var;
+            }
+        }
+        return null;
     }
 };
 

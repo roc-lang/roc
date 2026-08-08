@@ -21,8 +21,9 @@ EndOfFile,
 (e-apply
 	(e-tuple
 		(e-field-access
-			(e-ident (raw "person"))
-			(e-ident (raw "transform"))))
+			(receiver
+				(e-ident (raw "person")))
+			(segment (mode "required") (field "transform"))))
 	(e-int (raw "42")))
 ~~~
 # FORMATTED
@@ -32,9 +33,11 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call (constraint-fn-var 207)
-	(e-field-access (field "transform")
+	(e-field-access
 		(receiver
-			(e-runtime-error (tag "ident_not_in_scope"))))
+			(e-runtime-error (tag "ident_not_in_scope")))
+		(segments
+			(segment (name "transform") (mode "required"))))
 	(e-num (value "42")))
 ~~~
 # TYPES

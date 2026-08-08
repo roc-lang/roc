@@ -343,8 +343,9 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.decode"))
 								(e-field-access
-									(e-ident (raw "request"))
-									(e-ident (raw "body")))))
+									(receiver
+										(e-ident (raw "request")))
+									(segment (mode "required") (field "body")))))
 						(e-match
 							(e-ident (raw "result"))
 							(branches

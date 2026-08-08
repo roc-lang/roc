@@ -56,14 +56,16 @@ EndOfFile,
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "r"))
-							(e-ident (raw "f"))))
+							(receiver
+								(e-ident (raw "r")))
+							(segment (mode "required") (field "f"))))
 					(e-int (raw "1")))
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "r"))
-							(e-ident (raw "f"))))
+							(receiver
+								(e-ident (raw "r")))
+							(segment (mode "required") (field "f"))))
 					(e-string
 						(e-string-part (raw "a"))))))))
 ~~~
@@ -92,17 +94,21 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 225)
-					(e-field-access (field "f")
+				(e-call (constraint-fn-var 228)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "r")))))
+								(p-assign (ident "r"))))
+						(segments
+							(segment (name "f") (mode "required"))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 237)
-					(e-field-access (field "f")
+				(e-call (constraint-fn-var 240)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "r")))))
+								(p-assign (ident "r"))))
+						(segments
+							(segment (name "f") (mode "required"))))
 					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES

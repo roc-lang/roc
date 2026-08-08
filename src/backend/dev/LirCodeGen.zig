@@ -17387,11 +17387,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.codegen.emitLoadImm(reg, @bitCast(low));
                             try self.codegen.emitStoreStack(.w64, dest_offset, reg);
                         },
-                        4 => {
-                            try self.codegen.emitLoadImm(reg, @intCast(@as(u32, @truncate(low))));
-                            try self.codegen.emitStoreStack(.w32, dest_offset, reg);
+                        else => {
+                            // Small aggregates (e.g. records with sub-word
+                            // slots) materialize at any size below 8: store
+                            // the immediate's low bytes in descending
+                            // power-of-two chunks.
+                            std.debug.assert(size < 8);
+                            var written: u32 = 0;
+                            while (written < size) {
+                                const remaining = size - written;
+                                const chunk_bytes: u32 = if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
+                                const chunk: u64 = (low >> @intCast(written * 8)) & (@as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast((8 - chunk_bytes) * 8)));
+                                try self.codegen.emitLoadImm(reg, @bitCast(chunk));
+                                const chunk_offset = dest_offset + @as(i32, @intCast(written));
+                                switch (chunk_bytes) {
+                                    4 => try self.codegen.emitStoreStack(.w32, chunk_offset, reg),
+                                    2 => try self.emitStoreStackW16(chunk_offset, reg),
+                                    1 => try self.emitStoreStackW8(chunk_offset, reg),
+                                    else => unreachable,
+                                }
+                                written += chunk_bytes;
+                            }
                         },
-                        else => unreachable,
                     }
                     return;
                 },

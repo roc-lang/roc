@@ -127,8 +127,9 @@ EndOfFile,
 						(e-ident (raw "x"))
 						(e-ident (raw "y")))
 					(e-field-access
-						(e-ident (raw "rest"))
-						(e-ident (raw "z"))))))))
+						(receiver
+							(e-ident (raw "rest")))
+						(segment (mode "required") (field "z"))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -152,9 +153,9 @@ NO CHANGE
 						(record-destruct (label "z") (ident "z")
 							(required
 								(p-assign (ident "z")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 335)
+			(e-dispatch-call (method "plus") (constraint-fn-var 341)
 				(receiver
-					(e-dispatch-call (method "plus") (constraint-fn-var 329)
+					(e-dispatch-call (method "plus") (constraint-fn-var 339)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -189,7 +190,7 @@ NO CHANGE
 						(record-destruct (label "z") (ident "z")
 							(sub-pattern
 								(p-underscore))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 349)
+			(e-dispatch-call (method "plus") (constraint-fn-var 366)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -221,7 +222,7 @@ NO CHANGE
 						(record-destruct (label "#others") (ident "#others")
 							(rest-pattern
 								(p-underscore))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 363)
+			(e-dispatch-call (method "plus") (constraint-fn-var 386)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -253,9 +254,9 @@ NO CHANGE
 						(record-destruct (label "rest") (ident "rest")
 							(rest-pattern
 								(p-assign (ident "rest")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 384)
+			(e-dispatch-call (method "plus") (constraint-fn-var 410)
 				(receiver
-					(e-dispatch-call (method "plus") (constraint-fn-var 377)
+					(e-dispatch-call (method "plus") (constraint-fn-var 406)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -263,10 +264,12 @@ NO CHANGE
 							(e-lookup-local
 								(p-assign (ident "y"))))))
 				(args
-					(e-field-access (field "z")
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "rest"))))))))
+								(p-assign (ident "rest"))))
+						(segments
+							(segment (name "z") (mode "required")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

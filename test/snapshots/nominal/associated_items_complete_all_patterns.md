@@ -1193,12 +1193,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                       ‾‾‾‾‾‾                                               │
  └─────────────────────────── associated_items_complete_all_patterns.md:21:22 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.Inner` here.
@@ -1340,12 +1341,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                            ‾‾‾‾‾‾                                          │
  └─────────────────────────── associated_items_complete_all_patterns.md:30:27 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.Inner` here.
@@ -1468,12 +1470,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾‾‾‾                                     │
  └─────────────────────────── associated_items_complete_all_patterns.md:33:36 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.Inner` here.
@@ -1741,12 +1744,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                    ‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:51:27 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.InnerB` here.
@@ -1781,12 +1785,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                    ‾‾‾‾‾‾‾                                                 │
  └─────────────────────────── associated_items_complete_all_patterns.md:58:19 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.InnerA` here.
@@ -1928,12 +1933,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └─────────────────────────── associated_items_complete_all_patterns.md:72:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -1949,12 +1955,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └─────────────────────────── associated_items_complete_all_patterns.md:73:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -1970,12 +1977,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └─────────────────────────── associated_items_complete_all_patterns.md:73:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -2117,12 +2125,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └─────────────────────────── associated_items_complete_all_patterns.md:87:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2138,12 +2147,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └─────────────────────────── associated_items_complete_all_patterns.md:88:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2159,12 +2169,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └─────────────────────────── associated_items_complete_all_patterns.md:88:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -2558,12 +2569,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                            ‾‾‾                                             │
  └────────────────────────── associated_items_complete_all_patterns.md:122:27 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2579,12 +2591,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                            ‾‾‾                                             │
  └────────────────────────── associated_items_complete_all_patterns.md:123:27 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2600,12 +2613,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:123:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -2747,12 +2761,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:140:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2768,12 +2783,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                  ‾‾‾                                       │
  └────────────────────────── associated_items_complete_all_patterns.md:140:33 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -2789,12 +2805,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                     ‾‾‾                                    │
  └────────────────────────── associated_items_complete_all_patterns.md:140:36 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -2936,12 +2953,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:157:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -2957,12 +2975,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                  ‾‾‾                                       │
  └────────────────────────── associated_items_complete_all_patterns.md:157:33 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -2978,12 +2997,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                     ‾‾‾                                    │
  └────────────────────────── associated_items_complete_all_patterns.md:157:36 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -3125,12 +3145,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                         ‾‾‾                                                │
  └────────────────────────── associated_items_complete_all_patterns.md:174:24 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -3146,12 +3167,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                            ‾‾‾                                             │
  └────────────────────────── associated_items_complete_all_patterns.md:174:27 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -3167,12 +3189,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:174:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -3314,12 +3337,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                       ‾‾‾                                                  │
  └────────────────────────── associated_items_complete_all_patterns.md:191:22 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -3335,12 +3359,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                          ‾‾‾                                               │
  └────────────────────────── associated_items_complete_all_patterns.md:191:25 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -3356,12 +3381,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                             ‾‾‾                                            │
  └────────────────────────── associated_items_complete_all_patterns.md:191:28 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -3503,12 +3529,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:203:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -3524,12 +3551,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:203:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -3545,12 +3573,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:203:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -3692,12 +3721,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:218:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -3713,12 +3743,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:218:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -3734,12 +3765,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:218:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -3881,12 +3913,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:235:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -3902,12 +3935,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:235:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -3923,12 +3957,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:235:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -4448,12 +4483,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:292:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -4469,12 +4505,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                  ‾‾‾                                       │
  └────────────────────────── associated_items_complete_all_patterns.md:292:33 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -4490,12 +4527,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                     ‾‾‾                                    │
  └────────────────────────── associated_items_complete_all_patterns.md:292:36 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -4511,12 +4549,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                        ‾‾‾                                 │
  └────────────────────────── associated_items_complete_all_patterns.md:292:39 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -4658,12 +4697,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                               ‾‾‾                                          │
  └────────────────────────── associated_items_complete_all_patterns.md:313:30 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -4679,12 +4719,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                  ‾‾‾                                       │
  └────────────────────────── associated_items_complete_all_patterns.md:313:33 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -4700,12 +4741,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                     ‾‾‾                                    │
  └────────────────────────── associated_items_complete_all_patterns.md:313:36 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -4721,12 +4763,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                        ‾‾‾                                 │
  └────────────────────────── associated_items_complete_all_patterns.md:313:39 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -4868,12 +4911,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:334:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -4889,12 +4933,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:334:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -4910,12 +4955,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:334:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -4931,12 +4977,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                    ‾‾‾                                     │
  └────────────────────────── associated_items_complete_all_patterns.md:334:35 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -5078,12 +5125,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:349:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5099,12 +5147,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:349:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -5120,12 +5169,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:349:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -5141,12 +5191,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                    ‾‾‾                                     │
  └────────────────────────── associated_items_complete_all_patterns.md:349:35 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -5288,12 +5339,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:366:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5309,12 +5361,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:366:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -5330,12 +5383,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:366:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -5351,12 +5405,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                    ‾‾‾                                     │
  └────────────────────────── associated_items_complete_all_patterns.md:366:35 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -5498,12 +5553,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                       ‾‾‾                                                  │
  └────────────────────────── associated_items_complete_all_patterns.md:388:22 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5519,12 +5575,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                       ‾‾‾                                                  │
  └────────────────────────── associated_items_complete_all_patterns.md:389:22 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5540,12 +5597,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                          ‾‾‾                                               │
  └────────────────────────── associated_items_complete_all_patterns.md:389:25 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -5561,12 +5619,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                       ‾‾‾                                                  │
  └────────────────────────── associated_items_complete_all_patterns.md:390:22 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5582,12 +5641,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                          ‾‾‾                                               │
  └────────────────────────── associated_items_complete_all_patterns.md:390:25 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -5603,12 +5663,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                             ‾‾‾                                            │
  └────────────────────────── associated_items_complete_all_patterns.md:390:28 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -5624,12 +5685,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                        ‾‾‾                                                 │
  └────────────────────────── associated_items_complete_all_patterns.md:391:23 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L2` here.
@@ -5645,12 +5707,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                           ‾‾‾                                              │
  └────────────────────────── associated_items_complete_all_patterns.md:391:26 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L3` here.
@@ -5666,12 +5729,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                              ‾‾‾                                           │
  └────────────────────────── associated_items_complete_all_patterns.md:391:29 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L4` here.
@@ -5687,12 +5751,13 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
  │                                 ‾‾‾                                        │
  └────────────────────────── associated_items_complete_all_patterns.md:391:32 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `.L5` here.
@@ -8348,8 +8413,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d1_1"))
 			(e-field-access
-				(e-ident (raw "d1_forward"))
-				(e-ident (raw "first"))))
+				(receiver
+					(e-ident (raw "d1_forward")))
+				(segment (mode "required") (field "first"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8363,8 +8429,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d1_2"))
 			(e-field-access
-				(e-ident (raw "d1_scope"))
-				(e-ident (raw "inner"))))
+				(receiver
+					(e-ident (raw "d1_scope")))
+				(segment (mode "required") (field "inner"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8388,13 +8455,15 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_1"))
 			(e-field-access
-				(e-ident (raw "d2_inner_first"))
-				(e-ident (raw "outer_val"))))
+				(receiver
+					(e-ident (raw "d2_inner_first")))
+				(segment (mode "required") (field "outer_val"))))
 		(s-decl
 			(p-ident (raw "d2_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8418,8 +8487,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8429,8 +8499,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "outer_val"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-type-decl
 			(header (name "Inner")
 				(args))
@@ -8445,8 +8516,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_4"))
 			(e-field-access
-				(e-ident (raw "d2_outer_refs_inner"))
-				(e-ident (raw "outer_val"))))
+				(receiver
+					(e-ident (raw "d2_outer_refs_inner")))
+				(segment (mode "required") (field "outer_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8484,8 +8556,9 @@ EndOfFile,
 					(p-ident (raw "valA"))
 					(e-binop (op "+")
 						(e-field-access
-							(e-malformed (reason "expr_dot_suffix_not_allowed"))
-							(e-ident (raw "valB")))
+							(receiver
+								(e-malformed (reason "expr_dot_suffix_not_allowed")))
+							(segment (mode "required") (field "valB")))
 						(e-int (raw "1"))))))
 		(s-type-decl
 			(header (name "InnerB")
@@ -8501,8 +8574,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "valA"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "valA"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8538,18 +8612,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_1"))
 			(e-field-access
-				(e-ident (raw "d3_types_then_vals"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_types_then_vals")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8587,18 +8664,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_4"))
 			(e-field-access
-				(e-ident (raw "d3_vals_then_types"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_vals_then_types")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_6"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8690,18 +8770,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_7"))
 			(e-field-access
-				(e-ident (raw "d3_val_after_nested"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_val_after_nested")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_8"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_9"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8749,8 +8832,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_1"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8802,8 +8886,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8853,8 +8938,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8906,8 +8992,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_4"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8947,8 +9034,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8991,8 +9079,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_6"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9042,8 +9131,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_7"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9205,8 +9295,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_1"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9274,8 +9365,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9343,8 +9435,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9391,8 +9484,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_4"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9442,8 +9536,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9511,28 +9606,33 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_6"))
 			(e-field-access
-				(e-ident (raw "d5_l1_val_last"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d5_l1_val_last")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d5_7"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d5_8"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-decl
 			(p-ident (raw "d5_9"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-decl
 			(p-ident (raw "d5_10"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -10116,17 +10216,21 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d1_1"))
-		(e-field-access (field "first")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "first") (mode "required")))))
 	(d-let
 		(p-assign (ident "inner"))
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "d1_2"))
-		(e-field-access (field "inner")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "inner") (mode "required")))))
 	(d-let
 		(p-assign (ident "Test.Inner.inner_val"))
 		(e-lookup-local
@@ -10136,38 +10240,48 @@ L2 := [DS].{
 		(e-num (value "300")))
 	(d-let
 		(p-assign (ident "d2_1"))
-		(e-field-access (field "outer_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "outer_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "d2_2"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_val"))
 		(e-num (value "500")))
 	(d-let
 		(p-assign (ident "d2_3"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_val"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "d2_4"))
-		(e-field-access (field "outer_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "outer_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_trying_inner"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 704)
+		(e-dispatch-call (method "plus") (constraint-fn-var 731)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -10177,12 +10291,14 @@ L2 := [DS].{
 		(e-num (value "800")))
 	(d-let
 		(p-assign (ident "d2_5"))
-		(e-field-access (field "valA")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "valA") (mode "required")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 730)
+		(e-dispatch-call (method "plus") (constraint-fn-var 756)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -10197,37 +10313,49 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d3_1"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_2"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_3"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "d3_4"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_5"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_6"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad_l1"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -10236,69 +10364,89 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d3_7"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_8"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_9"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d4_1"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d4_2"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "7")))
 	(d-let
 		(p-assign (ident "d4_3"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "15")))
 	(d-let
 		(p-assign (ident "d4_4"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d4_5"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d4_6"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "d4_7"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -10307,63 +10455,83 @@ L2 := [DS].{
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d5_1"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d5_2"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "d5_3"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_4"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_5"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_7"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_8"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_9"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_10"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))

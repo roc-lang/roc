@@ -11,9 +11,30 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pattern_as_nested.md:3:33:3:64
 # PROBLEMS
-NIL
+
+┌───────────────┐
+│ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
+└┬──────────────┘  previous branch .                                          │
+ │                                                                            │
+ │  { name } as simplePerson => (simplePerson, name, "unknown")               │
+ │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾               │
+ └───────────────────────────────────────────────── pattern_as_nested.md:3:33 ┘
+
+    The second branch is:
+
+        ({ name: _field }, _field, a)
+          where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+
+    But the previous branch results in:
+
+        ({ address: _field, name: _field2 }, { city: _field3 }, _field)
+
+    All branches in a `match` must have compatible types.
+    Note: You can wrap branches values in a tag to make them compatible.
+    To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -133,5 +154,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Error, { city: Str }, Str)"))
+(expr (type "Error"))
 ~~~

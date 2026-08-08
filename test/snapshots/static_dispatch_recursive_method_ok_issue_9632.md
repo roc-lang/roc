@@ -83,12 +83,14 @@ EndOfFile,
 												(e-method-call (method ".total")
 													(receiver
 														(e-field-access
-															(e-ident (raw "node"))
-															(e-ident (raw "rest"))))
+															(receiver
+																(e-ident (raw "node")))
+															(segment (mode "required") (field "rest"))))
 													(args))
 												(e-field-access
-													(e-ident (raw "node"))
-													(e-ident (raw "value")))))))))))))
+													(receiver
+														(e-ident (raw "node")))
+													(segment (mode "required") (field "value")))))))))))))
 		(s-type-anno (name "empty")
 			(ty (name "Tree")))
 		(s-decl
@@ -146,18 +148,22 @@ result = empty.total()
 								(value
 									(e-dispatch-call (method "plus") (constraint-fn-var 282)
 										(receiver
-											(e-dispatch-call (method "total") (constraint-fn-var 276)
+											(e-dispatch-call (method "total") (constraint-fn-var 277)
 												(receiver
-													(e-field-access (field "rest")
+													(e-field-access
 														(receiver
 															(e-lookup-local
-																(p-assign (ident "node"))))))
+																(p-assign (ident "node"))))
+														(segments
+															(segment (name "rest") (mode "required")))))
 												(args)))
 										(args
-											(e-field-access (field "value")
+											(e-field-access
 												(receiver
 													(e-lookup-local
-														(p-assign (ident "node"))))))))))))))
+														(p-assign (ident "node"))))
+												(segments
+													(segment (name "value") (mode "required")))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Tree") (local))

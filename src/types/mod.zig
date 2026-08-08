@@ -29,9 +29,11 @@ pub const FlatType = types.FlatType;
 pub const Func = types.Func;
 pub const NominalType = types.NominalType;
 pub const NominalDecl = types.NominalDecl;
+pub const DefaultId = types.DefaultId;
 pub const SourceDecl = types.SourceDecl;
 pub const Record = types.Record;
 pub const RecordField = types.RecordField;
+pub const FieldPresence = types.FieldPresence;
 pub const Tag = types.Tag;
 pub const TagUnion = types.TagUnion;
 pub const Tuple = types.Tuple;
@@ -42,7 +44,6 @@ pub const TwoRecordFields = types.TwoRecordFields;
 pub const TwoTags = types.TwoTags;
 pub const Rank = types.Rank;
 pub const Mark = types.Mark;
-pub const TypeScope = types.TypeScope;
 pub const VarMap = types.VarMap;
 pub const StaticDispatchConstraint = types.StaticDispatchConstraint;
 pub const InterpolationPartMetadata = types.InterpolationPartMetadata;
@@ -57,11 +58,10 @@ pub const ResolvedVarDescs = store.ResolvedVarDescs;
 pub const Store = store.Store;
 pub const DescStoreIdx = store.DescStoreIdx;
 
-pub const Polarity = types.Polarity;
-
 test {
     std.testing.refAllDecls(@import("test/test_rigid_instantiation.zig"));
     std.testing.refAllDecls(@import("generalize.zig"));
     std.testing.refAllDecls(@import("numeral.zig"));
     std.testing.refAllDecls(@import("literal_defaulting.zig"));
+    std.testing.refAllDecls(@import("TypeWriter.zig"));
 }

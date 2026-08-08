@@ -122,8 +122,17 @@ pub const Constants = struct {
     /// 48: Source imports retain parser-owned bindings and type-module owners
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
-    /// 50: Interned literal entries record maximum runtime backing alignment.
-    pub const CACHE_VERSION = 50;
+    /// 50: Optional + defaulted record fields: canonical record annotations
+    ///     carry field presence and default expressions, field-access paths
+    ///     keep source-ordered required/optional segments, type-store fields
+    ///     carry the static kind axis (required/optional/defaulted with a
+    ///     default identity; no `absent` state, `present` renamed
+    ///     `required`), and checked layouts include field kinds and archived
+    ///     defaults (design.md "Field Kinds", "Defaulted Fields").
+    /// 51: Interned literal entries record maximum runtime backing alignment.
+    /// 52: Generalized checked record fields retain presence-variable identity,
+    ///     and const record evidence retains optional source-value types.
+    pub const CACHE_VERSION = 52;
 };
 
 /// Configuration for the Roc cache system.

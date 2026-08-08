@@ -1148,11 +1148,12 @@ test "Monotype recursive materialization predicate stays paired with graph shell
         "fn patternNeedsExplicitBinding(",
         "const CheckedPatternRefutabilityAdapter",
     );
-    try expectContains(predicate, ".as => |as| self.patternNeedsExplicitBinding(as.pattern)");
+    try expectContains(predicate, ".as => |as| try self.patternNeedsExplicitBinding(as.pattern)");
     try expectContains(predicate, ".applied_tag => |tag|");
-    try expectContains(predicate, ".nominal => |nominal| self.patternNeedsExplicitBinding(nominal.backing_pattern)");
+    try expectContains(predicate, ".nominal => |nominal| try self.patternNeedsExplicitBinding(nominal.backing_pattern)");
     try expectContains(predicate, ".tuple => |items|");
     try expectContains(predicate, "patternRequiresOwnMaterialization");
+    try expectContains(predicate, "recordDestructsHaveOptionalField");
 
     const prepass = sourceSliceBetween(
         lower_source,

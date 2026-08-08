@@ -54,6 +54,7 @@ const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
 const Content = @import("types.zig").Content;
 const Rank = @import("types.zig").Rank;
+const RecordField = @import("types.zig").RecordField;
 
 /// Manages the generalization process for type variables.
 ///
@@ -307,6 +308,22 @@ pub const Generalizer = struct {
         return next_rank;
     }
 
+    /// Adjust rank over both axes of a record field: its value type (when the
+    /// field can carry one) and its presence variable (when unresolved). Both
+    /// axes participate in generalization exactly like ordinary type variables,
+    /// so an unconstrained presence variable generalizes to `∀π`.
+    fn adjustRankFieldPresence(self: *Self, presence: RecordField.Presence, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
+        var next_rank = Rank.generalized;
+        {
+            const type_var = presence.typeVar();
+            next_rank = next_rank.max(try self.adjustRank(type_var, group_rank, vars_to_generalize));
+        }
+        if (presence.presenceVar()) |presence_var| {
+            next_rank = next_rank.max(try self.adjustRank(presence_var, group_rank, vars_to_generalize));
+        }
+        return next_rank;
+    }
+
     fn adjustRankContent(self: *Self, content: Content, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
         return switch (content) {
             .flex => {
@@ -326,6 +343,14 @@ pub const Generalizer = struct {
                 //     next_rank = next_rank.max(try self.adjustRank(constraint.fn_var, group_rank, vars_to_generalize));
                 // }
                 return next_rank;
+            },
+            .field_presence => {
+                // A resolved presence fact (present/absent) is concrete and
+                // monomorphic—like an empty record, it never needs to be
+                // generalized and cannot raise the rank on its own. An
+                // unresolved presence variable is `.flex`/`.rigid` and is
+                // handled by those arms above.
+                return .outermost;
             },
             .alias => |alias| {
                 // THEORY: we don't need to recurse into the backing type. Everything
@@ -382,8 +407,8 @@ pub const Generalizer = struct {
                     },
                     .record => |record| {
                         var next_rank = try self.adjustRank(record.ext, group_rank, vars_to_generalize);
-                        for (self.store.getRecordFieldsSlice(record.fields).items(.var_)) |rec_var| {
-                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
+                        for (self.store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                            next_rank = next_rank.max(try self.adjustRankFieldPresence(presence, group_rank, vars_to_generalize));
                         }
                         return next_rank;
                     },
@@ -395,8 +420,8 @@ pub const Generalizer = struct {
                             // to group_rank. So we just return that directly here.
                             break :blk group_rank;
                         };
-                        for (self.store.getRecordFieldsSlice(record_fields).items(.var_)) |rec_var| {
-                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
+                        for (self.store.getRecordFieldsSlice(record_fields).items(.presence)) |presence| {
+                            next_rank = next_rank.max(try self.adjustRankFieldPresence(presence, group_rank, vars_to_generalize));
                         }
                         return next_rank;
                     },

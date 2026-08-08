@@ -161,6 +161,12 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     switch (input_info.kind) {
         .expression => return try self.evaluateExpression(line, report_config),
         .definition => {
+            if (!input_info.binds_top_level_ident) {
+                return .{ .diagnostic = try self.allocator.dupe(
+                    u8,
+                    "REPL definitions must bind a top-level identifier. Destructure the value inside a block or def body instead, or bind it to a name first.",
+                ) };
+            }
             const name = input_info.name orelse line;
             if (input_info.definition_kind == .annotation) {
                 try self.addOrReplaceDefinition(line, name, .annotation);
@@ -1376,6 +1382,14 @@ const InputInfo = struct {
     kind: InputKind,
     definition_kind: DefinitionKind = .value,
     name: ?[]const u8 = null,
+    /// Whether a `.value` definition's pattern binds a single top-level
+    /// identifier. Destructure (and other non-identifier) patterns are not
+    /// supported as top-level definitions: the session compiles definitions
+    /// into a synthetic module, and top-level defs whose pattern is not a
+    /// plain identifier are not published as top-level values (their binders
+    /// are unreachable from other definitions). The snapshot REPL enforces
+    /// the same rule.
+    binds_top_level_ident: bool = true,
 };
 
 /// Whether a REPL input line forms a complete, parseable statement.
@@ -1423,60 +1437,70 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     }
 
     const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
-    return .{ .complete = switch (statement) {
-        .expr,
-        .crash,
-        .dbg,
-        .expect,
-        .@"for",
-        .@"while",
-        .@"return",
-        .@"break",
-        => .{ .kind = .expression },
-        .decl => |decl| .{
-            .kind = .definition,
-            .definition_kind = .value,
-            .name = declarationName(ast, decl.pattern),
-        },
-        .@"var" => |v| .{
-            .kind = .definition,
-            .definition_kind = .value,
-            .name = ast.resolve(v.name),
-        },
-        .type_anno => |anno| .{
-            .kind = .definition,
-            .definition_kind = .annotation,
-            .name = ast.resolve(anno.name),
-        },
-        .type_decl => |decl| blk: {
-            const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+    return .{
+        .complete = switch (statement) {
+            .expr,
+            .crash,
+            .dbg,
+            .expect,
+            .@"for",
+            .@"while",
+            .@"return",
+            .@"break",
+            => .{ .kind = .expression },
+            .decl => |decl| .{
                 .kind = .definition,
-                .definition_kind = .type_decl,
-                .name = null,
-            };
-            break :blk .{
+                .definition_kind = .value,
+                .name = declarationName(ast, decl.pattern),
+                // Mirror the snapshot REPL's identity rule: only a plain
+                // identifier pattern binds a top-level definition. `as` patterns
+                // have a name but still carry non-identifier sub-binders, so they
+                // are rejected too.
+                .binds_top_level_ident = blk: {
+                    const pattern = ast.store.getPattern(decl.pattern);
+                    break :blk pattern == .ident or pattern == .var_ident;
+                },
+            },
+            .@"var" => |v| .{
                 .kind = .definition,
-                .definition_kind = .type_decl,
-                .name = ast.resolve(header.name),
-            };
+                .definition_kind = .value,
+                .name = ast.resolve(v.name),
+            },
+            .type_anno => |anno| .{
+                .kind = .definition,
+                .definition_kind = .annotation,
+                .name = ast.resolve(anno.name),
+            },
+            .type_decl => |decl| blk: {
+                const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+                    .kind = .definition,
+                    .definition_kind = .type_decl,
+                    .name = null,
+                };
+                break :blk .{
+                    .kind = .definition,
+                    .definition_kind = .type_decl,
+                    .name = ast.resolve(header.name),
+                };
+            },
+            .import => |import| .{
+                .kind = .definition,
+                .definition_kind = .import,
+                .name = if (import.alias_tok) |tok|
+                    ast.resolve(tok)
+                else if (import.target.nested_start_tok) |nested_start|
+                    ast.resolve(nested_start + import.target.nested_len - 1)
+                else
+                    ast.resolve(import.target.module_name_tok),
+            },
+            .file_import => |file_import| .{
+                .kind = .definition,
+                .definition_kind = .import,
+                .name = ast.resolve(file_import.name_tok),
+            },
+            .malformed => return .invalid,
         },
-        .import => |import| .{
-            .kind = .definition,
-            .definition_kind = .import,
-            .name = if (import.alias_tok) |tok|
-                ast.resolve(tok)
-            else if (import.target.nested_start_tok) |nested_start|
-                ast.resolve(nested_start + import.target.nested_len - 1)
-            else
-                ast.resolve(import.target.module_name_tok),
-        },
-        .file_import => |file_import| .{
-            .kind = .definition,
-            .definition_kind = .import,
-            .name = ast.resolve(file_import.name_tok),
-        },
-        .malformed => return .invalid,
-    } };
+    };
 }
 
 fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
@@ -2213,6 +2237,69 @@ test "Repl - issue 9258 opaque type param field access" {
 
     try expectStepsFinal(.interpreter, steps, "\"hello\"");
     try expectStepsFinal(.dev, steps, "\"hello\"");
+}
+
+test "Repl - optional record field renders <missing> and plain present values" {
+    const missing_steps = &[_][]const u8{
+        "r : { a ?: U8, b : U8 }",
+        "r = { b: 2 }",
+        "r",
+    };
+    try expectStepsFinal(.interpreter, missing_steps, "{ a: <missing>, b: 2 }");
+    try expectStepsFinal(.dev, missing_steps, "{ a: <missing>, b: 2 }");
+
+    const present_steps = &[_][]const u8{
+        "s : { a ?: U8, b : U8 }",
+        "s = { a: 5, b: 2 }",
+        "s",
+    };
+    try expectStepsFinal(.interpreter, present_steps, "{ a: 5, b: 2 }");
+    try expectStepsFinal(.dev, present_steps, "{ a: 5, b: 2 }");
+}
+
+test "Repl - top-level destructure definition is rejected with a clean diagnostic" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const type_assigned = try repl.step("Rec : { req : U8, opt ?: U8 }");
+    defer testing.allocator.free(type_assigned);
+    try testing.expectEqualStrings("assigned `Rec`", type_assigned);
+
+    const anno = try repl.step("s : Rec");
+    defer testing.allocator.free(anno);
+    try testing.expectEqualStrings("", anno);
+
+    const assigned = try repl.step("s = { req: 1, opt: 7 }");
+    defer testing.allocator.free(assigned);
+    try testing.expectEqualStrings("assigned `s`", assigned);
+
+    // Publication has no story for top-level defs whose pattern is not a
+    // plain identifier (their binders are unreachable from other top-level
+    // definitions), so the session rejects the statement up front instead of
+    // folding it into the synthetic module, where a later reference to `opt`
+    // would trip a postcheck invariant.
+    const destructure = try repl.step("{ opt, .. } = s");
+    defer testing.allocator.free(destructure);
+    try testing.expect(std.mem.find(u8, destructure, "must bind a top-level identifier") != null);
+
+    // Any non-identifier pattern is rejected the same way, not just records.
+    const tuple_destructure = try repl.step("(a, b) = (1, 2)");
+    defer testing.allocator.free(tuple_destructure);
+    try testing.expect(std.mem.find(u8, tuple_destructure, "must bind a top-level identifier") != null);
+
+    // The session stays intact: the stored definitions still evaluate...
+    const opt_value = try repl.step("s.?opt ?? 0");
+    defer testing.allocator.free(opt_value);
+    try testing.expectEqualStrings("7", opt_value);
+
+    // ...and ordinary identifier definitions still work afterward.
+    const x_assigned = try repl.step("x = 5");
+    defer testing.allocator.free(x_assigned);
+    try testing.expectEqualStrings("assigned `x`", x_assigned);
+
+    const x_value = try repl.step("x");
+    defer testing.allocator.free(x_value);
+    try testing.expectEqualStrings("5.0", x_value);
 }
 
 test "Repl - polymorphic numeric in comparison snapshot sequence" {

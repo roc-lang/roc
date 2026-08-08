@@ -342,6 +342,10 @@ const Extractor = struct {
                     fields[i] = .{
                         .name = try alloc.dupe(u8, names.recordFieldLabelText(field.name)),
                         .ty = try self.convertType(view, names, field.ty, memo),
+                        // The published kind axis: a `name ?: T` field is a
+                        // different type from a required one (design.md
+                        // "Field Kinds"), so it is part of the API surface.
+                        .optional = field.kind.tag == .optional,
                     };
                 }
                 const ext = try self.convertExt(view, names, record.ext, .empty_record, memo);

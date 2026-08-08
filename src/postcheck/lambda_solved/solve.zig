@@ -543,6 +543,7 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     try self.closeCallableSlotsInType(field.ty, done, active);
+                    if (field.value_ty) |value_ty| try self.closeCallableSlotsInType(value_ty, done, active);
                 }
             },
             .tag_union => |tags| {
@@ -749,9 +750,13 @@ const Solver = struct {
                 try self.bindLowLevelTypes(call.op, expected, arg_tys);
             },
             .field_access => |field| {
-                const receiver_ty = try self.inferExpr(field.receiver);
-                const field_ty = try self.recordField(receiver_ty, field.field);
-                try self.unify(expected, field_ty);
+                var prefix_ty = try self.inferExpr(field.receiver);
+                const segments = self.lifted.fieldAccessSegmentSpan(field.segments);
+                if (segments.len == 0) Common.invariant("field access path had no segments");
+                for (segments) |segment| {
+                    prefix_ty = try self.recordField(prefix_ty, segment.field);
+                }
+                try self.unify(expected, prefix_ty);
             },
             .tuple_access => |access| {
                 const receiver_ty = try self.inferExpr(access.tuple);
@@ -1276,6 +1281,7 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     try self.markErasedCallablesReachedByTypeInner(field.ty, active);
+                    if (field.value_ty) |value_ty| try self.markErasedCallablesReachedByTypeInner(value_ty, active);
                 }
             },
             .tag_union => |tags| {
@@ -2232,6 +2238,12 @@ const Solver = struct {
                         Common.invariant("generated-private evidence relation received records with different fields");
                     }
                     try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
+                    if ((public_field.value_ty == null) != (private_field.value_ty == null)) {
+                        Common.invariant("generated-private evidence relation received different record field kinds");
+                    }
+                    if (public_field.value_ty) |public_value_ty| {
+                        try self.relateGeneratedPrivateEvidence(public_value_ty, private_field.value_ty.?);
+                    }
                 }
             },
             .tag_union => |public_tags| {
@@ -2503,6 +2515,12 @@ const Solver = struct {
             const right_field = self.program.types.fieldItem(rhs, i);
             if (left_field.name != right_field.name) Common.invariant("record field order failed Lambda Solved unification");
             try self.pushUnifyPair(stack, left_field.ty, right_field.ty);
+            if ((left_field.value_ty == null) != (right_field.value_ty == null)) {
+                Common.invariant("record field kind failed Lambda Solved unification");
+            }
+            if (left_field.value_ty) |left_value_ty| {
+                try self.pushUnifyPair(stack, left_value_ty, right_field.value_ty.?);
+            }
         }
     }
 
@@ -2667,6 +2685,12 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     writeBytes(hasher, self.lifted.names.recordFieldLabelText(field.name));
+                    if (field.value_ty) |value_ty| {
+                        writeBytes(hasher, "field-optional-value");
+                        try self.writeSolvedTypeDigest(hasher, value_ty, active);
+                    } else {
+                        writeBytes(hasher, "field-inline-value");
+                    }
                     try self.writeSolvedTypeDigest(hasher, field.ty, active);
                 }
             },
@@ -2772,7 +2796,10 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
                 .primitive, .zst, .erased => {},
                 .list, .box => |elem| callback.child(elem),
                 .tuple => |items| for (store.span(items)) |item| callback.child(item),
-                .record => |fields| for (store.fieldSpan(fields)) |field| callback.child(field.ty),
+                .record => |fields| for (store.fieldSpan(fields)) |field| {
+                    callback.child(field.ty);
+                    if (field.value_ty) |value_ty| callback.child(value_ty);
+                },
                 .tag_union => |tags| for (store.tagSpan(tags)) |tag| {
                     for (store.span(tag.payloads)) |payload| callback.child(payload);
                 },
@@ -2960,6 +2987,8 @@ const TypeCloner = struct {
                     lowered[i] = .{
                         .name = field.name,
                         .ty = try self.lower(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lower(value_ty) else null,
+                        .default = field.default,
                     };
                 }
                 break :blk .{ .record = try self.solver.program.types.addFields(lowered) };

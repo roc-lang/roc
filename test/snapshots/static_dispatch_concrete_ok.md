@@ -130,7 +130,7 @@ NO CHANGE
 				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "poly_no_dispatch"))
-		(e-call (constraint-fn-var 287)
+		(e-call (constraint-fn-var 289)
 			(e-lookup-local
 				(p-assign (ident "id")))
 			(e-string
