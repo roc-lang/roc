@@ -4571,6 +4571,38 @@ test "imported iterator producer keeps finite step callables" {
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
 }
 
+test "static list iter_rev loop eliminates the public iterator boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\sum_backwards : U64 -> I64
+        \\sum_backwards = |extra| {
+        \\    base = [11, 13, 3, 11]
+        \\
+        \\    points =
+        \\        if extra == 2 {
+        \\            base.append(2).append(7)
+        \\        } else {
+        \\            base
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for x in points.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_backwards(2)
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
+}
+
 test "static list iter append loop eliminates public iter adapters" {
     const allocator = std.testing.allocator;
     const iter_source =

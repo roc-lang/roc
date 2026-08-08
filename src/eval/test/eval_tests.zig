@@ -4139,74 +4139,74 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Unknown" },
     },
     .{
-        .name = "inspect: Iter.rev reverses items",
+        .name = "inspect: List.iter_rev yields items back to front",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    iter = [1.I64, 2, 3].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[3, 2, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev on empty source is empty",
+        .name = "inspect: List.iter_rev on empty list is empty",
         .source =
         \\{
-        \\    iter = [].iter().rev()
+        \\    iter = [].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[]" },
     },
     .{
-        .name = "inspect: Iter.rev on a singleton",
+        .name = "inspect: List.iter_rev on a singleton",
         .source =
         \\{
-        \\    iter = [1.I64].iter().rev()
+        \\    iter = [1.I64].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[1]" },
     },
     .{
-        .name = "inspect: Iter.rev on a range",
+        .name = "inspect: List.iter_rev composed with keep_if",
         .source =
         \\{
-        \\    iter = (1.U64..=5).rev()
-        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
-        \\}
-        ,
-        .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
-    },
-    .{
-        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
-        .source =
-        \\{
-        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
-        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\    odds = [1.I64, 2, 3, 4, 5].iter_rev().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[5, 3, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev composed with step_by",
+        .name = "inspect: List.iter_rev composed with step_by",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().step_by(2)
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[5, 3, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev reports known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
+        .name = "inspect: List.iter_rev composed with take_first",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().take_first(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter_rev())",
         .expected = .{ .inspect_str = "Known(3)" },
     },
     .{
-        .name = "inspect: Iter.rev upgrades unknown length to known",
-        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .name = "inspect: List.iter_rev on empty list reports zero length",
+        .source = "Iter.size_hint([].iter_rev())",
+        .expected = .{ .inspect_str = "Known(0)" },
     },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },

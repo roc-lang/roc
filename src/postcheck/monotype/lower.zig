@@ -19965,7 +19965,7 @@ const BodyContext = struct {
         if (expected_ret) |expected| switch (procedure) {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive => {},
         };
 
         switch (procedure) {
@@ -20017,6 +20017,16 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.list, public_fn.ret, &.{request_fn.args[0]}, null),
+                );
+            },
+            .list_iter_rev => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("List.iter_rev reached Monotype with an unexpected arity");
+                }
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.list_rev, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.list_rev, public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .str_iter_utf8 => {
@@ -20292,6 +20302,7 @@ const BodyContext = struct {
         switch (kind) {
             .custom,
             .list,
+            .list_rev,
             .str,
             .single,
             .range_exclusive,
@@ -44157,7 +44168,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .iter_from_step, .range_done => unreachable,
         }
     }
 

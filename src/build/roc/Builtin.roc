@@ -3591,21 +3591,6 @@ Builtin :: [].{
 							},
 					)
 				}
-
-		## Returns an iterator that yields this iterator's items in reverse order.
-		##
-		## Because an [Iter] only moves forward, this materializes the source into a
-		## list to reverse it. The result always has a known length, so collecting it
-		## is efficient. Avoid calling this on iterators whose length is unknown and
-		## might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
-		##
-		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
-		## ```
-		rev : Iter(item) -> Iter(item)
-		rev = |iterator|
-			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -3747,6 +3732,33 @@ Builtin :: [].{
 			}
 
 			make(0)
+		}
+
+		## Iterate over the list from last to first.
+		##
+		## This walks the list backwards in place; it does not build a reversed
+		## copy the way [List.rev] does.
+		## ```roc
+		## expect Iter.fold([1, 2, 3].iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold([].iter_rev(), [], |acc, item| acc.append(item)) == []
+		## ```
+		iter_rev : List(item) -> Iter(item)
+		iter_rev = |list| {
+			# `remaining` is both the number of items still to yield and the index
+			# just past the next one, so the length stays exact as it counts down.
+			make = |remaining|
+				iter_from_step(
+					Known(remaining),
+					||
+						if remaining == 0 {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, remaining - 1), rest: make(remaining - 1) })
+						},
+				)
+
+			make(List.len(list))
 		}
 
 		## Build a list from a pure [Iter], pre-sizing the allocation from the
@@ -4939,7 +4951,7 @@ Builtin :: [].{
 		## ```
 		find_last : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_last = |list, predicate| {
-			for item in list.rev() if predicate(item) {
+			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
 			return Err(NotFound)
