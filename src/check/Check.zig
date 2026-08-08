@@ -17152,6 +17152,20 @@ fn checkMatchExpr(
         try self.warnIfComptimeConditionalExpr(match.cond, .match_scrutinee, expected);
     }
 
+    // Every branch pattern describes the same scrutinee value, so the patterns
+    // must stay mutually consistent. That relation normally travels through
+    // `cond_var`. An already-erroneous scrutinee cannot carry it: unification
+    // against `.err` is accepted without merging, so each pattern would be
+    // solved in isolation and the bindings they share would only collide later,
+    // in the branch bodies, far from the pattern that disagrees. Tie the
+    // patterns to a class of their own instead. The first disagreement poisons
+    // that class to `.err`, so later patterns short-circuit exactly as they do
+    // when the scrutinee itself carries the relation.
+    const ptrn_target_var = if (self.types.resolveVar(cond_var).desc.content == .err)
+        try self.fresh(env, expr_region)
+    else
+        cond_var;
+
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
@@ -17166,7 +17180,7 @@ fn checkMatchExpr(
         const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
         // Check each of the first branch's patterns and unify it with the
-        // condition type. (A failed unify poisons cond_var to .err, so subsequent
+        // condition type. (A failed unify poisons the target to .err, so subsequent
         // pattern unifications short-circuit rather than cascading.)
         for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
@@ -17174,7 +17188,7 @@ fn checkMatchExpr(
 
             if (!cond_always_crashes) {
                 const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-                const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                const ptrn_result = try self.unifyInContext(ptrn_target_var, branch_ptrn_var, env, .{ .match_pattern = .{
                     .branch_index = 0,
                     .pattern_index = @intCast(cur_ptrn_index),
                     .num_branches = @intCast(match.branches.span.len),
@@ -17237,7 +17251,7 @@ fn checkMatchExpr(
             // Check the pattern against the cond
             if (!cond_always_crashes) {
                 const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-                const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                const ptrn_result = try self.unifyInContext(ptrn_target_var, branch_ptrn_var, env, .{ .match_pattern = .{
                     .branch_index = @intCast(branch_cur_index),
                     .pattern_index = @intCast(cur_ptrn_index),
                     .num_branches = @intCast(match.branches.span.len),
@@ -17304,7 +17318,7 @@ fn checkMatchExpr(
                         // Check the pattern against the cond
                         if (!cond_always_crashes) {
                             const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-                            _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
+                            _ = try self.unifyInContext(ptrn_target_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
                                 .branch_index = @intCast(other_branch_cur_index),
                                 .pattern_index = @intCast(other_cur_ptrn_index),
                                 .num_branches = @intCast(match.branches.span.len),

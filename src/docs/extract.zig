@@ -216,6 +216,23 @@ pub fn extractModuleDocs(
     package_name: []const u8,
     source_path: ?[]const u8,
 ) Allocator.Error!DocModel.ModuleDocs {
+    return extractModuleDocsWithOptions(gpa, module_env, package_name, source_path, .{});
+}
+
+/// Controls which source-level entries are included in one module's docs.
+pub const ExtractOptions = struct {
+    /// When set, retain only these top-level entries and their children.
+    exposed_names: ?[]const []const u8 = null,
+};
+
+/// Extract documentation, optionally restricted to explicit top-level names.
+pub fn extractModuleDocsWithOptions(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    package_name: []const u8,
+    source_path: ?[]const u8,
+    options: ExtractOptions,
+) Allocator.Error!DocModel.ModuleDocs {
     const source = module_env.getSourceAll();
     const line_index = try LineIndex.build(gpa, source);
     defer line_index.deinit(gpa);
@@ -249,10 +266,19 @@ pub fn extractModuleDocs(
         entries_list.deinit(gpa);
     }
 
+    var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+    defer exposed_names.deinit(gpa);
+    if (options.exposed_names) |names_to_expose| {
+        try exposed_names.ensureTotalCapacity(gpa, @intCast(names_to_expose.len));
+        for (names_to_expose) |exposed_name| exposed_names.putAssumeCapacity(exposed_name, {});
+    }
+
     // For documentation purposes, show all accessible definitions, not just
     // what's explicitly exported. Exports control compilation/linking (what
     // other modules can import), but docs should be comprehensive.
-    const defs_slice = switch (module_env.module_kind) {
+    const defs_slice = if (options.exposed_names != null)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else switch (module_env.module_kind) {
         .platform, .hosted => blk: {
             // Platforms and hosted modules: only document explicitly provided items
             const exports_slice = module_env.store.sliceDefs(module_env.exports);
@@ -265,6 +291,10 @@ pub fn extractModuleDocs(
     };
 
     for (defs_slice) |def_idx| {
+        if (options.exposed_names != null) {
+            const entry_name = defEntryName(module_env, def_idx) orelse continue;
+            if (!isUnderExposedName(&exposed_names, entry_name)) continue;
+        }
         if (try extractDefEntry(gpa, module_env, local_module_path, def_idx, source, line_index)) |entry| {
             // Skip internal Builtin functions
             if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry.name)) {
@@ -285,6 +315,7 @@ pub fn extractModuleDocs(
             .s_alias_decl => |decl| {
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
                 // Skip if already in entries
                 if (findEntryByName(entries_list.items, entry_name)) continue;
                 // Skip internal Builtin types
@@ -318,6 +349,7 @@ pub fn extractModuleDocs(
             .s_nominal_decl => |decl| {
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
                 if (findEntryByName(entries_list.items, entry_name)) continue;
                 // Skip internal Builtin types
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
@@ -354,6 +386,7 @@ pub fn extractModuleDocs(
             .s_where_alias_decl => |decl| {
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
                 if (findEntryByName(entries_list.items, entry_name)) continue;
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
@@ -496,6 +529,11 @@ pub fn extractModuleDocs(
         .source_path = duped_source_path,
         .module_doc_start_line = module_doc_start_line,
     };
+}
+
+fn isUnderExposedName(exposed_names: *const std.StringHashMapUnmanaged(void), name: []const u8) bool {
+    const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
+    return exposed_names.contains(root_name);
 }
 
 /// Filter entries in a type module to only include the main type and its children.
@@ -732,6 +770,54 @@ fn reparentDottedChildInto(
 }
 
 // --- Internal helpers ---
+
+fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 {
+    const def = module_env.store.getDef(def_idx);
+    return switch (module_env.store.getPattern(def.pattern)) {
+        .assign => |assign| module_env.getIdentText(assign.ident),
+        .nominal => |nominal| switch (module_env.store.getStatement(nominal.nominal_type_decl)) {
+            .s_nominal_decl => |decl| module_env.getIdentText(module_env.store.getTypeHeader(decl.header).relative_name),
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_alias_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => null,
+        },
+        .as,
+        .applied_tag,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => null,
+    };
+}
 
 fn extractDefEntry(
     gpa: Allocator,

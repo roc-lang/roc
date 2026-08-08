@@ -1357,18 +1357,18 @@ pub const Coordinator = struct {
 
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
-        const exposes = if (header == .package)
-            header.package.exposes
+        const exposes, const surface_kind: module_discovery.PublicSurfaceKind = if (header == .package)
+            .{ header.package.exposes, .package }
         else if (header == .platform)
-            header.platform.exposes
+            .{ header.platform.exposes, .platform }
         else
             return error.InvalidPackageHeader;
-        const public_modules = module_discovery.extractPublicModules(ast, exposes, self.gpa) catch |err| switch (err) {
+        var public_surface = module_discovery.extractPublicSurface(ast, exposes, surface_kind, self.gpa) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ImportEscapesPackageRoot => return error.InvalidPackageHeader,
         };
-        defer module_discovery.freePublicModules(self.gpa, public_modules);
-        for (public_modules) |module| {
+        defer public_surface.deinit(self.gpa);
+        for (public_surface.modules.items) |module| {
             try pkg.addPublicModule(self.gpa, module.name, module.target);
         }
         pkg.finishPublicModules();

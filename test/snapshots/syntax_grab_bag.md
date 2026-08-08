@@ -2175,12 +2175,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1973)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 1974)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1944)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 1945)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

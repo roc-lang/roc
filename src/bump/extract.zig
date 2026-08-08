@@ -26,12 +26,14 @@ const CheckedTypeId = CheckedArtifact.CheckedTypeId;
 const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
 const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
 
-/// One exposed module of the package being extracted.
+/// One public namespace of the package being extracted.
 pub const ModuleInput = struct {
-    /// The module name as exposed by the package header, e.g. "Parser".
+    /// The public namespace name, e.g. "Parser" or a platform root's name.
     exposed_name: []const u8,
     module_env: *const ModuleEnv,
     artifact: *const CheckedModuleArtifact,
+    /// Restrict a non-type root module to these names and their children.
+    exposed_names: ?[]const []const u8 = null,
 };
 
 /// Resolves an origin module identity (as recorded in checked types) to the
@@ -44,6 +46,7 @@ pub const OriginMap = struct {
         kind: Kind,
         /// The module's bare (unqualified) name. Paths are built from this so
         /// they stay stable when the root package renames a dependency alias.
+        /// Platform roots use an empty name because their items are unqualified.
         module_name: []const u8,
 
         pub const Kind = union(enum) {
@@ -160,10 +163,14 @@ const Extractor = struct {
         const names = &input.artifact.canonical_names;
 
         // In a type module, only the type matching the module name and its
-        // associated items (dotted names under it) are public; other
-        // top-level defs are private helpers. Other module kinds expose all
-        // their top-level items.
-        const apply_name_filter = module_env.module_kind == .type_module;
+        // associated items (dotted names under it) are public. Platform roots
+        // instead supply their exact source-declared public names.
+        var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+        defer exposed_names.deinit(self.gpa);
+        if (input.exposed_names) |names_to_expose| {
+            try exposed_names.ensureTotalCapacity(self.gpa, @intCast(names_to_expose.len));
+            for (names_to_expose) |name| exposed_names.putAssumeCapacity(name, {});
+        }
 
         var seen_paths = std.StringHashMapUnmanaged(void).empty;
         defer seen_paths.deinit(self.gpa);
@@ -181,7 +188,7 @@ const Extractor = struct {
                 continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.relative_name);
-            if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
+            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
             const path = try self.api.allocator().dupe(u8, name);
             self.current_item = path;
@@ -213,7 +220,7 @@ const Extractor = struct {
             if (pattern != .assign) continue;
             const ident = pattern.assign.ident;
             const name = module_env.getIdentText(ident);
-            if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
+            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
             const path = try self.api.allocator().dupe(u8, name);
             self.current_item = path;
@@ -494,6 +501,19 @@ const Extractor = struct {
     }
 };
 
+fn inputIncludesName(
+    input: ModuleInput,
+    exposed_names: *const std.StringHashMapUnmanaged(void),
+    module_kind: can.ModuleEnv.ModuleKind,
+    name: []const u8,
+) bool {
+    if (input.exposed_names != null) {
+        const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
+        return exposed_names.contains(root_name);
+    }
+    return module_kind != .type_module or nameIsPublic(name, input.exposed_name);
+}
+
 /// A name is public within a type module iff it is the module's type itself
 /// or an associated item underneath it ("Color", "Color.hex", never "helper").
 fn nameIsPublic(name: []const u8, module_name: []const u8) bool {
@@ -523,6 +543,7 @@ fn qualifiedPath(
             type_name;
         return try alloc.dupe(u8, bare);
     }
+    if (origin == .self and origin_module.len == 0) return try alloc.dupe(u8, type_name);
     if (nameIsPublic(type_name, origin_module)) return try alloc.dupe(u8, type_name);
     return try std.fmt.allocPrint(alloc, "{s}.{s}", .{ origin_module, type_name });
 }
@@ -534,4 +555,10 @@ test "nameIsPublic follows the type module visibility rule" {
     try std.testing.expect(!nameIsPublic("helper", "Color"));
     try std.testing.expect(!nameIsPublic("Colors", "Color"));
     try std.testing.expect(!nameIsPublic("Color2.hex", "Color"));
+}
+
+test "a root namespace leaves self type paths unqualified" {
+    const path = try qualifiedPath(std.testing.allocator, .self, "", "Blub");
+    defer std.testing.allocator.free(path);
+    try std.testing.expectEqualStrings("Blub", path);
 }

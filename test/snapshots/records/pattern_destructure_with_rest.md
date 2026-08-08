@@ -100,7 +100,7 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 216)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 217)
 						(receiver
 							(e-call
 								(e-runtime-error (tag "nested_value_not_found"))

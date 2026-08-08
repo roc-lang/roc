@@ -1357,6 +1357,19 @@ Checker sites that own a reported error use `markErroneous` to poison the owning
 solved class directly. No successful ordinary unification propagates an
 existing `.err` into a type that already carries information.
 
+Because `.err` no longer merges, it also no longer relates the operands unified
+against it. A checker site that relies on one variable to carry a relation
+between several others has to supply that relation itself once the carrier is
+erroneous. `match` is the one such site: every branch pattern describes the same
+scrutinee value, and that mutual consistency normally travels through the
+scrutinee's variable. When the scrutinee is already erroneous, the patterns
+unify against a shared fresh variable instead, so a disagreement between two
+patterns is still reported at the pattern that disagrees rather than surfacing
+later as an unexplained branch-body mismatch. The scrutinee's own error is not
+re-reported, the patterns are never related back to it, and the first
+disagreement poisons the shared variable so later patterns short-circuit exactly
+as they do when the scrutinee carries the relation.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -1855,6 +1868,13 @@ problem store, selected hoisted roots,
 requirement context, imported diagnostic environments, and CTFE options. A
 checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
 bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
+
+A relation-less platform output preserves its complete `provides` metadata for
+glue and interface consumers. If it also declares app requirements, it does not
+output provided runtime roots and cannot enter Monotype;
+runtime commands reject it until an app relation exists. This decision depends
+only on the explicit relation state and requirement surface, never on scanning
+provided bodies to guess whether the missing requirements happen to be used.
 
 ### Compile-Time Constants and Hoisted Roots
 
@@ -3930,6 +3950,11 @@ Other solved-graph mutations:
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
   unifying that node with a fresh error variable.
+- `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
+  an already-reported error. An erroneous scrutinee cannot relate the branch
+  patterns to each other, so they unify against a shared fresh variable instead
+  of the scrutinee's. An error-free program never reaches the probe, so no
+  program's typechecking or checked-module output changes.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning
