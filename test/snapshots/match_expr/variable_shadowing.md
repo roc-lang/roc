@@ -11,7 +11,7 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-NIL
+POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
 
 ┌───────────────────┐

@@ -11,7 +11,7 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pattern_as_nested.md:3:33:3:64
 # PROBLEMS
 
 ┌───────────────┐

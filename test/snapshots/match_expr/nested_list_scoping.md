@@ -13,6 +13,7 @@ match nestedList {
 ~~~
 # EXPECTED
 MISSING METHOD - nested_list_scoping.md:4:17:4:22
+POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 
 ┌────────────────┐
