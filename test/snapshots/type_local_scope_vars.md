@@ -237,7 +237,11 @@ main! = |_| {}
 							(p-assign (ident "a")))))
 				(s-let
 					(p-assign (ident "_result4"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-call (constraint-fn-var 273)
+						(e-lookup-local
+							(p-assign (ident "g")))
+						(e-lookup-local
+							(p-assign (ident "b")))))
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
