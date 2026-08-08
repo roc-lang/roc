@@ -189,7 +189,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
     // Apple's arm64 ABI packs overflow arguments on the stack at their natural
     // size and alignment; AAPCS64 elsewhere and both x86_64 conventions give
     // each one a full eightbyte slot.
-    const packs_stack_args = is_aarch64 and roc_target.isMacOS();
+    const target_packs_stack_args = is_aarch64 and roc_target.isMacOS();
 
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
@@ -226,6 +226,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
     return struct {
         const Self = @This();
+
+        /// Whether this target's ABI packs overflow arguments on the stack at
+        /// their natural size, which is what makes `packStackArgsForCAbi`
+        /// meaningful. Callers read this to require declared parameter sizes
+        /// only where placement actually depends on them.
+        pub const packs_stack_args = target_packs_stack_args;
 
         emit: *EmitType,
         stack_offset: *i32,
@@ -407,7 +413,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// and all parameters are integer class, which is what the boxy runtime
         /// entrypoints are.
         pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
-            if (comptime !packs_stack_args) return;
+            if (comptime !target_packs_stack_args) return;
             if (self.stack_arg_count == 0) return;
             std.debug.assert(self.stack_arg_count == self.implicit_stack_arg_count);
             std.debug.assert(self.float_arg_index == 0);

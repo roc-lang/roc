@@ -17525,7 +17525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
-            } else if (builtin.mode == .Debug and builder.stack_arg_count > 0) {
+            } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_arg_count > 0) {
                 std.debug.panic(
                     "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
                     .{ boxy_fn.symbolName(), builder.stack_arg_count },
