@@ -4601,6 +4601,88 @@ test "static list iter_rev loop eliminates the public iterator boundary" {
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+}
+
+test "static descending range loop eliminates the public iterator boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\sum_down : U8 -> U64
+        \\sum_down = |from| {
+        \\    var $sum = 0
+        \\    for x in U8.down_to(from, 1) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_down(5)
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Num.U8.down_to"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.descending_inclusive_range"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+}
+
+test "Dict and Set iteration inherit the minted list representation" {
+    const allocator = std.testing.allocator;
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |extra| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(extra, 20)
+        \\
+        \\    var $sum = 0
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(2)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |extra| {
+        \\    s = Set.from_list([1.U64, 2, extra])
+        \\
+        \\    var $sum = 0
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(3)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // The `Dict.iter` / `Set.iter_rev` procedures themselves may survive as a
+    // call: their bodies unwrap the nominal and hand back the backing list,
+    // which happens once when the iterator is built rather than once per step.
+    // What must not survive is the stepping machinery — a reachable `Iter.next`
+    // would mean the loop is running against the public iterator boundary
+    // instead of the minted representation.
+    for ([_][]const u8{ "Builtin.List.iter", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "Builtin.List.iter_rev", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
 }
 
 test "static list iter append loop eliminates public iter adapters" {

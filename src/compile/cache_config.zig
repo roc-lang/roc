@@ -124,7 +124,9 @@ pub const Constants = struct {
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
     /// 50: Interned literal entries record maximum runtime backing alignment.
     /// 51: Checked iterator procedure identity includes List.iter_rev.
-    pub const CACHE_VERSION = 51;
+    /// 52: Checked iterator identity includes Dict/Set iteration and descending
+    ///     numeric ranges.
+    pub const CACHE_VERSION = 52;
 };
 
 /// Configuration for the Roc cache system.

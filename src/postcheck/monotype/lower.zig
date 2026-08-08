@@ -19965,7 +19965,7 @@ const BodyContext = struct {
         if (expected_ret) |expected| switch (procedure) {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .dict_iter, .dict_iter_rev, .set_iter, .set_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .iter_descending_exclusive_range, .iter_descending_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_down_to, .numeric_down_until => {},
         };
 
         switch (procedure) {
@@ -20029,6 +20029,27 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(.list_rev, public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
+            // Dict and Set iterate their own backing list, so the receiver is the
+            // single representation component. Their kinds stay distinct from
+            // `.list`/`.list_rev` so a dictionary iterator never dedups against a
+            // list iterator over the same element type.
+            .dict_iter, .dict_iter_rev, .set_iter, .set_iter_rev => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("Dict/Set iteration reached Monotype with an unexpected arity");
+                }
+                const kind: Type.IteratorKind = switch (procedure) {
+                    .dict_iter => .dict,
+                    .dict_iter_rev => .dict_rev,
+                    .set_iter => .set,
+                    .set_iter_rev => .set_rev,
+                    else => unreachable,
+                };
+                if (try self.generatedIteratorExpectedProducerFunctionNode(kind, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(kind, public_fn.ret, &.{request_fn.args[0]}, null),
+                );
+            },
             .str_iter_utf8 => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
@@ -20061,6 +20082,20 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(.range_inclusive, public_fn.ret, &.{}, null),
+                );
+            },
+            .iter_descending_exclusive_range, .numeric_down_until => {
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.descending_range_exclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.descending_range_exclusive, public_fn.ret, &.{}, null),
+                );
+            },
+            .iter_descending_inclusive_range, .numeric_down_to => {
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.descending_range_inclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.descending_range_inclusive, public_fn.ret, &.{}, null),
                 );
             },
             .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
@@ -20135,7 +20170,9 @@ const BodyContext = struct {
         // Range bounds initialize the generated step state but are not stored as
         // nominal component arguments. Their producer therefore keeps the
         // checked two-argument request while returning the exact private range.
-        if (kind == .range_exclusive or kind == .range_inclusive) {
+        if (kind == .range_exclusive or kind == .range_inclusive or
+            kind == .descending_range_exclusive or kind == .descending_range_inclusive)
+        {
             return try self.graphFunctionNode(args, expected);
         }
         return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
@@ -20303,10 +20340,16 @@ const BodyContext = struct {
             .custom,
             .list,
             .list_rev,
+            .dict,
+            .dict_rev,
+            .set,
+            .set_rev,
             .str,
             .single,
             .range_exclusive,
             .range_inclusive,
+            .descending_range_exclusive,
+            .descending_range_inclusive,
             => return 1,
             .map,
             .keep_if,
@@ -44168,7 +44211,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .dict_iter, .dict_iter_rev, .set_iter, .set_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .iter_descending_exclusive_range, .iter_descending_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_down_to, .numeric_down_until, .iter_from_step, .range_done => unreachable,
         }
     }
 

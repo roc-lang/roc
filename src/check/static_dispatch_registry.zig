@@ -150,6 +150,10 @@ pub const IteratorProcedureId = enum(u8) {
     iter_single,
     list_iter,
     list_iter_rev,
+    dict_iter,
+    dict_iter_rev,
+    set_iter,
+    set_iter_rev,
     str_iter_utf8,
     iter_map,
     iter_keep_if,
@@ -160,8 +164,12 @@ pub const IteratorProcedureId = enum(u8) {
     iter_append,
     iter_exclusive_range,
     iter_inclusive_range,
+    iter_descending_exclusive_range,
+    iter_descending_inclusive_range,
     numeric_range_exclusive,
     numeric_range_inclusive,
+    numeric_down_to,
+    numeric_down_until,
     iter_from_step,
     range_done,
 
@@ -178,6 +186,10 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_single,
             .list_iter,
             .list_iter_rev,
+            .dict_iter,
+            .dict_iter_rev,
+            .set_iter,
+            .set_iter_rev,
             .str_iter_utf8,
             .iter_map,
             .iter_keep_if,
@@ -188,8 +200,12 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_append,
             .iter_exclusive_range,
             .iter_inclusive_range,
+            .iter_descending_exclusive_range,
+            .iter_descending_inclusive_range,
             .numeric_range_exclusive,
             .numeric_range_inclusive,
+            .numeric_down_to,
+            .numeric_down_until,
             .iter_from_step,
             => true,
         };
@@ -212,6 +228,10 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
         .{ "Builtin.Iter.single", .iter_single },
         .{ "Builtin.List.iter", .list_iter },
         .{ "Builtin.List.iter_rev", .list_iter_rev },
+        .{ "Builtin.Dict.iter", .dict_iter },
+        .{ "Builtin.Dict.iter_rev", .dict_iter_rev },
+        .{ "Builtin.Set.iter", .set_iter },
+        .{ "Builtin.Set.iter_rev", .set_iter_rev },
         .{ "Builtin.Str.iter_utf8", .str_iter_utf8 },
         .{ "Builtin.Iter.map", .iter_map },
         .{ "Builtin.Iter.keep_if", .iter_keep_if },
@@ -222,6 +242,8 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
         .{ "Builtin.Iter.append", .iter_append },
         .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
         .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
+        .{ "Builtin.Iter.descending_exclusive_range", .iter_descending_exclusive_range },
+        .{ "Builtin.Iter.descending_inclusive_range", .iter_descending_inclusive_range },
         .{ "iter_from_step", .iter_from_step },
         .{ "Builtin.iter_from_step", .iter_from_step },
         .{ "range_done", .range_done },
@@ -240,6 +262,12 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
         }
         if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".range_inclusive")) {
             return .numeric_range_inclusive;
+        }
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".down_to")) {
+            return .numeric_down_to;
+        }
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".down_until")) {
+            return .numeric_down_until;
         }
     }
     return null;

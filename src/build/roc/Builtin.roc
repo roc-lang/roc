@@ -3138,6 +3138,83 @@ Builtin :: [].{
 					},
 			)
 
+		# Flat step loop behind the numeric types' `down_until` methods: the mirror
+		# of `exclusive_range`, walking down from `start` and stopping before
+		# `end`. Same `len_if_known` contract, and the same self-recursive `rest`
+		# so an adapter wrapping a descending range carries its state by value.
+		descending_exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
+			where [
+				num.is_gt : num, num -> Bool,
+				num.minus_try : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+			]
+		descending_exclusive_range = |start, end, len_if_known|
+			iter_from_step(
+				len_if_known,
+				||
+					if start > end {
+						One({
+							item: start,
+							rest: match start.minus_try(1) {
+								Ok(next) => if next > end {
+									Iter.descending_exclusive_range(
+										next,
+										end,
+										match len_if_known {
+											Known(l) => Known(l - 1)
+											Unknown => Unknown
+										},
+									)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						})
+					} else {
+						Done
+					},
+			)
+
+		# Flat step loop behind the numeric types' `down_to` methods; the mirror of
+		# `inclusive_range`. Each step yields `start` and continues from
+		# `start - 1`; the final value is yielded before `Done`, including when
+		# stepping below it would underflow, which is what makes `down_to(n, 0)`
+		# terminate on unsigned types.
+		descending_inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
+			where [
+				num.is_gte : num, num -> Bool,
+				num.minus_try : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+			]
+		descending_inclusive_range = |start, end, len_if_known|
+			iter_from_step(
+				len_if_known,
+				||
+					if start >= end {
+						One({
+							item: start,
+							rest: match start.minus_try(1) {
+								Ok(next) => if next >= end {
+									Iter.descending_inclusive_range(
+										next,
+										end,
+										match len_if_known {
+											Known(l) => Known(l - 1)
+											Unknown => Unknown
+										},
+									)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						})
+					} else {
+						Done
+					},
+			)
+
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
@@ -5870,6 +5947,26 @@ Builtin :: [].{
 			HashMap(data) => data.entries
 		}
 
+		## Iterate over the dictionary's key-value pairs in insertion order.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter(), [], |acc, pair| acc.append(pair)) == [(1, "One"), (2, "Two")]
+		## ```
+		iter : Dict(k, v) -> Iter((k, v))
+		iter = |dict| match dict {
+			HashMap(data) => List.iter(data.entries)
+		}
+
+		## Iterate over the dictionary's key-value pairs in reverse insertion
+		## order. Like [List.iter_rev], this reads the entries in place rather
+		## than building a reversed copy.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter_rev(), [], |acc, pair| acc.append(pair)) == [(2, "Two"), (1, "One")]
+		## ```
+		iter_rev : Dict(k, v) -> Iter((k, v))
+		iter_rev = |dict| match dict {
+			HashMap(data) => List.iter_rev(data.entries)
+		}
+
 		## Create a `Dict` from a `List` of key-value pairs. If the list
 		## contains duplicate keys, later values overwrite earlier ones.
 		## ```roc
@@ -6236,6 +6333,46 @@ Builtin :: [].{
 		to_list : Set(a) -> List(a)
 		to_list = |set| match set {
 			Items(list) => list
+		}
+
+		## Build a value by folding through each value in the set. Starting with
+		## a given `state` value, this runs the given `step` function on each
+		## value, using its return value as the new `state`. It returns the final
+		## `state` at the end.
+		## ```roc
+		## expect Set.from_list([1, 2, 3.U64]).fold(0, |sum, item| sum + item) == 6
+		##
+		## expect Set.empty().fold(0, |sum, item| sum + item) == 0.U64
+		## ```
+		fold : Set(a), state, (state, a -> state) -> state
+		fold = |set, init, step| match set {
+			Items(list) => {
+				var $state = init
+				for item in list {
+					$state = step($state, item)
+				}
+				$state
+			}
+		}
+
+		## Iterate over the set's values in insertion order.
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		iter : Set(a) -> Iter(a)
+		iter = |set| match set {
+			Items(list) => List.iter(list)
+		}
+
+		## Iterate over the set's values in reverse insertion order. Like
+		## [List.iter_rev], this reads the values in place rather than building a
+		## reversed copy.
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		## ```
+		iter_rev : Set(a) -> Iter(a)
+		iter_rev = |set| match set {
+			Items(list) => List.iter_rev(list)
 		}
 
 		## Create a `Set` from a `List` of values.
@@ -6969,6 +7106,46 @@ Builtin :: [].{
 						},
 				)
 
+			## Iterator over [U8] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(U8.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(U8.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(U8.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : U8, U8 -> Iter(U8)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [U8] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(U8.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(U8.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : U8, U8 -> Iter(U8)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
+				)
+
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
 			## Convert a [U8] to an [I8], wrapping on overflow. Values from `0` to
@@ -7670,6 +7847,46 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [I8] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(I8.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(I8.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(I8.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : I8, I8 -> Iter(I8)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [I8] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(I8.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(I8.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : I8, I8 -> Iter(I8)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
@@ -8407,6 +8624,46 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [U16] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(U16.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(U16.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(U16.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : U16, U16 -> Iter(U16)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [U16] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(U16.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(U16.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : U16, U16 -> Iter(U16)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
@@ -9197,6 +9454,46 @@ Builtin :: [].{
 						},
 				)
 
+			## Iterator over [I16] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(I16.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(I16.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(I16.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : I16, I16 -> Iter(I16)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [I16] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(I16.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(I16.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : I16, I16 -> Iter(I16)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
+				)
+
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
@@ -9947,6 +10244,46 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [U32] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(U32.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(U32.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(U32.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : U32, U32 -> Iter(U32)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [U32] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(U32.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(U32.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : U32, U32 -> Iter(U32)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
@@ -10769,6 +11106,46 @@ Builtin :: [].{
 						},
 				)
 
+			## Iterator over [I32] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(I32.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(I32.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(I32.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : I32, I32 -> Iter(I32)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Known(start.abs_diff(end).to_u64() + 1)
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [I32] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(I32.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(I32.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : I32, I32 -> Iter(I32)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end).to_u64())
+					} else {
+						Known(0)
+					},
+				)
+
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
@@ -11566,6 +11943,49 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [U64] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(U64.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(U64.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(U64.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : U64, U64 -> Iter(U64)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						match start.abs_diff(end).plus_try(1) {
+							Ok(len) => Known(len)
+							Err(Overflow) => Unknown
+						}
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [U64] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(U64.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(U64.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : U64, U64 -> Iter(U64)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end))
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
@@ -12436,6 +12856,49 @@ Builtin :: [].{
 						},
 				)
 
+			## Iterator over [I64] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(I64.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(I64.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(I64.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : I64, I64 -> Iter(I64)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						match start.abs_diff(end).plus_try(1) {
+							Ok(len) => Known(len)
+							Err(Overflow) => Unknown
+						}
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [I64] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(I64.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(I64.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : I64, I64 -> Iter(I64)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Known(start.abs_diff(end))
+					} else {
+						Known(0)
+					},
+				)
+
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each item of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in an
@@ -13234,6 +13697,55 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [U128] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(U128.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(U128.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(U128.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : U128, U128 -> Iter(U128)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						match start.abs_diff(end).to_u64_try() {
+							Ok(steps) => match steps.plus_try(1) {
+								Ok(len) => Known(len)
+								Err(Overflow) => Unknown
+							}
+							Err(OutOfRange) => Unknown
+						}
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [U128] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(U128.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(U128.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : U128, U128 -> Iter(U128)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						match start.abs_diff(end).to_u64_try() {
+							Ok(steps) => Known(steps)
+							Err(OutOfRange) => Unknown
+						}
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
@@ -14147,6 +14659,55 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [I128] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(I128.down_to(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2, 1]
+			##
+			## expect Iter.fold(I128.down_to(3, 3), [], |acc, item| acc.append(item)) == [3]
+			##
+			## expect Iter.fold(I128.down_to(2, 5), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : I128, I128 -> Iter(I128)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						match start.abs_diff(end).to_u64_try() {
+							Ok(steps) => match steps.plus_try(1) {
+								Ok(len) => Known(len)
+								Err(Overflow) => Unknown
+							}
+							Err(OutOfRange) => Unknown
+						}
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [I128] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(I128.down_until(4, 1), [], |acc, item| acc.append(item)) == [4, 3, 2]
+			##
+			## expect Iter.fold(I128.down_until(3, 3), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : I128, I128 -> Iter(I128)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						match start.abs_diff(end).to_u64_try() {
+							Ok(steps) => Known(steps)
+							Err(OutOfRange) => Unknown
+						}
+					} else {
+						Known(0)
+					},
 				)
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
@@ -15366,6 +15927,46 @@ Builtin :: [].{
 						} else {
 							Err(NoMore)
 						},
+				)
+
+			## Iterator over [Dec] values from `start` down to and including `end`.
+			## Returns an empty iterator if `start` is less than `end`.
+			## ```roc
+			## expect Iter.fold(Dec.down_to(4.0, 1.0), [], |acc, item| acc.append(item)) == [4.0, 3.0, 2.0, 1.0]
+			##
+			## expect Iter.fold(Dec.down_to(3.0, 3.0), [], |acc, item| acc.append(item)) == [3.0]
+			##
+			## expect Iter.fold(Dec.down_to(2.0, 5.0), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_to : Dec, Dec -> Iter(Dec)
+			down_to = |start, end|
+				Iter.descending_inclusive_range(
+					start,
+					end,
+					if start >= end {
+						Unknown
+					} else {
+						Known(0)
+					},
+				)
+
+			## Iterator over [Dec] values from `start` down to but not including `end`.
+			## Returns an empty iterator if `start` is less than or equal to `end`.
+			## ```roc
+			## expect Iter.fold(Dec.down_until(4.0, 1.0), [], |acc, item| acc.append(item)) == [4.0, 3.0, 2.0]
+			##
+			## expect Iter.fold(Dec.down_until(3.0, 3.0), [], |acc, item| acc.append(item)) == []
+			## ```
+			down_until : Dec, Dec -> Iter(Dec)
+			down_until = |start, end|
+				Iter.descending_exclusive_range(
+					start,
+					end,
+					if start > end {
+						Unknown
+					} else {
+						Known(0)
+					},
 				)
 
 			## Encode a Dec using a format that provides encode_dec

@@ -4208,6 +4208,109 @@ const core_tests = [_]TestCase{
         .source = "Iter.size_hint([].iter_rev())",
         .expected = .{ .inspect_str = "Known(0)" },
     },
+    .{
+        .name = "inspect: down_to counts down inclusively",
+        .source = "Iter.fold(U8.down_to(4, 1), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[4, 3, 2, 1]" },
+    },
+    .{
+        // The underflow boundary: stepping below 0 on an unsigned type must end
+        // the iterator rather than wrap or spin forever.
+        .name = "inspect: down_to reaching zero on an unsigned type terminates",
+        .source = "Iter.fold(U8.down_to(3, 0), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[3, 2, 1, 0]" },
+    },
+    .{
+        .name = "inspect: down_to on a single point yields that point",
+        .source = "Iter.fold(U8.down_to(3, 3), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[3]" },
+    },
+    .{
+        .name = "inspect: down_to with start below end is empty",
+        .source = "Iter.fold(U8.down_to(2, 5), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: down_until excludes the end bound",
+        .source = "Iter.fold(U8.down_until(4, 1), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[4, 3, 2]" },
+    },
+    .{
+        .name = "inspect: down_until on a single point is empty",
+        .source = "Iter.fold(U8.down_until(3, 3), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: down_to crosses zero on a signed type",
+        .source = "Iter.fold(I8.down_to(2, -2), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[2, 1, 0, -1, -2]" },
+    },
+    .{
+        // The signed mirror of the unsigned zero case: stepping below I8.lowest.
+        .name = "inspect: down_to reaching the signed minimum terminates",
+        .source = "Iter.fold(I8.down_to(-126, -128), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[-126, -127, -128]" },
+    },
+    .{
+        .name = "inspect: down_to reports an exact length",
+        .source = "Iter.size_hint(U8.down_to(4, 1))",
+        .expected = .{ .inspect_str = "Known(4)" },
+    },
+    .{
+        .name = "inspect: down_until reports an exact length",
+        .source = "Iter.size_hint(U8.down_until(4, 1))",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: down_to composed with keep_if",
+        .source = "Iter.fold(U8.down_to(5, 1).keep_if(|x| x != 3), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[5, 4, 2, 1]" },
+    },
+    .{
+        .name = "inspect: down_to composed with step_by",
+        .source = "Iter.fold(U8.down_to(9, 1).step_by(3), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[9, 6, 3]" },
+    },
+    .{
+        .name = "inspect: Dict.iter yields pairs in insertion order",
+        .source =
+        \\{
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(1, \"one\"), (2, \"two\"), (3, \"three\")]" },
+    },
+    .{
+        .name = "inspect: Dict.iter_rev yields pairs in reverse insertion order",
+        .source =
+        \\{
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter_rev(), [], |acc, pair| acc.append(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\"), (1, \"one\")]" },
+    },
+    .{
+        .name = "inspect: Set.fold sums the values",
+        .source = "Set.fold(Set.from_list([1, 2, 3.U64]), 0, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: Set.fold on an empty set returns the initial state",
+        .source = "Set.fold(Set.empty(), 0.U64, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "inspect: Set.iter yields values in insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Set.iter_rev yields values in reverse insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
