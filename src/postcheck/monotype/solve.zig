@@ -285,16 +285,21 @@ const FunctionRequestSubstitution = struct {
     }
 };
 
-pub const ExactNominalSelection = struct {
+pub const RequestSubstitution = struct {
     checked: NodeId,
-    exact: NodeId,
+    produced: NodeId,
 };
 
-const ExactNominalSelectionSpan = struct {
+const RequestSubstitutionSpan = struct {
     start: u32,
     len: u32,
 
-    const empty: ExactNominalSelectionSpan = .{ .start = 0, .len = 0 };
+    const uninitialized_len = std.math.maxInt(u32);
+    const uninitialized: RequestSubstitutionSpan = .{ .start = 0, .len = uninitialized_len };
+
+    fn isInitialized(self: RequestSubstitutionSpan) bool {
+        return self.len != uninitialized_len;
+    }
 };
 
 const ProducedJoinMemo = union(enum) {
@@ -468,11 +473,11 @@ pub const InstGraph = struct {
     /// consumers read this field instead of deriving it from the produced
     /// function's type shape.
     request_checked_sources: std.ArrayList(?NodeId),
-    /// Exact generated-nominal substitutions already discovered while each
-    /// function request was constructed. Body lowering consumes this explicit
-    /// request output instead of traversing the complete function type again.
-    request_exact_nominal_selection_spans: std.ArrayList(ExactNominalSelectionSpan),
-    exact_nominal_selections: std.ArrayList(ExactNominalSelection),
+    /// Complete substitutions already discovered while each function request
+    /// was constructed. Request refinement and body lowering consume this
+    /// explicit output instead of traversing the previous interface again.
+    request_substitution_spans: std.ArrayList(RequestSubstitutionSpan),
+    request_substitutions: std.ArrayList(RequestSubstitution),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -522,8 +527,8 @@ pub const InstGraph = struct {
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
-            .request_exact_nominal_selection_spans = .empty,
-            .exact_nominal_selections = .empty,
+            .request_substitution_spans = .empty,
+            .request_substitutions = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
         };
@@ -570,8 +575,8 @@ pub const InstGraph = struct {
         while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
         self.generated_iterators_by_item.deinit();
         self.generated_iterator_nodes.deinit(allocator);
-        self.exact_nominal_selections.deinit(allocator);
-        self.request_exact_nominal_selection_spans.deinit(allocator);
+        self.request_substitutions.deinit(allocator);
+        self.request_substitution_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
@@ -619,10 +624,15 @@ pub const InstGraph = struct {
         return self.find(source_fn);
     }
 
-    pub fn requestExactNominalSelections(self: *const InstGraph, request_fn: NodeId) []const ExactNominalSelection {
-        const span = self.request_exact_nominal_selection_spans.items[@intFromEnum(request_fn)];
+    pub fn requestSubstitutions(self: *const InstGraph, request_fn: NodeId) []const RequestSubstitution {
+        const span = self.request_substitution_spans.items[@intFromEnum(request_fn)];
+        if (!span.isInitialized()) return &.{};
         const start: usize = span.start;
-        return self.exact_nominal_selections.items[start .. start + span.len];
+        return self.request_substitutions.items[start .. start + span.len];
+    }
+
+    pub fn nodeIsGeneratedPrivateRoot(self: *InstGraph, node: NodeId) bool {
+        return isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(self.find(node))]);
     }
 
     pub fn findGeneratedIterator(
@@ -1819,7 +1829,7 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
-        try self.request_exact_nominal_selection_spans.append(self.allocator, .empty);
+        try self.request_substitution_spans.append(self.allocator, .uninitialized);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -2833,19 +2843,36 @@ pub const InstGraph = struct {
         var substitution = FunctionRequestSubstitution.init(self.allocator);
         defer substitution.deinit();
 
-        for (checked_fn.args, current_request_fn.args) |checked_arg, current_arg| {
+        const checked_source_root = try self.functionRequestRoot(checked_fn_node);
+        const current_source = self.requestCheckedSource(current_request_fn_node);
+        const source_changed = if (current_source) |source|
+            !self.sameClass(try self.functionRequestRoot(source), checked_source_root)
+        else
+            false;
+        const stored = self.request_substitution_spans.items[@intFromEnum(current_request_fn_node)];
+        if (stored.isInitialized() and !source_changed) {
+            for (self.requestSubstitutions(current_request_fn_node)) |selection| {
+                try self.seedFunctionRequestReplacement(
+                    self.find(selection.checked),
+                    self.find(selection.produced),
+                    &substitution,
+                );
+            }
+        } else {
+            for (checked_fn.args, current_request_fn.args) |checked_arg, current_arg| {
+                try self.collectFunctionRequestSubstitutions(
+                    checked_arg,
+                    current_arg,
+                    &substitution,
+                );
+            }
             try self.collectFunctionRequestSubstitutions(
-                checked_arg,
-                current_arg,
+                checked_fn.ret,
+                current_request_fn.ret,
                 &substitution,
             );
+            substitution.compared.clearRetainingCapacity();
         }
-        try self.collectFunctionRequestSubstitutions(
-            checked_fn.ret,
-            current_request_fn.ret,
-            &substitution,
-        );
-        substitution.compared.clearRetainingCapacity();
         for (checked_fn.args, produced_args) |checked_arg, produced_arg| {
             try self.collectFunctionRequestSubstitutions(
                 checked_arg,
@@ -2871,11 +2898,6 @@ pub const InstGraph = struct {
             .produced_callable,
         );
         const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
-        const checked_source_root = try self.functionRequestRoot(checked_fn_node);
-        const source_changed = if (self.requestCheckedSource(current_request_fn_node)) |current_source|
-            !self.sameClass(try self.functionRequestRoot(current_source), checked_source_root)
-        else
-            false;
 
         const request_fn = if (changed_args != null or ret_changed or source_changed)
             try self.newNode(.{ .func = .{
@@ -2885,7 +2907,7 @@ pub const InstGraph = struct {
         else
             current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_source_root);
-        try self.recordRequestExactNominalSelections(request_fn, &substitution);
+        try self.recordRequestSubstitutions(request_fn, &substitution);
         const components = try self.arena().alloc(NodeId, checked_components.len);
         for (checked_components, components) |checked_component, *component| {
             component.* = try self.materializeFunctionRequestNode(
@@ -2897,24 +2919,22 @@ pub const InstGraph = struct {
         return .{ .request = request_fn, .components = components };
     }
 
-    fn recordRequestExactNominalSelections(
+    fn recordRequestSubstitutions(
         self: *InstGraph,
         request_fn: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
-        const start = self.exact_nominal_selections.items.len;
+        const start = self.request_substitutions.items.len;
         var replacements = substitution.replacements.iterator();
         while (replacements.next()) |entry| {
-            const exact = self.find(entry.value_ptr.*);
-            if (!isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(exact)])) continue;
-            try self.exact_nominal_selections.append(self.allocator, .{
+            try self.request_substitutions.append(self.allocator, .{
                 .checked = self.find(entry.key_ptr.*),
-                .exact = exact,
+                .produced = self.find(entry.value_ptr.*),
             });
         }
-        self.request_exact_nominal_selection_spans.items[@intFromEnum(request_fn)] = .{
+        self.request_substitution_spans.items[@intFromEnum(request_fn)] = .{
             .start = @intCast(start),
-            .len = @intCast(self.exact_nominal_selections.items.len - start),
+            .len = @intCast(self.request_substitutions.items.len - start),
         };
     }
 
@@ -3093,10 +3113,29 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
+        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, true);
+    }
+
+    fn seedFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, false);
+    }
+
+    fn putFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+        count_discovery: bool,
+    ) Allocator.Error!void {
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
-            self.countDiagnostic("function_request_replacements");
+            if (count_discovery) self.countDiagnostic("function_request_replacements");
             return;
         }
         if (self.sameClass(entry.value_ptr.*, produced_node)) return;
@@ -3131,31 +3170,20 @@ pub const InstGraph = struct {
             &substitution,
             .body_abi,
         );
-        try self.inheritRequestExactNominalSelections(fn_node, isolated);
+        self.inheritRequestSubstitutions(fn_node, isolated);
         return isolated;
     }
 
-    /// Preserve a completed request's explicit checked-occurrence selections
-    /// when a generated callable wrapper or isolated body ABI gets a new
-    /// function node of its own.
-    pub fn inheritRequestExactNominalSelections(
+    /// Share a completed request's immutable substitution span with a generated
+    /// callable wrapper or isolated body ABI that gets its own function node.
+    pub fn inheritRequestSubstitutions(
         self: *InstGraph,
         source_fn: NodeId,
         destination_fn: NodeId,
-    ) Allocator.Error!void {
+    ) void {
         if (source_fn == destination_fn) return;
-        const source = self.request_exact_nominal_selection_spans.items[@intFromEnum(source_fn)];
-        const start = self.exact_nominal_selections.items.len;
-        try self.exact_nominal_selections.ensureUnusedCapacity(self.allocator, source.len);
-        for (0..source.len) |index| {
-            self.exact_nominal_selections.appendAssumeCapacity(
-                self.exact_nominal_selections.items[@as(usize, source.start) + index],
-            );
-        }
-        self.request_exact_nominal_selection_spans.items[@intFromEnum(destination_fn)] = .{
-            .start = @intCast(start),
-            .len = source.len,
-        };
+        const source = self.request_substitution_spans.items[@intFromEnum(source_fn)];
+        self.request_substitution_spans.items[@intFromEnum(destination_fn)] = source;
     }
 
     /// Build one detached request whose explicitly selected descendant cells
@@ -7976,16 +8004,30 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
-    const request_selections = graph.requestExactNominalSelections(request);
+    const request_selections = graph.requestSubstitutions(request);
     try std.testing.expectEqual(@as(usize, 1), request_selections.len);
     try std.testing.expect(graph.sameClass(request_selections[0].checked, slot));
-    try std.testing.expect(graph.sameClass(request_selections[0].exact, exact));
+    try std.testing.expect(graph.sameClass(request_selections[0].produced, exact));
 
     const isolated_request = try graph.isolateFunctionAbi(request);
-    const isolated_selections = graph.requestExactNominalSelections(isolated_request);
+    const isolated_selections = graph.requestSubstitutions(isolated_request);
     try std.testing.expectEqual(@as(usize, 1), isolated_selections.len);
     try std.testing.expect(graph.sameClass(isolated_selections[0].checked, slot));
-    try std.testing.expect(graph.sameClass(isolated_selections[0].exact, exact));
+    try std.testing.expect(graph.sameClass(isolated_selections[0].produced, exact));
+
+    var refinement_diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&refinement_diagnostics);
+    const refined_request = try graph.functionRequestFromProducedArguments(
+        checked_fn,
+        request,
+        &.{ produced_list, exact },
+    );
+    const refined_fn = try graph.functionNodes(refined_request);
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(refined_fn.args[0]), exact));
+    try std.testing.expect(graph.sameClass(refined_fn.args[1], exact));
+    // Refinement seeds the existing replacement from request metadata. A
+    // previous-interface walk would rediscover and count that replacement.
+    try std.testing.expectEqual(@as(u64, 0), refinement_diagnostics.function_request_replacements);
 
     const checked_view_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{public}),
@@ -8106,15 +8148,15 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(distinct_request_fn.args[1], second_exact));
     try std.testing.expect(!graph.sameClass(distinct_request_fn.args[0], distinct_request_fn.args[1]));
     try std.testing.expect(graph.sameClass(distinct_request_fn.ret, return_public));
-    const distinct_selections = graph.requestExactNominalSelections(distinct_request);
+    const distinct_selections = graph.requestSubstitutions(distinct_request);
     try std.testing.expectEqual(@as(usize, 2), distinct_selections.len);
     var found_first = false;
     var found_second = false;
     for (distinct_selections) |selection| {
-        if (graph.sameClass(selection.checked, public) and graph.sameClass(selection.exact, exact)) {
+        if (graph.sameClass(selection.checked, public) and graph.sameClass(selection.produced, exact)) {
             found_first = true;
         }
-        if (graph.sameClass(selection.checked, second_public) and graph.sameClass(selection.exact, second_exact)) {
+        if (graph.sameClass(selection.checked, second_public) and graph.sameClass(selection.produced, second_exact)) {
             found_second = true;
         }
     }

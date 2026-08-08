@@ -2658,9 +2658,12 @@ lowers those operands once before constructing the result cell: `box_unbox`
 and `list_get_unsafe` project the actual operand, list-preserving operations
 return the actual list cell, and insertion, concatenation, and replacement
 select an exact item representation at their declared storage boundary.
-The checked exact-result-flow pass consumes the same metadata. It must not
-maintain a second handwritten classification or stamp the low-level result
-with the checker-public type and ask Lambda Solved to repair it.
+The checked exact-result-flow pass and Lambda Solved callable analysis consume
+the same metadata. A contextual flow may name the enclosing function argument
+or return cell that a higher-order operation such as list mapping projects.
+Neither consumer may maintain a second handwritten operation classification,
+stamp the low-level result with the checker-public type, or reconstruct
+callable identity from operation-specific syntax.
 
 Every checked procedure use that names a compiler-provided low-level operation
 records that exact operation in the checked artifact. A direct call to a
@@ -2727,20 +2730,29 @@ passed at runtime even when the checked-public request did not expose that
 identity. Direct graph-backed dispatch follows the same operation; it cannot
 bypass producer conversion merely because it does not need evidence lookup.
 
-Building that request is one whole-interface substitution. Monotype walks each
-checked argument beside its completed produced argument once and records the
-directed replacement for every checked polymorphic cell that selected an exact
-generated nominal. It then materializes every completed argument and the
-current requested return from the same table. Each completed argument is its
-own structural authority, so two independent concrete `Iter(U64)` parameters
-may retain two different exact identities; only a shared checked polymorphic
-cell requires a common replacement. Reuse of one concrete public nominal node
-by the checker does not make separate runtime occurrences one substitution slot
-and cannot preselect the return. The body’s explicit produced-result flow
-determines the return instead. The checked interface supplies polymorphic
-substitution identity but cannot replace an already selected private structural
-or nominal view. Repeated polymorphic occurrences therefore
-cannot disagree: specializing
+The first request for a checked function source walks that interface beside its
+current request and completed produced arguments. It records every differing
+checked-node-to-produced-node substitution in a flat dense column, with one
+span owned by the request node. Refining that request seeds substitution
+directly from the previous span and walks only the newly completed produced
+arguments; it never walks the previous function interface again. Materializing
+the refined arguments and requested return consumes that same substitution
+table. Isolated body ABIs and generated callable wrappers share the immutable
+span as explicit request metadata; they do not copy its entries. At body entry,
+Monotype consumes the span directly and selects its generated-private roots; it
+does not reconstruct them by walking the complete function type.
+
+Each completed argument is its own structural authority, so two independent
+concrete `Iter(U64)` parameters may retain two different exact identities.
+Checker-authored node recurrence is the explicit declaration that two source
+occurrences share one substitution slot; independent source occurrences have
+distinct checked nodes even when their public shapes are identical. Fresh call
+argument occurrences likewise remain distinct produced cells. A shared
+checked polymorphic cell requires one common replacement, but cannot preselect
+the return: the body's explicit produced-result flow determines the return.
+The checked interface supplies polymorphic substitution identity but cannot
+replace an already selected private structural or nominal view. Repeated
+polymorphic occurrences therefore cannot disagree: specializing
 `List(a), a -> List(a)` with an exact `Iter` produces
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
 lowered. Ordinary compound nodes are rebuilt only along changed paths, and an
