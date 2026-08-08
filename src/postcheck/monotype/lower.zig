@@ -16077,11 +16077,13 @@ const BodyContext = struct {
         }
         const fn_nodes = try self.graph.functionNodes(fn_node);
         const checked_fn_node = try self.instNode(template.checked_fn_root);
-        try self.graph.collectFunctionRequestExactNominalSelections(
-            checked_fn_node,
-            fn_node,
-            &self.instantiation.exact_nominal_selections,
-        );
+        const exact_selections = self.graph.requestExactNominalSelections(fn_node);
+        for (exact_selections) |selection| {
+            try self.instantiation.exact_nominal_selections.put(
+                self.graph.rootNode(selection.checked),
+                self.graph.rootNode(selection.exact),
+            );
+        }
         const saved_enclosing_function = self.enclosing_function;
         defer self.enclosing_function = saved_enclosing_function;
         self.enclosing_function = fn_nodes;
@@ -25391,6 +25393,7 @@ const BodyContext = struct {
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try self.graph.inheritRequestExactNominalSelections(fn_node, private_fn_node);
                     try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     fn_node = private_fn_node;
@@ -25408,6 +25411,7 @@ const BodyContext = struct {
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try self.graph.inheritRequestExactNominalSelections(fn_node, private_fn_node);
                     try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     fn_node = private_fn_node;
@@ -26468,6 +26472,7 @@ const BodyContext = struct {
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
             if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                try self.graph.inheritRequestExactNominalSelections(fn_node, private_fn_node);
                 try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                 try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                 fn_node = private_fn_node;
@@ -27573,6 +27578,7 @@ const BodyContext = struct {
             const public_fn_node = self.graph.requestCheckedSource(request_fn_node) orelse
                 Common.invariant("iterator procedure value request had no checked source interface");
             if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, request_fn_node, null)) |private_fn_node| {
+                try self.graph.inheritRequestExactNominalSelections(request_fn_node, private_fn_node);
                 try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                 try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                 request_fn_node = private_fn_node;
@@ -34337,6 +34343,7 @@ const BodyContext = struct {
             request_node,
             checked_args,
         )) orelse return null;
+        try self.graph.inheritRequestExactNominalSelections(request_node, private_node);
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
         return private_node;
@@ -34358,6 +34365,7 @@ const BodyContext = struct {
             request_node,
             checked_args,
         )) orelse return null;
+        try self.graph.inheritRequestExactNominalSelections(request_node, private_node);
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
         return private_node;

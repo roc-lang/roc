@@ -675,7 +675,7 @@ test "Monotype loop carries remain graph-native through headers and backedges" {
     try expectNotContains(loop_source, "fn loopStateType(");
 }
 
-test "Monotype indirect calls retain graph-native function provenance" {
+test "Monotype calls retain graph-native function provenance and lower operands once" {
     const lower_source = @embedFile("monotype/lower.zig");
     const call_source = sourceSliceBetween(
         lower_source,
@@ -683,19 +683,25 @@ test "Monotype indirect calls retain graph-native function provenance" {
         "fn lowerDirectCallWithUninhabitedArgument(",
     );
     try expectContains(call_source, "instantiateCallNodeFromCallerAtNode");
-    try expectContains(call_source, "const fn_nodes = try self.graph.functionNodes(fn_node)");
-    try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)");
+    try expectContains(call_source, "try self.preLowerDirectCallOperands(");
+    try expectContains(call_source, "const initial_produced_args = try self.producedCallArgumentNodes(");
+    try expectContains(call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(");
+    try expectContains(call_source, "var lowered_args = try self.lowerCallOperandsAtNodes(");
+    try expectContains(call_source, "const produced = try call_ctx.producedCallableNode(fn_node, lowered_args)");
     try expectContains(call_source, "const callee = try self.lowerExprAtTypeCell(");
     try expectContains(call_source, "const produced_callee = try self.graph.functionNodes(callee_node)");
     try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, produced_callee.args)");
     try expectContains(call_source, ".args = try self.lowerPreparedExprSpanAtNodes(call.args, produced_callee.args)");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(produced_callee.ret)");
-    try expectNotContains(call_source, "completed_callee_node");
     try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
-    const direct_prepare = std.mem.find(u8, call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)").?;
+    const direct_prepare = std.mem.find(u8, call_source, "try self.preLowerDirectCallOperands(").?;
+    const direct_request = std.mem.find(u8, call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(").?;
+    const direct_finish = std.mem.find(u8, call_source, "var lowered_args = try self.lowerCallOperandsAtNodes(").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;
-    try std.testing.expect(direct_prepare < direct_specialize);
+    try std.testing.expect(direct_prepare < direct_request);
+    try std.testing.expect(direct_request < direct_finish);
+    try std.testing.expect(direct_finish < direct_specialize);
 }
 
 test "Monotype open specialization lookup covers the complete function interface" {

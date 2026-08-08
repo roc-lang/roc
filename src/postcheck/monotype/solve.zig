@@ -285,6 +285,18 @@ const FunctionRequestSubstitution = struct {
     }
 };
 
+pub const ExactNominalSelection = struct {
+    checked: NodeId,
+    exact: NodeId,
+};
+
+const ExactNominalSelectionSpan = struct {
+    start: u32,
+    len: u32,
+
+    const empty: ExactNominalSelectionSpan = .{ .start = 0, .len = 0 };
+};
+
 const ProducedJoinMemo = union(enum) {
     visiting,
     cycle: NodeId,
@@ -456,6 +468,11 @@ pub const InstGraph = struct {
     /// consumers read this field instead of deriving it from the produced
     /// function's type shape.
     request_checked_sources: std.ArrayList(?NodeId),
+    /// Exact generated-nominal substitutions already discovered while each
+    /// function request was constructed. Body lowering consumes this explicit
+    /// request output instead of traversing the complete function type again.
+    request_exact_nominal_selection_spans: std.ArrayList(ExactNominalSelectionSpan),
+    exact_nominal_selections: std.ArrayList(ExactNominalSelection),
     /// Minted iterator roots whose relation graph proved that retaining the
     /// minted tier would create a recursive component identity. The raw node
     /// remains valid across later unions; finalization resolves it to the live
@@ -505,6 +522,8 @@ pub const InstGraph = struct {
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
+            .request_exact_nominal_selection_spans = .empty,
+            .exact_nominal_selections = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
         };
@@ -551,6 +570,8 @@ pub const InstGraph = struct {
         while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
         self.generated_iterators_by_item.deinit();
         self.generated_iterator_nodes.deinit(allocator);
+        self.exact_nominal_selections.deinit(allocator);
+        self.request_exact_nominal_selection_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
@@ -596,6 +617,12 @@ pub const InstGraph = struct {
     pub fn requestCheckedSource(self: *InstGraph, request_fn: NodeId) ?NodeId {
         const source_fn = self.request_checked_sources.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
+    }
+
+    pub fn requestExactNominalSelections(self: *const InstGraph, request_fn: NodeId) []const ExactNominalSelection {
+        const span = self.request_exact_nominal_selection_spans.items[@intFromEnum(request_fn)];
+        const start: usize = span.start;
+        return self.exact_nominal_selections.items[start .. start + span.len];
     }
 
     pub fn findGeneratedIterator(
@@ -1792,6 +1819,7 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
+        try self.request_exact_nominal_selection_spans.append(self.allocator, .empty);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -2774,32 +2802,6 @@ pub const InstGraph = struct {
         )).request;
     }
 
-    /// Record the exact generated nominals selected by a complete function
-    /// request. Ordinary checked substitutions already share union-find
-    /// classes with the function body; public nominal interfaces deliberately
-    /// do not, so body instantiation consumes these explicit replacements by
-    /// checked-node identity.
-    pub fn collectFunctionRequestExactNominalSelections(
-        self: *InstGraph,
-        checked_fn_node: NodeId,
-        exact_fn_node: NodeId,
-        selections: *collections.DenseMap(NodeId, NodeId),
-    ) Allocator.Error!void {
-        var substitution = FunctionRequestSubstitution.init(self.allocator);
-        defer substitution.deinit();
-        try self.collectFunctionRequestSubstitutions(
-            checked_fn_node,
-            exact_fn_node,
-            &substitution,
-        );
-        var replacements = substitution.replacements.iterator();
-        while (replacements.next()) |entry| {
-            const exact = self.find(entry.value_ptr.*);
-            if (!isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(exact)])) continue;
-            try selections.put(self.find(entry.key_ptr.*), exact);
-        }
-    }
-
     pub const MaterializedFunctionRequest = struct {
         request: NodeId,
         components: []const NodeId,
@@ -2883,6 +2885,7 @@ pub const InstGraph = struct {
         else
             current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_source_root);
+        try self.recordRequestExactNominalSelections(request_fn, &substitution);
         const components = try self.arena().alloc(NodeId, checked_components.len);
         for (checked_components, components) |checked_component, *component| {
             component.* = try self.materializeFunctionRequestNode(
@@ -2892,6 +2895,27 @@ pub const InstGraph = struct {
             );
         }
         return .{ .request = request_fn, .components = components };
+    }
+
+    fn recordRequestExactNominalSelections(
+        self: *InstGraph,
+        request_fn: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const start = self.exact_nominal_selections.items.len;
+        var replacements = substitution.replacements.iterator();
+        while (replacements.next()) |entry| {
+            const exact = self.find(entry.value_ptr.*);
+            if (!isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(exact)])) continue;
+            try self.exact_nominal_selections.append(self.allocator, .{
+                .checked = self.find(entry.key_ptr.*),
+                .exact = exact,
+            });
+        }
+        self.request_exact_nominal_selection_spans.items[@intFromEnum(request_fn)] = .{
+            .start = @intCast(start),
+            .len = @intCast(self.exact_nominal_selections.items.len - start),
+        };
     }
 
     fn collectFunctionRequestSubstitutions(
@@ -2921,12 +2945,10 @@ pub const InstGraph = struct {
         if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
             sameTypeDef(checked_content.named.def, produced_content.named.def))
         {
-            // Generated definitions are ordinary exact nominal types in a
-            // specialization request. Replacing the complete checked-public
-            // occurrence preserves the producer-selected runtime type in
-            // every argument/result position where the checked slot recurs.
-            // Multiple exact values for one checked slot meet through the
-            // normal produced-representation join in recordFunctionRequestReplacement.
+            // Checked-node identity is the checker's explicit relation between
+            // occurrences. Replace this complete occurrence everywhere that
+            // same node recurs; independent concrete positions have distinct
+            // checked nodes even when their public shapes are identical.
             try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
             return;
         }
@@ -3103,12 +3125,37 @@ pub const InstGraph = struct {
     pub fn isolateFunctionAbi(self: *InstGraph, fn_node: NodeId) Allocator.Error!NodeId {
         var substitution = FunctionRequestSubstitution.init(self.allocator);
         defer substitution.deinit();
-        return try self.materializeFunctionRequestNodeMode(
+        const isolated = try self.materializeFunctionRequestNodeMode(
             fn_node,
             fn_node,
             &substitution,
             .body_abi,
         );
+        try self.inheritRequestExactNominalSelections(fn_node, isolated);
+        return isolated;
+    }
+
+    /// Preserve a completed request's explicit checked-occurrence selections
+    /// when a generated callable wrapper or isolated body ABI gets a new
+    /// function node of its own.
+    pub fn inheritRequestExactNominalSelections(
+        self: *InstGraph,
+        source_fn: NodeId,
+        destination_fn: NodeId,
+    ) Allocator.Error!void {
+        if (source_fn == destination_fn) return;
+        const source = self.request_exact_nominal_selection_spans.items[@intFromEnum(source_fn)];
+        const start = self.exact_nominal_selections.items.len;
+        try self.exact_nominal_selections.ensureUnusedCapacity(self.allocator, source.len);
+        for (0..source.len) |index| {
+            self.exact_nominal_selections.appendAssumeCapacity(
+                self.exact_nominal_selections.items[@as(usize, source.start) + index],
+            );
+        }
+        self.request_exact_nominal_selection_spans.items[@intFromEnum(destination_fn)] = .{
+            .start = @intCast(start),
+            .len = source.len,
+        };
     }
 
     /// Build one detached request whose explicitly selected descendant cells
@@ -7866,7 +7913,7 @@ test "opaque interface relation preserves distinct public and generated-private 
     try std.testing.expectEqual(field_name, projected.fields[0].name);
 }
 
-test "function request substitutes variables while keeping concrete slots independent" {
+test "function request follows checked occurrence identity and keeps independent slots distinct" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7929,6 +7976,16 @@ test "function request substitutes variables while keeping concrete slots indepe
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
+    const request_selections = graph.requestExactNominalSelections(request);
+    try std.testing.expectEqual(@as(usize, 1), request_selections.len);
+    try std.testing.expect(graph.sameClass(request_selections[0].checked, slot));
+    try std.testing.expect(graph.sameClass(request_selections[0].exact, exact));
+
+    const isolated_request = try graph.isolateFunctionAbi(request);
+    const isolated_selections = graph.requestExactNominalSelections(isolated_request);
+    try std.testing.expectEqual(@as(usize, 1), isolated_selections.len);
+    try std.testing.expect(graph.sameClass(isolated_selections[0].checked, slot));
+    try std.testing.expect(graph.sameClass(isolated_selections[0].exact, exact));
 
     const checked_view_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{public}),
@@ -7963,7 +8020,7 @@ test "function request substitutes variables while keeping concrete slots indepe
     );
     const unique_concrete_request_fn = try graph.functionNodes(unique_concrete_request);
     try std.testing.expect(graph.sameClass(unique_concrete_request_fn.args[0], exact));
-    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, public));
+    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, exact));
 
     const independent_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const independent_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -7995,9 +8052,9 @@ test "function request substitutes variables while keeping concrete slots indepe
         &.{ public, exact },
     );
     const mixed_concrete_request_fn = try graph.functionNodes(mixed_concrete_request);
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], public));
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[1], exact));
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.ret, public));
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.ret, exact));
 
     var second_def = def;
     second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
@@ -8013,9 +8070,31 @@ test "function request substitutes variables while keeping concrete slots indepe
             .authority = .generated_private,
         },
     } });
+    const second_public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+        },
+    } });
+    const return_public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+        },
+    } });
     const concrete_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ public, public }),
-        .ret = public,
+        .args = try graph.arena().dupe(NodeId, &.{ public, second_public }),
+        .ret = return_public,
     } });
     const distinct_request = try graph.functionRequestFromProducedArguments(
         concrete_fn,
@@ -8026,7 +8105,21 @@ test "function request substitutes variables while keeping concrete slots indepe
     try std.testing.expect(graph.sameClass(distinct_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(distinct_request_fn.args[1], second_exact));
     try std.testing.expect(!graph.sameClass(distinct_request_fn.args[0], distinct_request_fn.args[1]));
-    try std.testing.expect(graph.sameClass(distinct_request_fn.ret, public));
+    try std.testing.expect(graph.sameClass(distinct_request_fn.ret, return_public));
+    const distinct_selections = graph.requestExactNominalSelections(distinct_request);
+    try std.testing.expectEqual(@as(usize, 2), distinct_selections.len);
+    var found_first = false;
+    var found_second = false;
+    for (distinct_selections) |selection| {
+        if (graph.sameClass(selection.checked, public) and graph.sameClass(selection.exact, exact)) {
+            found_first = true;
+        }
+        if (graph.sameClass(selection.checked, second_public) and graph.sameClass(selection.exact, second_exact)) {
+            found_second = true;
+        }
+    }
+    try std.testing.expect(found_first);
+    try std.testing.expect(found_second);
 
     const stored_public_list = try graph.newNode(.{ .list = public });
     const requested_exact_list = try graph.newNode(.{ .list = exact });
@@ -8155,7 +8248,7 @@ test "checked type mapping preserves forced-dynamic iterator identity" {
     try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, graph.content(private).named.def.iterator_representation);
 }
 
-test "opaque iterator relation materializes unresolved public interface from provenance" {
+test "opaque iterator relation selects generated-private nominal over unresolved request" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -8207,12 +8300,13 @@ test "opaque iterator relation materializes unresolved public interface from pro
 
     _ = try graph.applyProducedTypeToRequest(public, private);
 
-    const retained_public = graph.content(public).named;
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
-    try std.testing.expectEqual(Type.IteratorRepresentation.none, retained_public.def.iterator_representation);
-    try std.testing.expectEqual(@as(usize, 1), retained_public.args.len);
-    try std.testing.expect(graph.sameClass(retained_public.args[0], private_item));
+    const selected = graph.content(public).named;
+    try std.testing.expect(graph.sameClass(public, private));
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, selected.backing.?.authority);
+    try std.testing.expectEqual(Type.IteratorRepresentation.minted, selected.def.iterator_representation);
+    try std.testing.expectEqual(@as(usize, 1), selected.args.len);
+    try std.testing.expect(graph.sameClass(selected.args[0], private_item));
+    try std.testing.expect(selected.generated_iterator != null);
 }
 
 test "opaque iterator relation resolves unresolved public variable to imported generated iterator" {
