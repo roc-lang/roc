@@ -32255,7 +32255,7 @@ const BodyContext = struct {
                 .ext = request_row.ext,
             } })
         else
-            self.constructorRepresentationNode(tag_node);
+            request_row.root;
         const produced_node = try self.producedConstructorNode(tag_node, structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
             .name = name,

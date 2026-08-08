@@ -3217,6 +3217,13 @@ from the exact child cells they emit. They never first construct a
 checked-public container, scan it for private descendants, or emit a second
 witness related to that container.
 
+A tag-construction row carries both its exact payload cells and its exact
+structural root beneath any explicit nominal constructor. Rebuilding a changed
+row replaces that structural root; an unchanged row reuses it. The constructor
+then applies the requested nominal wrapper exactly once. The outer nominal is
+never passed back as its own backing, because doing so manufactures a second
+nominal layer that neither checking nor the producer requested.
+
 A procedure specialization retains its exact checked source scheme and the
 explicit substitution from that scheme to its exact argument and result types.
 Input and output identities therefore remain distinct when the source signature

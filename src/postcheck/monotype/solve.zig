@@ -243,6 +243,8 @@ pub const TagRowNodes = struct {
 
 /// Graph-native tag row used while constructing an exact produced value.
 pub const TagConstructionRow = struct {
+    /// Exact structural backing beneath any explicit nominal constructor.
+    root: NodeId,
     tags: []const InstTag,
     ext: NodeId,
 };
@@ -3831,7 +3833,7 @@ pub const InstGraph = struct {
         return switch (self.content(structural)) {
             .tag_union => blk: {
                 const row = try self.flattenTagRow(structural);
-                break :blk .{ .tags = row.tags, .ext = row.ext };
+                break :blk .{ .root = structural, .tags = row.tags, .ext = row.ext };
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("instantiation tag constructor had a non-tag-union runtime backing"),
         };
