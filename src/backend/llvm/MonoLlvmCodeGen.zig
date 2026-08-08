@@ -9713,15 +9713,6 @@ pub const MonoLlvmCodeGen = struct {
 
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
-        // listReplace moves the displaced element into out_element before
-        // overwriting it. list_set does not return that ownership unit, so it
-        // needs both a real slot and a drop after the call.
-        const old_elem_ptr = try self.allocEntryBlockSlot(
-            .i8,
-            abi.elem_size,
-            LlvmBuilder.Alignment.fromByteUnits(@max(abi.elem_alignment, 1)),
-            "list_set_old_elem",
-        );
 
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
@@ -9732,7 +9723,9 @@ pub const MonoLlvmCodeGen = struct {
         if (boxy_elem) |elem| {
             try self.appendBoxyListElementDescArgs(&call_args, elem);
         } else {
-            try call_args.append(self.allocator, try self.ptrType(), old_elem_ptr);
+            // `listSet` decrefs the element it displaces before overwriting it,
+            // so unlike `list_replace` it has no out_element parameter and the
+            // caller owes no drop afterwards.
             try self.appendListElementRcArgs(&call_args, abi, true, true);
         }
         try self.appendUpdateModeArg(&call_args, unique_args);
@@ -9741,11 +9734,6 @@ pub const MonoLlvmCodeGen = struct {
             try self.callBoxyVoid("roc_boxy_list_set", call_args.types.items, call_args.values.items);
         } else {
             try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_set)), call_args.types.items, call_args.values.items);
-            if (abi.contains_refcounted) {
-                if (abi.elem_layout_idx) |elem_layout_idx| {
-                    try self.emitRcHelperCall(.{ .op = .decref, .layout_idx = elem_layout_idx }, .atomic, old_elem_ptr, null);
-                }
-            }
         }
     }
 
