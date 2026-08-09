@@ -15294,6 +15294,19 @@ const BodyContext = struct {
             return existing;
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
+        switch (checkedPayload(self.view, checked_ty)) {
+            .flex, .rigid => {
+                const checked_key = self.view.types.rootKey(checked_ty).bytes;
+                for (self.active_request_substitutions) |selection| {
+                    const selection_key = selection.checked_key orelse continue;
+                    if (!std.meta.eql(selection_key, checked_key)) continue;
+                    const produced = self.graph.rootNode(selection.produced);
+                    try self.putScopedNode(scoped_ty, produced);
+                    return produced;
+                }
+            },
+            .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union, .nominal => {},
+        }
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         try self.putScopedNode(scoped_ty, placeholder);
         const built = try self.instNodeContent(checked_ty);
@@ -15372,20 +15385,11 @@ const BodyContext = struct {
         return switch (checkedPayload(self.view, checked_ty)) {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
-            .flex, .rigid => |variable| blk: {
-                const checked_key = self.view.types.rootKey(checked_ty).bytes;
-                for (self.active_request_substitutions) |selection| {
-                    const selection_key = selection.checked_key orelse continue;
-                    if (std.meta.eql(selection_key, checked_key)) {
-                        break :blk self.graph.rootNode(selection.produced);
-                    }
-                }
-                break :blk try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
                     variable.numeric_default_phase,
                     variable.row_default,
-                    checked_key,
-                ) });
-            },
+                    self.view.types.rootKey(checked_ty).bytes,
+                ) }),
             .empty_record => try self.graph.newNode(.empty_record),
             .empty_tag_union => try self.graph.newNode(.empty_tag_union),
             .alias => |alias| try self.graph.newNode(.{ .named = .{
@@ -19068,6 +19072,11 @@ const BodyContext = struct {
         };
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
+        }
+        if (public_named.def.generated != null) {
+            if (public_named.args.len == 1 and self.graph.sameClass(public_named.args[0], item_node)) {
+                return self.graph.rootNode(public_iterator);
+            }
         }
         var lookup_args = [_]NodeId{item_node};
         public_named.args = &lookup_args;

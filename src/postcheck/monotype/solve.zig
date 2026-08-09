@@ -467,6 +467,9 @@ pub const InstGraph = struct {
     /// Generated iterator nominals keyed by the final canonical content identity
     /// by their producer. The identity and backing are complete before entry.
     generated_iterator_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedIteratorInternContext, 80),
+    /// Fast producer lookup by the already-completed dense item node. Buckets
+    /// distinguish declarations without re-hashing the item type graph.
+    generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
     /// Permanent roots recorded by the producer so sealing can publish each
     /// completed nominal to the cross-specialization TypeId interner.
     generated_iterator_nodes: std.ArrayList(NodeId),
@@ -510,6 +513,7 @@ pub const InstGraph = struct {
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
             .generated_iterator_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedIteratorInternContext, 80).init(allocator),
+            .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
             .request_substitution_spans = .empty,
@@ -551,6 +555,9 @@ pub const InstGraph = struct {
             bucket.deinit(allocator);
         }
         self.nominal_backings.deinit();
+        var generated_item_buckets = self.generated_iterators_by_item.valueIterator();
+        while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.generated_iterators_by_item.deinit();
         self.generated_iterator_intern.deinit();
         self.generated_iterator_nodes.deinit(allocator);
         self.request_substitutions.deinit(allocator);
@@ -637,10 +644,6 @@ pub const InstGraph = struct {
         } });
     }
 
-    pub fn nodeIsGeneratedPrivateRoot(self: *InstGraph, node: NodeId) bool {
-        return isGeneratedPrivateRootContent(self.nodes.items[@intFromEnum(self.find(node))]);
-    }
-
     pub fn lookupGeneratedIteratorFromNamed(
         self: *InstGraph,
         public_named: InstNamed,
@@ -648,8 +651,27 @@ pub const InstGraph = struct {
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator lookup received no public item argument");
         }
+        const item_root = self.find(public_named.args[0]);
+        if (self.generated_iterators_by_item.getPtr(item_root)) |bucket| {
+            for (bucket.items) |raw_existing| {
+                const existing = self.find(raw_existing);
+                const existing_named = switch (self.content(existing)) {
+                    .named => |named| named,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator item index contained a non-named node"),
+                };
+                if (!sameTypeDef(public_named.def, existing_named.def)) continue;
+                if (existing_named.args.len != 1 or self.find(existing_named.args[0]) != item_root) {
+                    Common.invariant("generated iterator item index contained a mismatched item node");
+                }
+                const digest = existing_named.def.generated orelse
+                    Common.invariant("generated iterator item index contained an unstamped node");
+                self.countDiagnostic("generated_identity_intern_hits");
+                return .{ .existing = existing, .digest = digest };
+            }
+        }
         const digest = try self.generatedIteratorInternDigest(public_named);
         if (self.generated_iterator_intern.get(digest)) |node| {
+            try self.indexGeneratedIteratorByItem(node);
             self.countDiagnostic("generated_identity_intern_hits");
             return .{ .existing = self.find(node), .digest = digest };
         }
@@ -692,7 +714,26 @@ pub const InstGraph = struct {
             Common.invariant("one generated identity was constructed twice in one body");
         }
         entry.value_ptr.* = node;
+        try self.indexGeneratedIteratorByItem(node);
         try self.generated_iterator_nodes.append(self.allocator, node);
+    }
+
+    fn indexGeneratedIteratorByItem(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator item index received a non-named node"),
+        };
+        if (named.args.len != 1) {
+            Common.invariant("generated iterator registration had an unexpected item arity");
+        }
+        const item_root = self.find(named.args[0]);
+        const item_bucket = try self.generated_iterators_by_item.getOrPut(item_root);
+        if (!item_bucket.found_existing) item_bucket.value_ptr.* = .empty;
+        for (item_bucket.value_ptr.items) |existing| {
+            if (self.find(existing) == node) return;
+        }
+        try item_bucket.value_ptr.append(self.allocator, node);
     }
 
     fn generatedIteratorInternDigest(
@@ -1371,22 +1412,6 @@ pub const InstGraph = struct {
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
 
-        // A checked occurrence can already have consumed this specialization's
-        // exact nominal selection before a later interface constraint creates
-        // a fresh public view. Normalize that checked-mapping pair here: the
-        // exact nominal remains authoritative, and the public node contributes
-        // only its checker-proved interface relation.
-        if (kind == .checked_mapping and
-            isGeneratedPrivateRootContent(public_content) and
-            private_content == .named and
-            private_content.named.backing != null and
-            private_content.named.backing.?.authority == .checked_public and
-            sameTypeDef(public_content.named.def, private_content.named.def))
-        {
-            try self.relateGeneratedOpaquePair(private_content, public_content.named, pending);
-            return;
-        }
-
         // A still-open cell contains no selected substitution to copy. Do not
         // merge it with the fresh occurrence: either side may later receive a
         // different producer-owned exact representation of the same checked
@@ -1455,7 +1480,7 @@ pub const InstGraph = struct {
                         },
                         .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
                     }
-                    try self.relateGeneratedOpaquePair(public_content, private_named, pending);
+                    self.validateGeneratedPublicRequest(public_content, private_named);
                     return;
                 }
             },
@@ -1719,14 +1744,16 @@ pub const InstGraph = struct {
         try pending.append(self.allocator, .{ .left = public_node, .right = private_node });
     }
 
-    fn relateGeneratedOpaquePair(
+    /// Validate the public declaration at the one edge where it requests an
+    /// exact generated nominal. This is not a relation traversal: the exact
+    /// nominal is already complete and neither its arguments nor its backing
+    /// are visited here.
+    fn validateGeneratedPublicRequest(
         self: *InstGraph,
         public_content: InstNode,
         private_named: InstNamed,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
+    ) void {
         _ = self;
-        _ = pending;
         if (public_content != .named) Common.invariant("opaque public interface relation received a non-named public node");
         const public_named = public_content.named;
         const iterator_pair = sameTypeDef(public_named.def, private_named.def) and
@@ -3776,7 +3803,17 @@ pub const InstGraph = struct {
             .origin = mergeVariableOrigin(a.origin, b.origin),
             .numeric_default_phase = a.numeric_default_phase orelse b.numeric_default_phase,
             .row_default = a.row_default orelse b.row_default,
+            .checked_key = mergeCheckedVariableKey(a.checked_key, b.checked_key),
         };
+    }
+
+    fn mergeCheckedVariableKey(a: ?[32]u8, b: ?[32]u8) ?[32]u8 {
+        if (a == null) return b;
+        if (b == null) return a;
+        if (!std.meta.eql(a.?, b.?)) {
+            Common.invariant("one checked substitution class carried two different stable identities");
+        }
+        return a;
     }
 
     fn mergeVariableOrigin(a: InstVariableOrigin, b: InstVariableOrigin) InstVariableOrigin {
