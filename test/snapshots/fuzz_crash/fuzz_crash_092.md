@@ -54,17 +54,13 @@ d = ((0 |> X).a)
 (can-ir
 	(d-let
 		(p-assign (ident "d"))
-		(e-field-access (field "a")
-			(receiver
-				(e-tag (name "X")
-					(args
-						(e-num (value "0"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_b")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_b"))))
+		(expr (type "Error"))))
 ~~~

@@ -79,21 +79,13 @@ a = (
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "a")
-			(receiver
-				(e-tag (name "X")
-					(args
-						(e-call (constraint-fn-var 215)
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-tag (name "X")
-								(args
-									(e-num (value "0")))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_b")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_b"))))
+		(expr (type "Error"))))
 ~~~

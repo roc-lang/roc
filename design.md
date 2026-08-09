@@ -1328,6 +1328,16 @@ Checker sites that own a reported error use `markErroneous` to poison the owning
 solved class directly. No successful ordinary unification propagates an
 existing `.err` into a type that already carries information.
 
+A relation an expression merely consults is not a relation it may destroy. A
+call checks its callee and its arguments, and a field access checks the record
+it reads from, against a shape the consuming expression demands; each operand is
+an independently solved producer that other expressions also read. Those sites
+unify through `unifyOwnedRelation`, which suppresses mismatch poisoning, records
+the diagnostic itself, and marks only the consuming expression erroneous. The
+producer keeps the type it was solved to, so a rejected relation neither
+cascades into unrelated uses of that producer nor leaves an `.err` on a binding
+whose value post-check lowering must still instantiate.
+
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that relies on one variable to carry a relation
 between several others has to supply that relation itself once the carrier is
