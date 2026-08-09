@@ -7412,18 +7412,10 @@ test "check type - finalize defaulting - heterogeneous multi-driver group at top
 }
 
 // OUTER-ROOTED DISPATCH CHAINS: a dispatch deferred on a flex receiver owned
-// by an OUTER scope (here the weak top-level value `top_str`, whose quote
-// literal stays open until module finalize so every def can constrain it) is a
-// unification-in-waiting. A literal argument trapped behind such a chain
-// (`.get(0)`'s index) must NOT be defaulted at the inner def's generalization
-// boundary: the chain, once its receiver resolves, pins the literal itself
-// (`List.get` wants U64). The boundary demotes every still-flex var reachable
-// from an outer-owned receiver's constraint signatures to the receiver's rank,
-// handing the whole chain to the outer scope's universe—the same rank
-// discipline an eagerly-fired dispatch would have imposed via unification.
-// Before that demotion pass, the literal looked locally unconstrained,
-// committed the canonical Dec default, and the finalize cascade then reported
-// `List(Str), U64 -> ...` against `List(Str), Dec -> ...`.
+// by an outer scope is part of the inner definition's explicit type scheme.
+// Its literal-bearing callable relation is protected from boundary defaulting
+// and copied with every use, so `.get(0)` learns U64 when that use's copied
+// `List.get` requirement is discharged.
 test "check type - boundary defaulting - literal behind dispatch chain rooted at weak top-level value" {
     const source =
         \\top_str = "a,b,c"
@@ -7432,11 +7424,9 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted at
     try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
 }
 
-// Nested-frame analogue of the test above—no top-level weak value involved:
-// `s` is owned by `outer`'s frame, and `inner`'s generalization boundary is a
-// frame deeper, so the chain root sits at an outer (but not outermost) rank.
-// The demotion hands `inner`'s trapped `0` to `outer`'s boundary, where `s`'s
-// quote commits Str and the cascade pins the index to U64.
+// Nested-frame analogue of the test above—no top-level weak value involved.
+// The scheme requirement keeps `s` as its shared enclosing receiver while the
+// callable relation and its trapped literal are copied per use.
 test "check type - boundary defaulting - literal behind dispatch chain rooted in enclosing frame" {
     const source =
         \\outer = |_a| {
@@ -7448,10 +7438,9 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted in
     try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
 }
 
-// Guard: the demotion pass must not disturb weak top-level literal semantics.
-// A weak literal with only its literal-conversion constraint has no dispatch
-// chain (`rangeHasNonLiteralConstraint` is false), so it is never a demotion
-// root; it stays open and a later def's use pins it to exactly one type.
+// Guard: explicit scheme requirements must not disturb weak top-level literal
+// semantics. A weak literal stays open and a later def's use pins it to exactly
+// one type.
 test "check type - weak top-level literal pinned by cross-def use" {
     const source =
         \\n = 5
@@ -7518,4 +7507,329 @@ test "check type - principality - inferred receiver, two call sites" {
         \\selves = f(|s| s)
     ;
     try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+const principality_enclosing_defs = &[_]DefAndExpectation{
+    .{ .def = "outer", .expected = "_arg -> (List(U64), List(Str))" },
+    .{ .def = "result", .expected = "(List(U64), List(Str))" },
+};
+
+test "check type - principality - annotated enclosing weak receiver, two call sites" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak : Str
+        \\    weak = "a,b,c"
+        \\    f = |g| weak.split_on(",").map(g)
+        \\    lengths = f(|s| s.count_utf8_bytes())
+        \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - inferred enclosing weak receiver, two call sites" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak = "a,b,c"
+        \\    f = |g| weak.split_on(",").map(g)
+        \\    lengths = f(|s| s.count_utf8_bytes())
+        \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - annotated weak numeric receiver, two call sites" {
+    const source =
+        \\weak : I64
+        \\weak = 5
+        \\f = |g| weak.to_str().split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+test "check type - principality - inferred weak numeric receiver, two call sites" {
+    const source =
+        \\weak = 5
+        \\f = |g| weak.to_str().split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+const principality_transitive_defs = &[_]DefAndExpectation{
+    .{ .def = "base", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated transitive scheme requirement" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\f = |g| base(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_transitive_defs);
+}
+
+test "check type - principality - inferred transitive scheme requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\f = |g| base(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_transitive_defs);
+}
+
+const principality_result_flow_defs = &[_]DefAndExpectation{
+    .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
+    .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
+    .{ .def = "selves", .expected = "[Mapped(List(Str)), ..]" },
+};
+
+test "check type - principality - annotated requirement result flows into return type" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\f = |g| Mapped(weak.split_on(",").map(g))
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_result_flow_defs);
+}
+
+test "check type - principality - inferred requirement result flows into return type" {
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g| Mapped(weak.split_on(",").map(g))
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_result_flow_defs);
+}
+
+test "check type - principality - literal-constrained lambda parameter remains polymorphic" {
+    const source =
+        \\func = |offset| {
+        \\    condition = offset == 1
+        \\    f = if condition |x| x + offset else |x| x * 2
+        \\    f(10)
+        \\}
+        \\as_u8 = func(10.U8)
+        \\as_i64 = func(10.I64)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "as_u8", .expected = "U8" },
+        .{ .def = "as_i64", .expected = "I64" },
+    });
+}
+
+const GeneratedWeakLiteral = enum { quote, numeral };
+const GeneratedResultWrapper = enum { direct, record };
+const GeneratedAnnotationSite = enum { none, receiver, lengths, selves };
+
+const PrincipalityGenerator = struct {
+    state: u64,
+
+    fn choose(self: *@This(), comptime E: type) E {
+        self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
+        const fields = @typeInfo(E).@"enum".fields;
+        return @enumFromInt(self.state % fields.len);
+    }
+
+    fn boolean(self: *@This()) bool {
+        self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
+        return self.state & 1 == 1;
+    }
+};
+
+fn generatedPrincipalitySource(
+    allocator: std.mem.Allocator,
+    weak: GeneratedWeakLiteral,
+    wrapper: GeneratedResultWrapper,
+    transitive: bool,
+    reverse_before_map: bool,
+    annotation_site: GeneratedAnnotationSite,
+    invalid_result: bool,
+) ![]u8 {
+    const receiver_annotation = if (annotation_site == .receiver)
+        switch (weak) {
+            .quote => "weak : Str\n",
+            .numeral => "weak : I64\n",
+        }
+    else
+        "";
+    const weak_literal = switch (weak) {
+        .quote => "\"a,b,c\"",
+        .numeral => "5",
+    };
+    const normalized = switch (weak) {
+        .quote => "weak",
+        .numeral => "weak.to_str()",
+    };
+    const identity_map = if (reverse_before_map) ".map(|item| item)" else "";
+    const mapped = try std.fmt.allocPrint(allocator, "{s}.split_on(\",\"){s}.map(g)", .{ normalized, identity_map });
+    defer allocator.free(mapped);
+    const wrapped = switch (wrapper) {
+        .direct => try allocator.dupe(u8, mapped),
+        .record => try std.fmt.allocPrint(allocator, "{{ value: {s} }}", .{mapped}),
+    };
+    defer allocator.free(wrapped);
+
+    const base_binding = if (transitive)
+        try std.fmt.allocPrint(allocator, "base = |g| {s}\n", .{wrapped})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(base_binding);
+    const f_body = if (transitive) "base(g)" else wrapped;
+
+    const lengths_type = switch (wrapper) {
+        .direct => "List(U64)",
+        .record => "{ value : List(U64) }",
+    };
+    const selves_type = switch (wrapper) {
+        .direct => "List(Str)",
+        .record => "{ value : List(Str) }",
+    };
+    const lengths_annotation = if (annotation_site == .lengths)
+        try std.fmt.allocPrint(allocator, "lengths : {s}\n", .{lengths_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(lengths_annotation);
+    const selves_annotation = if (annotation_site == .selves)
+        try std.fmt.allocPrint(allocator, "selves : {s}\n", .{selves_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(selves_annotation);
+    const invalid_binding = if (invalid_result)
+        "bad : Str\nbad = lengths\n"
+    else
+        "";
+
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}weak = {s}\n{s}f = |g| {s}\n{s}lengths = f(|s| s.count_utf8_bytes())\n{s}selves = f(|s| s)\n{s}",
+        .{
+            receiver_annotation,
+            weak_literal,
+            base_binding,
+            f_body,
+            lengths_annotation,
+            selves_annotation,
+            invalid_binding,
+        },
+    );
+}
+
+fn expectGeneratedDefTypesEqual(
+    allocator: std.mem.Allocator,
+    inferred: *TestEnv,
+    annotated: *TestEnv,
+    transitive: bool,
+) !void {
+    const names = [_][]const u8{ "weak", "f", "lengths", "selves" };
+    for (names) |name| {
+        const inferred_type = try inferred.allocDefType(allocator, name);
+        defer allocator.free(inferred_type);
+        const annotated_type = try annotated.allocDefType(allocator, name);
+        defer allocator.free(annotated_type);
+        try testing.expectEqualStrings(inferred_type, annotated_type);
+    }
+    if (transitive) {
+        const inferred_type = try inferred.allocDefType(allocator, "base");
+        defer allocator.free(inferred_type);
+        const annotated_type = try annotated.allocDefType(allocator, "base");
+        defer allocator.free(annotated_type);
+        try testing.expectEqualStrings(inferred_type, annotated_type);
+    }
+}
+
+test "check type - generated principality under optional exact annotations" {
+    const allocator = testing.allocator;
+    var generator = PrincipalityGenerator{ .state = 0x9e3779b97f4a7c15 };
+
+    // Each case is assembled from independently chosen, typed constructs: a
+    // weak literal, a normalization path, a list operation, an optional
+    // transitive helper, and a result wrapper. This is deliberately a small
+    // compositional generator rather than a catalogue of scenario strings.
+    for (0..8) |_| {
+        const weak = generator.choose(GeneratedWeakLiteral);
+        const wrapper = generator.choose(GeneratedResultWrapper);
+        const transitive = generator.boolean();
+        const reverse_before_map = generator.boolean();
+
+        const inferred_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            reverse_before_map,
+            .none,
+            false,
+        );
+        defer allocator.free(inferred_source);
+        var inferred = try TestEnv.init("Test", inferred_source);
+        defer inferred.deinit();
+        try inferred.assertNoErrors();
+
+        const annotation_sites = [_]GeneratedAnnotationSite{ .receiver, .lengths, .selves };
+        for (annotation_sites) |annotation_site| {
+            const annotated_source = try generatedPrincipalitySource(
+                allocator,
+                weak,
+                wrapper,
+                transitive,
+                reverse_before_map,
+                annotation_site,
+                false,
+            );
+            defer allocator.free(annotated_source);
+            var annotated = try TestEnv.init("Test", annotated_source);
+            defer annotated.deinit();
+            try expectGeneratedDefTypesEqual(allocator, &inferred, &annotated, transitive);
+        }
+
+        // An unrelated bad result stays rejected when the weak receiver gets
+        // its exact annotation: adding the annotation cannot unlock the module.
+        const rejected_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            reverse_before_map,
+            .none,
+            true,
+        );
+        defer allocator.free(rejected_source);
+        var rejected = try TestEnv.init("Test", rejected_source);
+        defer rejected.deinit();
+        try testing.expect(rejected.typeProblemCount() > 0);
+
+        const rejected_annotated_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            reverse_before_map,
+            .receiver,
+            true,
+        );
+        defer allocator.free(rejected_annotated_source);
+        var rejected_annotated = try TestEnv.init("Test", rejected_annotated_source);
+        defer rejected_annotated.deinit();
+        try testing.expect(rejected_annotated.typeProblemCount() > 0);
+    }
 }

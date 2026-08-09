@@ -443,6 +443,30 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
     return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
 }
 
+/// Allocate the rendered inferred type of a named top-level definition.
+/// Dynamic invariant generators use this to compare two independently checked
+/// modules without baking one generated program's type strings into the test.
+pub fn allocDefType(self: *TestEnv, allocator: Allocator, target_def_name: []const u8) TestEnvError![]u8 {
+    try self.assertNoErrors();
+
+    const idents = self.module_env.getIdentStoreConst();
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const ptrn = self.module_env.store.getPattern(def.pattern);
+        if (ptrn != .assign) return error.TestUnexpectedResult;
+        if (!std.mem.eql(u8, target_def_name, idents.getText(ptrn.assign.ident))) continue;
+
+        try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
+        return allocator.dupe(u8, self.type_writer.get());
+    }
+    return error.TestUnexpectedResult;
+}
+
+pub fn typeProblemCount(self: *const TestEnv) usize {
+    return self.checker.problems.problems.items.len;
+}
+
 /// Get the inferred type of the last declaration and compare it to the provided
 /// expected type string.
 ///

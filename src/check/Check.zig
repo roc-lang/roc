@@ -295,22 +295,18 @@ group_stack: std.ArrayListUnmanaged(GroupFrame) = .empty,
 /// owned by the group that discovered them (stack-suffix discipline: entries
 /// at index >= the owning frame's `pending_targets_top` belong to that frame).
 pending_dispatch_targets: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
-/// Boundaries whose generalize decision is delayed until every dispatch chain
-/// rooted at an outer-scope receiver has fired (see `SuspendedGeneralization`).
-/// APPENDED IN CHECK ORDER, and resumption walks it in that order: a def's
-/// scheme must exist before the defs that use it are decided. Never sort it,
-/// and never key resumption off a hash map instead—hash iteration order is
-/// unstable, which would make inferred types vary between runs.
-suspended_generalizations: std.ArrayListUnmanaged(SuspendedGeneralization) = .empty,
-/// Lookups of a def whose generalize decision is parked. Linking one to the
-/// def's in-flight var the ordinary way is what freezes the def to a single
-/// module-wide type, so the lookup waits here for a scheme to instantiate
-/// instead. Drained by `resumeSuspendedGeneralizations`.
-pending_scheme_uses: std.ArrayListUnmanaged(PendingSchemeUse) = .empty,
-/// Whether module-wide literal defaulting has run, i.e. whether the outer-scope
-/// receivers parked frames are waiting on have actually been settled. Read by
-/// `resumeSuspendedGeneralizations`'s ordering tripwire.
-literal_defaults_finalized: bool = false,
+/// Explicit generalized schemes whose type has pending static-dispatch
+/// requirements not structurally reachable from the type root. Requirements
+/// are copied under the same substitution as the root at every use.
+type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty,
+/// Dispatch requirements discovered while checking a prospective scheme.
+/// Generalization boundaries move the still-open entries owned by their roots
+/// into `type_schemes`; probe rollback truncates speculative entries.
+scheme_requirement_candidates: std.ArrayListUnmanaged(SchemeRequirementCandidate) = .empty,
+/// The innermost expression whose type is the scheme currently being built.
+/// Constraint creation and transitive scheme instantiation stamp requirements
+/// with this exact owner instead of reconstructing ownership at a boundary.
+active_scheme_root: ?Var = null,
 /// Standalone schemes declared from annotated top-level defs' annotations
 /// before any body checking (annotated-scheme pre-pass). A reference to such
 /// a def before its body has been checked instantiates this scheme—exactly
@@ -724,6 +720,59 @@ const InstantiationDispatcher = struct {
     /// the constrained scheme). Null only if the dispatcher was created outside
     /// `checkExpr`.
     instantiation_expr: ?CIR.Expr.Idx,
+    source: Source = .attached_constraint,
+
+    const Source = enum {
+        /// Constraints copied structurally with a generalized flex var.
+        attached_constraint,
+        /// An explicit scheme requirement. This is enqueued at instantiation
+        /// time so it can participate in the caller's ordinary solve pass.
+        scheme_requirement,
+    };
+};
+
+/// A generalized type together with the pending dispatch requirements that
+/// form the rest of its scheme. The requirement list is checker-owned because
+/// it is meaningful while solving and instantiating; every instantiated copy
+/// is registered in the ordinary deferred-dispatch worklist.
+const TypeScheme = struct {
+    root_var: Var,
+    dispatch_requirements: std.ArrayListUnmanaged(SchemeDispatchRequirement) = .empty,
+};
+
+/// One independently-copyable pending method relation in a type scheme.
+/// `receiver_var` may belong to an enclosing scope; `constraint.fn_var` owns
+/// the scheme-local callable relation whose generalized children vary per use.
+const SchemeDispatchRequirement = struct {
+    receiver_var: Var,
+    constraint: StaticDispatchConstraint,
+};
+
+const InstantiatedSchemeDispatchRequirement = struct {
+    scheme_receiver_var: Var,
+    receiver_var: Var,
+    scheme_fn_var: Var,
+    constraint: StaticDispatchConstraint,
+};
+
+/// A requirement before its owning definition reaches generalization.
+const SchemeRequirementCandidate = struct {
+    owner_root: Var,
+    receiver_var: Var,
+    constraint: StaticDispatchConstraint,
+    source: Source,
+    captured: bool = false,
+
+    const Source = enum {
+        /// A dispatch expression created in this definition. It only needs the
+        /// explicit scheme representation when its receiver belongs outside
+        /// the definition's rank frame.
+        creation,
+        /// A requirement copied while instantiating another scheme. Unlike an
+        /// attached flex constraint, it must remain explicit while unresolved
+        /// regardless of the copied receiver's rank.
+        scheme_copy,
+    };
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -821,6 +870,22 @@ fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchCo
     return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
+fn recordSchemeRequirementCandidate(
+    self: *Self,
+    receiver_var: Var,
+    constraint: StaticDispatchConstraint,
+    source: SchemeRequirementCandidate.Source,
+) Allocator.Error!void {
+    if (self.constraintIsLiteralConversion(constraint)) return;
+    const owner_root = self.active_scheme_root orelse return;
+    try self.scheme_requirement_candidates.append(self.gpa, .{
+        .owner_root = owner_root,
+        .receiver_var = receiver_var,
+        .constraint = constraint,
+        .source = source,
+    });
+}
+
 const StaticDispatchUse = struct {
     expr_idx: CIR.Expr.Idx,
     region: Region,
@@ -839,39 +904,6 @@ const LocalDefProcessed = struct {
 
 /// Progress of one check-order group (see `check_order`).
 const GroupState = enum { pending, checking, checked };
-
-/// A generalization boundary whose decision is delayed to module finalize.
-///
-/// A body that dispatches on a receiver OWNED BY AN OUTER SCOPE (a weak
-/// top-level value whose literal is still open) cannot decide generalize-vs-
-/// share when its own frame ends: the method's signature is unknown until the
-/// receiver resolves, and the receiver cannot resolve until the whole module
-/// has been read, because any later def may still constrain it. Deciding
-/// anyway is what an annotation on the receiver used to paper over—the same
-/// program inferred a strictly worse type without one. So the frame's vars are
-/// parked here and the decision is made at finalize, after the cascade fires
-/// the chain, at which point the answer is forced rather than guessed.
-const SuspendedGeneralization = struct {
-    /// The boundary's root var (the def RHS whose scheme is being decided).
-    root_var: Var,
-    /// The rank the frame ran at, re-established when it resumes.
-    rank: Rank,
-    /// The frame's var-pool entry, copied because `popRank` clears it. Owned;
-    /// freed in `deinit` and after the frame resumes.
-    frame_vars: []Var,
-};
-
-/// A lookup waiting on a parked def's scheme (see `pending_scheme_uses`).
-const PendingSchemeUse = struct {
-    /// The lookup expression's var. Deliberately left unconstrained by the
-    /// lookup itself; the surrounding expression may still constrain it, which
-    /// is exactly the per-use information a shared link would have destroyed.
-    expr_var: Var,
-    /// The target def's pattern var—the same union-find class as the parked
-    /// frame's root, which is how the two are matched up on resume.
-    pat_var: Var,
-    resolved: bool = false,
-};
 
 /// One group currently being checked (an entry on `group_stack`).
 const GroupFrame = struct {
@@ -1729,9 +1761,9 @@ pub fn deinit(self: *Self) void {
     self.group_states.deinit(self.gpa);
     self.group_stack.deinit(self.gpa);
     self.pending_dispatch_targets.deinit(self.gpa);
-    for (self.suspended_generalizations.items) |suspended| self.gpa.free(suspended.frame_vars);
-    self.suspended_generalizations.deinit(self.gpa);
-    self.pending_scheme_uses.deinit(self.gpa);
+    for (self.type_schemes.items) |*scheme| scheme.dispatch_requirements.deinit(self.gpa);
+    self.type_schemes.deinit(self.gpa);
+    self.scheme_requirement_candidates.deinit(self.gpa);
     self.predeclared_scheme_vars.deinit(self.gpa);
     self.predeclared_local_scheme_vars.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
@@ -4003,6 +4035,14 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
+fn typeSchemeIndexForRoot(self: *Self, root_var: Var) ?usize {
+    const root = self.types.resolveVar(root_var).var_;
+    for (self.type_schemes.items, 0..) |scheme, i| {
+        if (self.types.resolveVar(scheme.root_var).var_ == root) return i;
+    }
+    return null;
+}
+
 /// Instantiate a variable
 ///
 /// * Substituting generalized flex vars with fresh flex vars
@@ -4102,6 +4142,28 @@ fn instantiateVarHelp(
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
+
+    // A scheme is the root type plus its explicit pending dispatch
+    // requirements. Copy both under this one var_map so generalized variables
+    // shared between the root and a requirement remain shared in the copy,
+    // while every use receives an independent callable relation.
+    var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
+    defer instantiated_requirements.deinit(self.gpa);
+    if (self.typeSchemeIndexForRoot(var_to_instantiate)) |scheme_idx| {
+        const requirements_len = self.type_schemes.items[scheme_idx].dispatch_requirements.items.len;
+        var requirement_idx: usize = 0;
+        while (requirement_idx < requirements_len) : (requirement_idx += 1) {
+            // Instantiation grows the type store but not `type_schemes`; copy
+            // the record before doing either recursive operation.
+            const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
+            try instantiated_requirements.append(self.gpa, .{
+                .scheme_receiver_var = requirement.receiver_var,
+                .receiver_var = try instantiator.instantiateVar(requirement.receiver_var),
+                .scheme_fn_var = requirement.constraint.fn_var,
+                .constraint = try instantiator.instantiateSchemeDispatchConstraint(requirement.constraint),
+            });
+        }
+    }
 
     if (instantiator.recursion_overflow) {
         // Non-terminating instantiation—e.g. a self-referential static-dispatch
@@ -4241,6 +4303,20 @@ fn instantiateVarHelp(
         } else null
     else
         null;
+    for (instantiated_requirements.items) |requirement| {
+        const scheme_receiver = self.types.resolveVar(requirement.scheme_receiver_var).var_;
+        const fresh_receiver = self.types.resolveVar(requirement.receiver_var).var_;
+        if (scheme_receiver != fresh_receiver) {
+            try self.scratch_evidence_pairs.append(self.gpa, .{
+                .old_var = @intFromEnum(scheme_receiver),
+                .fresh_var = @intFromEnum(fresh_receiver),
+            });
+        }
+        try self.scratch_evidence_pairs.append(self.gpa, .{
+            .old_var = @intFromEnum(self.types.resolveVar(requirement.scheme_fn_var).var_),
+            .fresh_var = @intFromEnum(requirement.constraint.fn_var),
+        });
+    }
     std.mem.sort(ModuleEnv.SchemeUsePair, self.scratch_evidence_pairs.items, {}, struct {
         fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
             return a.old_var < b.old_var;
@@ -4275,6 +4351,36 @@ fn instantiateVarHelp(
         }
     }
     self.scratch_evidence_pairs.clearRetainingCapacity();
+
+    // Explicit scheme requirements are pending facts of this particular use,
+    // not constraints merged onto a shared receiver descriptor. Enqueue every
+    // copy independently, and retain it in the per-instantiation registry used
+    // by the final dispatch fixpoint. If this instantiation occurs while
+    // building another scheme, the copied requirement is also a candidate for
+    // that outer scheme, which provides transitive propagation.
+    for (instantiated_requirements.items) |requirement| {
+        const constraint_range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
+        const instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
+        try self.instantiation_dispatchers.append(self.gpa, .{
+            .dispatcher_var = requirement.receiver_var,
+            .constraints = constraint_range,
+            .instantiation_expr = instantiation_expr,
+            .source = .scheme_requirement,
+        });
+        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
+            .var_ = requirement.receiver_var,
+            .constraints = constraint_range,
+            .failure_expr = if (instantiation_expr) |expr_idx|
+                .from(@intFromEnum(expr_idx))
+            else
+                .none,
+        });
+        try self.recordSchemeRequirementCandidate(
+            requirement.receiver_var,
+            requirement.constraint,
+            .scheme_copy,
+        );
+    }
 
     // Add the var to the right rank
     try env.var_pool.addVarToRank(instantiated_var, instantiator.current_rank);
@@ -7765,6 +7871,13 @@ fn checkInstantiatedStaticDispatchConstraints(
             const dispatcher = self.instantiation_dispatchers.items[dispatcher_idx];
             if (dispatcher.constraints.len() == 0) continue;
 
+            // Explicit scheme requirements enter the deferred worklist at the
+            // instant the scheme is copied, so ordinary caller-side solving can
+            // discharge them. Re-enqueuing here would process the same use
+            // twice; this registry entry exists so the fixpoint still observes
+            // requirements created by nested method-target instantiations.
+            if (dispatcher.source == .scheme_requirement) continue;
+
             // The ambiguity judgment has already decided which generalized
             // instantiations are unpinnable. Only those receivers will be
             // materialized through the specialization default at this use;
@@ -9495,6 +9608,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         expectation.forComptimeRoot();
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
+    const saved_active_scheme_root = self.active_scheme_root;
+    self.active_scheme_root = expr_var;
+    defer self.active_scheme_root = saved_active_scheme_root;
     const def_does_fx = try self.checkExpr(def.expr, env, def_expectation);
     if (def.annotation != null) {
         if (platform_required) |required| {
@@ -13017,6 +13133,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const should_generalize = !suppress_group_member_generalize and
         self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
 
+    // A generalizing expression owns every pending dispatch relation created
+    // while its body is checked. Save/restore makes nested generalized lambdas
+    // exact owners rather than folding their requirements into an enclosing
+    // scheme.
+    const previous_active_scheme_root = self.active_scheme_root;
+    if (should_generalize) self.active_scheme_root = expr_var_raw;
+    defer self.active_scheme_root = previous_active_scheme_root;
+
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
     defer if (should_generalize) {
@@ -13634,16 +13758,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
-            if (self.defGeneralizationIsSuspended(pat_var)) {
-                // The target's generalize decision is parked until the module's
-                // dispatch chains fire. Linking to its in-flight var now would
-                // publish one module-wide type for it and make the FIRST use
-                // win, so this use waits for a scheme to instantiate instead.
-                try self.pending_scheme_uses.append(self.gpa, .{
-                    .expr_var = expr_var,
-                    .pat_var = pat_var,
-                });
-            } else if (resolved_pat.desc.rank == Rank.generalized) {
+            if (resolved_pat.desc.rank == Rank.generalized or self.typeSchemeIndexForRoot(pat_var) != null) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
@@ -13990,7 +14105,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // generalization into the enclosing function's types.
                     const func_var = blk_instantiate: {
                         const resolved = self.types.resolveVar(call_func_expr_var);
-                        if (resolved.desc.rank == Rank.generalized) {
+                        if (resolved.desc.rank == Rank.generalized or self.typeSchemeIndexForRoot(call_func_expr_var) != null) {
                             break :blk_instantiate try self.instantiateVar(
                                 call_func_expr_var,
                                 env,
@@ -14768,14 +14883,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // frame and stay live for the group boundary.
             try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
         }
-        if (!try self.suspendGeneralizationIfChained(expr_var, env)) {
-            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-            // The scheme's vars froze at generalized rank: judge this def's
-            // dispatch-constrained receivers now, while the judgment is a
-            // local question about one scheme (see
-            // `judgeAmbiguityCandidatesAtGeneralization`).
-            try self.judgeAmbiguityCandidatesAtGeneralization(expr_var);
-        }
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        // The scheme's vars froze at generalized rank: judge this def's
+        // dispatch-constrained receivers now, while the judgment is a
+        // local question about one scheme (see
+        // `judgeAmbiguityCandidatesAtGeneralization`).
+        try self.judgeAmbiguityCandidatesAtGeneralization(expr_var);
     }
 
     try hoist_frame.finish(does_fx);
@@ -17525,6 +17638,7 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
+    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation);
     try self.recordAmbiguityCandidate(lhs_var, .creation, null);
 }
 
@@ -17620,6 +17734,7 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
+    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation);
     try self.recordAmbiguityCandidate(arg_var, .creation, null);
 }
 
@@ -17809,6 +17924,7 @@ fn mkReceiverDispatchConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
+    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation);
     try self.recordAmbiguityCandidate(receiver_var, .creation, null);
     return constraint_fn_var;
 }
@@ -17844,6 +17960,7 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
+    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation);
     try self.recordAmbiguityCandidate(dispatcher_var, .creation, null);
     return constraint_fn_var;
 }
@@ -18700,6 +18817,7 @@ const Probe = struct {
     savepoint: types_mod.Store.Savepoint,
     regions_len: usize,
     instantiation_dispatchers_len: usize,
+    scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
     pending_tuple_accesses_len: usize,
@@ -18715,6 +18833,7 @@ const Probe = struct {
         // Per-instantiation dispatchers recorded during the probe reference fresh
         // receiver vars that were just rolled back with the type store.
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
+        self.check.scheme_requirement_candidates.shrinkRetainingCapacity(self.scheme_requirement_candidates_len);
         // Likewise, open literals registered during the probe (by in-probe
         // instantiation) reference vars the savepoint rollback just discarded.
         self.check.open_literal_vars.shrinkRetainingCapacity(self.open_literal_vars_len);
@@ -18751,6 +18870,7 @@ const Probe = struct {
 fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const regions_len = self.regions.items.items.len;
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
+    const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
@@ -18763,6 +18883,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .check = self,
         .regions_len = regions_len,
         .instantiation_dispatchers_len = instantiation_dispatchers_len,
+        .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
@@ -18893,7 +19014,6 @@ fn finalizeLiteralDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void 
     try self.runLiteralDefaultingRounds(env, .{ .finalize = .{
         .literal_count = self.open_literal_vars.items.len,
     } });
-    self.literal_defaults_finalized = true;
 }
 
 /// What `finalizeTypes` is finalizing: the whole module, or a single REPL
@@ -18935,15 +19055,6 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     if (run_defaults) {
         try self.finalizeLiteralDefaults(env);
     }
-
-    // The receivers are settled now, so the boundaries that parked their
-    // generalize decision can finally make it. ORDER IS LOAD-BEARING: this runs
-    // AFTER defaulting, because deciding before the receiver is known is
-    // exactly the guess that let an annotation on the receiver change a def's
-    // inferred type. It also runs unconditionally—a parked frame that never
-    // resumed would leave its def undecided and its uses unresolved, which is
-    // worse than deciding without the defaults this module opted out of.
-    try self.resumeSuspendedGeneralizations(env, run_defaults);
 
     // Committing a default can spawn deferred static-dispatch
     // constraints (e.g. Dec.plus, Dec.to_str returning Str); resolve
@@ -19588,284 +19699,77 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(&.{def_root_var}, env);
 }
 
-/// Make the generalize decisions parked by `suspendGeneralizationIfChained`,
-/// now that the module has been read and the finalize cascade has fired every
-/// chain whose receiver resolved. Each frame is re-established at its original
-/// rank and generalized there, so the ordinary rank-adjustment rules decide
-/// what is quantified and what escaped—the same decision the frame would have
-/// made inline, taken with the answers it was missing.
-///
-/// Walks `suspended_generalizations` in APPEND order, which is check order:
-/// a def's scheme must exist before defs that use it are decided.
-fn resumeSuspendedGeneralizations(self: *Self, env: *Env, receivers_settled: bool) std.mem.Allocator.Error!void {
-    // Tripwire for the one ordering that makes this whole mechanism pointless.
-    // A frame parked precisely because its receiver was unknown; resuming while
-    // that is still true decides against a guess, and the wrong answer looks
-    // entirely plausible—no crash, no error, just a def that infers a worse
-    // type than it would have with an annotation on the receiver. So anything
-    // that settles receivers must stay ahead of this call.
-    std.debug.assert(!receivers_settled or self.literal_defaults_finalized);
+fn ensureTypeScheme(self: *Self, root_var: Var) Allocator.Error!usize {
+    if (self.typeSchemeIndexForRoot(root_var)) |scheme_idx| return scheme_idx;
+    const scheme_idx = self.type_schemes.items.len;
+    try self.type_schemes.append(self.gpa, .{ .root_var = root_var });
+    return scheme_idx;
+}
 
-    // Nothing parked: leave finalize exactly as it was. Everything below—not
-    // least the cascade at the end—is the parked frames' business, and running
-    // any of it for a module that never parked one would change that module's
-    // checking for no reason.
-    if (self.suspended_generalizations.items.len == 0) return;
+/// Move every still-open dispatch relation owned by this generalization
+/// boundary into its explicit scheme. Creation-site constraints need this
+/// representation only when the receiver belongs to an outer rank; copied
+/// scheme requirements are already side-table facts and therefore remain
+/// explicit whenever their receiver is still open.
+fn captureSchemeDispatchRequirements(
+    self: *Self,
+    roots: []const Var,
+    rank: Rank,
+) Allocator.Error!void {
+    for (self.scheme_requirement_candidates.items) |*candidate| {
+        if (candidate.captured) continue;
 
-    for (self.suspended_generalizations.items) |suspended| {
-        // Re-establish the frame. `pushRank` bumps the pool to this rank, which
-        // is what `generalize` asserts against, and the parked vars go back
-        // into the entry `popRank` cleared.
-        // Re-establish the frame's depth. A frame nested inside another
-        // function sat more than one rank below finalize's, so push until the
-        // depth matches rather than assuming a single step.
-        const resume_base_rank = env.rank();
-        std.debug.assert(@intFromEnum(resume_base_rank) <= @intFromEnum(suspended.rank));
-        while (@intFromEnum(env.rank()) < @intFromEnum(suspended.rank)) {
-            try env.var_pool.pushRank();
-        }
-
-        // Everything that happened since this frame was parked—binding the
-        // def's pattern, and the cascade firing the chain—unified these vars
-        // against things at the outer rank, which drags them there. That is the
-        // ordinary mark for "escaped to an enclosing scope", but here it only
-        // records that the work happened while the frame was away. So put the
-        // frame's OWN vars back at its rank and let rank adjustment rule on
-        // them exactly as it would have inline: it lowers each one right back
-        // if the body genuinely reaches an outer-scope var. This restores the
-        // question rather than presuming the answer.
-        for (suspended.frame_vars) |frame_var| {
-            const resolved = self.types.resolveVar(frame_var);
-            if (resolved.desc.rank == .generalized) continue;
-            if (@intFromEnum(resolved.desc.rank) < @intFromEnum(suspended.rank)) {
-                try self.types.setDescRank(resolved.desc_idx, suspended.rank);
+        var owner_root: ?Var = null;
+        const candidate_owner = self.types.resolveVar(candidate.owner_root).var_;
+        for (roots) |root| {
+            if (self.types.resolveVar(root).var_ == candidate_owner) {
+                owner_root = root;
+                break;
             }
-            try env.var_pool.addVarToRank(resolved.var_, env.rank());
         }
+        if (owner_root == null) continue;
 
-        // Firing the chain minted fresh vars for the method's signature, and
-        // they were born at the rank that was current then—the outer one—so
-        // they carry the outer scope's stamp even though they are this def's
-        // own type variables. Claim the ones this def actually owns: reachable
-        // from its root, and reachable from no OTHER definition. That second
-        // half is what keeps a genuinely shared var (an enclosing frame's
-        // local, a weak value the body reads) in the scope that declared it.
-        self.boundary_reachable_vars.clearRetainingCapacity();
-        try self.collectReachableVars(suspended.root_var, &self.boundary_reachable_vars);
-        try self.collectVarsOwnedElsewhere(suspended.root_var, &self.var_set);
-        var claim_iter = self.boundary_reachable_vars.keyIterator();
-        while (claim_iter.next()) |claim_var| {
-            const resolved = self.types.resolveVar(claim_var.*);
-            if (resolved.desc.rank == .generalized) continue;
-            if (@intFromEnum(resolved.desc.rank) >= @intFromEnum(suspended.rank)) continue;
-            if (self.var_set.contains(resolved.var_)) continue;
-            try self.types.setDescRank(resolved.desc_idx, suspended.rank);
-            try env.var_pool.addVarToRank(resolved.var_, env.rank());
-        }
+        // This is the candidate's one declared owner boundary. Whether it
+        // needs an explicit entry is decided here and never reconstructed at a
+        // later enclosing boundary.
+        candidate.captured = true;
+        const receiver = self.types.resolveVar(candidate.receiver_var);
+        if (receiver.desc.content != .flex) continue;
+        if (receiver.desc.rank == .generalized) continue;
 
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        try self.judgeAmbiguityCandidatesAtGeneralization(suspended.root_var);
-        while (env.rank() != resume_base_rank) env.var_pool.popRank();
+        const needs_explicit_requirement = switch (candidate.source) {
+            .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
+            .scheme_copy => true,
+        };
+        if (!needs_explicit_requirement) continue;
 
-        // The scheme exists now, so every lookup that was waiting on it can
-        // take its own copy—the per-use independence that linking to the
-        // in-flight var would have thrown away. Uses are resolved as soon as
-        // their own target is decided, so a def waiting on THIS one is settled
-        // before its own frame is reached further down the list.
-        try self.resolvePendingSchemeUses(env);
-    }
-    for (self.suspended_generalizations.items) |suspended| self.gpa.free(suspended.frame_vars);
-    self.suspended_generalizations.clearRetainingCapacity();
-
-    // A parked def can turn out not to generalize after all: rank adjustment
-    // found its body genuinely reaching an enclosing scope, so it stays shared.
-    // Its waiting lookups then want precisely what an ordinary lookup of a
-    // non-generalized def does—link to the def's own var. Leaving one unlinked
-    // would strand the using def with a type nothing ever constrains.
-    for (self.pending_scheme_uses.items) |*use| {
-        if (use.resolved) continue;
-        use.resolved = true;
-        _ = try self.unify(use.expr_var, use.pat_var, env);
-    }
-
-    // A resolved use can pin a receiver that other deferred dispatches were
-    // waiting on, so let the cascade run those out.
-    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(env, true);
-        try self.checkAllConstraints(env);
-    }
-    self.pending_scheme_uses.clearRetainingCapacity();
-}
-
-/// Give every lookup whose target now has a scheme its own instantiation.
-/// Uses whose target is still parked stay pending for a later round.
-fn resolvePendingSchemeUses(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.pending_scheme_uses.items) |*use| {
-        if (use.resolved) continue;
-        if (self.types.resolveVar(use.pat_var).desc.rank != Rank.generalized) continue;
-        use.resolved = true;
-        const instantiated = try self.instantiateVar(use.pat_var, env, .use_last_var);
-        _ = try self.unify(use.expr_var, instantiated, env);
+        const scheme_idx = try self.ensureTypeScheme(owner_root.?);
+        try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
+            .receiver_var = candidate.receiver_var,
+            .constraint = candidate.constraint,
+        });
     }
 }
 
-/// Collect, into `out`, every var reachable from a top-level def OTHER than the
-/// one rooted at `except_root`, plus every still-parked frame's root. A var in
-/// here is spoken for by a scope that is not the resuming frame's, so the
-/// resuming frame must not re-rank it into itself and quantify it.
-fn collectVarsOwnedElsewhere(self: *Self, except_root: Var, out: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
-    out.clearRetainingCapacity();
-    const except = self.types.resolveVar(except_root).var_;
-    for (0..self.cir.all_defs.span.len) |def_offset| {
-        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        const def = self.cir.store.getDef(def_idx);
-        const root = ModuleEnv.varFrom(def.expr);
-        if (self.types.resolveVar(root).var_ == except) continue;
-        try self.collectReachableVars(root, out);
-    }
-    for (self.suspended_generalizations.items) |other| {
-        if (self.types.resolveVar(other.root_var).var_ == except) continue;
-        try self.collectReachableVars(other.root_var, out);
-    }
-}
-
-/// Whether `pat_var` names a def whose generalize decision is still parked.
-/// The def's pattern and RHS were unified when the def was checked, so the two
-/// share a union-find class and the parked root identifies it.
-fn defGeneralizationIsSuspended(self: *Self, pat_var: Var) bool {
-    if (self.suspended_generalizations.items.len == 0) return false;
-    const target = self.types.resolveVar(pat_var).var_;
-    for (self.suspended_generalizations.items) |suspended| {
-        if (self.types.resolveVar(suspended.root_var).var_ == target) return true;
-    }
-    return false;
-}
-
-/// Whether this rank's pool holds a dispatch deferred on a flex receiver owned
-/// by the MODULE scope—the pending chain described on `SuspendedGeneralization`.
-///
-/// Only module-scope receivers qualify. A receiver owned by an ENCLOSING FRAME
-/// (an outer lambda's parameter in `|y| x + y`) is not a waiting game: that
-/// frame reaches its own boundary well before finalize and decides there, which
-/// is precisely what ranks exist to arrange. Handing such a chain's vars down to
-/// that frame is the right answer and stays the answer. A module-scope weak
-/// value is the exception—its literal stays open until the whole module has been
-/// read, and no later boundary is coming.
-fn boundaryHasOpenWeakChainRoot(self: *Self, pool_vars: []const Var, rank: Rank) bool {
-    for (pool_vars) |pool_var| {
-        if (self.receiverIsOpenWeakChainRoot(pool_var, rank)) return true;
-    }
-    return false;
-}
-
-/// Whether `candidate` is a dispatch receiver this frame cannot decide for
-/// itself: an outer-scope WEAK VALUE whose literal is still open.
-///
-/// The open literal is the whole test, and it is what separates the two outer
-/// receivers that look alike:
-///
-///   * A weak value (`s = "a,b,c"`) has one. Nothing settles it until enough of
-///     the program has been read, and in the meantime a use of the def that
-///     dispatches on it pins that def—so waiting is the only way the def's type
-///     can come out the same as it would with the value annotated.
-///
-///   * An enclosing lambda's parameter (`x` in `|y| x + y`) has none. There is
-///     no literal to settle, and demoting the chain to the enclosing frame is
-///     both correct and what the rank discipline is for.
-///
-/// An outer flex var with neither—an unbound `where` receiver, say—is settled
-/// by nothing at all, so waiting on it would only move its error to a later
-/// line.
-fn receiverIsOpenWeakChainRoot(self: *Self, candidate: Var, rank: Rank) bool {
-    if (rank == Rank.outermost) return false;
-    const receiver = self.types.resolveVar(candidate);
-    if (receiver.desc.content != .flex) return false;
-    if (receiver.desc.rank == .generalized) return false;
-    if (@intFromEnum(receiver.desc.rank) >= @intFromEnum(rank)) return false;
-    if (!self.rangeHasNonLiteralConstraint(receiver.desc.content.flex.constraints)) return false;
-    if (self.varLiteralKind(receiver.var_) == null) return false;
-    // A PARAMETER is not a weak value, however much it may look like one here:
-    // unifying it with a literal argument (`offset == 1`) leaves it carrying a
-    // literal conversion of its own. Its type belongs to the caller, so the
-    // enclosing frame's boundary is exactly where it should be decided, and
-    // waiting for a settlement that is not coming would collapse the enclosing
-    // function to whatever that literal defaults to.
-    return !self.varIsCheckedLambdaParam(receiver.var_);
-}
-
-/// Whether this var is a parameter of some lambda checked so far.
-fn varIsCheckedLambdaParam(self: *Self, var_: Var) bool {
-    const target = self.types.resolveVar(var_).var_;
-    for (self.checked_lambda_params.items) |params| {
-        for (self.cir.store.slicePatterns(params)) |param_pattern| {
-            if (self.types.resolveVar(ModuleEnv.varFrom(param_pattern)).var_ == target) return true;
+fn addSchemeDispatchRequirementsToBoundaryReachability(
+    self: *Self,
+    roots: []const Var,
+) Allocator.Error!void {
+    for (roots) |root| {
+        const scheme_idx = self.typeSchemeIndexForRoot(root) orelse continue;
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            const receiver_root = self.types.resolveVar(requirement.receiver_var).var_;
+            const receiver_was_reachable = self.boundary_reachable_vars.contains(receiver_root);
+            try self.collectReachableVars(requirement.constraint.fn_var, &self.boundary_reachable_vars);
+            // The receiver is the requirement's shared anchor, not a
+            // scheme-owned result. Walking the callable relation reaches it as
+            // the first argument, but that must not make a definition-local
+            // weak receiver signature-reachable and suppress its own boundary
+            // default. Preserve it only when the published root already made
+            // it reachable independently.
+            if (!receiver_was_reachable) _ = self.boundary_reachable_vars.remove(receiver_root);
         }
     }
-    return false;
-}
-
-/// Whether one of this frame's own vars is a lookup still waiting on a parked
-/// def's scheme (see `pending_scheme_uses`).
-fn frameHasPendingSchemeUse(self: *Self, pool_vars: []const Var, rank: Rank) bool {
-    if (self.pending_scheme_uses.items.len == 0) return false;
-    for (self.pending_scheme_uses.items) |use| {
-        if (use.resolved) continue;
-        const use_root = self.types.resolveVar(use.expr_var);
-        if (use_root.desc.rank != rank) continue;
-        for (pool_vars) |pool_var| {
-            if (self.types.resolveVar(pool_var).var_ == use_root.var_) return true;
-        }
-    }
-    return false;
-}
-
-/// Park this frame's generalize decision for module finalize instead of making
-/// it now, when the pending chain's receiver is still unresolved. Returns true
-/// when the frame was parked, in which case the caller must NOT generalize.
-///
-/// The frame's pool entry is copied because `popRank` clears it; the copy is
-/// what `resumeSuspendedGeneralizations` re-establishes the frame from.
-fn suspendGeneralizationIfChained(self: *Self, root_var: Var, env: *Env) std.mem.Allocator.Error!bool {
-    const rank = env.rank();
-    const pool_vars = env.var_pool.getVarsForRank(rank);
-    // Waiting is contagious. A frame holding a lookup that is itself waiting on
-    // a parked def has an undecided hole in its own type, and generalizing
-    // around that hole publishes a scheme with a variable nothing will ever
-    // constrain. So park for a pending lookup as readily as for a pending
-    // chain, and the resume walk—which runs in check order—settles the target
-    // before it reaches the frame that waited on it.
-    if (!self.boundaryHasOpenWeakChainRoot(pool_vars, rank) and
-        !self.frameHasPendingSchemeUse(pool_vars, rank)) return false;
-
-    // Keep only the vars this frame OWNS—those actually sitting at its rank
-    // right now. The pool also lists outer-scope vars the body merely referred
-    // to (that is how the pending chain's receiver is found at all), and those
-    // belong to whoever declared them; re-ranking one into this frame on resume
-    // would hand an enclosing scope's local to this frame to quantify.
-    var owned: std.ArrayListUnmanaged(Var) = .empty;
-    errdefer owned.deinit(self.gpa);
-    for (pool_vars) |pool_var| {
-        const resolved = self.types.resolveVar(pool_var);
-        if (resolved.desc.rank != rank) continue;
-        try owned.append(self.gpa, resolved.var_);
-    }
-    // A frame holding none of its own vars has nothing to decide—every var its
-    // body touched belongs to an enclosing scope already. Parking it would gain
-    // nothing and cost something: on resume it would reclaim vars by
-    // reachability and quantify type variables that were never its to quantify.
-    if (owned.items.len == 0) {
-        owned.deinit(self.gpa);
-        return false;
-    }
-
-    const frame_vars = try owned.toOwnedSlice(self.gpa);
-    errdefer self.gpa.free(frame_vars);
-    try self.suspended_generalizations.append(self.gpa, .{
-        .root_var = root_var,
-        .rank = rank,
-        .frame_vars = frame_vars,
-    });
-    return true;
 }
 
 /// `defaultLiteralsAtGeneralizationBoundary` for a whole binding group: the
@@ -19874,6 +19778,11 @@ fn suspendGeneralizationIfChained(self: *Self, root_var: Var, env: *Env) std.mem
 /// boundary.
 fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: []const Var, env: *Env) std.mem.Allocator.Error!void {
     const rank = env.rank();
+
+    // Generalization publishes a complete scheme: its root type plus every
+    // unresolved method relation the definition owns. Capture those relations
+    // even when this boundary has no literal candidates of its own.
+    try self.captureSchemeDispatchRequirements(def_root_vars, rank);
 
     // The candidate universe is the var pool entry this generalize call will
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
@@ -19919,6 +19828,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
     for (def_root_vars) |def_root_var| {
         try self.collectReachableVars(def_root_var, &self.boundary_reachable_vars);
     }
+    try self.addSchemeDispatchRequirementsToBoundaryReachability(def_root_vars);
 
     // Pending `eql` constraints are recursive-group cross-reference edges; a
     // literal awaiting unification with the def's type through one is NOT
@@ -19935,77 +19845,6 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
             try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
             try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
             changed = true;
-        }
-    }
-
-    // A dispatch deferred on a flex receiver OWNED BY AN OUTER SCOPE is a
-    // unification-in-waiting: when the receiver resolves, the dispatch fires and
-    // pins its signature's vars exactly as an eager dispatch would have. Either
-    // way this boundary must not decide those vars—it does not yet know what
-    // the method demands. Without that, a literal argument of the pending chain
-    // looks locally unconstrained and commits its canonical default
-    // (`top_str.split_on(",").get(0)` committed `0` to Dec) even though the
-    // chain, once its receiver resolves, demands another type (`List.get`
-    // wants U64).
-    //
-    // WHO decides instead depends on who owns the receiver, and the two cases
-    // want opposite treatment:
-    //
-    //   * An ENCLOSING FRAME's var (an outer lambda's parameter). That frame
-    //     reaches its own boundary shortly, and eager unification would have
-    //     min-ranked the chain down to it, so demote the chain to the receiver's
-    //     rank and let the enclosing frame decide. Ranks exist for exactly this.
-    //
-    //   * A MODULE-SCOPE var (a weak top-level value whose literal stays open
-    //     until the whole module has been read). Demote it the same way, which
-    //     is what keeps this boundary's defaulting off the chain—but no later
-    //     boundary is coming to decide it, so demotion alone would freeze the
-    //     chain to one module-wide type. `suspendGeneralizationIfChained` parks
-    //     the whole frame as well, and the frame reclaims these vars when it
-    //     resumes at finalize with the receiver settled.
-    //
-    // Outer-owned receivers are found in THIS rank's pool: a body that
-    // dispatches on an outer var registers that var here (lookup/monomorphic-
-    // reference bookkeeping), and `resolveVar` exposes the true (outer) rank.
-    // One pass suffices: `collectReachableVars` recurses through nested
-    // constraint signatures, so a multi-hop chain (`split_on`'s result carries
-    // the deferred `get`) is walked whole from its root, and a var reachable
-    // from several outer roots ends at the minimum of their ranks regardless
-    // of scan order (the `<=` guard lowers, never raises). Generalized
-    // receivers are per-use-instantiated schemes, not outer weak vars, so
-    // their chains are left alone. Scratch reuse is safe: both maps are
-    // cleared by every later user (`literal_defaulting_seen_roots` at each
-    // round's gather, `boundary_leak_vars` by each leak check).
-    self.literal_defaulting_seen_roots.clearRetainingCapacity();
-    for (pool_vars) |pool_var| {
-        const receiver = self.types.resolveVar(pool_var);
-        if (receiver.desc.content != .flex) continue;
-        const receiver_rank = receiver.desc.rank;
-        if (receiver_rank == .generalized) continue;
-        if (@intFromEnum(receiver_rank) >= @intFromEnum(rank)) continue;
-        const constraint_range = receiver.desc.content.flex.constraints;
-        if (!self.rangeHasNonLiteralConstraint(constraint_range)) continue;
-        if ((try self.literal_defaulting_seen_roots.getOrPut(receiver.var_)).found_existing) continue;
-        try self.collectConstraintSignatureReachable(constraint_range, &self.boundary_leak_vars);
-        // A receiver still waiting to be settled keeps its chain HERE: these
-        // vars are this frame's, the frame parks
-        // (`suspendGeneralizationIfChained`), and it decides them itself once
-        // the receiver settles. Joining the protected set is what keeps this
-        // boundary's defaulting off them in the meantime—the same service
-        // demotion performs for the receivers that are not waiting on anything.
-        const waits_for_settling = self.receiverIsOpenWeakChainRoot(receiver.var_, rank);
-        var chain_iter = self.boundary_leak_vars.keyIterator();
-        while (chain_iter.next()) |chain_var| {
-            const chain_resolved = self.types.resolveVar(chain_var.*);
-            if (waits_for_settling) {
-                try self.boundary_reachable_vars.put(chain_resolved.var_, {});
-                continue;
-            }
-            if (chain_resolved.desc.content != .flex) continue;
-            if (chain_resolved.desc.rank == .generalized) continue;
-            if (@intFromEnum(chain_resolved.desc.rank) <= @intFromEnum(receiver_rank)) continue;
-            try self.types.setDescRank(chain_resolved.desc_idx, receiver_rank);
-            try env.var_pool.addVarToRank(chain_resolved.var_, receiver_rank);
         }
     }
 

@@ -168,6 +168,29 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
+        return self.instantiateVarHelp(initial_var, false);
+    }
+
+    /// Instantiate the root even when it is not generalized, while applying
+    /// the ordinary rank rule to everything below it. A scheme-level pending
+    /// dispatch requirement uses this for its callable relation: the relation
+    /// root is anchored by an outer receiver and therefore is intentionally
+    /// not generalized, but its scheme-owned argument and result variables are.
+    pub fn instantiateSchemeDispatchConstraint(
+        self: *Self,
+        constraint: StaticDispatchConstraint,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint {
+        var result = constraint;
+        result.fn_var = try self.instantiateVarHelp(constraint.fn_var, true);
+        result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
+        return result;
+    }
+
+    fn instantiateVarHelp(
+        self: *Self,
+        initial_var: Var,
+        force_root_copy: bool,
+    ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
@@ -182,7 +205,7 @@ pub const Instantiator = struct {
         }
 
         // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
-        if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
+        if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             return resolved_var;
         }
 

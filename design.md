@@ -3248,66 +3248,62 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
-### Delayed Generalization For Outer-Rooted Dispatch Chains
+### Pending Dispatch Requirements In Type Schemes
 
-A body that dispatches on an outer-scope WEAK VALUE whose literal is still open
-cannot decide at its own generalization boundary which of its type variables
-generalize. The method's signature is unknown until the receiver settles, and
-the receiver cannot settle until enough of the program has been read, because
-any later definition may still constrain it.
+A generalized scheme is a pair: its root type and the unresolved static-dispatch
+requirements created while checking that definition. A requirement records its
+receiver and its callable relation. This representation is necessary when the
+receiver belongs to an enclosing scope: the callable relation can contain
+scheme-owned argument, result, and literal variables even though traversing the
+root type alone cannot reach them.
 
-Two outer receivers look alike here and must not be treated alike. The open
-literal is the whole test:
+Constraint creation records the innermost prospective scheme root as the exact
+owner. At that root's generalization boundary,
+`captureSchemeDispatchRequirements` moves each still-open relation on an
+outer-rank receiver into the scheme. This is explicit producer data; no later
+pass may recover ownership from reachability, creation order, rank shape, or
+source syntax. A relation copied from another scheme remains explicit whenever
+it is still open, which carries requirements transitively through helper
+definitions.
 
-- A weak value (`s = "a,b,c"`, whether top-level or an enclosing frame's local)
-  has one. Nothing settles it in time, and a use of the def that dispatches on
-  it pins that def first, so waiting is the only way the def's inferred type
-  comes out the same as it would with the value annotated.
-- A PARAMETER of an enclosing lambda does not, even when it looks like it:
-  unifying it with a literal argument (`offset == 1`) leaves it carrying a
-  literal conversion of its own. Its type belongs to the caller, the enclosing
-  frame's boundary is the right place to decide it, and waiting for a
-  settlement that is not coming would collapse the enclosing function to
-  whatever that literal defaults to.
+Instantiation copies the root type and every pending requirement under one
+substitution. The receiver follows ordinary rank behavior: an enclosing weak
+value stays shared, while a receiver quantified by an enclosing scheme is
+copied. The callable root is copied even though its outer receiver keeps that
+root below generalized rank; everything below the callable root follows
+ordinary rank behavior, so its generalized argument and result variables are
+fresh per use. Each copied relation is registered as a distinct deferred static
+dispatch check. Copies are never merged merely because they share a receiver.
 
-Deciding anyway is not a neutral choice, and both available guesses are wrong.
-Freezing the chain's vars to the receiver's rank publishes one monomorphic type
-module-wide, so the first use pins the def for every other use, and annotating
-the receiver then makes the def MORE polymorphic—an annotation that widens the
-inferred type, which is not type inference. Letting them generalize is the
-opposite error: the chain fires once, against the scheme's own vars, so every
-per-use instantiation is left unconstrained.
+Boundary literal defaulting protects variables in the callable relation but
+does not protect the receiver solely because it is the callable's first
+argument. A receiver owned by the current definition therefore defaults at that
+definition's boundary; a receiver owned by an enclosing scope remains outside
+the boundary's candidate universe. This keeps literal settlement with the scope
+that declared the literal while preventing a literal inside a pending relation
+from being guessed before that relation is discharged.
 
-The rule: such a boundary parks its frame instead of deciding
-(`suspendGeneralizationIfChained`), and every var the chain reaches joins the
-boundary's protected set so nothing defaults it in the meantime. At module
-finalize, once literal defaulting has settled the receivers,
-`resumeSuspendedGeneralizations` re-establishes each parked frame at its own
-rank and generalizes it there, so the ordinary rank-adjustment rules make the
-decision with the information the frame was missing. A lookup of a parked def
-parks too, recording a pending instantiation rather than linking to the def's
-in-flight var, and takes its own instantiation once the scheme exists; a parked
-def that turns out not to generalize gives its uses the ordinary shared link.
-Parked frames resume in check order, so a def's scheme exists before the defs
-that use it are decided, and resumption never iterates a hash map—unstable
-iteration order there would make inferred types vary between runs.
+When the receiver settles, ordinary static-dispatch checking discharges the
+original relation and every registered use copy independently. Normal
+unification is the only solved-graph mutation. An annotation can settle the
+receiver earlier, but cannot create a more reusable scheme: inferred and
+annotated receivers carry the same per-use relations, so the annotation only
+confirms or narrows the inferred program.
 
-ORDERING IS PART OF THE RULE, not an implementation detail. Resumption must
-follow receiver settling. Settling a receiver early—because its type "looks
-obvious" before the whole module has been read—silently returns every parked
-decision to a guess, producing a plausible wrong type with no crash and no
-diagnostic. `resumeSuspendedGeneralizations` therefore asserts that module-wide
-defaulting ran before it, and the accepted side is pinned by a test that states
-the promise itself rather than the machinery.
-
-Both sides are pinned by tests in src/check/test/type_checking_integration.zig:
-accepted—"principality - annotated receiver, two call sites" and "principality -
-inferred receiver, two call sites", which assert IDENTICAL types for two modules
-differing only in the receiver's annotation (two call sites at different element
-types are load-bearing; with one call site or none, both modules agree even when
-the def has collapsed to a single module-wide type); rejected—"weak top-level
-literal rejects second use at different type", since parking a generalization
-decision must not turn a weak value into a polymorphic one.
+Both sides are pinned in src/check/test/type_checking_integration.zig.
+Accepted pairs cover top-level and enclosing weak receivers, weak numerals,
+multi-hop and transitively copied chains, and results carried through the
+definition's return type; every pair has two uses at different result element
+types and asserts identical inferred types. The generated principality test
+randomly composes small typed weak literals, normalization paths, list maps,
+transitive helpers, and result wrappers, then checks every generated exact
+annotation site and the rejection direction. The literal-constrained lambda
+parameter regression proves two concrete instantiations remain independent.
+The cross-module weak-receiver regression proves that, after the receiver has
+settled, publication preserves the discharged root scheme's polymorphism
+without checker-local requirement state.
+Rejected—"weak top-level literal rejects second use at different type"—proves
+the representation does not make the weak receiver itself polymorphic.
 
 ### Rewrite Inventory
 
@@ -3361,14 +3357,12 @@ Other solved-graph mutations:
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
   committed probes of ordinary unification.
-- `suspendGeneralizationIfChained` / `resumeSuspendedGeneralizations`
-  (`setDescRank`)—policy: Delayed Generalization For Outer-Rooted Dispatch
-  Chains (above). A parked frame's own vars are re-ranked back into the frame
-  when it resumes, because binding the def's pattern and firing the chain
-  stamped them with the rank that happened to be current while the frame was
-  away. Vars reachable from any other definition are excluded, so a var an
-  enclosing scope or a weak value can also reach stays where it was declared
-  and no other scope's var is quantified.
+- `captureSchemeDispatchRequirements` /
+  `Instantiator.instantiateSchemeDispatchConstraint`—policy: Pending Dispatch
+  Requirements In Type Schemes (above). Capturing records no solved-graph
+  mutation. Instantiation builds a fresh disjoint callable root, and every
+  copied requirement is discharged only through ordinary unification in the
+  deferred static-dispatch worklist; there is no rank rewrite or graph restamp.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 
