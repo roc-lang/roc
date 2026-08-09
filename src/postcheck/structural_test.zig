@@ -109,7 +109,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "const produced_callee_node = try self.lowerExprTypeNode(call.func);");
     try expectContains(lower_call, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
     try expectContains(lower_call, "try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);");
-    try expectContains(lower_call, "request_fn_node = try self.graph.functionRequestFromProducedArguments(");
+    try expectContains(lower_call, "request_fn_node = try self.graph.functionRequestFromAvailableProducedArgumentsWithCanonicalizer(");
+    try expectContains(lower_call, "self.generatedTypeCanonicalizer()");
     try expectContains(lower_call, "const callee = try self.lowerExprAtExactRequest(");
     try expectContains(lower_call, "const callee_node = try self.exprTypeCell(callee).toGraphNode(self.graph);");
     try expectContains(lower_call, "const callee_fn = try self.graph.functionNodes(callee_node);");
@@ -740,8 +741,8 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     );
     try expectContains(call_source, "const checked_fn_node = try call_ctx.instNode(source_fn_ty);");
     try expectContains(call_source, "try self.preLowerDirectCallOperands(");
-    try expectContains(call_source, "var produced_args = try self.producedCallArgumentNodes(");
-    try expectContains(call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(");
+    try expectContains(call_source, "const produced_args = try self.producedCallArgumentNodes(");
+    try expectContains(call_source, "fn_node = try self.graph.functionRequestFromAvailableProducedArgumentsWithCanonicalizer(");
     try expectContains(call_source, "const lowered_args = try self.lowerCallOperandsAtNodes(");
     try expectContains(call_source, "const produced_callee_node = try self.lowerExprTypeNode(call.func);");
     try expectContains(call_source, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
@@ -754,7 +755,7 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try expectNotContains(call_source, "indirectCalleeMonoType");
 
     const direct_prepare = std.mem.find(u8, call_source, "try self.preLowerDirectCallOperands(").?;
-    const direct_request = std.mem.find(u8, call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(").?;
+    const direct_request = std.mem.find(u8, call_source, "fn_node = try self.graph.functionRequestFromAvailableProducedArgumentsWithCanonicalizer(").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;
     const direct_finish = direct_specialize + std.mem.find(
         u8,
@@ -779,17 +780,17 @@ test "Monotype open specialization lookup reuses only exact function interfaces"
         "fn lowerExprAtTypeCell(",
     );
     inline for (.{ template_source, nested_source }) |lookup_source| {
-        try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
-        try expectContains(lookup_source, "classMemberIterator(interface_node)");
-        try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
-        try expectContains(lookup_source, "sameFunctionInterface(");
-        try expectContains(lookup_source, "if (!exact_interface) continue;");
+        try expectContains(lookup_source, "draftOpenRequestKey(source_ctx.graph, request_fn_node)");
+        try expectContains(lookup_source, "spec_lookup.get(address)");
+        try expectContains(lookup_source, "sameFunctionInterface(spec.body_request_fn_node, request_fn_node)");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "selection.add(raw_spec);");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
-        try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
+        try expectNotContains(lookup_source, "functionInterfaceIterator(");
+        try expectNotContains(lookup_source, "classMemberIterator(");
+        try expectNotContains(lookup_source, "indexed_nodes");
+        try expectNotContains(lookup_source, "seen_specs");
         try expectNotContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectNotContains(lookup_source, "joinRecursiveFunctionInterface(");
         try expectNotContains(lookup_source, "initial_request_arg_classes");
@@ -951,8 +952,8 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         "fn lowerDispatchWithUninhabitedArgument(",
     );
     try expectContains(closed_low_level, "try self.preLowerDispatchOperands(operands, checked_callable.args, &pre_lowered)");
-    try expectContains(closed_low_level, "var produced_args = try self.producedCallArgumentNodes(");
-    try expectContains(closed_low_level, "self.graph.functionRequestFromProducedArguments(");
+    try expectContains(closed_low_level, "const produced_args = try self.producedCallArgumentNodes(");
+    try expectContains(closed_low_level, "self.graph.functionRequestFromAvailableProducedArgumentsWithCanonicalizer(");
     try expectContains(closed_low_level, "try self.lowerDispatchOperandsAtNodes(");
     try expectNotContains(closed_low_level, "prepareDispatchOperandsAtNodes");
     try expectNotContains(closed_low_level, "lowerPreparedDispatchOperandsAtNodes");
@@ -1392,7 +1393,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "produced_node.* = try self.exprTypeCell(produced_expr.*).toGraphNode(self.graph)");
     try expectContains(iterator, "const initial_request = try functionRequestNode(");
-    try expectContains(iterator, "functionRequestFromProducedArguments(");
+    try expectContains(iterator, "functionRequestFromProducedArgumentsWithCanonicalizer(");
     try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
 }
 
