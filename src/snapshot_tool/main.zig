@@ -3671,7 +3671,9 @@ fn processDocsSnapshot(
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
+        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
+            .exposed_names = mod.docs_exposed_names,
+        }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
