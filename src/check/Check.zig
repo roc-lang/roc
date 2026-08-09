@@ -15232,6 +15232,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // should still get `I64 -> Str` from the annotation.
         self.var_set.clearRetainingCapacity();
         if (try self.varContainsError(expr_var, &self.var_set)) {
+            // Keep the clean annotation type for references, but ensure the
+            // invalid body cannot be published as an executable constant.
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
