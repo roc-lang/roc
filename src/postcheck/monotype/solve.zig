@@ -483,17 +483,6 @@ pub const InstGraph = struct {
     /// explicit output instead of traversing the previous interface again.
     request_substitution_spans: std.ArrayList(RequestSubstitutionSpan),
     request_substitutions: std.ArrayList(RequestSubstitution),
-    /// Minted iterator roots whose relation graph proved that retaining the
-    /// minted tier would create a recursive component identity. The raw node
-    /// remains valid across later unions; finalization resolves it to the live
-    /// class and constructs the single forced-dynamic fixed point.
-    forced_dynamic_iterator_roots: collections.DenseMap(NodeId, void),
-    /// Permanent value-slot nodes that differ from the corresponding source
-    /// slot on an explicit recursive edge. Function recursion and loop
-    /// feedback both mark this dense set; a later minted join touching one of
-    /// these slots proves that recursion grows the representation rather than
-    /// merely recurring over a fixed iterator.
-    recursive_argument_slots: collections.DenseMap(NodeId, void),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -531,8 +520,6 @@ pub const InstGraph = struct {
             .request_checked_sources = .empty,
             .request_substitution_spans = .empty,
             .request_substitutions = .empty,
-            .forced_dynamic_iterator_roots = collections.DenseMap(NodeId, void).init(allocator),
-            .recursive_argument_slots = collections.DenseMap(NodeId, void).init(allocator),
         };
         return graph;
     }
@@ -575,8 +562,6 @@ pub const InstGraph = struct {
         self.request_substitutions.deinit(allocator);
         self.request_substitution_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
-        self.forced_dynamic_iterator_roots.deinit();
-        self.recursive_argument_slots.deinit();
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
@@ -868,90 +853,6 @@ pub const InstGraph = struct {
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         self.relation_state = .frozen;
-    }
-
-    pub const ArgumentClassSnapshot = struct {
-        members: []const NodeId,
-
-        fn contains(self: ArgumentClassSnapshot, node: NodeId) bool {
-            for (self.members) |member| {
-                if (member == node) return true;
-            }
-            return false;
-        }
-    };
-
-    /// Snapshot every permanent member of each ordered argument class before
-    /// a specialization body can add recursive relations. Root choice is not
-    /// stable under union, so recursive growth must compare permanent identity
-    /// against the whole initial class rather than one representative node.
-    pub fn snapshotFunctionArgumentClasses(
-        self: *InstGraph,
-        fn_node: NodeId,
-    ) Allocator.Error![]const ArgumentClassSnapshot {
-        const args = (try self.functionNodes(fn_node)).args;
-        const snapshots = try self.arena().alloc(ArgumentClassSnapshot, args.len);
-        for (args, snapshots) |arg, *snapshot| {
-            var count: usize = 0;
-            var counting = self.classMemberIterator(arg);
-            while (counting.next() != null) count += 1;
-
-            const members = try self.arena().alloc(NodeId, count);
-            var filling = self.classMemberIterator(arg);
-            var index: usize = 0;
-            while (filling.next()) |member| : (index += 1) members[index] = member;
-            snapshot.* = .{ .members = members };
-        }
-        return snapshots;
-    }
-
-    pub fn joinRecursiveFunctionInterface(
-        self: *InstGraph,
-        active_fn: NodeId,
-        initial_active_arg_classes: []const ArgumentClassSnapshot,
-        recursive_request: NodeId,
-    ) Allocator.Error!void {
-        self.requireRelationProduction();
-        const active = try self.functionNodes(active_fn);
-        const request = try self.functionNodes(recursive_request);
-        if (active.args.len != request.args.len or
-            initial_active_arg_classes.len != request.args.len)
-        {
-            Common.invariant("recursive function interface changed argument arity");
-        }
-        const joined_args = try self.arena().alloc(NodeId, request.args.len);
-        for (active.args, initial_active_arg_classes, request.args, joined_args) |active_arg, initial_class, request_arg, *joined_arg| {
-            joined_arg.* = try self.joinProducedTypeRepresentations(active_arg, request_arg);
-            if (!initial_class.contains(request_arg)) {
-                try self.recursive_argument_slots.put(joined_arg.*, {});
-            }
-        }
-        const joined_ret = try self.joinProducedTypeRepresentations(active.ret, request.ret);
-        const joined_content: InstNode = .{ .func = .{
-            .args = joined_args,
-            .ret = joined_ret,
-        } };
-        const active_root = self.find(active_fn);
-        const request_root = self.find(recursive_request);
-        try self.setContent(active_root, joined_content);
-        if (request_root != active_root) try self.setContent(request_root, joined_content);
-    }
-
-    pub fn markRecursiveValueSlot(self: *InstGraph, slot: NodeId) Allocator.Error!void {
-        self.requireRelationProduction();
-        try self.recursive_argument_slots.put(slot, {});
-    }
-
-    fn classContainsMarkedNode(
-        self: *InstGraph,
-        node: NodeId,
-        marked: *const collections.DenseMap(NodeId, void),
-    ) bool {
-        var members = self.classMemberIterator(node);
-        while (members.next()) |member| {
-            if (marked.contains(member)) return true;
-        }
-        return false;
     }
 
     pub fn finalizesAsClosedEmptyTagUnion(self: *InstGraph, raw_node: NodeId) bool {
@@ -5622,8 +5523,6 @@ const OpenFunctionInterfaceShapeWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
     unresolved_ids: collections.DenseMap(NodeId, u32),
-    recursive_value_slot_classes: collections.DenseMap(NodeId, bool),
-    forced_dynamic_iterator_classes: collections.DenseMap(NodeId, bool),
     visiting: std.ArrayList(NodeId),
     mode: Mode,
     next_unresolved: u32 = 0,
@@ -5637,8 +5536,6 @@ const OpenFunctionInterfaceShapeWriter = struct {
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
-            .recursive_value_slot_classes = collections.DenseMap(NodeId, bool).init(graph.allocator),
-            .forced_dynamic_iterator_classes = collections.DenseMap(NodeId, bool).init(graph.allocator),
             .visiting = .empty,
             .mode = .open_interface,
         };
@@ -5658,13 +5555,11 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
     fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
         self.visiting.deinit(self.graph.allocator);
-        self.forced_dynamic_iterator_classes.deinit();
-        self.recursive_value_slot_classes.deinit();
         self.unresolved_ids.deinit();
     }
 
     fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v4");
+        self.writeBytes("roc.monotype.open_function_interface_shape.v5");
         try self.writeFunctionNodes(try self.graph.functionNodes(node));
         self.primary_resolved = self.next_unresolved == 0;
         if (self.graph.requestCheckedSource(node)) |source| {
@@ -5690,19 +5585,12 @@ const OpenFunctionInterfaceShapeWriter = struct {
         if (InstGraph.isGeneratedPrivateRootContent(content)) {
             const digest = content.named.def.generated orelse
                 Common.invariant("generated-private identity writer encountered an unstamped nominal");
-            if (self.mode == .open_interface) {
-                self.writeU8(if (try self.hasRecursiveValueSlot(node)) 1 else 0);
-                self.writeU8(if (try self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
-            } else {
+            if (self.mode == .generated_identity) {
                 self.graph.countDiagnostic("generated_identity_input_nodes_hashed");
             }
             self.writeBytes("generated-private-nominal");
             self.writeBytes(&digest.bytes);
             return;
-        }
-        if (self.mode == .open_interface) {
-            self.writeU8(if (try self.hasRecursiveValueSlot(node)) 1 else 0);
-            self.writeU8(if (try self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
         }
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
@@ -5804,35 +5692,6 @@ const OpenFunctionInterfaceShapeWriter = struct {
             },
             .zst => self.writeBytes("zst"),
         }
-    }
-
-    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!bool {
-        return try self.classContainsMarkedNodeCached(
-            node,
-            &self.graph.recursive_argument_slots,
-            &self.recursive_value_slot_classes,
-        );
-    }
-
-    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!bool {
-        return try self.classContainsMarkedNodeCached(
-            node,
-            &self.graph.forced_dynamic_iterator_roots,
-            &self.forced_dynamic_iterator_classes,
-        );
-    }
-
-    fn classContainsMarkedNodeCached(
-        self: *OpenFunctionInterfaceShapeWriter,
-        raw_node: NodeId,
-        marked: *const collections.DenseMap(NodeId, void),
-        cache: *collections.DenseMap(NodeId, bool),
-    ) Allocator.Error!bool {
-        const node = self.graph.find(raw_node);
-        const entry = try cache.getOrPut(node);
-        if (entry.found_existing) return entry.value_ptr.*;
-        entry.value_ptr.* = self.graph.classContainsMarkedNode(node, marked);
-        return entry.value_ptr.*;
     }
 
     fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
@@ -6343,7 +6202,7 @@ test "open function interface shape preserves defaults and recursive structure" 
     try std.testing.expectEqualSlices(u8, left_recursive_shape.bytes, right_recursive_shape.bytes);
 }
 
-test "open function interface shape includes producer-owned graph evidence" {
+test "open function interface shape treats generated identities atomically" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6367,11 +6226,6 @@ test "open function interface shape includes producer-owned graph evidence" {
     const initial_left_shape = try graph.openFunctionInterfaceShape(left);
     const initial_right_shape = try graph.openFunctionInterfaceShape(right);
     try std.testing.expectEqualSlices(u8, initial_left_shape.bytes, initial_right_shape.bytes);
-
-    try graph.markRecursiveValueSlot(left_arg);
-    const recursive_left_shape = try graph.openFunctionInterfaceShape(left);
-    const unmarked_right_shape = try graph.openFunctionInterfaceShape(right);
-    try std.testing.expect(!std.mem.eql(u8, recursive_left_shape.bytes, unmarked_right_shape.bytes));
 
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
     const type_name = try name_store.internTypeName("PrivateShape");
@@ -7553,24 +7407,6 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(requested_exact_list, stored_public_list));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(stored_public_list), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
-
-    const recursive_active = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{public}),
-        .ret = public,
-    } });
-    const initial_classes = try graph.snapshotFunctionArgumentClasses(recursive_active);
-    const recursive_request = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{exact}),
-        .ret = exact,
-    } });
-    try graph.joinRecursiveFunctionInterface(recursive_active, initial_classes, recursive_request);
-    const joined_active = try graph.functionNodes(recursive_active);
-    const joined_recursive = try graph.functionNodes(recursive_request);
-    try std.testing.expect(graph.sameClass(joined_active.args[0], exact));
-    try std.testing.expect(graph.sameClass(joined_active.ret, exact));
-    try std.testing.expect(graph.sameClass(joined_active.args[0], joined_recursive.args[0]));
-    try std.testing.expect(graph.sameClass(joined_active.ret, joined_recursive.ret));
-    try std.testing.expect(!graph.sameClass(recursive_active, recursive_request));
 
     const first_tag = try name_store.internTagLabel("First");
     const second_tag = try name_store.internTagLabel("Second");

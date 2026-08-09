@@ -25,7 +25,6 @@ const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
 const EntryRoot = solve.EntryRoot;
 const FunctionNodes = solve.FunctionNodes;
-const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -3352,7 +3351,6 @@ const Builder = struct {
             .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
             .evidence = body_ctx.evidence.vector,
             .request_fn_node = root_node,
-            .initial_request_arg_classes = try graph.snapshotFunctionArgumentClasses(root_node),
             .fn_id = reservation.fn_id,
         };
         const root_owner = try body_draft.enterOwner(.{ .reserved_fn = reservation.fn_id });
@@ -3442,11 +3440,9 @@ const Builder = struct {
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
-        // in its own specialization graph. Reuse that exact function instead
-        // of deferring a sibling body: doing so keeps recursion within one
-        // Monotype instantiation context and lets recursive representation
-        // evidence (notably forced-dynamic iterator flow) reach the root before
-        // its single seal.
+        // in its own specialization graph. Producer identity and explicit
+        // recursive-storage metadata complete its request before body lowering,
+        // so recursion may reuse it only at the exact same interface.
         if (self.active_template_root) |active_root| {
             if (active_root.graph == source_ctx.graph and
                 active_root.family.sameRecursiveCallable(family) and
@@ -3456,36 +3452,17 @@ const Builder = struct {
                     active_root.request_fn_node,
                     request_fn_node,
                 );
-                const active_recursive_edge = source_ctx.draft.ownerDescendsFromReservedFn(
-                    source_ctx.draft.current_owner,
-                    active_root.fn_id,
-                );
-                const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
-                    .resolved => true,
-                    .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                        source_ctx.graph,
-                        active_root.initial_request_arg_classes,
-                        request_fn_node,
-                    ),
-                };
-                if (exact_interface or partial_recursive_allowed) {
-                    if (active_recursive_edge) {
-                        try source_ctx.graph.joinRecursiveFunctionInterface(
-                            active_root.request_fn_node,
-                            active_root.initial_request_arg_classes,
-                            request_fn_node,
-                        );
-                    } else {
+                if (exact_interface) {
+                    const active_recursive_edge = source_ctx.draft.ownerDescendsFromReservedFn(
+                        source_ctx.draft.current_owner,
+                        active_root.fn_id,
+                    );
+                    if (!active_recursive_edge) {
                         try applyProducedTypeToRequest(
                             source_ctx.graph,
                             request_fn_node,
                             active_root.request_fn_node,
                         );
-                    }
-                    if (active_recursive_edge and
-                        !source_ctx.graph.sameFunctionInterface(active_root.request_fn_node, request_fn_node))
-                    {
-                        Common.invariant("recursive root request did not join its complete function interface");
                     }
                     self.promoteFnSignatureRelation(active_root.fn_id, signature_relation);
                     self.count("template_hits");
@@ -3493,6 +3470,8 @@ const Builder = struct {
                 }
             }
         }
+
+        _ = evidence_mode;
 
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
@@ -3553,7 +3532,7 @@ const Builder = struct {
                     else
                         false;
                     if (!initial_matches and !produced_matches) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.add(raw_spec);
                 }
             }
         }
@@ -3562,13 +3541,13 @@ const Builder = struct {
                 if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                     for (candidates.items) |raw_spec| {
                         const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                        if (spec.state != .lowered) continue;
+                        if (spec.state != .lowering and spec.state != .lowered) continue;
                         if (!spec.caller_owned_body) continue;
                         if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                         if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                         const spec_shape = spec.open_request_shape orelse continue;
                         if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
-                        if (!selection.add(raw_spec, true)) unreachable;
+                        selection.add(raw_spec);
                     }
                 }
             }
@@ -3594,32 +3573,8 @@ const Builder = struct {
                             if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                             if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                             const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            // Synthesized component calls can share ubiquitous
-                            // result cells such as Bool across unrelated
-                            // component types; require an argument-class
-                            // anchor before treating a partial match as
-                            // recursion.
-                            const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
-                                .resolved => true,
-                                .synthesized => try draftRequestOverlapsInitialArgumentClass(
-                                    source_ctx.graph,
-                                    spec.initial_request_arg_classes,
-                                    request_fn_node,
-                                ),
-                            };
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                partial_recursive_allowed,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft template request matched more than one partial active recursive specialization");
-                            }
+                            if (!exact_interface) continue;
+                            selection.add(raw_spec);
                         }
                     }
                 }
@@ -3652,17 +3607,14 @@ const Builder = struct {
                         false;
                     if (!initial_matches and
                         !try self.program.types.typeEql(&self.program.names, current_spec_ty, request_ty)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.add(raw_spec);
                 }
             }
         }
         if (selection.selected()) |raw_spec| {
-            // A lowering specialization reached through an explicitly shared
-            // interface class is a recursive edge. Fresh checked variables in
-            // its new body instance are not joined until that edge is related,
-            // so join the complete request before returning the in-progress
-            // definition. Completed specializations reach here through exact
-            // resolved identity, never through a partial interface overlap.
+            // Reuse is exact. An active recursive edge already names the same
+            // completed request; a completed sibling maps the caller's request
+            // directionally to the representation its body produced.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const request_owner = source_ctx.draft.current_owner;
@@ -3678,13 +3630,7 @@ const Builder = struct {
             }
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
-            if (active_recursive_edge) {
-                try source_ctx.graph.joinRecursiveFunctionInterface(
-                    spec.request_fn_node,
-                    spec.initial_request_arg_classes,
-                    request_fn_node,
-                );
-            } else {
+            if (!active_recursive_edge) {
                 // Reusing a completed specialization maps this call request
                 // to the function type the body actually produced. This is
                 // directional even for ordinary types; exact generated roots
@@ -3694,11 +3640,6 @@ const Builder = struct {
                     request_fn_node,
                     spec.request_fn_node,
                 );
-            }
-            if (active_recursive_edge and
-                !source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node))
-            {
-                Common.invariant("recursive draft template request did not join its complete function interface");
             }
             if (signature_relation == .exact_graph) {
                 source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
@@ -3771,7 +3712,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
-            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
+            .evidence_digest = evidence_digest.bytes,
             .evidence = evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = demand_boundary,
@@ -5288,7 +5229,7 @@ const Builder = struct {
                     else
                         false;
                     if (!initial_matches and !produced_matches) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.add(raw_spec);
                 }
             }
         }
@@ -5297,7 +5238,7 @@ const Builder = struct {
                 if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
                     for (candidates.items) |raw_spec| {
                         const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-                        if (spec.state != .lowered) continue;
+                        if (spec.state != .lowering and spec.state != .lowered) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
@@ -5308,7 +5249,7 @@ const Builder = struct {
                         }
                         const spec_shape = spec.open_request_shape orelse continue;
                         if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
-                        if (!selection.add(raw_spec, true)) unreachable;
+                        selection.add(raw_spec);
                     }
                 }
             }
@@ -5339,116 +5280,19 @@ const Builder = struct {
                             }
                             const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                             const exact_interface = source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node);
-                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                                source_ctx.draft.current_owner,
-                                spec.fn_id,
-                            );
-                            if (!draftOpenCandidateQualifies(
-                                spec.state,
-                                exact_interface,
-                                active_recursive_edge,
-                                true,
-                            )) continue;
-                            if (!selection.add(raw_spec, exact_interface)) {
-                                Common.invariant("draft nested request matched more than one partial active recursive specialization");
-                            }
+                            if (!exact_interface) continue;
+                            selection.add(raw_spec);
                         }
                     }
                 }
             }
         }
-        if (selection.selected() == null) {
-            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
-                if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                {
-                    continue;
-                }
-                if (!try draftNestedActiveRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    capture_entry_guards,
-                    requested_evidence,
-                    source_ctx.draft.current_owner,
-                )) continue;
-                const raw_spec: u32 = @intCast(raw_spec_usize);
-                if (!selection.add(raw_spec, false)) {
-                    Common.invariant("draft nested request matched more than one active recursive specialization");
-                }
-            }
-        }
-        if (selection.selected() == null) {
-            var capture_anchor: ?u32 = null;
-            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
-                if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
-                {
-                    continue;
-                }
-                if (!try draftNestedCaptureAnchoredRecursiveCandidate(
-                    source_ctx.graph,
-                    spec,
-                    family,
-                    request_fn_node,
-                    capture_entry_guards,
-                    requested_evidence,
-                )) continue;
-                const raw_spec: u32 = @intCast(raw_spec_usize);
-                if (capture_anchor) |anchor_raw| {
-                    const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
-                    const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
-                    try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
-                    try source_ctx.graph.joinRecursiveFunctionInterface(
-                        anchor.request_fn_node,
-                        anchor.initial_request_arg_classes,
-                        spec.request_fn_node,
-                    );
-                } else {
-                    capture_anchor = raw_spec;
-                }
-            }
-            if (capture_anchor) |raw_spec| {
-                if (!selection.add(raw_spec, false)) unreachable;
-            }
-        }
         if (selection.selected()) |raw_spec| {
             self.count("nested_hits");
-            // As for template requests, a partially overlapping in-progress
-            // nested request is an explicit recursive edge. Relate its fresh
-            // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
-                (source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id) or
-                    try draftNestedActiveRecursiveCandidate(
-                        source_ctx.graph,
-                        spec,
-                        family,
-                        capture_entry_guards,
-                        requested_evidence,
-                        source_ctx.draft.current_owner,
-                    ));
-            if (try draftNestedCaptureAnchoredRecursiveCandidate(
-                source_ctx.graph,
-                spec,
-                family,
-                request_fn_node,
-                capture_entry_guards,
-                requested_evidence,
-            )) {
-                const request = try source_ctx.graph.functionNodes(request_fn_node);
-                try source_ctx.graph.markRecursiveValueSlot(request.ret);
-            }
-            if (active_recursive_edge) {
-                try source_ctx.graph.joinRecursiveFunctionInterface(
-                    spec.request_fn_node,
-                    spec.initial_request_arg_classes,
-                    request_fn_node,
-                );
-                if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
-                    Common.invariant("recursive draft nested request did not join its complete function interface");
-                }
-            } else {
+                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+            if (!active_recursive_edge) {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
                 try applyProducedTypeToRequest(source_ctx.graph, request_fn_node, spec_fn_node);
             }
@@ -5472,7 +5316,6 @@ const Builder = struct {
             return .{ .draft = spec.fn_id };
         }
         self.count("nested_misses");
-
         const fn_id = try source_ctx.draft.addFn(.{ .source = .{
             .fn_def = .{ .nested = nested },
             .source_fn_ty = source_fn_ty,
@@ -5493,7 +5336,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
-            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
+            .evidence_digest = evidence_digest.bytes,
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
             .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
@@ -5523,6 +5366,9 @@ const Builder = struct {
             const lookup_entry = try source_ctx.draft.nested_spec_lookup.getOrPut(lookup_address);
             if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+        }
+        if (resolved_lookup_address) |address| {
+            try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
         if (open_shape_lookup_address) |address| {
             try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
@@ -9576,32 +9422,6 @@ fn runtimeDemandGuardFrameSetsEql(
     return true;
 }
 
-fn draftOpenCandidateQualifies(
-    state: DraftSpecState,
-    exact_interface: bool,
-    active_recursive_edge: bool,
-    partial_recursive_allowed: bool,
-) bool {
-    return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
-}
-
-fn draftRequestOverlapsInitialArgumentClass(
-    graph: *InstGraph,
-    initial_arg_classes: []const ArgumentClassSnapshot,
-    request_fn_node: NodeId,
-) Allocator.Error!bool {
-    const request = try graph.functionNodes(request_fn_node);
-    if (initial_arg_classes.len != request.args.len) {
-        Common.invariant("draft recursive request changed function argument arity");
-    }
-    for (initial_arg_classes, request.args) |initial_class, request_arg| {
-        for (initial_class.members) |member| {
-            if (graph.sameClass(member, request_arg)) return true;
-        }
-    }
-    return false;
-}
-
 fn draftCaptureEntryGuardsMatch(
     graph: *InstGraph,
     stored_guards: []const NodeId,
@@ -9611,43 +9431,6 @@ fn draftCaptureEntryGuardsMatch(
     for (stored_guards, requested_guards) |stored, requested| {
         if (!graph.sameClass(stored, requested)) return false;
     }
-    return true;
-}
-
-fn draftNestedActiveRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-    current_owner: DraftOwner,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-    if (!std.meta.eql(spec.lexical_owner, current_owner)) return false;
-    return true;
-}
-
-fn draftNestedCaptureAnchoredRecursiveCandidate(
-    graph: *InstGraph,
-    spec: *const DraftNestedSpec,
-    family: DraftNestedFamilyAddress,
-    request_fn_node: NodeId,
-    capture_entry_guards: []const NodeId,
-    requested_evidence: EvidenceChain,
-) Allocator.Error!bool {
-    if (spec.state != .lowering) return false;
-    if (capture_entry_guards.len == 0) return false;
-    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
-    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
-    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
-
-    const request = try graph.functionNodes(request_fn_node);
-    if (request.args.len != 0) return false;
-    const spec_request = try graph.functionNodes(spec.request_fn_node);
-    if (spec_request.args.len != 0) return false;
     return true;
 }
 
@@ -9794,29 +9577,17 @@ fn verifyReusedDemandRange(
     }
 }
 
-/// Active graph relations can make independently created draft requests share
-/// one complete function interface. Exact matches therefore converge on the
-/// earliest recorded specialization, matching final draft commit order. A
-/// partial match is an active recursive edge and must remain unique.
+/// Exact graph or durable request identities converge on the earliest recorded
+/// specialization, matching final draft commit order.
 const DraftOpenCandidateSelection = struct {
     exact: ?u32 = null,
-    partial: ?u32 = null,
 
-    fn add(self: *DraftOpenCandidateSelection, raw_spec: u32, exact_interface: bool) bool {
-        if (exact_interface) {
-            if (self.exact == null or raw_spec < self.exact.?) self.exact = raw_spec;
-            return true;
-        }
-        if (self.partial) |existing| {
-            if (existing != raw_spec) return false;
-        } else {
-            self.partial = raw_spec;
-        }
-        return true;
+    fn add(self: *DraftOpenCandidateSelection, raw_spec: u32) void {
+        if (self.exact == null or raw_spec < self.exact.?) self.exact = raw_spec;
     }
 
     fn selected(self: DraftOpenCandidateSelection) ?u32 {
-        return self.exact orelse self.partial;
+        return self.exact;
     }
 };
 
@@ -9857,7 +9628,6 @@ const ActiveTemplateRoot = struct {
     family: DraftTemplateFamilyAddress,
     evidence: []const SpecEvidence,
     request_fn_node: NodeId,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
     fn_id: Ast.FnId,
 };
 
@@ -9912,7 +9682,7 @@ const DraftTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
+    evidence_digest: [32]u8,
     evidence: []const SpecEvidence,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     /// Runtime-value demands recorded while this specialization's body (and
@@ -10416,7 +10186,7 @@ const DraftNestedSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    initial_request_arg_classes: []const ArgumentClassSnapshot,
+    evidence_digest: [32]u8,
     evidence: EvidenceChain,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     demand_start: u32 = 0,
@@ -16057,12 +15827,76 @@ const BodyContext = struct {
             changed = changed or !self.graph.sameClass(produced, storage_node.*);
         }
         if (!changed) return raw_request_fn_node;
-        return try self.graph.functionRequestWithRecursiveStorage(
+        const finalized = try self.graph.functionRequestWithRecursiveStorage(
             checked_fn_node,
             raw_request_fn_node,
             checked_slots,
             storage_nodes,
         );
+        try self.publishFinalizedProcedureRequest(raw_request_fn_node, finalized);
+        return finalized;
+    }
+
+    /// Publish a finalized request before lowering its first pattern or body
+    /// expression, so a recursive construction edge observes the same exact
+    /// identity and never needs a late interface merge.
+    fn publishFinalizedProcedureRequest(
+        self: *BodyContext,
+        raw_request: NodeId,
+        finalized: NodeId,
+    ) Allocator.Error!void {
+        if (raw_request == finalized) return;
+        if (self.builder.active_template_root) |*active_root| {
+            if (active_root.graph == self.graph and active_root.request_fn_node == raw_request) {
+                active_root.request_fn_node = finalized;
+            }
+        }
+        switch (self.draft.current_owner) {
+            .root => {},
+            .reserved_fn => {},
+            .draft_fn => |fn_id| {
+                self.draft.fns.items[@intFromEnum(fn_id)].source.mono_fn_ty =
+                    DraftTypeCell.fromGraphNode(finalized);
+                if (self.draft.template_spec_by_fn.get(fn_id)) |raw_spec| {
+                    self.draft.template_specs.items[raw_spec].request_fn_node = finalized;
+                    const spec = self.draft.template_specs.items[raw_spec];
+                    try registerTemplateSpecInterfaceLookups(
+                        self.draft,
+                        self.allocator,
+                        self.graph,
+                        DraftTemplateFamilyAddress.init(
+                            spec.template_ref,
+                            spec.method_scope,
+                            spec.source_fn_key,
+                        ),
+                        spec.evidence_digest,
+                        finalized,
+                        raw_spec,
+                    );
+                    return;
+                }
+                for (self.draft.nested_specs.items, 0..) |spec, raw_spec_usize| {
+                    if (spec.fn_id != fn_id) continue;
+                    const raw_spec: u32 = @intCast(raw_spec_usize);
+                    self.draft.nested_specs.items[raw_spec].request_fn_node = finalized;
+                    try registerNestedSpecInterfaceLookups(
+                        self.draft,
+                        self.allocator,
+                        self.graph,
+                        DraftNestedFamilyAddress.init(
+                            spec.nested,
+                            spec.method_scope,
+                            spec.source_fn_key,
+                        ),
+                        spec.evidence_digest,
+                        finalized,
+                        raw_spec,
+                    );
+                    return;
+                }
+                Common.invariant("finalized draft procedure request had no specialization record");
+            },
+        }
     }
 
     fn recordProcedureExactNominalSelections(
@@ -46994,7 +46828,7 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
-test "open draft recursive provenance joins fresh interface cells only while lowering" {
+test "draft runtime guard frames retain exact ancestry" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -47046,11 +46880,6 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(u32, 2), frames.depth);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
-    try std.testing.expect(try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, recursive_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
     try graph.unify(active_fn, recursive_fn);
     try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(shared_ret, recursive_ret));
@@ -47061,26 +46890,15 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, independent_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
-
-    // An exact request reuses a completed specialization regardless of the
-    // requesting guard context; reuses under a different context are recorded
-    // and re-verified against the specialization's demands at seal.
-    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false, false));
 }
 
-test "open draft selection converges exact interfaces and rejects partial ambiguity" {
+test "open draft selection chooses the earliest exact interface" {
     var selection = DraftOpenCandidateSelection{};
-    try std.testing.expect(selection.add(7, false));
-    try std.testing.expect(selection.add(5, true));
-    try std.testing.expect(selection.add(3, true));
+    selection.add(7);
+    selection.add(5);
+    selection.add(3);
     try std.testing.expectEqual(@as(?u32, 3), selection.selected());
-
-    var ambiguous = DraftOpenCandidateSelection{};
-    try std.testing.expect(ambiguous.add(1, false));
-    try std.testing.expect(!ambiguous.add(2, false));
 }
 
 test "runtime demand guards exempt only frozen impossible constructor branches" {

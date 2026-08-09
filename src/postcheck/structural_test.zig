@@ -745,7 +745,7 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try std.testing.expect(direct_specialize < direct_finish);
 }
 
-test "Monotype open specialization lookup covers the complete function interface" {
+test "Monotype open specialization lookup reuses only exact function interfaces" {
     const lower_source = @embedFile("monotype/lower.zig");
     const template_source = sourceSliceBetween(
         lower_source,
@@ -761,16 +761,18 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
         try expectContains(lookup_source, "classMemberIterator(interface_node)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
-        try expectContains(lookup_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
-        try expectContains(lookup_source, "draftOpenCandidateQualifies(");
+        try expectContains(lookup_source, "sameFunctionInterface(");
+        try expectContains(lookup_source, "if (!exact_interface) continue;");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
-        try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
+        try expectContains(lookup_source, "selection.add(raw_spec);");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.joinRecursiveFunctionInterface(");
-        try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
         try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
+        try expectNotContains(lookup_source, "draftOpenCandidateQualifies(");
+        try expectNotContains(lookup_source, "joinRecursiveFunctionInterface(");
+        try expectNotContains(lookup_source, "initial_request_arg_classes");
+        try expectNotContains(lookup_source, "partial_recursive");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
