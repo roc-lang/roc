@@ -2685,6 +2685,7 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     writeBytes(hasher, self.lifted.names.recordFieldLabelText(field.name));
+                    MonoType.writeFieldDefaultDigest(self.lifted.names, hasher, field.default);
                     if (field.value_ty) |value_ty| {
                         writeBytes(hasher, "field-optional-value");
                         try self.writeSolvedTypeDigest(hasher, value_ty, active);
@@ -3106,6 +3107,49 @@ fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return std.mem.eql(u8, left.?.bytes[0..], right.?.bytes[0..]);
+}
+
+test "lambda solved erased callable digest includes record field default identity" {
+    const gpa = std.testing.allocator;
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const field_name = try name_store.internRecordFieldLabel("retries");
+    const module = try name_store.internModuleIdentity(&([_]u8{0xD5} ** 32));
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(gpa);
+    defer program.types.deinit();
+
+    const value_ty = try program.types.add(.{ .primitive = .u8 });
+    const plain_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = null,
+    }}) });
+    const first_default_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = .{ .module = module, .expr_node = 3 },
+    }}) });
+    const second_default_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = .{ .module = module, .expr_node = 4 },
+    }}) });
+
+    var lifted: Lifted.ProgramView = undefined;
+    lifted.names = &name_store;
+    var solver: Solver = undefined;
+    solver.allocator = gpa;
+    solver.program = &program;
+    solver.lifted = lifted;
+
+    const plain_digest = try solver.solvedTypeDigest(plain_ty);
+    const first_default_digest = try solver.solvedTypeDigest(first_default_ty);
+    const second_default_digest = try solver.solvedTypeDigest(second_default_ty);
+    try std.testing.expect(!std.mem.eql(u8, plain_digest.bytes[0..], first_default_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first_default_digest.bytes[0..], second_default_digest.bytes[0..]));
 }
 
 test "lambda solved solve declarations are referenced" {
