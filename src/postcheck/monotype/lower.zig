@@ -18957,12 +18957,18 @@ const BodyContext = struct {
         }
         switch (procedure) {
             .iter_from_step => {
-                const produced = try self.generatedIteratorNode(request_fn.ret, null);
+                const produced = try self.generatedIteratorNode(
+                    request_fn.ret,
+                    try self.generatedIteratorItemNode(request_fn.ret),
+                );
                 return try self.generatedIteratorConstructorFunctionNode(produced);
             },
             .range_done => return try self.graphFunctionNode(
                 request_fn.args,
-                try self.generatedIteratorNode(request_fn.ret, null),
+                try self.generatedIteratorNode(
+                    request_fn.ret,
+                    try self.generatedIteratorItemNode(request_fn.ret),
+                ),
             ),
             .iter_iter => {
                 if (request_fn.args.len != 1) {
@@ -19139,7 +19145,7 @@ const BodyContext = struct {
         };
         const owner = named.builtin_owner orelse return node;
         if (!static_dispatch.isIteratorOwner(owner) or named.def.generated != null) return node;
-        return try self.generatedIteratorNode(node, null);
+        return try self.generatedIteratorNode(node, named.args[0]);
     }
 
     fn generatedTypeCanonicalizer(self: *BodyContext) solve.GeneratedTypeCanonicalizer {
@@ -19205,7 +19211,7 @@ const BodyContext = struct {
     fn generatedIteratorNode(
         self: *BodyContext,
         public_iterator: NodeId,
-        explicit_item_node: ?NodeId,
+        item_node: NodeId,
     ) Allocator.Error!NodeId {
         var public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
@@ -19214,13 +19220,6 @@ const BodyContext = struct {
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
         }
-        const item_node = explicit_item_node orelse public_named.args[0];
-        // A representation-free producer such as an empty list may leave its
-        // item slot unconstrained after every surrounding request has had an
-        // opportunity to select it. At this exact generated producer, commit
-        // the checker-authored language default for that one leaf. This does
-        // not search the input or infer missing representation information.
-        try self.graph.materializeProducedDefault(item_node);
         var lookup_args = [_]NodeId{item_node};
         public_named.args = &lookup_args;
         const owner = public_named.builtin_owner orelse
@@ -30053,7 +30052,7 @@ const BodyContext = struct {
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
         };
         const item_node = if (interpolation.parts.len == 0)
-            null
+            try self.generatedIteratorItemNode(request_node)
         else item: {
             const first = interpolation.parts[0];
             const value_node = try self.canonicalIteratorOccurrence(

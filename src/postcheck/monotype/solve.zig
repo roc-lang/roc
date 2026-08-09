@@ -1200,34 +1200,6 @@ pub const InstGraph = struct {
         });
     }
 
-    /// Finish an otherwise unconstrained leaf at the value producer that owns
-    /// it, after every contextual input has been applied. A genuinely
-    /// unconstrained checked variable has the language's empty-union default;
-    /// compiler placeholders and row extensions still require explicit data.
-    pub fn materializeProducedDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
-        self.requireRelationProduction();
-        const node = self.find(raw_node);
-        const node_content = self.nodes.items[@intFromEnum(node)];
-        if (node_content != .unresolved) return;
-        const variable = node_content.unresolved;
-        const completed: InstNode = if (variable.numeric_default_phase) |phase| blk: {
-            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-                Common.invariant("checking-finalized numeric variable reached value production");
-            break :blk switch (target) {
-                .dec => .{ .primitive = .dec },
-                .str => .{ .primitive = .str },
-            };
-        } else if (variable.row_default) |row_default| switch (row_default) {
-            .empty_record => .empty_record,
-            .empty_tag_union => .empty_tag_union,
-        } else switch (variable.origin) {
-            .checked_variable => .empty_tag_union,
-            .row_extension => Common.invariant("value producer received a row extension without its checked default"),
-            .placeholder => Common.invariant("value producer received a compiler placeholder instead of explicit type data"),
-        };
-        try self.setContent(node, completed);
-    }
-
     /// Whether evidence finalization has explicit producer provenance for every
     /// node in this live type. Numeric and row defaults are direct closure
     /// evidence. A plain checked variable is provisionally sealable as the
@@ -5271,7 +5243,30 @@ const OpenFunctionInterfaceShapeWriter = struct {
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
             if (self.mode == .generated_identity) {
-                Common.invariant("generated identity input was hashed before its producer completed it");
+                // This is the final producer boundary for the identity input.
+                // Contextual substitutions have already run; if the checker
+                // deliberately left a leaf polymorphic (for example the item
+                // of an entirely empty iterator), commit its declared language
+                // default at the exact leaf encountered by this hash traversal.
+                // There is no separate probe or graph scan, and the node cannot
+                // be refined after it becomes part of a generated identity.
+                const completed: InstNode = if (content.unresolved.numeric_default_phase) |phase| blk: {
+                    const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                        Common.invariant("checking-finalized numeric variable reached generated identity production");
+                    break :blk switch (target) {
+                        .dec => .{ .primitive = .dec },
+                        .str => .{ .primitive = .str },
+                    };
+                } else if (content.unresolved.row_default) |row_default| switch (row_default) {
+                    .empty_record => .empty_record,
+                    .empty_tag_union => .empty_tag_union,
+                } else switch (content.unresolved.origin) {
+                    .checked_variable => .empty_tag_union,
+                    .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
+                    .placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
+                };
+                try self.graph.setContent(node, completed);
+                return self.writeNode(node);
             }
             const entry = try self.unresolved_ids.getOrPut(node);
             if (!entry.found_existing) {
