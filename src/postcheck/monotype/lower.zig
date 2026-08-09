@@ -44637,10 +44637,15 @@ const BodyContext = struct {
         for (binders) |binder| {
             const initial = self.binders.get(binder) orelse continue;
             const ty = self.localTypeCell(initial);
+            // The loop parameter is an ordinary version of the binder's local:
+            // it must carry the binder so closures in the loop body that
+            // capture it declare the binder's CaptureId.
+            const param_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), ty, binder);
+            try self.bindLocalName(param_local, binder);
             try carries.append(self.allocator, .{
                 .binder = binder,
                 .initial_local = initial,
-                .param_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), ty, null),
+                .param_local = param_local,
                 .ty = ty,
             });
         }
