@@ -3078,6 +3078,12 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+LLVM codegen interns one refcounted backing global per blob for the whole
+module, but the pointer to the blob's data offset is a WipFunction
+instruction: every proc body that restores a view must emit its own GEP from
+the interned global. Caching the offset pointer itself would leak the first
+body's instruction into every later function sharing that backing.
+
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves
 its id beside the stored root node. Restoration lowers the saved root type first

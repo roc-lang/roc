@@ -6874,12 +6874,17 @@ pub const MonoLlvmCodeGen = struct {
 
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
         const key: u32 = @intFromEnum(backing);
-        if (self.static_refcounted_backings.get(key)) |existing| return existing;
-
         const builder = self.builder orelse return error.CompilationFailed;
         const word_size: usize = self.targetWordSize();
         const backing_alignment = @max(word_size, @as(usize, self.store.strings.alignment(backing)));
         const data_offset = std.mem.alignForward(usize, word_size, backing_alignment);
+        // Only the backing global may be cached across proc bodies: the GEP to
+        // its data offset is an instruction in whichever WipFunction is being
+        // compiled, so it must be emitted fresh per function.
+        if (self.static_refcounted_backings.get(key)) |existing| {
+            return try self.offsetPtrValue(existing, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
+        }
+
         const bytes = self.store.getString(backing);
         const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
         defer self.allocator.free(storage);
@@ -6897,9 +6902,8 @@ pub const MonoLlvmCodeGen = struct {
         variable.setInitializer(builder.stringConst(builder.string(storage) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
         const base = variable.toValue(builder);
-        const value = try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
-        try self.static_refcounted_backings.put(key, value);
-        return value;
+        try self.static_refcounted_backings.put(key, base);
+        return try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
     }
 
     fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {
