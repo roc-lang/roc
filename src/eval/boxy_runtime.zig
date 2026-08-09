@@ -5276,6 +5276,13 @@ pub const BoxyRuntime = struct {
         value: Value,
         layout_idx: layout_mod.Idx,
     ) Error!void {
+        // Roc's own Ryu formatter rather than `{d}`: std's float formatting
+        // divides a 128-bit intermediate by ten, which lowers to the
+        // `__udivti3`/`__umodti3` compiler-rt libcalls. Ryu stays within 64-bit
+        // arithmetic, so the standalone runtime object keeps no undefined
+        // compiler-rt references, and inspect output matches how Roc renders
+        // fractions everywhere else.
+        var float_buf: [builtins.compiler_rt_128.float_string_capacity]u8 = undefined;
         const text = switch (self.helper.sizeOf(layout_idx)) {
             1 => if (isUnsigned(layout_idx))
                 try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u8)})
@@ -5288,7 +5295,7 @@ pub const BoxyRuntime = struct {
             4 => blk: {
                 const layout_val = self.layout_store.getLayout(layout_idx);
                 break :blk if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac)
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(f32)})
+                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f32_to_str(&float_buf, value.read(f32)))
                 else if (isUnsigned(layout_idx))
                     try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u32)})
                 else
@@ -5297,7 +5304,7 @@ pub const BoxyRuntime = struct {
             8 => blk: {
                 const layout_val = self.layout_store.getLayout(layout_idx);
                 break :blk if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac)
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(f64)})
+                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f64_to_str(&float_buf, value.read(f64)))
                 else if (isUnsigned(layout_idx))
                     try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u64)})
                 else
@@ -5310,10 +5317,16 @@ pub const BoxyRuntime = struct {
                     const dec = builtins.dec.RocDec{ .num = value.read(i128) };
                     break :blk try self.eval_arena.dupe(u8, dec.format_to_buf(&dec_buf));
                 }
+                // `compiler_rt_128` rather than `{d}`: std's integer formatting
+                // divides the 128-bit value by ten, which lowers to the
+                // `__udivti3`/`__umodti3` compiler-rt libcalls. These helpers
+                // decompose to 64-bit arithmetic, so the standalone runtime
+                // object stays free of undefined compiler-rt references.
+                var int_buf: [builtins.compiler_rt_128.int_string_capacity(i128)]u8 = undefined;
                 break :blk if (isUnsigned(layout_idx))
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u128)})
+                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.u128_to_str(&int_buf, value.read(u128)).str)
                 else
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(i128)});
+                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.i128_to_str(&int_buf, value.read(i128)).str);
             },
             else => try std.fmt.allocPrint(self.eval_arena, "0", .{}),
         };
@@ -6257,13 +6270,18 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         const payload_layout = desc.payload_layout;
+        // `compiler_rt_128` rather than `@floatFromInt`: a 128-bit integer to
+        // float conversion lowers to the `__floattisf`/`__floattidf` libcalls.
+        // These helpers decode the exponent and mantissa directly, so the
+        // standalone runtime object stays free of undefined compiler-rt
+        // references.
         const payload = if (payload_layout == .f32) blk: {
             const val = try hooks.allocValue(.f32);
-            val.write(f32, @floatFromInt(value));
+            val.write(f32, builtins.compiler_rt_128.i128_to_f32(value));
             break :blk val;
         } else if (payload_layout == .f64) blk: {
             const val = try hooks.allocValue(.f64);
-            val.write(f64, @floatFromInt(value));
+            val.write(f64, builtins.compiler_rt_128.i128_to_f64(value));
             break :blk val;
         } else if (payload_layout == .dec) blk: {
             const val = try hooks.allocValue(.dec);
