@@ -873,7 +873,12 @@ pub const BuildEnv = struct {
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
             try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
             for (pkg.public_surface.modules.items) |public_module| {
-                try coord_pkg.addPublicModule(self.gpa, public_module.name, public_module.target);
+                try coord_pkg.addPublicModule(
+                    self.gpa,
+                    public_module.name,
+                    public_module.target,
+                    public_module.nested_type,
+                );
             }
             coord_pkg.finishPublicModules();
 
