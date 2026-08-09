@@ -3149,11 +3149,14 @@ const Formatter = struct {
             try fmt.push(' ');
         }
         // `name ?: Type`—the `?` before the colon marks the field
-        // optional. Legacy `:?` sources format to `?:`. Trivia between the
-        // mark and the type is flushed exactly once, by the before-type
-        // flush below.
-        if (field.optional_mark != null) {
+        // optional. Legacy `:?` sources format to `?:`. The marker remains its
+        // own token boundary so a comment between `?` and `:` is preserved.
+        if (field.optional_mark) |optional_mark| {
             try fmt.push('?');
+            if (multiline and try fmt.flushCommentsAfter(optional_mark)) {
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            }
         }
         try fmt.push(':');
         const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
@@ -3169,13 +3172,23 @@ const Formatter = struct {
         // "Defaulted Fields").
         if (field.default_value) |default_idx| {
             const default_region = fmt.nodeRegion(@intFromEnum(default_idx));
-            if (multiline and try fmt.flushCommentsBefore(default_region.start)) {
+            const default_mark = default_region.start - 1;
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(fmt.ast.tokens.tokenTag(default_mark) == .OpDoubleQuestion);
+            }
+            if (multiline and try fmt.flushCommentsBefore(default_mark)) {
                 fmt.curr_indent += 1;
                 try fmt.pushIndent();
             } else {
                 try fmt.push(' ');
             }
-            try fmt.pushAll("?? ");
+            try fmt.pushAll("??");
+            if (multiline and try fmt.flushCommentsAfter(default_mark)) {
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            } else {
+                try fmt.push(' ');
+            }
             try fmt.formatExprDiscard(default_idx);
         }
         return field.region;
@@ -4444,6 +4457,18 @@ test "defaulted record type fields keep their default through formatting" {
     );
 }
 
+test "defaulted record field preserves a comment after the default marker" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\value : {
+        \\    a : U8 ?? # why
+        \\        10,
+        \\}
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, "# why"));
+}
+
 test "optional mark with a trailing comment formats idempotently" {
     // Review H2: trivia between `?:` and the type is flushed exactly once,
     // so format(format(x)) == format(x). moduleFmtsStable asserts stability.
@@ -4454,6 +4479,18 @@ test "optional mark with a trailing comment formats idempotently" {
     );
     defer std.testing.allocator.free(result);
     try std.testing.expect(std.mem.count(u8, result, "# after mark") == 1);
+}
+
+test "optional record field preserves a comment before the colon" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\value : {
+        \\    a ? # why
+        \\        : U8,
+        \\}
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, "# why"));
 }
 
 test "legacy optional marker after the colon formats to the leading form" {
