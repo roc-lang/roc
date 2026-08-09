@@ -149,6 +149,11 @@ fn findFieldAccessSegmentAtOffset(
     segments: CIR.Expr.FieldAccessSegment.Span,
     target_offset: u32,
 ) ?FieldAccessSegmentMatch {
+    // Find the rightmost segment whose start is at or before the target. Field
+    // access regions are source-adjacent, so one segment's exclusive end is
+    // the next segment's inclusive start. Preferring the latter makes shared
+    // boundaries deterministic while retaining the final segment's inclusive
+    // end for cursor queries.
     var lower: u32 = 0;
     var upper = segments.len;
     while (lower < upper) {
@@ -157,18 +162,22 @@ fn findFieldAccessSegmentAtOffset(
         const region = store.getFieldAccessSegmentRegion(segment_idx);
         if (target_offset < region.start.offset) {
             upper = position;
-        } else if (target_offset > region.end.offset) {
-            lower = position + 1;
         } else {
-            return .{
-                .idx = segment_idx,
-                .position = position,
-                .region = region,
-            };
+            lower = position + 1;
         }
     }
 
-    return null;
+    if (lower == 0) return null;
+    const position = lower - 1;
+    const segment_idx = store.fieldAccessSegmentAt(segments, position);
+    const region = store.getFieldAccessSegmentRegion(segment_idx);
+    if (target_offset > region.end.offset) return null;
+
+    return .{
+        .idx = segment_idx,
+        .position = position,
+        .region = region,
+    };
 }
 
 /// Return the receiver type variable for one source-ordered path segment.
@@ -761,9 +770,9 @@ test "field access query segments preserve ordered type, receiver, and lookup id
         .{ .start = .{ .offset = 0 }, .end = .{ .offset = 4 } },
     );
     const segment_regions = [_]Region{
-        .{ .start = .{ .offset = 6 }, .end = .{ .offset = 10 } },
-        .{ .start = .{ .offset = 13 }, .end = .{ .offset = 18 } },
-        .{ .start = .{ .offset = 21 }, .end = .{ .offset = 26 } },
+        .{ .start = .{ .offset = 2 }, .end = .{ .offset = 5 } },
+        .{ .start = .{ .offset = 5 }, .end = .{ .offset = 7 } },
+        .{ .start = .{ .offset = 7 }, .end = .{ .offset = 10 } },
     };
 
     const builder = try store.startFieldAccessPath(segment_regions.len);
@@ -777,7 +786,7 @@ test "field access query segments preserve ordered type, receiver, and lookup id
     const access_idx = try store.addExpr(.{ .e_field_access = .{
         .receiver = receiver_idx,
         .segments = segments,
-    } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 26 } });
+    } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } });
     const access_expr = store.getExpr(access_idx);
 
     for (segment_regions, 0..) |segment_region, segment_position_usize| {
@@ -815,6 +824,20 @@ test "field access query segments preserve ordered type, receiver, and lookup id
             .segment_idx = segment_idx,
         } }, lookup);
         try std.testing.expectEqual(ModuleEnv.varFrom(segment_idx), lookup.typeVar());
+    }
+
+    for (segment_regions[1..], 1..) |segment_region, segment_position_usize| {
+        const segment_position: u32 = @intCast(segment_position_usize);
+        const segment = findFieldAccessSegmentAtOffset(
+            &store,
+            segments,
+            segment_region.start.offset,
+        ).?;
+        try std.testing.expectEqual(segment_position, segment.position);
+        try std.testing.expectEqual(
+            store.fieldAccessSegmentAt(segments, segment_position),
+            segment.idx,
+        );
     }
 
     const required_region = Region{

@@ -540,6 +540,28 @@ fn emitSmallDec(self: *Self, value: CIR.SmallDecValue) EmitError!void {
     }
 }
 
+/// Emit an i128 fixed-point decimal while preserving the sign of values whose
+/// integer part truncates to zero. Typed fractional literals must retain a
+/// fractional component so they cannot be reparsed as typed integers.
+fn emitScaledDec(self: *Self, value: i128, force_fraction: bool) EmitError!void {
+    const scale: i128 = RocDec.one_point_zero_i128;
+    const whole = i128h.divTrunc_i128(value, scale);
+    const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+
+    if (value < 0 and whole == 0) try self.write("-");
+    try self.write(try self.formatI128(whole));
+
+    if (frac_part != 0) {
+        try self.write(".");
+        const frac_str = try self.formatU128(frac_part);
+        var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
+        while (pad > 0) : (pad -= 1) try self.write("0");
+        try self.write(frac_str);
+    } else if (force_fraction) {
+        try self.write(".0");
+    }
+}
+
 fn emitExprFrame(
     self: *Self,
     expr_idx: Expr.Idx,
@@ -551,20 +573,7 @@ fn emitExprFrame(
         .e_num => |num| try self.emitIntValue(num.value),
         .e_frac_f32 => |frac| try self.output.print(self.allocator, "{d}f32", .{frac.value}),
         .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
-        .e_dec => |dec| {
-            const value = dec.value.num;
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            try self.write(try self.formatI128(whole));
-            if (frac_part != 0) {
-                try self.write(".");
-                const frac_str = try self.formatU128(frac_part);
-                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
-                while (pad > 0) : (pad -= 1) try self.write("0");
-                try self.write(frac_str);
-            }
-        },
+        .e_dec => |dec| try self.emitScaledDec(dec.value.num, false),
         .e_dec_small => |small| try self.emitSmallDec(small.value),
         .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
         .e_typed_int => |typed| {
@@ -572,15 +581,7 @@ fn emitExprFrame(
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_frac => |typed| {
-            const value = typed.value.toI128();
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            if (frac_part == 0) {
-                try self.output.print(self.allocator, "{d}.0", .{whole});
-            } else {
-                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
-            }
+            try self.emitScaledDec(typed.value.toI128(), true);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
@@ -948,20 +949,7 @@ fn emitPatternFrame(
         .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
-        .dec_literal => |dec| {
-            const value = dec.value.num;
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            try self.write(try self.formatI128(whole));
-            if (frac_part != 0) {
-                try self.write(".");
-                const frac_str = try self.formatU128(frac_part);
-                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
-                while (pad > 0) : (pad -= 1) try self.write("0");
-                try self.write(frac_str);
-            }
-        },
+        .dec_literal => |dec| try self.emitScaledDec(dec.value.num, false),
         .frac_f32_literal => |frac| {
             try self.write(try self.formatF32(frac.value));
             try self.write("f32");

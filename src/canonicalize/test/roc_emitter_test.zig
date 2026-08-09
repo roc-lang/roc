@@ -158,6 +158,37 @@ test "emit small decimal preserves its exact fractional scale" {
     }
 }
 
+test "emit fixed-point decimal preserves a negative fractional sign" {
+    const module_env = try createTestEnv(test_allocator, "");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    const scaled_value: i128 = -123_456_789_012_345_678;
+    const dec_expr = try module_env.store.addExpr(.{
+        .e_dec = .{
+            .value = .{ .num = scaled_value },
+            .has_suffix = false,
+        },
+    }, base.Region.zero());
+
+    try emitter.emitExpr(dec_expr);
+    try testing.expectEqualStrings("-0.123456789012345678", emitter.getOutput());
+
+    const dec_ident = try module_env.insertIdent(base.Ident.for_text("Dec"));
+    const typed_expr = try module_env.store.addExpr(.{
+        .e_typed_frac = .{
+            .value = .{ .bytes = @bitCast(scaled_value), .kind = .i128 },
+            .type_name = dec_ident,
+        },
+    }, base.Region.zero());
+
+    emitter.reset();
+    try emitter.emitExpr(typed_expr);
+    try testing.expectEqualStrings("-0.123456789012345678.Dec", emitter.getOutput());
+}
+
 test "emit string literal escapes decoded contents" {
     const module_env = try createTestEnv(test_allocator, "");
     defer destroyTestEnv(test_allocator, module_env);
