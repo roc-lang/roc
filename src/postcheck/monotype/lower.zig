@@ -15803,38 +15803,16 @@ const BodyContext = struct {
     }
 
     fn finalizeProcedureRequestForRecursiveStorage(
-        self: *BodyContext,
-        procedure_expr: checked.CheckedExprId,
-        checked_fn_node: NodeId,
+        _: *BodyContext,
+        _: checked.CheckedExprId,
+        _: NodeId,
         raw_request_fn_node: NodeId,
     ) Allocator.Error!NodeId {
-        const storage_types = self.view.templates.recursiveStorageTypes(procedure_expr);
-        if (storage_types.len == 0) return raw_request_fn_node;
-
-        const checked_slots = try self.graph.arena().alloc(NodeId, storage_types.len);
-        const storage_nodes = try self.graph.arena().alloc(NodeId, storage_types.len);
-        var transformed = collections.DenseMap(NodeId, RecursiveStorageTransform).init(self.allocator);
-        defer transformed.deinit();
-        var changed = false;
-        for (storage_types, checked_slots, storage_nodes) |storage_ty, *checked_slot, *storage_node| {
-            checked_slot.* = try self.instNode(storage_ty);
-            const produced = try self.graph.producedNodeForCheckedRequestSlot(
-                checked_fn_node,
-                raw_request_fn_node,
-                checked_slot.*,
-            );
-            storage_node.* = try self.recursiveStorageRepresentation(produced, &transformed);
-            changed = changed or !self.graph.sameClass(produced, storage_node.*);
-        }
-        if (!changed) return raw_request_fn_node;
-        const finalized = try self.graph.functionRequestWithRecursiveStorage(
-            checked_fn_node,
-            raw_request_fn_node,
-            checked_slots,
-            storage_nodes,
-        );
-        try self.publishFinalizedProcedureRequest(raw_request_fn_node, finalized);
-        return finalized;
+        // Generated iterator types are already canonical recursive runtime
+        // interfaces. Recursion therefore uses the exact request it received;
+        // it does not replace a generated child with a second dynamic type or
+        // rebuild every compound ancestor merely because that child exists.
+        return raw_request_fn_node;
     }
 
     /// Publish a finalized request before lowering its first pattern or body
@@ -16344,7 +16322,6 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
         else
             ret_cell;
-        try self.constrainCheckedExprInterfaceToCell(checked_body, body_ret_cell);
         var body = if (materialized_args.items.len == 0)
             switch (ret_destination_relation) {
                 .exact_request => try self.lowerExprAtExactRequest(checked_body, body_ret_cell),
@@ -19283,12 +19260,18 @@ const BodyContext = struct {
                 if (request_fn.args.len != 3) {
                     Common.invariant("Iter.custom reached Monotype with an unexpected arity");
                 }
+                const advance = try self.graph.functionNodes(request_fn.args[2]);
+                const advance_result = try self.graphTryPayloads(advance.ret);
+                const ok_items = try self.graph.tupleItemNodes(advance_result.ok);
+                if (ok_items.len != 2) {
+                    Common.invariant("Iter.custom advance Ok payload was not an item/state pair");
+                }
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
                         .custom,
                         request_fn.ret,
-                        null,
+                        ok_items[0],
                         &.{ request_fn.args[0], request_fn.args[2] },
                         if (checked_args) |args| try self.callableArgumentEvidenceDigest(args[2]) else null,
                     ),
@@ -19318,7 +19301,7 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(
                         .str,
                         request_fn.ret,
-                        null,
+                        try self.generatedIteratorItemNode(public_fn.ret),
                         &.{request_fn.args[0]},
                         null,
                     ),
@@ -19333,7 +19316,7 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(
                         .single,
                         request_fn.ret,
-                        null,
+                        request_fn.args[0],
                         &.{request_fn.args[0]},
                         null,
                     ),
@@ -19342,20 +19325,52 @@ const BodyContext = struct {
             .iter_exclusive_range, .numeric_range_exclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, null, &.{}, null),
+                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, request_fn.args[0], &.{}, null),
                 );
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, null, &.{}, null),
+                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, request_fn.args[0], &.{}, null),
                 );
             },
-            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, request_fn.ret, request_fn.args, checked_args, 1),
-            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, request_fn.ret, request_fn.args, checked_args, 1),
-            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, request_fn.ret, request_fn.args, checked_args, 1),
-            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, request_fn.ret, request_fn.args, checked_args, null),
-            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, request_fn.ret, request_fn.args, checked_args, null),
+            .iter_map => {
+                if (request_fn.args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
+                const transform = try self.graph.functionNodes(request_fn.args[1]);
+                return try self.generatedIteratorAdapterFunctionNode(.map, request_fn.ret, transform.ret, request_fn.args, checked_args, 1);
+            },
+            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(
+                .keep_if,
+                request_fn.ret,
+                try self.generatedIteratorItemNode(request_fn.args[0]),
+                request_fn.args,
+                checked_args,
+                1,
+            ),
+            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(
+                .drop_if,
+                request_fn.ret,
+                try self.generatedIteratorItemNode(request_fn.args[0]),
+                request_fn.args,
+                checked_args,
+                1,
+            ),
+            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(
+                .take_first,
+                request_fn.ret,
+                try self.generatedIteratorItemNode(request_fn.args[0]),
+                request_fn.args,
+                checked_args,
+                null,
+            ),
+            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(
+                .drop_first,
+                request_fn.ret,
+                try self.generatedIteratorItemNode(request_fn.args[0]),
+                request_fn.args,
+                checked_args,
+                null,
+            ),
             .iter_concat => {
                 if (request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
@@ -19363,13 +19378,30 @@ const BodyContext = struct {
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
                     self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
                 {
+                    const source = if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))
+                        request_fn.args[0]
+                    else
+                        request_fn.args[1];
                     return try self.graphFunctionNode(
                         request_fn.args,
-                        try self.generatedIteratorNode(.concat, request_fn.ret, null, request_fn.args, null),
+                        try self.generatedIteratorNode(
+                            .concat,
+                            request_fn.ret,
+                            try self.generatedIteratorItemNode(source),
+                            request_fn.args,
+                            null,
+                        ),
                     );
                 }
             },
-            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, request_fn.ret, request_fn.args, checked_args, null),
+            .iter_append => return try self.generatedIteratorAdapterFunctionNode(
+                .append,
+                request_fn.ret,
+                try self.generatedIteratorItemNode(request_fn.args[0]),
+                request_fn.args,
+                checked_args,
+                null,
+            ),
             .iter_from_step, .range_done => {},
         }
         return null;
@@ -19379,6 +19411,7 @@ const BodyContext = struct {
         self: *BodyContext,
         kind: Type.IteratorKind,
         public_ret: NodeId,
+        item_node: NodeId,
         args: []const NodeId,
         checked_args: ?[]const checked.CheckedExprId,
         callable_index: ?usize,
@@ -19393,8 +19426,16 @@ const BodyContext = struct {
             null else null;
         return try self.graphFunctionNode(
             args,
-            try self.generatedIteratorNode(kind, public_ret, null, args, callable_evidence),
+            try self.generatedIteratorNode(kind, public_ret, item_node, args, callable_evidence),
         );
+    }
+
+    fn generatedIteratorItemNode(self: *BodyContext, iterator_node: NodeId) Allocator.Error!NodeId {
+        const content = self.graph.content(iterator_node);
+        if (content != .named or content.named.builtin_owner != .iter or content.named.args.len != 1) {
+            Common.invariant("iterator producer input did not carry one explicit item type");
+        }
+        return content.named.args[0];
     }
 
     const IteratorRepresentationNames = Type.IteratorTopology;
@@ -19454,6 +19495,12 @@ const BodyContext = struct {
             Common.invariant("generated iterator requested a public type without an item argument");
         }
         const item_node = explicit_item_node orelse public_named.args[0];
+        // A representation-free producer such as an empty list may leave its
+        // item slot unconstrained after every surrounding request has had an
+        // opportunity to select it. At this exact generated producer, commit
+        // the checker-authored language default for that one leaf. This does
+        // not search the input or infer missing representation information.
+        try self.graph.materializeProducedDefault(item_node);
         var lookup_args = [_]NodeId{item_node};
         public_named.args = &lookup_args;
         const owner = public_named.builtin_owner orelse
@@ -19462,8 +19509,6 @@ const BodyContext = struct {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
         const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
-        const mint_depth = self.generatedIteratorMintDepth(kind, components) orelse
-            return try self.forcedDynamicIteratorNode(public_iterator, public_named.args[0], public_source);
         const lookup = try self.graph.lookupGeneratedIteratorFromNamed(
             public_named,
             kind,
@@ -19477,8 +19522,6 @@ const BodyContext = struct {
             public_source: solve.InstIteratorPublicSource,
             item_node: NodeId,
             identity: names.TypeDigest,
-            kind: Type.IteratorKind,
-            mint_depth: u8,
 
             fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
                 const args = try ctx.body.graph.arena().alloc(NodeId, 1);
@@ -19486,8 +19529,8 @@ const BodyContext = struct {
                 var def = ctx.public_source.def;
                 def.generated = ctx.identity;
                 def.iterator_representation = .minted;
-                def.iterator_kind = ctx.kind;
-                def.iterator_depth = ctx.mint_depth;
+                def.iterator_kind = .none;
+                def.iterator_depth = 1;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
                 return .{ .named = .{
                     .named_type = ctx.public_source.named_type,
@@ -19513,8 +19556,6 @@ const BodyContext = struct {
             .public_source = public_source,
             .item_node = public_named.args[0],
             .identity = lookup.digest,
-            .kind = kind,
-            .mint_depth = mint_depth,
         }, Context.fill);
         try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
         return generated;
@@ -24897,7 +24938,8 @@ const BodyContext = struct {
             // public Iter occurrence into its result.
             var operand_fn_node = checked_fn_node;
             if (iterator_procedure) |procedure| {
-                if (expected_ret_node) |expected| {
+                if ((procedure == .iter_from_step or procedure == .range_done) and expected_ret_node != null) {
+                    const expected = expected_ret_node.?;
                     const destination_request = try functionRequestNode(
                         self.graph,
                         checked_fn_node,
@@ -24929,7 +24971,7 @@ const BodyContext = struct {
                 if (operand_fn_node == checked_fn_node) null else operand_fn_nodes.args,
                 &pre_lowered,
             );
-            const produced_args = try self.producedCallArgumentNodes(
+            var produced_args = try self.producedCallArgumentNodes(
                 operand_fn_nodes.args,
                 pre_lowered.items,
             );
@@ -24943,6 +24985,36 @@ const BodyContext = struct {
                 ) orelse try functionRequestNode(self.graph, checked_fn_node, produced_args, request_ret)
             else
                 try functionRequestNode(self.graph, checked_fn_node, produced_args, request_ret);
+            fn_node = try self.graph.functionRequestFromProducedArguments(
+                checked_fn_node,
+                fn_node,
+                produced_args,
+            );
+            var preliminary_fn = try self.graph.functionNodes(fn_node);
+            try self.preLowerContextualCallOperandsAtNodes(
+                call.args,
+                preliminary_fn.args,
+                &pre_lowered,
+            );
+            produced_args = try self.producedCallArgumentNodes(
+                preliminary_fn.args,
+                pre_lowered.items,
+            );
+            fn_node = try self.graph.functionRequestFromProducedArguments(
+                checked_fn_node,
+                fn_node,
+                produced_args,
+            );
+            preliminary_fn = try self.graph.functionNodes(fn_node);
+            try self.preLowerNestedCallOperandsAtNodes(
+                call.args,
+                preliminary_fn.args,
+                &pre_lowered,
+            );
+            produced_args = try self.producedCallArgumentNodes(
+                preliminary_fn.args,
+                pre_lowered.items,
+            );
             fn_node = try self.graph.functionRequestFromProducedArguments(
                 checked_fn_node,
                 fn_node,
@@ -25011,21 +25083,60 @@ const BodyContext = struct {
             };
         }
 
-        const checked_callee_node = try self.lowerExprTypeNode(call.func);
-        const checked_callee = try self.graph.functionNodes(checked_callee_node);
+        const produced_callee_node = try self.lowerExprTypeNode(call.func);
+        const produced_callee = try self.graph.functionNodes(produced_callee_node);
+        const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse
+            produced_callee_node;
         var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
         defer pre_lowered.deinit(self.allocator);
         try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);
-        const produced_args = try self.producedCallArgumentNodes(
-            checked_callee.args,
+        var produced_args = try self.producedCallArgumentNodes(
+            produced_callee.args,
             pre_lowered.items,
         );
-        const request_ret = expected_ret_node orelse try self.freshInstNode(checked_ret_ty);
+        // An existing callable value already owns its complete result type.
+        // Preserve that result directly. Only a callable expression whose
+        // body is being specialized by this call receives the caller's exact
+        // destination as its initial request.
+        const request_ret = if (self.isNestedCallableExpr(call.func))
+            expected_ret_node orelse try self.freshInstNode(checked_ret_ty)
+        else
+            produced_callee.ret;
         var request_fn_node = try functionRequestNode(
             self.graph,
             checked_callee_node,
             produced_args,
             request_ret,
+        );
+        request_fn_node = try self.graph.functionRequestFromProducedArguments(
+            checked_callee_node,
+            request_fn_node,
+            produced_args,
+        );
+        var preliminary_callee = try self.graph.functionNodes(request_fn_node);
+        try self.preLowerContextualCallOperandsAtNodes(
+            call.args,
+            preliminary_callee.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callee.args,
+            pre_lowered.items,
+        );
+        request_fn_node = try self.graph.functionRequestFromProducedArguments(
+            checked_callee_node,
+            request_fn_node,
+            produced_args,
+        );
+        preliminary_callee = try self.graph.functionNodes(request_fn_node);
+        try self.preLowerNestedCallOperandsAtNodes(
+            call.args,
+            preliminary_callee.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callee.args,
+            pre_lowered.items,
         );
         request_fn_node = try self.graph.functionRequestFromProducedArguments(
             checked_callee_node,
@@ -27058,18 +27169,11 @@ const BodyContext = struct {
             raw_request.args,
             raw_request.ret,
         );
-        var request_fn_node = try self.graph.functionRequestFromProducedArguments(
+        const request_fn_node = try self.graph.functionRequestFromProducedArguments(
             source_fn_node,
             initial_request,
             raw_request.args,
         );
-        if (proc.iterator_procedure) |procedure| {
-            if (try self.generatedIteratorFunctionNode(procedure, source_fn_node, request_fn_node, null)) |private_fn_node| {
-                self.graph.inheritRequestSubstitutions(request_fn_node, private_fn_node);
-                try self.graph.registerRequestCheckedSource(private_fn_node, source_fn_node);
-                request_fn_node = private_fn_node;
-            }
-        }
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
             source_fn_ty,
@@ -29977,6 +30081,17 @@ const BodyContext = struct {
         };
     }
 
+    /// These values receive their concrete type from the surrounding checked
+    /// request. They are still ordinary producers, but unlike a lookup, call,
+    /// or suffixed conversion they cannot complete their result independently
+    /// of correlated operands in that request.
+    fn isContextualValueExpr(self: *BodyContext, checked_expr: checked.CheckedExprId) bool {
+        return switch (self.view.bodies.expr(checked_expr).data) {
+            .numeral, .empty_list => true,
+            .pending, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
     fn preLowerDirectCallOperands(
         self: *BodyContext,
         checked_exprs: []const checked.CheckedExprId,
@@ -29987,15 +30102,20 @@ const BodyContext = struct {
             Common.invariant("direct-call argument arity differed from explicit producer request");
         };
         for (checked_exprs, 0..) |checked_expr, index| {
+            // A nested callable's checked function shell participates in the
+            // request, but its body is not a completed operand yet. Other
+            // value operands first select every correlated exact type; the
+            // callable is then lowered exactly once against that final
+            // function request in `lowerCallOperandsAtNodes`.
+            if (explicit_request_nodes == null and
+                (self.isNestedCallableExpr(checked_expr) or self.isContextualValueExpr(checked_expr))) continue;
             const lowered = if (explicit_request_nodes) |nodes|
                 try self.lowerExprAtTypeCell(
                     checked_expr,
                     DraftTypeCell.fromGraphNode(nodes[index]),
                 )
-            else if (!self.isNestedCallableExpr(checked_expr))
-                try self.lowerExpr(checked_expr)
             else
-                continue;
+                try self.lowerExpr(checked_expr);
             try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
         }
     }
@@ -30011,7 +30131,7 @@ const BodyContext = struct {
         }
         for (operands, checked_nodes, 0..) |operand, checked_node, index| {
             const lowered = switch (operand) {
-                .checked_expr => |expr| if (self.isNestedCallableExpr(expr))
+                .checked_expr => |expr| if (self.isNestedCallableExpr(expr) or self.isContextualValueExpr(expr))
                     continue
                 else
                     try self.lowerExpr(expr),
@@ -30040,6 +30160,100 @@ const BodyContext = struct {
             produced_nodes[operand.index] = try self.exprTypeCell(operand.expr).toGraphNode(self.graph);
         }
         return produced_nodes;
+    }
+
+    /// Lower every nested callable exactly once, after ordinary value
+    /// operands have completed the correlated slots in its preliminary
+    /// request and before the consumer specialization is selected.
+    fn preLowerNestedCallOperandsAtNodes(
+        self: *BodyContext,
+        checked_exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId,
+        pre_lowered: *std.ArrayList(PreLoweredOperand),
+    ) Allocator.Error!void {
+        if (checked_exprs.len != nodes.len) {
+            Common.invariant("nested-callable argument arity differed from its preliminary request");
+        }
+        for (checked_exprs, nodes, 0..) |expr, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered.items, index) != null) continue;
+            if (self.isContextualValueExpr(expr)) continue;
+            if (!self.isNestedCallableExpr(expr)) {
+                Common.invariant("non-callable operand was not produced before preliminary request materialization");
+            }
+            const lowered = try self.lowerExprAtExactRequest(
+                expr,
+                DraftTypeCell.fromGraphNode(node),
+            );
+            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+        }
+    }
+
+    fn preLowerNestedDispatchOperandsAtNodes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        nodes: []const NodeId,
+        pre_lowered: *std.ArrayList(PreLoweredOperand),
+    ) Allocator.Error!void {
+        if (operands.len != nodes.len) {
+            Common.invariant("nested dispatch argument arity differed from its preliminary request");
+        }
+        for (operands, nodes, 0..) |operand, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered.items, index) != null) continue;
+            const expr = switch (operand) {
+                .checked_expr => |expr| expr,
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => Common.invariant("generated dispatch operand was not produced before preliminary request materialization"),
+            };
+            if (self.isContextualValueExpr(expr)) continue;
+            if (!self.isNestedCallableExpr(expr)) {
+                Common.invariant("non-callable dispatch operand was not produced before preliminary request materialization");
+            }
+            const lowered = try self.lowerExprAtExactRequest(
+                expr,
+                DraftTypeCell.fromGraphNode(node),
+            );
+            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+        }
+    }
+
+    fn preLowerContextualCallOperandsAtNodes(
+        self: *BodyContext,
+        checked_exprs: []const checked.CheckedExprId,
+        nodes: []const NodeId,
+        pre_lowered: *std.ArrayList(PreLoweredOperand),
+    ) Allocator.Error!void {
+        if (checked_exprs.len != nodes.len) {
+            Common.invariant("contextual call argument arity differed from its preliminary request");
+        }
+        for (checked_exprs, nodes, 0..) |expr, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered.items, index) != null) continue;
+            if (!self.isContextualValueExpr(expr)) continue;
+            const lowered = try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(node));
+            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+        }
+    }
+
+    fn preLowerContextualDispatchOperandsAtNodes(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        nodes: []const NodeId,
+        pre_lowered: *std.ArrayList(PreLoweredOperand),
+    ) Allocator.Error!void {
+        if (operands.len != nodes.len) {
+            Common.invariant("contextual dispatch argument arity differed from its preliminary request");
+        }
+        for (operands, nodes, 0..) |operand, node, index| {
+            if (self.preLoweredOperandAt(pre_lowered.items, index) != null) continue;
+            const expr = switch (operand) {
+                .checked_expr => |expr| expr,
+                .generated_interpolation_iter, .generated_numeral, .generated_quote => continue,
+            };
+            if (!self.isContextualValueExpr(expr)) continue;
+            const lowered = try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(node));
+            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+        }
     }
 
     fn lowerCallOperandsAtNodes(
@@ -30874,10 +31088,7 @@ const BodyContext = struct {
         const reserved = try self.reserveExprSpan(checked_args.len);
         errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_args, 0..) |checked_arg, index| {
-            const lowered = try self.lowerExprAtTypeCell(
-                checked_arg,
-                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(checked_arg)),
-            );
+            const lowered = try self.lowerExpr(checked_arg);
             arg_nodes[index] = try self.exprTypeCell(lowered).toGraphNode(self.graph);
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
         }
@@ -32296,7 +32507,7 @@ const BodyContext = struct {
         var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
         defer pre_lowered.deinit(self.allocator);
         try self.preLowerDispatchOperands(plan_args, checked_callable.args, &pre_lowered);
-        const produced_args = try self.producedCallArgumentNodes(checked_callable.args, pre_lowered.items);
+        var produced_args = try self.producedCallArgumentNodes(checked_callable.args, pre_lowered.items);
         const request_ret = try self.freshInstNode(checked_ret_ty);
         const initial_request = try functionRequestNode(
             self.graph,
@@ -32304,9 +32515,41 @@ const BodyContext = struct {
             produced_args,
             request_ret,
         );
-        const materialized_request = try self.graph.functionRequestFromProducedArgumentsAndComponents(
+        var materialized_request = try self.graph.functionRequestFromProducedArgumentsAndComponents(
             checked_callable_node,
             initial_request,
+            produced_args,
+            &.{checked_dispatcher_node},
+        );
+        var preliminary_callable = try self.graph.functionNodes(materialized_request.request);
+        try self.preLowerContextualDispatchOperandsAtNodes(
+            plan_args,
+            preliminary_callable.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callable.args,
+            pre_lowered.items,
+        );
+        materialized_request = try self.graph.functionRequestFromProducedArgumentsAndComponents(
+            checked_callable_node,
+            materialized_request.request,
+            produced_args,
+            &.{checked_dispatcher_node},
+        );
+        preliminary_callable = try self.graph.functionNodes(materialized_request.request);
+        try self.preLowerNestedDispatchOperandsAtNodes(
+            plan_args,
+            preliminary_callable.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callable.args,
+            pre_lowered.items,
+        );
+        materialized_request = try self.graph.functionRequestFromProducedArgumentsAndComponents(
+            checked_callable_node,
+            materialized_request.request,
             produced_args,
             &.{checked_dispatcher_node},
         );
@@ -32440,16 +32683,46 @@ const BodyContext = struct {
         var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
         defer pre_lowered.deinit(self.allocator);
         try self.preLowerDispatchOperands(operands, checked_callable.args, &pre_lowered);
-        const produced_args = try self.producedCallArgumentNodes(checked_callable.args, pre_lowered.items);
+        var produced_args = try self.producedCallArgumentNodes(checked_callable.args, pre_lowered.items);
         const initial_request = try functionRequestNode(
             self.graph,
             checked_callable_node,
             produced_args,
             try self.freshInstNode(checked_ret_ty),
         );
-        const callable_node = try self.graph.functionRequestFromProducedArguments(
+        var callable_node = try self.graph.functionRequestFromProducedArguments(
             checked_callable_node,
             initial_request,
+            produced_args,
+        );
+        var preliminary_callable = try self.graph.functionNodes(callable_node);
+        try self.preLowerContextualDispatchOperandsAtNodes(
+            operands,
+            preliminary_callable.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callable.args,
+            pre_lowered.items,
+        );
+        callable_node = try self.graph.functionRequestFromProducedArguments(
+            checked_callable_node,
+            callable_node,
+            produced_args,
+        );
+        preliminary_callable = try self.graph.functionNodes(callable_node);
+        try self.preLowerNestedDispatchOperandsAtNodes(
+            operands,
+            preliminary_callable.args,
+            &pre_lowered,
+        );
+        produced_args = try self.producedCallArgumentNodes(
+            preliminary_callable.args,
+            pre_lowered.items,
+        );
+        callable_node = try self.graph.functionRequestFromProducedArguments(
+            checked_callable_node,
+            callable_node,
             produced_args,
         );
         const callable = try self.graph.functionNodes(callable_node);
@@ -34733,11 +35006,18 @@ const BodyContext = struct {
         );
         const callable = try self.graph.functionNodes(callable_node);
         const produced_args = try arg_ctx.producedCallArgumentNodes(callable.args, pre_lowered);
+        const target_function = try self.graph.functionNodes(target_node);
+        // An iterator producer owns its result identity. Build its target
+        // request from the declared public result and the already-produced
+        // operands, mint the exact result, and only then publish that result
+        // into the caller's destination. An unresolved destination is not an
+        // input to producer identity selection.
+        const iterator_producer = self.iteratorProcedureForMethodTarget(contextual_lookup.target) != null;
         const target_request = try functionRequestNode(
             self.graph,
             target_node,
             produced_args,
-            callable.ret,
+            if (iterator_producer) target_function.ret else callable.ret,
         );
         var prepared_callable = try self.graph.functionRequestFromProducedArguments(
             target_node,
@@ -34751,6 +35031,8 @@ const BodyContext = struct {
             plan.argsSlice(self.view.static_dispatch_plans),
         )) |private_node| {
             prepared_callable = private_node;
+            const produced = try self.graph.functionNodes(private_node);
+            try applyProducedTypeToRequest(self.graph, callable.ret, produced.ret);
         }
         const callee = try self.methodTargetCalleeAtNode(
             contextual_lookup,
@@ -34791,11 +35073,13 @@ const BodyContext = struct {
         const callable_node = raw_callable_node;
         const callable = try self.graph.functionNodes(callable_node);
         const produced_args = try arg_ctx.producedCallArgumentNodes(callable.args, pre_lowered);
+        const target_function = try self.graph.functionNodes(target_node);
+        const iterator_producer = self.iteratorProcedureForMethodTarget(contextual_lookup.target) != null;
         const target_request = try functionRequestNode(
             self.graph,
             target_node,
             produced_args,
-            callable.ret,
+            if (iterator_producer) target_function.ret else callable.ret,
         );
         var prepared_callable = try self.graph.functionRequestFromProducedArguments(
             target_node,
@@ -34809,6 +35093,8 @@ const BodyContext = struct {
             plan.argsSlice(self.view.static_dispatch_plans),
         )) |private_node| {
             prepared_callable = private_node;
+            const produced = try self.graph.functionNodes(private_node);
+            try applyProducedTypeToRequest(self.graph, callable.ret, produced.ret);
         }
         const callee = try self.methodTargetCalleeAtNode(
             contextual_lookup,

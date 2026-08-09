@@ -715,113 +715,30 @@ pub const InstGraph = struct {
     fn generatedIteratorInternDigest(
         self: *InstGraph,
         public_named: InstNamed,
-        kind: Type.IteratorKind,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
+        _: Type.IteratorKind,
+        _: []const NodeId,
+        _: ?names.TypeDigest,
     ) Allocator.Error!names.TypeDigest {
-        try self.completeGeneratedIdentityInput(public_named.args[0]);
-        for (components) |component| try self.completeGeneratedIdentityInput(component);
-
         var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self);
         defer writer.deinit();
-        writer.writeBytes("roc.generated_iterator.producer_identity.v4");
+        // Every iterator producer implements the same runtime interface: one
+        // length value and one zero-argument step closure returning the shared
+        // iterator step protocol. The closure's callable set records which
+        // implementations and captures may inhabit that slot; it does not
+        // change the surrounding iterator's Monotype. Consequently the exact
+        // generated nominal is identified only by that interface's declared
+        // nominal and item type, not by the syntax/operator that produced one
+        // value or by another iterator value stored in its captures.
+        writer.writeBytes("roc.generated_iterator.runtime_interface.v5");
         writer.writeBytes(self.name_store.moduleIdentityBytes(public_named.def.module));
         writer.writeOptionalU32(public_named.def.source_decl);
         if (public_named.def.source_decl == null) {
             writer.writeBytes(self.name_store.typeNameText(public_named.def.type_name));
         }
         writer.writeBytes(@tagName(public_named.kind));
-        writer.writeBytes(@tagName(kind));
         const item_digest = try self.generatedIdentityInputDigest(public_named.args[0]);
         writer.writeBytes(&item_digest.bytes);
-        writer.writeU32(@intCast(components.len));
-        if (kind == .join) {
-            if (components.len != 2) {
-                Common.invariant("generated iterator join identity requires two exact producer inputs");
-            }
-            var digests = [2]names.TypeDigest{
-                try self.generatedIdentityInputDigest(components[0]),
-                try self.generatedIdentityInputDigest(components[1]),
-            };
-            if (std.mem.order(u8, &digests[0].bytes, &digests[1].bytes) == .gt) {
-                std.mem.swap(names.TypeDigest, &digests[0], &digests[1]);
-            }
-            for (digests) |digest| writer.writeBytes(&digest.bytes);
-        } else {
-            for (components) |component| {
-                const digest = try self.generatedIdentityInputDigest(component);
-                writer.writeBytes(&digest.bytes);
-            }
-        }
-        writer.writeOptionalDigest(callable_evidence);
         return .{ .bytes = writer.hasher.finalResult() };
-    }
-
-    /// Commit the language-defined defaults in an exact producer input before
-    /// its content identity is minted. A compiler placeholder here means the
-    /// producer was invoked before its explicit input existed.
-    fn completeGeneratedIdentityInput(self: *InstGraph, raw_root: NodeId) Allocator.Error!void {
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        try pending.append(self.allocator, raw_root);
-        while (pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved => |variable| {
-                    const completed: InstNode = if (variable.numeric_default_phase) |phase| blk: {
-                        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-                            Common.invariant("checking-finalized numeric variable reached generated identity production");
-                        break :blk switch (target) {
-                            .dec => .{ .primitive = .dec },
-                            .str => .{ .primitive = .str },
-                        };
-                    } else if (variable.row_default) |row_default| switch (row_default) {
-                        .empty_record => .empty_record,
-                        .empty_tag_union => .empty_tag_union,
-                    } else switch (variable.origin) {
-                        .checked_variable => Common.invariant("generated identity producer was invoked before its checked type input was complete"),
-                        .row_extension => Common.invariant("row extension reached generated identity production without its checked default"),
-                        .placeholder => Common.invariant("generated identity producer was invoked before an explicit type input existed"),
-                    };
-                    try self.setContent(node, completed);
-                },
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    if (isGeneratedPrivateRootContent(.{ .named = named })) {
-                        if (named.def.generated == null) {
-                            Common.invariant("nested generated-private input lacked its producer identity");
-                        }
-                        continue;
-                    }
-                    if (named.kind == .alias) {
-                        const backing = named.backing orelse
-                            Common.invariant("alias identity input lacked its checked backing");
-                        try pending.append(self.allocator, backing.node);
-                    } else {
-                        try pending.appendSlice(self.allocator, named.args);
-                    }
-                },
-            }
-        }
     }
 
     fn generatedIdentityInputDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
@@ -1349,6 +1266,34 @@ pub const InstGraph = struct {
         });
     }
 
+    /// Finish an otherwise unconstrained leaf at the value producer that owns
+    /// it. The checked artifact supplies the exact language default; callers
+    /// may not use this to complete compiler placeholders or recover missing
+    /// type relations.
+    pub fn materializeProducedDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_node);
+        const node_content = self.nodes.items[@intFromEnum(node)];
+        if (node_content != .unresolved) return;
+        const variable = node_content.unresolved;
+        const completed: InstNode = if (variable.numeric_default_phase) |phase| blk: {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached value production");
+            break :blk switch (target) {
+                .dec => .{ .primitive = .dec },
+                .str => .{ .primitive = .str },
+            };
+        } else if (variable.row_default) |row_default| switch (row_default) {
+            .empty_record => .empty_record,
+            .empty_tag_union => .empty_tag_union,
+        } else switch (variable.origin) {
+            .checked_variable => Common.invariant("value producer received an unconstrained type without an explicit checked default"),
+            .row_extension => Common.invariant("value producer received a row extension without its checked default"),
+            .placeholder => Common.invariant("value producer received a compiler placeholder instead of explicit type data"),
+        };
+        try self.setContent(node, completed);
+    }
+
     /// Whether evidence finalization has explicit producer provenance for every
     /// node in this live type. Numeric and row defaults are direct closure
     /// evidence. A plain checked variable is provisionally sealable as the
@@ -1596,14 +1541,14 @@ pub const InstGraph = struct {
                         Common.invariant("structural request reached an atomic generated-private nominal without an explicit backing operation");
                     }
                     switch (public_content) {
-                        .unresolved => |public_var| {
-                            if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-                                Common.invariant("generated-private substitution received a defaultable request variable");
-                            }
+                        .unresolved => {
                             // A generic checked slot has no public nominal
-                            // contract to preserve. Select the exact produced
-                            // nominal directly; only an already-materialized
-                            // public nominal takes the interface path below.
+                            // contract to preserve. The concrete producer wins
+                            // over a checked default, which is used only when
+                            // no value ever resolves this slot. Select the exact
+                            // produced nominal directly; only an already-
+                            // materialized public nominal takes the interface
+                            // path below.
                             try self.selectNamedOverUnresolved(private_node, public_node);
                             return;
                         },
@@ -2097,11 +2042,13 @@ pub const InstGraph = struct {
                     &substitution,
                 );
             }
-            try self.collectFunctionRequestSubstitutions(
-                checked_fn.ret,
-                current_request_fn.ret,
-                &substitution,
-            );
+            if (self.content(current_request_fn.ret) != .unresolved) {
+                try self.collectFunctionRequestSubstitutions(
+                    checked_fn.ret,
+                    current_request_fn.ret,
+                    &substitution,
+                );
+            }
             substitution.compared.clearRetainingCapacity();
         }
         for (checked_fn.args, produced_args) |checked_arg, produced_arg| {
@@ -2122,9 +2069,13 @@ pub const InstGraph = struct {
         // checked-public occurrence. Preserve a definition-private structural
         // destination just as nested callable outputs preserve their produced
         // representation.
+        const return_source = if (self.content(current_request_fn.ret) == .unresolved)
+            checked_fn.ret
+        else
+            current_request_fn.ret;
         const request_ret = try self.materializeFunctionRequestNodeMode(
             checked_fn.ret,
-            current_request_fn.ret,
+            return_source,
             &substitution,
             .produced_callable,
         );
@@ -2318,10 +2269,17 @@ pub const InstGraph = struct {
         if (isGeneratedPrivateRootContent(produced_content) and checked_content == .named and
             sameTypeDef(checked_content.named.def, produced_content.named.def))
         {
-            // Checked-node identity is the checker's explicit relation between
-            // occurrences. Replace this complete occurrence everywhere that
-            // same node recurs; independent concrete positions have distinct
-            // checked nodes even when their public shapes are identical.
+            if (checked_content.named.args.len != produced_content.named.args.len) {
+                Common.invariant("generated nominal had a different declared argument arity from its public declaration");
+            }
+            // A generated nominal is atomic with respect to its private
+            // backing, but its declared arguments remain ordinary explicit
+            // interface data. Propagate those arguments to correlated checked
+            // slots, then replace this complete occurrence so consumers retain
+            // the producer's exact nominal without traversing its backing.
+            for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
+                try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
+            }
             try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
             return;
         }
@@ -2961,14 +2919,25 @@ pub const InstGraph = struct {
         checked_nodes: []const NodeId,
         current_nodes: []const NodeId,
         produced_nodes: []const NodeId,
-        _: *FunctionRequestSubstitution,
+        substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
         if (checked_nodes.len != current_nodes.len or current_nodes.len != produced_nodes.len) {
             Common.invariant("function request argument materialization received different arities");
         }
         var changed_nodes: ?[]NodeId = null;
-        for (current_nodes, produced_nodes, 0..) |current, produced, index| {
-            const materialized = self.find(produced);
+        for (checked_nodes, current_nodes, produced_nodes, 0..) |checked_source, current, produced, index| {
+            // A producer may leave a representation-free child at its checked
+            // public type (for example, the element of an empty list). Exact
+            // selections made by another occurrence of the same checked slot
+            // are part of this argument's final produced type too. Construct
+            // that complete type now, before the callee body is selected or
+            // lowered, instead of repairing its parameter later.
+            const materialized = (try self.materializeFunctionRequestNodeResult(
+                checked_source,
+                produced,
+                substitution,
+                .produced_callable,
+            )).node;
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(current, materialized)) {
