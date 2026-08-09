@@ -3505,6 +3505,18 @@ test "check type - record - update - opt - flex-kind base stays flex then finali
     try testing.expectEqual(types.Content{ .field_presence = .required }, kind);
 }
 
+test "issue 10576 - generalized record update cannot adopt an optional field kind" {
+    const source =
+        \\f = |r| { ..r, a: 5 }
+        \\
+        \\v : { a ?: U64 }
+        \\v = {}
+        \\
+        \\result = f(v)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
 test "check type - record - update - opt - wrong payload type on optional field rejected" {
     const source =
         \\main! = |_| {}

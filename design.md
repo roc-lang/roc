@@ -3424,13 +3424,12 @@ The kind rules:
   rows carry the concrete kind and the judgment survives instantiation—
   with a finalize pass as the monomorphic backstop.
 - Record UPDATE (`{ ..r, field: v }`) follows the CONSTRUCTION rule per supplied
-  field: like a record literal, each mentioned field probes the base with a
-  kind-FLEXIBLE field (a fresh presence var, recorded for the finalize
-  kind-defaulting sweep exactly like a literal's), so the base's kind
-  decides—optional pins optional and the value checks against the payload
-  type (lowering wraps it in `#Present`, exactly as construction does),
-  required/defaulted pin as before, and a still-flex base kind stays flex
-  and finalize-defaults to `required`. This realizes the SET side of the
+  field: each mentioned field probes the base with a kind-FLEXIBLE field, so
+  an optional base pins optional and checks the value against its payload
+  type, while required/defaulted pin as before. A probe still flex at its
+  owning generalization boundary commits to `required` before the scheme
+  forms; a generic update therefore has one stable field layout instead of
+  adopting a different kind per caller. This realizes the SET side of the
   typing frame in "Deferred: Unsetting an Optional Field" below.
 - Record DESTRUCTURE (IMPLEMENTED) is kind-flexible the same way: each
   destructured field probes the record with a fresh presence var and a

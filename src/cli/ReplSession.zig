@@ -2257,6 +2257,27 @@ test "Repl - optional record field renders <missing> and plain present values" {
     try expectStepsFinal(.dev, present_steps, "{ a: 5, b: 2 }");
 }
 
+test "Repl - issue 10576 generalized record update rejects an optional field" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const function_assigned = try repl.step("f = |r| { ..r, a: 5 }");
+    defer testing.allocator.free(function_assigned);
+    try testing.expectEqualStrings("assigned `f`", function_assigned);
+
+    const annotation = try repl.step("v : { a ?: U64 }");
+    defer testing.allocator.free(annotation);
+    try testing.expectEqualStrings("", annotation);
+
+    const value_assigned = try repl.step("v = {}");
+    defer testing.allocator.free(value_assigned);
+    try testing.expectEqualStrings("assigned `v`", value_assigned);
+
+    const result = try repl.step("f(v)");
+    defer testing.allocator.free(result);
+    try testing.expect(std.mem.find(u8, result, "TYPE MISMATCH") != null);
+}
+
 test "Repl - top-level destructure definition is rejected with a clean diagnostic" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();

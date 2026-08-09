@@ -194,6 +194,9 @@ optional_access_watermark: usize = 0,
 /// finalize repeatedly on one Check).
 literal_field_kinds: std.ArrayList(LiteralFieldKind),
 literal_field_kind_watermark: usize = 0,
+/// Update-field probes are committed at their owning generalization boundary
+/// so an unresolved scheme cannot change runtime field layout per caller.
+pending_record_updates: std.ArrayList(PendingRecordUpdate),
 /// Record-destructure fields pending the kind-directed binder judgment
 /// (design.md "Field Kinds"): each destructured field probes the record with
 /// a kind-FLEXIBLE fresh presence var (the same mint as a record update's
@@ -1643,6 +1646,7 @@ fn initAssumePrepared(
         .pending_default_checks = .empty,
         .optional_field_accesses = .empty,
         .literal_field_kinds = .empty,
+        .pending_record_updates = .empty,
         .pending_record_destructs = .empty,
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
@@ -1799,6 +1803,7 @@ pub fn deinit(self: *Self) void {
     self.pending_default_checks.deinit(self.gpa);
     self.optional_field_accesses.deinit(self.gpa);
     self.literal_field_kinds.deinit(self.gpa);
+    self.pending_record_updates.deinit(self.gpa);
     self.pending_record_destructs.deinit(self.gpa);
     self.pending_default_seen.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
@@ -5681,6 +5686,11 @@ const OptionalFieldAccess = struct {
 /// The region is the literal's, reused when the finalize sweep mints the
 /// `required` content it commits the kind to.
 const LiteralFieldKind = struct {
+    presence_var: Var,
+    region: Region,
+};
+
+const PendingRecordUpdate = struct {
     presence_var: Var,
     region: Region,
 };
@@ -13713,17 +13723,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // kind optional and checks the value against the payload
                     // type (lowering then wraps the value in `Present`,
                     // exactly as construction does); `required`/`defaulted`
-                    // pin as before; a still-flex base kind joins flex and
-                    // defaults to `required` at finalize, exactly like a
-                    // literal's—which is why the minted kind var is
-                    // recorded in `literal_field_kinds` (see
-                    // `defaultLiteralFieldKinds`).
+                    // pin as before. If no context decides a still-flex kind,
+                    // the update judgment commits it to required before its
+                    // owning generalization boundary.
                     //
                     // TODO(optional-fields): `{ x: _ }` UNSET syntax is
                     // designed in design.md "Deferred: Unsetting an Optional
                     // Field (`{ ..r, x: _ }`)".
                     const field_kind_var = try self.fresh(env, expr_region);
-                    try self.literal_field_kinds.append(self.gpa, .{
+                    try self.pending_record_updates.append(self.gpa, .{
                         .presence_var = field_kind_var,
                         .region = expr_region,
                     });
@@ -19497,7 +19505,29 @@ const FinalizeScope = union(enum) {
 /// helper is the single place it lives.
 fn judgeFieldKindsAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     try self.judgeOptionalFieldAccesses(env);
+    try self.judgeRecordUpdates(env);
     try self.judgeRecordDestructBinds(env);
+}
+
+fn judgeRecordUpdates(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var retained: usize = 0;
+    for (self.pending_record_updates.items) |pending| {
+        const resolved = self.types.resolveVar(pending.presence_var);
+        if (resolved.desc.content == .flex) {
+            if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+                self.pending_record_updates.items[retained] = pending;
+                retained += 1;
+                continue;
+            }
+            const required_var = try self.freshFromContent(
+                .{ .field_presence = .required },
+                env,
+                pending.region,
+            );
+            _ = try self.unify(pending.presence_var, required_var, env);
+        }
+    }
+    self.pending_record_updates.shrinkRetainingCapacity(retained);
 }
 
 fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!void {
