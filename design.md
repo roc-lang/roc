@@ -3562,7 +3562,7 @@ complete):
 - `.?` access: the CheckedModule output is complete—
   `CheckedFieldAccessSegment.mode` records required/optional per segment
   (introduced in `serialized_layout_version` 57; the current version is
-  defined beside `CheckedModuleArtifact.Serialized`), and the body copier's
+  defined beside the checked module's `Serialized` layout), and the body copier's
   former required-only invariant is gone. Monotype field-access segment instantiation
   consumes that mode as field-kind evidence: a required segment commits an undetermined
   kind to required and relates its runtime slot to its source value; an
@@ -3714,16 +3714,24 @@ Restrictions:
   by walking the canonicalized default; on rejection the default is
   dropped. The rule exists because defaults are compiler-materialized at
   construction sites: a reference could form an evaluation cycle the
-  compiler will not chase. Banning references bans every cycle BY
-  CONSTRUCTION—the direct self-reference judgment, the local-capture
-  (free-variables) judgment, and the def-dependency demand edges from
-  annotation defaults were all subsumed and deleted, including the
+  compiler will not chase. Banning references bans every VALUE-REFERENCE
+  cycle—the direct self-reference judgment, the local-capture (free-variables)
+  judgment, and the def-dependency demand edges from annotation defaults were
+  all subsumed and deleted, including the
   alias-mediated gap none of them covered (a type declaration's default
   referencing a def, cycling through a value annotated with the alias—
   the demand walk never followed alias lookups). Supporting references
   later is future work that needs declaration-aware cycle edges: demand
   edges that follow a value annotation's alias/apply lookups into the
   referenced declarations' defaults.
+- Literal aggregates can still introduce a cycle IMPLICITLY by omitting a
+  defaulted field—for example, `Node := { next : Node ?? Node.{} }`. After
+  default expressions are checked and field kinds are solved, the checker
+  walks each literal and its solved record rows. Every omitted defaulted field
+  contributes an explicit `DefaultId` dependency; following those local
+  identities back to the starting default is rejected as `recursive_default_value`.
+  This judgment runs before building `CheckedModule`, so postcheck lowering
+  only receives defaults whose materialization graph is acyclic.
 - The declared FIELD type of a default must be CONCRETE: the one archived
   default is materialized at every construction site, so a parametric field
   has no single runtime representation even when the default literal itself

@@ -1338,6 +1338,37 @@ test "check type - record - default - indirect self-reference cycle rejected at 
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
+test "check type - record - default - omitted recursive default is rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Node := { next : Node ?? Node.{} }
+        \\
+        \\root : Node
+        \\root = Node.{}
+    ;
+    // `Node.{}` is syntactically a closed literal, but constructing it omits
+    // `next` and therefore materializes this same default again. The checker
+    // must reject that explicit default-materialization cycle before the
+    // checked module reaches postcheck lowering.
+    try checkTypesModule(source, .fail_first, "Recursive Default Value");
+}
+
+test "check type - record - default - nested omitted defaults terminate" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner := { value : U8 ?? 1 }
+        \\Outer := { inner : Inner ?? Inner.{} }
+        \\
+        \\root : Outer
+        \\root = Outer.{}
+        \\
+        \\value = root.inner.value
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "value" } }, "U8");
+}
+
 test "check type - record - default - module-constant default rejected at Can as non-literal" {
     const source =
         \\main! = |_| {}

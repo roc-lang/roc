@@ -68,6 +68,7 @@ pub const Problem = union(enum) {
     optional_access_of_required_field: OptionalAccessOfRequiredField,
     effectful_default_value: EffectfulDefaultValue,
     non_concrete_default_value: NonConcreteDefaultValue,
+    recursive_default_value: RecursiveDefaultValue,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -294,6 +295,14 @@ pub const EffectfulDefaultValue = struct {
 /// and materialized at construction sites, so it must have exactly one
 /// runtime representation (design.md "Defaulted Fields").
 pub const NonConcreteDefaultValue = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// A record field default whose literal construction transitively omits the
+/// same default again. Materializing such a default cannot terminate
+/// (design.md "Defaulted Fields").
+pub const RecursiveDefaultValue = struct {
     region: base.Region,
     field_name: Ident.Idx,
 };

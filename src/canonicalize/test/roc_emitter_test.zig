@@ -131,6 +131,49 @@ test "emit negative integer" {
     try testing.expectEqualStrings("-123", emitter.getOutput());
 }
 
+test "emit small decimal preserves its exact fractional scale" {
+    const module_env = try createTestEnv(test_allocator, "");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    const cases = [_]struct {
+        value: CIR.SmallDecValue,
+        expected: []const u8,
+    }{
+        .{ .value = .{ .numerator = 102, .denominator_power_of_ten = 2 }, .expected = "1.02" },
+        .{ .value = .{ .numerator = -15, .denominator_power_of_ten = 6 }, .expected = "-0.000015" },
+        .{ .value = .{ .numerator = 1, .denominator_power_of_ten = 10 }, .expected = "0.0000000001" },
+        .{ .value = .{ .numerator = -32768, .denominator_power_of_ten = 0 }, .expected = "-32768" },
+    };
+
+    for (cases) |case| {
+        const expr_idx = try module_env.store.addExpr(.{
+            .e_dec_small = .{ .value = case.value, .has_suffix = false },
+        }, base.Region.zero());
+        emitter.reset();
+        try emitter.emitExpr(expr_idx);
+        try testing.expectEqualStrings(case.expected, emitter.getOutput());
+    }
+}
+
+test "emit string literal escapes decoded contents" {
+    const module_env = try createTestEnv(test_allocator, "");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    const literal = try module_env.insertString("a\"b\\c\n$d\x00");
+    const expr_idx = try module_env.store.addExpr(.{
+        .e_str_segment = .{ .literal = literal },
+    }, base.Region.zero());
+
+    try emitter.emitExpr(expr_idx);
+    try testing.expectEqualStrings("\"a\\\"b\\\\c\\n\\$d\\u(0)\"", emitter.getOutput());
+}
+
 test "emit empty record" {
     const module_env = try createTestEnv(test_allocator, "{}");
     defer destroyTestEnv(test_allocator, module_env);

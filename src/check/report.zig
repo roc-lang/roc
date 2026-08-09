@@ -102,6 +102,7 @@ const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
 const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
 const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
 const NonConcreteDefaultValue = problem_mod.NonConcreteDefaultValue;
+const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
@@ -1028,6 +1029,7 @@ pub const ReportBuilder = struct {
             .optional_access_of_required_field => |data| return self.buildOptionalAccessOfRequiredFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
             .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
+            .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
@@ -3080,6 +3082,33 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
         try report.document.addReflowingText("A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.");
+
+        return report;
+    }
+
+    fn buildRecursiveDefaultValueReport(
+        self: *Self,
+        data: RecursiveDefaultValue,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Recursive Default Value", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The default value for the"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field constructs a record that eventually needs this same default again."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
 
         return report;
     }

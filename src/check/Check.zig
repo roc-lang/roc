@@ -19702,6 +19702,9 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// copy of a parametric field type can make that copy concrete while leaving
 /// the declared field polymorphic.
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
+    defer recursive_defaults.deinit(self.gpa);
+
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (effectful poisoning above, or
         // a unify mismatch against its field type—both leave the var `.err`);
@@ -19716,8 +19719,239 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
                 .field_name = pending.field_name,
             } });
         }
+        if (try self.defaultMaterializationIsRecursive(pending.default_expr)) {
+            try recursive_defaults.append(self.gpa, pending);
+        }
     }
+
+    // Diagnose every cycle against the original checked expressions before
+    // applying error recovery; poisoning one side of a mutual cycle must not
+    // hide the other side's cycle from this judgment.
+    for (recursive_defaults.items) |pending| {
+        const region = self.cir.store.getExprRegion(pending.default_expr);
+        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_default_value = .{
+            .region = region,
+            .field_name = pending.field_name,
+        } });
+
+        // The checked-module pipeline still builds an artifact after type
+        // errors so it can render diagnostics. Replace the rejected default
+        // before that boundary; otherwise post-check lowering tries to
+        // materialize the same default forever.
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = region,
+        } });
+        try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+    }
+
     self.pending_default_checks.clearRetainingCapacity();
+}
+
+/// Whether materializing `root` transitively omits a field carrying `root` as
+/// its own default. This is an explicit dependency walk over checked literal
+/// expressions and their solved record rows: every omitted defaulted field
+/// contributes its `DefaultId`, and local identities resolve directly to the
+/// corresponding CIR expression. Foreign defaults were already validated in
+/// their declaring module, and the module import graph cannot cycle.
+fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+    const target_expr_node: u32 = @intFromEnum(root);
+    const self_module = self.cir.selfModuleIdentity();
+
+    var expr_work: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer expr_work.deinit(self.gpa);
+    try expr_work.append(self.gpa, root);
+
+    var visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer visited_defaults.deinit(self.gpa);
+
+    while (expr_work.pop()) |expr_idx| {
+        const expr = self.cir.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
+            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
+            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
+            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_empty_record => {
+                if (try self.appendOmittedDefaultDependencies(
+                    expr_idx,
+                    &.{},
+                    self_module,
+                    target_expr_node,
+                    &visited_defaults,
+                    &expr_work,
+                )) return true;
+            },
+            .e_record => |record| {
+                const fields = self.cir.store.sliceRecordFields(record.fields);
+                if (try self.appendOmittedDefaultDependencies(
+                    expr_idx,
+                    fields,
+                    self_module,
+                    target_expr_node,
+                    &visited_defaults,
+                    &expr_work,
+                )) return true;
+                for (fields) |field_idx| {
+                    try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
+                }
+            },
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_empty_list,
+            .e_zero_argument_tag,
+            => {},
+            // Canonicalization admits only the literal forms above. An error
+            // elsewhere can replace a child with another expression kind; it
+            // has already produced a diagnostic and contributes no usable
+            // default-materialization dependency.
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_block,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_not,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_for,
+            .e_break,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => {},
+        }
+    }
+    return false;
+}
+
+fn recordLiteralSuppliesField(
+    self: *const Self,
+    fields: []const CIR.RecordField.Idx,
+    field_name: Ident.Idx,
+) bool {
+    for (fields) |field_idx| {
+        if (self.cir.store.getRecordField(field_idx).name == field_name) return true;
+    }
+    return false;
+}
+
+/// Append the local default expressions that `record_expr` materializes by
+/// omission. Returns true immediately when one is the target default.
+fn appendOmittedDefaultDependencies(
+    self: *Self,
+    record_expr: CIR.Expr.Idx,
+    supplied_fields: []const CIR.RecordField.Idx,
+    self_module: base.ModuleIdentity.Idx,
+    target_expr_node: u32,
+    visited_defaults: *std.AutoHashMapUnmanaged(u32, void),
+    expr_work: *std.ArrayList(CIR.Expr.Idx),
+) std.mem.Allocator.Error!bool {
+    var current = ModuleEnv.varFrom(record_expr);
+    var visited_rows: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited_rows.deinit(self.gpa);
+
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        const seen = try visited_rows.getOrPut(self.gpa, resolved.var_);
+        if (seen.found_existing) return false;
+
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .record => |record| {
+                    if (try self.appendDefaultsFromRecordFields(
+                        record.fields,
+                        supplied_fields,
+                        self_module,
+                        target_expr_node,
+                        visited_defaults,
+                        expr_work,
+                    )) return true;
+                    current = record.ext;
+                },
+                .record_unbound => |fields| return try self.appendDefaultsFromRecordFields(
+                    fields,
+                    supplied_fields,
+                    self_module,
+                    target_expr_node,
+                    visited_defaults,
+                    expr_work,
+                ),
+                .empty_record => return false,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => return false,
+            },
+            .flex, .rigid, .field_presence, .err => return false,
+        }
+    }
+}
+
+fn appendDefaultsFromRecordFields(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    supplied_fields: []const CIR.RecordField.Idx,
+    self_module: base.ModuleIdentity.Idx,
+    target_expr_node: u32,
+    visited_defaults: *std.AutoHashMapUnmanaged(u32, void),
+    expr_work: *std.ArrayList(CIR.Expr.Idx),
+) std.mem.Allocator.Error!bool {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    for (fields.items(.name), fields.items(.presence)) |field_name, presence| {
+        if (self.recordLiteralSuppliesField(supplied_fields, field_name)) continue;
+        const presence_var = presence.presenceVar() orelse continue;
+        const presence_content = self.types.resolveVar(presence_var).desc.content;
+        if (presence_content != .field_presence or presence_content.field_presence != .defaulted) continue;
+        const default_id = presence_content.field_presence.defaulted;
+        if (default_id.origin_module != self_module) continue;
+        if (default_id.expr_node == target_expr_node) return true;
+        const seen = try visited_defaults.getOrPut(self.gpa, default_id.expr_node);
+        if (!seen.found_existing) {
+            try expr_work.append(self.gpa, @enumFromInt(default_id.expr_node));
+        }
+    }
+    return false;
 }
 
 /// THE type-finalization point: every checking entry point (module check and

@@ -486,6 +486,60 @@ fn emitFieldAccessSuffix(self: *Self, segments: Expr.FieldAccessSegment.Span) Em
     }
 }
 
+/// Emit decoded string bytes as one valid, unambiguous Roc string literal.
+/// Canonical CIR stores literal contents after escape processing, so the
+/// emitter must restore every syntactically significant byte rather than
+/// writing the decoded contents verbatim.
+fn emitStringBytes(self: *Self, bytes: []const u8) EmitError!void {
+    for (bytes) |byte| {
+        switch (byte) {
+            '\n' => try self.write("\\n"),
+            '\r' => try self.write("\\r"),
+            '\t' => try self.write("\\t"),
+            '\\' => try self.write("\\\\"),
+            '"' => try self.write("\\\""),
+            '$' => try self.write("\\$"),
+            else => if (byte < 0x20 or byte == 0x7f) {
+                try self.output.print(self.allocator, "\\u({x})", .{byte});
+            } else {
+                try self.output.append(self.allocator, byte);
+            },
+        }
+    }
+}
+
+fn emitStringLiteral(self: *Self, bytes: []const u8) EmitError!void {
+    try self.write("\"");
+    try self.emitStringBytes(bytes);
+    try self.write("\"");
+}
+
+/// Emit a small decimal from its exact base-10 representation. Using integer
+/// division here loses leading fractional zeroes (and overflows for powers
+/// larger than the numerator's integer width), so place the decimal point in
+/// the numerator's digit string instead.
+fn emitSmallDec(self: *Self, value: CIR.SmallDecValue) EmitError!void {
+    const magnitude: u16 = @abs(value.numerator);
+    var digit_buffer: [5]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digit_buffer, "{d}", .{magnitude}) catch unreachable;
+    const power: usize = value.denominator_power_of_ten;
+
+    if (value.numerator < 0) try self.write("-");
+    if (power == 0) {
+        try self.write(digits);
+    } else if (power >= digits.len) {
+        try self.write("0.");
+        var padding = power - digits.len;
+        while (padding > 0) : (padding -= 1) try self.write("0");
+        try self.write(digits);
+    } else {
+        const decimal_point = digits.len - power;
+        try self.write(digits[0..decimal_point]);
+        try self.write(".");
+        try self.write(digits[decimal_point..]);
+    }
+}
+
 fn emitExprFrame(
     self: *Self,
     expr_idx: Expr.Idx,
@@ -511,19 +565,7 @@ fn emitExprFrame(
                 try self.write(frac_str);
             }
         },
-        .e_dec_small => |small| {
-            const numerator = small.value.numerator;
-            const power = small.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                var divisor: i32 = 1;
-                for (0..power) |_| divisor *= 10;
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
+        .e_dec_small => |small| try self.emitSmallDec(small.value),
         .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
@@ -542,15 +584,17 @@ fn emitExprFrame(
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
-        .e_str_segment => |seg| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(seg.literal)}),
+        .e_str_segment => |seg| try self.emitStringLiteral(self.module_env.common.getString(seg.literal)),
         .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
         .e_str => |str| {
             const segments = self.module_env.store.sliceExpr(str.span);
-            var i = segments.len;
-            while (i > 0) {
-                i -= 1;
-                try frames.append(allocator, .{ .expr = segments[i] });
+            try self.write("\"");
+            for (segments) |segment_idx| {
+                const segment = self.module_env.store.getExpr(segment_idx);
+                std.debug.assert(segment == .e_str_segment);
+                try self.emitStringBytes(self.module_env.common.getString(segment.e_str_segment.literal));
             }
+            try self.write("\"");
         },
         .e_lookup_local => |lookup| {
             if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
@@ -903,19 +947,7 @@ fn emitPatternFrame(
         .runtime_error => try self.write("<pattern_error>"),
         .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
-        .small_dec_literal => |dec| {
-            const numerator = dec.value.numerator;
-            const power = dec.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                var divisor: i32 = 1;
-                for (0..power) |_| divisor *= 10;
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
+        .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
         .dec_literal => |dec| {
             const value = dec.value.num;
             const scale: i128 = RocDec.one_point_zero_i128;

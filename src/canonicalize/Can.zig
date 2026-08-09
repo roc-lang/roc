@@ -7213,9 +7213,10 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
 /// interpolation-free string literal, a tag literal (bare or applied, plain or
 /// nominal-qualified), or a list / record / tuple literal whose components are
 /// all literals. Nothing else—in particular no name reference of any kind—
-/// so a default can never participate in an evaluation cycle: it is
-/// materialized by the compiler at construction sites, and the literal set is
-/// closed by construction (design.md "Defaulted Fields").
+/// so a default cannot participate in a value-reference evaluation cycle.
+/// Literal aggregates can still omit fields that materialize other defaults;
+/// the checker follows those explicit `DefaultId` dependencies and rejects
+/// cycles after field kinds are solved (design.md "Defaulted Fields").
 ///
 /// Returns the first non-literal node found (for the diagnostic to point at),
 /// or null when the whole expression is a literal. The walk is an explicit
