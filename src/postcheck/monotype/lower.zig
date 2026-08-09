@@ -13937,9 +13937,6 @@ const BodyContext = struct {
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => produced_backing,
         };
-        if (!self.graph.sameClass(request_node, produced_node)) {
-            _ = try self.graph.applyProducedTypeToRequest(request_node, produced_node);
-        }
         return produced_node;
     }
 
@@ -17478,32 +17475,10 @@ const BodyContext = struct {
                     try self.lowerStr(segments),
                 );
             },
-            // Constructor payloads carry the type evidence that completes the
-            // constructor node. Lower them first, then seal the whole value at
-            // this expression boundary. This is especially important for
-            // nominal open rows such as `Try.Ok(numeral)`.
-            .tag => |tag| {
-                const name = try self.builder.tagName(self.view, tag.name);
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                const payload_nodes = try self.allocator.alloc(NodeId, tag.args.len);
-                defer self.allocator.free(payload_nodes);
-                for (tag.args, 0..) |_, index| {
-                    payload_nodes[index] = try self.graph.tagConstructionPayloadNode(expr_node, name, index);
-                }
-                try self.prepareConstructorChildrenAtNodes(tag.args, payload_nodes);
-                const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
-                defer self.allocator.free(lowered);
-                for (tag.args, payload_nodes, 0..) |arg, payload_node, index| {
-                    lowered[index] = try self.lowerConstructorChildAtCell(
-                        arg,
-                        DraftTypeCell.fromGraphNode(payload_node),
-                    );
-                }
-                return try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
-                    .name = name,
-                    .payloads = try self.addExprSpan(lowered),
-                } });
-            },
+            .tag => |tag| return try self.lowerTagConstructorAtNode(
+                tag,
+                try self.lowerExprTypeNode(expr_id),
+            ),
             .zero_argument_tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 return try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
@@ -17516,66 +17491,18 @@ const BodyContext = struct {
                 nominal,
                 try self.lowerExprTypeNode(expr_id),
             ),
-            .tuple => |items| {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                const item_nodes = try self.graph.tupleItemNodes(expr_node);
-                if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
-                try self.prepareConstructorChildrenAtNodes(items, item_nodes);
-                const lowered = try self.allocator.alloc(DraftExprId, items.len);
-                defer self.allocator.free(lowered);
-                for (items, item_nodes, 0..) |item, item_node, index| {
-                    lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(item_node));
-                }
-                return try self.addConstructorExprAtNode(expr_node, .{ .tuple = try self.addExprSpan(lowered) });
-            },
-            .list => |items| {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                const element_node = try self.graph.listElementNode(expr_node);
-                const item_nodes = try self.allocator.alloc(NodeId, items.len);
-                defer self.allocator.free(item_nodes);
-                @memset(item_nodes, element_node);
-                try self.prepareConstructorChildrenAtNodes(items, item_nodes);
-                const lowered = try self.allocator.alloc(DraftExprId, items.len);
-                defer self.allocator.free(lowered);
-                for (items, 0..) |item, index| {
-                    lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
-                }
-                return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = try self.addExprSpan(lowered) });
-            },
-            .record => |record| {
-                var children = std.ArrayList(PreLoweredChild).empty;
-                defer children.deinit(self.allocator);
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                const child_exprs = try self.allocator.alloc(checked.CheckedExprId, record.fields.len);
-                defer self.allocator.free(child_exprs);
-                const child_nodes = try self.allocator.alloc(NodeId, record.fields.len);
-                defer self.allocator.free(child_nodes);
-                for (record.fields, 0..) |field, index| {
-                    child_exprs[index] = field.value;
-                    child_nodes[index] = try self.graph.recordConstructionFieldNode(
-                        expr_node,
-                        try self.builder.recordFieldName(self.view, field.label),
-                    );
-                }
-                try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
-                if (record.ext) |ext| {
-                    const base_node = self.recordConstructionRootNode(expr_node);
-                    try children.append(self.allocator, .{
-                        .checked_expr = ext,
-                        .expr = try self.lowerExprAtTypeCell(
-                            ext,
-                            DraftTypeCell.fromGraphNode(base_node),
-                        ),
-                    });
-                }
-                for (record.fields, 0..) |field, index| {
-                    try children.append(self.allocator, .{
-                        .checked_expr = field.value,
-                        .expr = try self.lowerConstructorChildAtCell(field.value, DraftTypeCell.fromGraphNode(child_nodes[index])),
-                    });
-                }
-                return try self.lowerRecordExprAtNode(record, expr_node, children.items);
-            },
+            .tuple => |items| return try self.lowerTupleConstructorAtNode(
+                items,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .list => |items| return try self.lowerListConstructorAtNode(
+                items,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .record => |record| return try self.lowerRecordConstructorAtNode(
+                record,
+                try self.lowerExprTypeNode(expr_id),
+            ),
             .empty_list => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = .empty() });
@@ -30674,13 +30601,8 @@ const BodyContext = struct {
         if (checked_exprs.len != nodes.len) {
             Common.invariant("direct-call argument arity differed from function graph node");
         }
-        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            if (self.isNestedCallableExpr(checked_expr)) continue;
-            try self.relateCallArgumentAtNode(checked_expr, node);
-            const lowered = try self.lowerExprAtTypeCell(
-                checked_expr,
-                DraftTypeCell.fromGraphNode(node),
-            );
+        for (checked_exprs, 0..) |checked_expr, index| {
+            const lowered = try self.lowerExpr(checked_expr);
             try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
         }
     }
@@ -30709,36 +30631,13 @@ const BodyContext = struct {
         if (checked_exprs.len != nodes.len) {
             Common.invariant("direct-call argument arity differed from function graph node");
         }
-        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                try prepareProducedOperandForRequest(
-                    self.graph,
-                    node,
-                    try self.exprTypeCell(pre).toGraphNode(self.graph),
-                );
-            } else {
-                try self.relateCallArgumentAtNode(checked_expr, node);
-            }
-        }
-        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index) == null) {
-                try self.ensureNestedCallableAtNode(checked_expr, node);
-            }
-        }
-
         const reserved = try self.reserveExprSpan(checked_exprs.len);
         errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (checked_exprs, nodes, 0..) |checked_expr, node, index| {
-            const lowered = if (self.preLoweredOperandAt(pre_lowered, index)) |pre|
-                try self.wrapCheckedNominalRequestAroundBackingValue(node, pre)
-            else
-                try self.lowerExprAtTypeCell(checked_expr, DraftTypeCell.fromGraphNode(node));
+        for (nodes, 0..) |node, index| {
+            const pre = self.preLoweredOperandAt(pre_lowered, index) orelse
+                Common.invariant("call operand was not completed before specialization");
+            const lowered = try self.wrapCheckedNominalRequestAroundBackingValue(node, pre);
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
-            try applyProducedTypeToRequest(
-                self.graph,
-                node,
-                try self.exprTypeCell(lowered).toGraphNode(self.graph),
-            );
         }
         return reserved.span;
     }
@@ -31818,20 +31717,15 @@ const BodyContext = struct {
         self: *BodyContext,
         _: checked.CheckedExprId,
         field: anytype,
-        expected_node: NodeId,
+        _: NodeId,
     ) Allocator.Error!DraftExprId {
-        const receiver_request_node = try self.lowerExprTypeNode(field.receiver);
-        const receiver = try self.lowerExprAtTypeCell(
-            field.receiver,
-            DraftTypeCell.fromGraphNode(receiver_request_node),
-        );
+        const receiver = try self.lowerExpr(field.receiver);
         const receiver_node = try self.exprTypeCell(receiver).toGraphNode(self.graph);
         const field_name = try self.builder.recordFieldName(self.view, field.field_name);
         const field_node = switch (field.backing_access) {
             .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
             .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
         };
-        try applyExpressionValueToRequest(self.graph, expected_node, field_node);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(field_node),
             .{ .field_access = .{
@@ -31844,20 +31738,15 @@ const BodyContext = struct {
     fn lowerTupleAccessExprAtNode(
         self: *BodyContext,
         access: anytype,
-        expected_node: NodeId,
+        _: NodeId,
     ) Allocator.Error!DraftExprId {
-        const tuple_request_node = try self.lowerExprTypeNode(access.tuple);
-        const tuple = try self.lowerExprAtTypeCell(
-            access.tuple,
-            DraftTypeCell.fromGraphNode(tuple_request_node),
-        );
+        const tuple = try self.lowerExpr(access.tuple);
         const tuple_node = try self.exprTypeCell(tuple).toGraphNode(self.graph);
         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
         if (access.elem_index >= item_nodes.len) {
             Common.invariant("tuple access index was outside its exact graph tuple type");
         }
         const item_node = item_nodes[access.elem_index];
-        try applyExpressionValueToRequest(self.graph, expected_node, item_node);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(item_node),
             .{ .tuple_access = .{
@@ -32291,16 +32180,32 @@ const BodyContext = struct {
         if (record.ext) |ext| {
             const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
+            const base_node = try self.exprTypeCell(base_expr).toGraphNode(self.graph);
+            const base_fields = (try self.graph.recordConstructionNodes(base_node)).fields;
+            const produced_fields = try self.graph.arena().dupe(InstField, base_fields);
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
+                const name = try self.builder.recordFieldName(self.view, field.label);
+                const value = self.preLoweredChildAt(pre_lowered, field.value) orelse
+                    Common.invariant("record graph update lost its pre-lowered field child");
                 fields[index] = .{
-                    .name = try self.builder.recordFieldName(self.view, field.label),
-                    .value = self.preLoweredChildAt(pre_lowered, field.value) orelse
-                        Common.invariant("record graph update lost its pre-lowered field child"),
+                    .name = name,
+                    .value = value,
                 };
+                const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+                for (produced_fields) |*produced_field| {
+                    if (!self.builder.program.names.recordFieldLabelTextEql(produced_field.name, name)) continue;
+                    produced_field.ty = value_node;
+                    break;
+                } else Common.invariant("record update named a field absent from its exact base value");
             }
-            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(record_node), .{ .record_update = .{
+            const structural_node = try self.graph.newNode(.{ .record = .{
+                .fields = produced_fields,
+                .ext = try self.graph.newNode(.empty_record),
+            } });
+            const produced_node = try self.producedConstructorNode(record_node, structural_node);
+            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .record_update = .{
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
             } });
@@ -32410,23 +32315,13 @@ const BodyContext = struct {
         self: *BodyContext,
         tag: anytype,
         tag_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
+        _: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const name = try self.builder.tagName(self.view, tag.name);
-        const payload_nodes = try self.allocator.alloc(NodeId, tag.args.len);
-        defer self.allocator.free(payload_nodes);
-        for (tag.args, 0..) |_, index| {
-            payload_nodes[index] = try self.graph.tagConstructionPayloadNode(tag_node, name, index);
-        }
-        try self.prepareConstructorChildrenAtNodes(tag.args, payload_nodes);
         const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
         defer self.allocator.free(lowered);
-        for (tag.args, payload_nodes, 0..) |arg, payload_node, index| {
-            lowered[index] = try self.lowerConstructorChildAtCellWithRelation(
-                arg,
-                DraftTypeCell.fromGraphNode(payload_node),
-                destination_relation,
-            );
+        for (tag.args, 0..) |arg, index| {
+            lowered[index] = try self.lowerExpr(arg);
         }
         const request_row = try self.graph.tagConstructionRow(tag_node);
         const produced_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
@@ -32480,23 +32375,13 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         nominal: anytype,
         expected_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
+        _: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const checked_node = try self.lowerExprTypeNode(checked_expr);
-        _ = try self.graph.applyCheckedTypeMapping(checked_node, expected_node);
         const nominal_node = try self.explicitNominalConstructorNode(checked_node, expected_node);
-        const named = self.graph.namedNodes(nominal_node);
-        const backing_node = (named.backing orelse
-            Common.invariant("nominal constructor graph node had no backing")).node;
-        try self.prepareConstructorChildrenAtNodes(&.{nominal.backing_expr}, &.{backing_node});
-        const backing = try self.lowerConstructorChildAtCellWithRelation(
-            nominal.backing_expr,
-            DraftTypeCell.fromGraphNode(backing_node),
-            destination_relation,
-        );
+        const backing = try self.lowerExpr(nominal.backing_expr);
         const produced_backing = try self.exprTypeCell(backing).toGraphNode(self.graph);
         const produced_node = try self.producedConstructorNode(nominal_node, produced_backing);
-        _ = try self.graph.applyProducedTypeToRequest(expected_node, produced_node);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
             .{ .nominal = backing },
@@ -32515,19 +32400,14 @@ const BodyContext = struct {
         self: *BodyContext,
         items: []const checked.CheckedExprId,
         tuple_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
+        _: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
         if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
-        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
-        for (items, item_nodes, 0..) |item, item_node, index| {
-            lowered[index] = try self.lowerConstructorChildAtCellWithRelation(
-                item,
-                DraftTypeCell.fromGraphNode(item_node),
-                destination_relation,
-            );
+        for (items, 0..) |item, index| {
+            lowered[index] = try self.lowerExpr(item);
         }
         const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
         var changed = false;
@@ -32537,7 +32417,6 @@ const BodyContext = struct {
         }
         const produced_node = if (changed) blk: {
             const node = try self.graph.newNode(.{ .tuple = produced_items });
-            _ = try self.graph.applyProducedTypeToRequest(tuple_node, node);
             break :blk node;
         } else tuple_node;
         return try self.addConstructorExprAtNode(produced_node, .{ .tuple = try self.addExprSpan(lowered) });
@@ -32555,21 +32434,13 @@ const BodyContext = struct {
         self: *BodyContext,
         items: []const checked.CheckedExprId,
         list_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
+        _: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const element_node = try self.graph.listElementNode(list_node);
-        const item_nodes = try self.allocator.alloc(NodeId, items.len);
-        defer self.allocator.free(item_nodes);
-        @memset(item_nodes, element_node);
-        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.lowerConstructorChildAtCellWithRelation(
-                item,
-                DraftTypeCell.fromGraphNode(element_node),
-                destination_relation,
-            );
+            lowered[index] = try self.lowerExpr(item);
         }
         var produced_element = element_node;
         if (lowered.len > 0) {
@@ -32585,7 +32456,6 @@ const BodyContext = struct {
             list_node
         else blk: {
             const node = try self.graph.newNode(.{ .list = produced_element });
-            _ = try self.graph.applyProducedTypeToRequest(list_node, node);
             break :blk node;
         };
         return try self.addExprWithTypeCell(
@@ -32606,40 +32476,20 @@ const BodyContext = struct {
         self: *BodyContext,
         record: anytype,
         record_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
+        _: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         var children = std.ArrayList(PreLoweredChild).empty;
         defer children.deinit(self.allocator);
-        const child_exprs = try self.allocator.alloc(checked.CheckedExprId, record.fields.len);
-        defer self.allocator.free(child_exprs);
-        const child_nodes = try self.allocator.alloc(NodeId, record.fields.len);
-        defer self.allocator.free(child_nodes);
-        for (record.fields, 0..) |field, index| {
-            child_exprs[index] = field.value;
-            child_nodes[index] = try self.graph.recordConstructionFieldNode(
-                record_node,
-                try self.builder.recordFieldName(self.view, field.label),
-            );
-        }
-        try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
         if (record.ext) |ext| {
-            const base_node = self.recordConstructionRootNode(record_node);
             try children.append(self.allocator, .{
                 .checked_expr = ext,
-                .expr = try self.lowerExprAtTypeCell(
-                    ext,
-                    DraftTypeCell.fromGraphNode(base_node),
-                ),
+                .expr = try self.lowerExpr(ext),
             });
         }
-        for (record.fields, 0..) |field, index| {
+        for (record.fields) |field| {
             try children.append(self.allocator, .{
                 .checked_expr = field.value,
-                .expr = try self.lowerConstructorChildAtCellWithRelation(
-                    field.value,
-                    DraftTypeCell.fromGraphNode(child_nodes[index]),
-                    destination_relation,
-                ),
+                .expr = try self.lowerExpr(field.value),
             });
         }
         return try self.lowerRecordExprAtNode(record, record_node, children.items);
