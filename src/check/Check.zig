@@ -2125,7 +2125,7 @@ fn recordHoistPatternProvenance(
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
-        => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern),
+        => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred),
     }
 }
 
@@ -2227,49 +2227,61 @@ fn recordHoistMatchBranchContextualBindings(
     }
 }
 
+const HoistPatternExtractionSelection = enum {
+    deferred,
+    immediate,
+};
+
 fn recordHoistPatternExtractionProvenanceHelp(
     self: *Self,
     pattern: CIR.Pattern.Idx,
     base_expr: CIR.Expr.Idx,
     scrutinee_pattern: CIR.Pattern.Idx,
+    selection: HoistPatternExtractionSelection,
 ) Allocator.Error!void {
     switch (self.cir.store.getPattern(pattern)) {
         .assign => {
             try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
+            if (selection == .immediate) {
+                _ = try self.ensureHoistedBindingRoot(pattern);
+            }
         },
         .as => |as_pattern| {
             try self.recordHoistPatternExtractionProvenance(pattern, base_expr, scrutinee_pattern);
-            try self.recordHoistPatternExtractionProvenanceHelp(as_pattern.pattern, base_expr, scrutinee_pattern);
+            if (selection == .immediate) {
+                _ = try self.ensureHoistedBindingRoot(pattern);
+            }
+            try self.recordHoistPatternExtractionProvenanceHelp(as_pattern.pattern, base_expr, scrutinee_pattern, selection);
         },
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern);
+                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection);
             }
         },
         .record_destructure => |destructure| {
             for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                try self.recordHoistPatternExtractionProvenanceHelp(destruct.kind.toPatternIdx(), base_expr, scrutinee_pattern);
+                try self.recordHoistPatternExtractionProvenanceHelp(destruct.kind.toPatternIdx(), base_expr, scrutinee_pattern, selection);
             }
         },
         .applied_tag => |tag| {
             for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(arg_pattern, base_expr, scrutinee_pattern);
+                try self.recordHoistPatternExtractionProvenanceHelp(arg_pattern, base_expr, scrutinee_pattern, selection);
             }
         },
         .nominal => |nominal| {
-            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern);
+            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection);
         },
         .nominal_external => |nominal| {
-            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern);
+            try self.recordHoistPatternExtractionProvenanceHelp(nominal.backing_pattern, base_expr, scrutinee_pattern, selection);
         },
         .list => |list| {
             for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern);
+                try self.recordHoistPatternExtractionProvenanceHelp(elem_pattern, base_expr, scrutinee_pattern, selection);
             }
             if (list.rest_info) |rest_info| {
                 if (rest_info.pattern) |rest_pattern| {
-                    try self.recordHoistPatternExtractionProvenanceHelp(rest_pattern, base_expr, scrutinee_pattern);
+                    try self.recordHoistPatternExtractionProvenanceHelp(rest_pattern, base_expr, scrutinee_pattern, selection);
                 }
             }
         },
@@ -2278,7 +2290,7 @@ fn recordHoistPatternExtractionProvenanceHelp(
             while (step_offset < str.steps.span.len) : (step_offset += 1) {
                 const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
                 if (step.capture) |capture| {
-                    try self.recordHoistPatternExtractionProvenanceHelp(capture, base_expr, scrutinee_pattern);
+                    try self.recordHoistPatternExtractionProvenanceHelp(capture, base_expr, scrutinee_pattern, selection);
                 }
             }
         },
@@ -9760,6 +9772,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     if (ptrn_result.isOk()) {
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
         try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
+        if (self.cir.store.getPattern(def.pattern) != .assign) {
+            try self.recordHoistPatternExtractionProvenanceHelp(def.pattern, def.expr, def.pattern, .immediate);
+        }
     }
 
     // Mark as processed

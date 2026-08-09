@@ -650,6 +650,23 @@ test "hoist roots selected for record rest extraction binders" {
     try std.testing.expect(roots[1].pattern != null);
 }
 
+test "hoist roots publish top-level destructure binders used by executable roots" {
+    var test_env = try TestEnv.initWithExecutableRootNames("Test",
+        \\Rec : { req : U8, other : U8 }
+        \\s : Rec
+        \\s = { req: 7, other: 1 }
+        \\{ req, .. } = s
+        \\(a, b) = (1, 2)
+        \\main = req
+    , &.{"main"});
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots) |root| try expectPatternExtractionRoot(root);
+}
+
 test "hoist roots selected for single-branch match tuple binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

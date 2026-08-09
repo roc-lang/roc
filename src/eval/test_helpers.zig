@@ -1446,6 +1446,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
+            .hoisted_roots = main_checked.checker.selectedHoistedRoots(),
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             .problem_store = switch (problem_reporting) {
                 .ignore_comptime_problems => null,

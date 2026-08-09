@@ -1976,6 +1976,14 @@ restore selected hoisted locals. Therefore same-module compile-time roots are
 emitted as one dependency-sorted request stream, not as permanently separated
 top-level and hoisted groups.
 
+A top-level definition with a destructuring pattern is the exception to the
+ordinary-root representation: it has no single source name under which the whole
+right-hand side can be published. After the pattern checks successfully, the
+checker selects one pattern-extraction root for each binder, carrying the shared
+right-hand side and complete scrutinee pattern. Those roots are emitted in
+dependency-first order and later lookups resolve through the selected binder,
+never as runtime-local pattern references.
+
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker
 must carry that position as explicit checking context while computing
