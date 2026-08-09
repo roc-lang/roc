@@ -1019,7 +1019,7 @@ const Solver = struct {
                 }
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
+                if (try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     try self.bindGeneratedOpaqueBackingPattern(backing);
                 } else {
                     if (try self.namedBacking(pat_ty)) |backing_ty| {
@@ -1030,13 +1030,6 @@ const Solver = struct {
                 }
             },
         }
-    }
-
-    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
-        const content = self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty);
-        if (std.meta.activeTag(content) != .named) return false;
-        const backing = content.named.backing orelse return false;
-        return backing.authority == .generated_private;
     }
 
     fn bindGeneratedOpaqueBackingPattern(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!void {
@@ -1892,7 +1885,6 @@ const Solver = struct {
                     left_named.kind != right_named.kind or
                     left_named.builtin_owner != right_named.builtin_owner)
                 {
-                    if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
                     if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
@@ -2237,27 +2229,6 @@ const Solver = struct {
             if (result or cycle_hits.* == cycle_hits_before) try completed.put(id, result);
         }
         return result;
-    }
-
-    fn unifyIteratorOwnerStampedPublic(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (left.kind != right.kind) return false;
-        if (!sameMonoTypeDef(left.def, right.def)) return false;
-        _ = iteratorLikeOwnerFromPair(left.builtin_owner, right.builtin_owner) orelse return false;
-        if (left.builtin_owner == right.builtin_owner) return false;
-
-        try self.unifySpans(left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -2808,28 +2779,6 @@ fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
         left.source_decl == right.source_decl and
         optionalDigestEql(left.generated, right.generated) and
         std.meta.eql(left.iterator_topology, right.iterator_topology);
-}
-
-fn iteratorLikeOwnerFromPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) ?static_dispatch.BuiltinOwner {
-    if (left) |left_owner| {
-        if (!isIteratorLikeOwner(left_owner)) return null;
-        if (right) |right_owner| {
-            if (left_owner != right_owner) return null;
-        }
-        return left_owner;
-    }
-    if (right) |right_owner| {
-        if (!isIteratorLikeOwner(right_owner)) return null;
-        return right_owner;
-    }
-    return null;
-}
-
-fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    return static_dispatch.isIteratorOwner(owner orelse return false);
 }
 
 fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
