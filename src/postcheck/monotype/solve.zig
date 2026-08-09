@@ -398,13 +398,6 @@ pub const InstGraph = struct {
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
-    /// Intrusive chain of permanent node ids in each live union class. Draft
-    /// request lookup indexes an open function under one permanent interface
-    /// node and probes the current class members, so later unions never stale
-    /// the key. Roots own the head/tail; every node owns one next link.
-    class_member_next: std.ArrayList(?NodeId),
-    class_member_head: std.ArrayList(NodeId),
-    class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
     processed_produced_relations: std.AutoHashMap(ProducedRelationStamp, void),
     produced_type_pending: std.ArrayList(NodePair),
@@ -468,9 +461,6 @@ pub const InstGraph = struct {
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
             .versions = .empty,
-            .class_member_next = .empty,
-            .class_member_head = .empty,
-            .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .processed_produced_relations = std.AutoHashMap(ProducedRelationStamp, void).init(allocator),
             .produced_type_pending = .empty,
@@ -536,9 +526,6 @@ pub const InstGraph = struct {
         self.produced_type_pending.deinit(allocator);
         self.processed_produced_relations.deinit();
         self.processed_relations.deinit();
-        self.class_member_tail.deinit(allocator);
-        self.class_member_head.deinit(allocator);
-        self.class_member_next.deinit(allocator);
         self.versions.deinit(allocator);
         self.nodes.deinit(allocator);
         self.arena_impl.deinit();
@@ -895,9 +882,6 @@ pub const InstGraph = struct {
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
         try self.nodes.append(self.allocator, node_content);
         try self.versions.append(self.allocator, 0);
-        try self.class_member_next.append(self.allocator, null);
-        try self.class_member_head.append(self.allocator, id);
-        try self.class_member_tail.append(self.allocator, id);
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
         try self.registerRowParent(id, node_content);
@@ -1067,24 +1051,6 @@ pub const InstGraph = struct {
     /// Whether two live cells already belong to the same union-find class.
     pub fn sameClass(self: *InstGraph, left: NodeId, right: NodeId) bool {
         return self.find(left) == self.find(right);
-    }
-
-    pub const ClassMemberIterator = struct {
-        graph: *const InstGraph,
-        current: ?NodeId,
-
-        pub fn next(self: *ClassMemberIterator) ?NodeId {
-            const member = self.current orelse return null;
-            self.current = self.graph.class_member_next.items[@intFromEnum(member)];
-            return member;
-        }
-    };
-
-    /// Permanent node ids currently joined to the requested node by explicit
-    /// graph relations. Open draft lookup probes these stable aliases directly.
-    pub fn classMemberIterator(self: *InstGraph, node: NodeId) ClassMemberIterator {
-        const root = self.find(node);
-        return .{ .graph = self, .current = self.class_member_head.items[@intFromEnum(root)] };
     }
 
     /// Collision authority for open function-interface lookup buckets.
@@ -2793,30 +2759,6 @@ pub const InstGraph = struct {
         return changed_nodes;
     }
 
-    pub const FunctionInterfaceIterator = struct {
-        function: FunctionNodes,
-        index: usize = 0,
-
-        pub fn next(self: *FunctionInterfaceIterator) ?NodeId {
-            if (self.index < self.function.args.len) {
-                defer self.index += 1;
-                return self.function.args[self.index];
-            }
-            if (self.index == self.function.args.len) {
-                self.index += 1;
-                return self.function.ret;
-            }
-            return null;
-        }
-    };
-
-    /// Every permanent cell in a function request's explicit interface.
-    /// Open draft lookup indexes and probes all of these cells so recursive
-    /// requests remain discoverable when any subset of the interface is joined.
-    pub fn functionInterfaceIterator(self: *InstGraph, node: NodeId) Allocator.Error!FunctionInterfaceIterator {
-        return .{ .function = try self.functionNodes(node) };
-    }
-
     /// Project tuple item cells without materializing a Monotype.
     pub fn tupleItemNodes(self: *InstGraph, node: NodeId) Allocator.Error![]const NodeId {
         const node_content = self.content(try self.shapeRoot(node, "tuple", .inspectable));
@@ -3029,10 +2971,6 @@ pub const InstGraph = struct {
         const loser = self.find(raw_loser);
         if (winner == loser) return;
         try self.unregisterRowParent(loser);
-        const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
-        const loser_head = self.class_member_head.items[@intFromEnum(loser)];
-        self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
-        self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
         if (self.row_parents.fetchRemove(loser)) |moved| {
@@ -5741,25 +5679,10 @@ test "open draft function interfaces use related graph classes directly" {
     const left = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
     const right = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
     try std.testing.expect(graph.sameFunctionInterface(left, right));
-    var interface = try graph.functionInterfaceIterator(left);
-    try std.testing.expectEqual(arg, interface.next().?);
-    try std.testing.expectEqual(ret, interface.next().?);
-    try std.testing.expectEqual(null, interface.next());
 
     const older_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     try graph.unify(arg, older_arg);
-    var aliases = graph.classMemberIterator(arg);
-    var saw_arg = false;
-    var saw_older_arg = false;
-    var alias_count: usize = 0;
-    while (aliases.next()) |alias| {
-        alias_count += 1;
-        saw_arg = saw_arg or alias == arg;
-        saw_older_arg = saw_older_arg or alias == older_arg;
-    }
-    try std.testing.expectEqual(@as(usize, 2), alias_count);
-    try std.testing.expect(saw_arg);
-    try std.testing.expect(saw_older_arg);
+    try std.testing.expect(graph.sameFunctionInterface(left, right));
 
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
