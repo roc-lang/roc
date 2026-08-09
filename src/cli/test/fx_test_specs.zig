@@ -121,6 +121,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Every runtime Dec-to-integer width recovers the whole part, truncates toward zero, and wraps past the destination range",
     },
     .{
+        .roc_file = "test/fx/runtime_zst_list_ownership.roc",
+        .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
+        .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",
+    },
+    .{
         .roc_file = "test/fx/list_for_each.roc",
         .io_spec = "1>Item: apple|1>Item: banana|1>Item: cherry",
         .description = "List.for_each! with effectful callback",

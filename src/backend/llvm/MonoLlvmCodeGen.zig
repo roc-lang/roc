@@ -8207,6 +8207,19 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
+        // Reserving room for zero-sized elements needs no memory, and every
+        // other zero-sized branch in this backend represents such a list as a
+        // null pointer with zero capacity. Going to the builtin here would
+        // hand back a refcounted zero-byte allocation instead, which those
+        // branches then drop on the floor.
+        if (abi.elem_size == 0) {
+            const out_ptr = self.slot(target).ptr;
+            const zero = builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory;
+            try self.storePointer(out_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+            try self.storeListLen(out_ptr, zero);
+            try self.storeListCapacity(out_ptr, zero);
+            return;
+        }
         const cap = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), .i64, false);
         try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
             self.slot(target).ptr,
@@ -8222,8 +8235,10 @@ pub const MonoLlvmCodeGen = struct {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A zero-sized element has no bytes to copy, so appending one only
         // bumps the length. Handled here for the same reason emitListConcat
-        // handles it here: the list owns no allocation, so there is no data
-        // pointer to walk and no capacity to maintain.
+        // handles it here: there is no data pointer to walk. The pointer and
+        // capacity still travel across, so this stays correct for a list that
+        // does hold an allocation rather than depending on the zero-sized
+        // representation being unallocated.
         if (abi.elem_size == 0) {
             const builder = self.builder orelse return error.CompilationFailed;
             const wip = self.wip orelse return error.CompilationFailed;
