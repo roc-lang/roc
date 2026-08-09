@@ -8788,9 +8788,18 @@ fn checkProvidesEntryHostBoundaryRows(
     const def = self.cir.store.getDef(def_idx);
     const def_var = ModuleEnv.varFrom(def_idx);
 
-    if (try self.varContainsOpenRowInHostBoundary(def_var)) {
+    try self.checkHostBoundaryType(def_var, self.cir.store.getPatternRegion(def.pattern));
+}
+
+fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {
+    if (try self.varContainsOpenRowInHostBoundary(var_)) {
         _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_open_row = .{
-            .region = self.cir.store.getPatternRegion(def.pattern),
+            .region = region,
+        } });
+    }
+    if (try self.varContainsOptionalFieldInHostBoundary(var_)) {
+        _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_optional_field = .{
+            .region = region,
         } });
     }
 }
@@ -15153,12 +15162,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .region = region,
                     } });
                 }
-                if (try self.varContainsOpenRowInHostBoundary(annotation_var)) {
-                    const region = self.cir.store.getAnnotationRegion(annotation_idx);
-                    _ = try self.problems.appendProblem(self.gpa, .{ .host_boundary_open_row = .{
-                        .region = region,
-                    } });
-                }
+                try self.checkHostBoundaryType(annotation_var, self.cir.store.getAnnotationRegion(annotation_idx));
                 // The expr will be unified with the expected type below
                 // expr_var is a flex var by default, so no action is need here
             } else {
@@ -22831,103 +22835,125 @@ fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.A
     return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
 }
 
+const HostBoundaryRule = enum {
+    closed_rows,
+    no_optional_fields,
+};
+
 fn varContainsOpenRowInHostBoundary(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varContainsOpenRowInHostBoundaryInternal(var_, &self.var_set);
+    return try self.varViolatesHostBoundaryRuleInternal(var_, &self.var_set, .closed_rows);
 }
 
-fn varContainsOpenRowInHostBoundaryInternal(
+fn varContainsOptionalFieldInHostBoundary(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varViolatesHostBoundaryRuleInternal(var_, &self.var_set, .no_optional_fields);
+}
+
+fn varViolatesHostBoundaryRuleInternal(
     self: *Self,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
+    comptime rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
     switch (resolved.desc.content) {
-        .flex, .rigid, .field_presence, .err => return false,
+        .flex, .rigid, .err => return false,
+        .field_presence => |presence| return rule == .no_optional_fields and presence == .optional,
         .alias, .structure => {},
     }
     if (visited.contains(resolved.var_)) return false;
     try visited.put(resolved.var_, {});
 
     return switch (resolved.desc.content) {
-        .structure => |flat_type| try self.flatTypeContainsOpenRowInHostBoundary(flat_type, visited),
+        .structure => |flat_type| try self.flatTypeViolatesHostBoundaryRule(flat_type, visited, rule),
         .alias => |alias| blk: {
-            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) break :blk true;
-            break :blk try self.varContainsOpenRowInHostBoundaryInternal(self.types.getAliasBackingVar(alias), visited);
+            if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, rule)) break :blk true;
+            break :blk try self.varViolatesHostBoundaryRuleInternal(self.types.getAliasBackingVar(alias), visited, rule);
         },
         .flex, .rigid, .err, .field_presence => unreachable,
     };
 }
 
-fn varsContainOpenRowInHostBoundary(
+fn varsViolateHostBoundaryRule(
     self: *Self,
     vars: []const Var,
     visited: *std.AutoHashMap(Var, void),
+    comptime rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     for (vars) |var_| {
-        if (try self.varContainsOpenRowInHostBoundaryInternal(var_, visited)) return true;
+        if (try self.varViolatesHostBoundaryRuleInternal(var_, visited, rule)) return true;
     }
     return false;
 }
 
-fn recordFieldsContainOpenRowInHostBoundary(
+fn recordFieldsViolateHostBoundaryRule(
     self: *Self,
     fields: types_mod.RecordField.SafeMultiList.Range,
     visited: *std.AutoHashMap(Var, void),
+    comptime rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     const fields_slice = self.types.getRecordFieldsSlice(fields);
     for (fields_slice.items(.presence)) |presence| {
-        {
-            const field_var = presence.typeVar();
-            if (try self.varContainsOpenRowInHostBoundaryInternal(field_var, visited)) return true;
+        if (presence.presenceVar()) |presence_var| {
+            if (try self.varViolatesHostBoundaryRuleInternal(presence_var, visited, rule)) return true;
         }
+        if (try self.varViolatesHostBoundaryRuleInternal(presence.typeVar(), visited, rule)) return true;
     }
     return false;
 }
 
-fn tagsContainOpenRowInHostBoundary(
+fn tagsViolateHostBoundaryRule(
     self: *Self,
     tags: types_mod.Tag.SafeMultiList.Range,
     visited: *std.AutoHashMap(Var, void),
+    comptime rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     const tags_slice = self.types.getTagsSlice(tags);
     for (tags_slice.items(.args)) |args| {
-        if (try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(args), visited)) return true;
+        if (try self.varsViolateHostBoundaryRule(self.types.sliceVars(args), visited, rule)) return true;
     }
     return false;
 }
 
-fn flatTypeContainsOpenRowInHostBoundary(
+fn flatTypeViolatesHostBoundaryRule(
     self: *Self,
     flat_type: types_mod.FlatType,
     visited: *std.AutoHashMap(Var, void),
+    comptime rule: HostBoundaryRule,
 ) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .empty_record, .empty_tag_union => false,
         .record => |record| blk: {
-            if (try self.recordFieldsContainOpenRowInHostBoundary(record.fields, visited)) break :blk true;
-            break :blk !try self.recordExtIsClosedForHostBoundary(record.ext, visited);
+            if (try self.recordFieldsViolateHostBoundaryRule(record.fields, visited, rule)) break :blk true;
+            break :blk switch (rule) {
+                .closed_rows => !try self.recordExtIsClosedForHostBoundary(record.ext, visited),
+                .no_optional_fields => try self.varViolatesHostBoundaryRuleInternal(record.ext, visited, rule),
+            };
         },
         .record_unbound => |fields| blk: {
-            _ = try self.recordFieldsContainOpenRowInHostBoundary(fields, visited);
-            break :blk true;
+            if (try self.recordFieldsViolateHostBoundaryRule(fields, visited, rule)) break :blk true;
+            break :blk rule == .closed_rows;
         },
-        .tuple => |tuple| try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(tuple.elems), visited),
+        .tuple => |tuple| try self.varsViolateHostBoundaryRule(self.types.sliceVars(tuple.elems), visited, rule),
         .tag_union => |tag_union| blk: {
-            if (try self.tagsContainOpenRowInHostBoundary(tag_union.tags, visited)) break :blk true;
-            break :blk !try self.tagUnionExtIsClosedForHostBoundary(tag_union.ext, visited);
+            if (try self.tagsViolateHostBoundaryRule(tag_union.tags, visited, rule)) break :blk true;
+            break :blk switch (rule) {
+                .closed_rows => !try self.tagUnionExtIsClosedForHostBoundary(tag_union.ext, visited),
+                .no_optional_fields => try self.varViolatesHostBoundaryRuleInternal(tag_union.ext, visited, rule),
+            };
         },
         .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceVars(func.args), visited)) break :blk true;
-            break :blk try self.varContainsOpenRowInHostBoundaryInternal(func.ret, visited);
+            if (try self.varsViolateHostBoundaryRule(self.types.sliceVars(func.args), visited, rule)) break :blk true;
+            break :blk try self.varViolatesHostBoundaryRuleInternal(func.ret, visited, rule);
         },
         .nominal_type => |nominal| blk: {
-            if (try self.varsContainOpenRowInHostBoundary(self.types.sliceNominalArgs(nominal), visited)) break :blk true;
+            if (try self.varsViolateHostBoundaryRule(self.types.sliceNominalArgs(nominal), visited, rule)) break :blk true;
             // The declaration's backing template covers the structural rows;
             // its formals are rigid leaves (never open rows) standing for the
             // args checked above.
             const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk false;
-            break :blk try self.varContainsOpenRowInHostBoundaryInternal(template, visited);
+            break :blk try self.varViolatesHostBoundaryRuleInternal(template, visited, rule);
         },
     };
 }
@@ -22947,16 +22973,16 @@ fn recordExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
                 .record => |record| {
-                    if (try self.recordFieldsContainOpenRowInHostBoundary(record.fields, visited)) return false;
+                    if (try self.recordFieldsViolateHostBoundaryRule(record.fields, visited, .closed_rows)) return false;
                     current = record.ext;
                 },
                 .record_unbound => |fields| {
-                    _ = try self.recordFieldsContainOpenRowInHostBoundary(fields, visited);
+                    _ = try self.recordFieldsViolateHostBoundaryRule(fields, visited, .closed_rows);
                     return false;
                 },
                 .empty_record => return true,
@@ -22990,12 +23016,12 @@ fn tagUnionExtIsClosedForHostBoundary(
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                if (try self.varsContainOpenRowInHostBoundary(self.types.sliceAliasArgs(alias), visited)) return false;
+                if (try self.varsViolateHostBoundaryRule(self.types.sliceAliasArgs(alias), visited, .closed_rows)) return false;
                 current = self.types.getAliasBackingVar(alias);
             },
             .structure => |flat_type| switch (flat_type) {
                 .tag_union => |tag_union| {
-                    if (try self.tagsContainOpenRowInHostBoundary(tag_union.tags, visited)) return false;
+                    if (try self.tagsViolateHostBoundaryRule(tag_union.tags, visited, .closed_rows)) return false;
                     current = tag_union.ext;
                 },
                 .empty_tag_union => return true,

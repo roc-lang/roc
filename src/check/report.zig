@@ -79,6 +79,7 @@ const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
+const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -999,6 +1000,9 @@ pub const ReportBuilder = struct {
             },
             .host_boundary_open_row => |data| {
                 return self.buildHostBoundaryOpenRowReport(data);
+            },
+            .host_boundary_optional_field => |data| {
+                return self.buildHostBoundaryOptionalFieldReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -4139,6 +4143,22 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Close every record and tag-union row in this type before it crosses the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostBoundaryOptionalFieldReport(self: *Self, data: HostBoundaryOptionalField) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Replace each"),
+            D.bytes("?:").withAnnotation(.inline_code),
+            D.bytes("field with a required field whose value explicitly represents absence before it crosses the host boundary."),
         }, self, &report);
         return report;
     }

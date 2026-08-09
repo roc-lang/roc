@@ -490,16 +490,13 @@ pub const Resolver = struct {
         return self.buildStructNode(build_state, graph_fields.items, false);
     }
 
-    /// The layout slot of one checked record field (design.md "Field Kinds
-    /// (All-Dynamic Optional Fields)"): `required` and `defaulted` kinds are
-    /// the field's own layout inline, while an `optional` kind is the tagged
-    /// slot—a two-variant union laid out exactly like the Monotype slot
-    /// union `[#Missing, #Present(value)]` (variants in sorted tag-name
-    /// order: 0 = `#Missing` with no payload, 1 = `#Present` carrying the
-    /// value; the labels are compiler-reserved and never surface in glue
-    /// output—layout is built here by variant index, from the kind), so
-    /// the glue/host view of a `?:` field agrees byte-for-byte with the
-    /// compiler's.
+    /// The internal layout slot of one checked record field (design.md "Field
+    /// Kinds"): `required` and `defaulted` kinds use the field's own inline
+    /// layout, while `optional` uses the compiler's two-variant
+    /// `[#Missing, #Present(value)]` slot. The checker separately forbids every
+    /// reachable optional field in hosted/provided signatures; being able to
+    /// resolve checked metadata here does not make this representation part of
+    /// the platform-host ABI.
     fn buildFieldSlotRef(
         self: *Resolver,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,

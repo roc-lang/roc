@@ -3387,9 +3387,10 @@ The kind rules:
 - Annotations pin kinds CONCRETELY, in every syntactic position—argument,
   return, the annotated value's own type, and type-declaration bodies all
   mean the same thing. There is no polarity split: `?:` is `optional`
-  everywhere, `:` is `required` everywhere. Layout is therefore a function
-  of the annotation alone, which is what makes `?:` legal across the Host
-  Symbol ABI (glue generated from the annotation agrees with every app).
+  everywhere, and `:` is `required` everywhere. This typing rule does not
+  make every kind legal at every external interface: the Host Symbol ABI
+  categorically rejects every reachable `?:` field, just as it rejects open
+  `..` rows (see Host Symbol ABI).
 - `required ~ optional` is a TYPE MISMATCH. One value has one layout; a
   record annotated with a required field cannot flow where an optional
   field is expected (or vice versa)—reconstruct the record instead. Only
@@ -3471,7 +3472,7 @@ complete):
   compiler-reserved—`#` starts a comment in source, so no user tag can
   spell them; tag variants normalize to sorted label order, so `#Missing`
   is variant 0 with no payload and `#Present` is variant 1 carrying the value—the discriminant
-  contract every consumer shares, hosts included). One uniform
+  contract every compiler runtime consumer shares). One uniform
   representation per field regardless of how many optional siblings the
   record has; a per-record presence BITMASK remains a possible later
   layout optimization that would not change this check-level contract.
@@ -3577,13 +3578,12 @@ complete):
   chain yields the flat `Try(τ_final, [MissingField])` the checker
   promised (never nested), constructed at the access expression's own
   checked Try type.
-- Glue / Host Symbol ABI: the glue layout resolver over checked module
-  data (`buildFieldSlotRef`, in src/glue)
-  builds the identical two-variant union layout (variant 0 = zero-sized
-  `#Missing`, variant 1 = the value) directly from the checked field kind,
-  so the host's view of a `?:` field agrees byte-for-byte with the
-  compiler's—layout stays a function of the annotation alone, which is
-  what keeps `?:` legal across the Host Symbol ABI.
+- Glue / Host Symbol ABI: `?:` is not a host ABI type. The checker walks every
+  hosted and provided signature through aliases, nominal backings, containers,
+  arguments, and returns, and emits a hard error when any reachable record
+  field has the `optional` presence state. Glue output therefore never includes
+  the internal `#Missing`/`#Present` slot representation in a platform-host
+  contract.
 - Inspect rendering reads the reserved slot labels: Monotype `Type.Field`
   carries explicit optional source-value metadata for specialization, but
   runtime consumers still receive the kind consumed into the slot encoding
@@ -3897,8 +3897,9 @@ Interactions:
   (wildcard) deliberately diverge. FALLBACK destructure (`{ x ?? fallback }`)
   stays its own deferred item (Field Kinds above); plain destructure of an
   optional field binds the Try (Field Kinds above).
-- Glue / Host Symbol ABI: no impact. The slot union and its layout are
-  unchanged; unset only selects variant 0 at runtime.
+- Glue / Host Symbol ABI: no additional impact. `?:` remains forbidden at the
+  boundary; within Roc code, unset only selects variant 0 of the unchanged
+  internal slot representation at runtime.
 
 Diagnostics (Title Case, cf. "Optional Access Of Required Field"): "Unset
 Of Required Field" and "Unset Of Defaulted Field" at check (the latter with
@@ -7823,6 +7824,17 @@ whose own type legitimately differs gets a generated Roc adapter at the
 requested type that calls the declared-type boundary and converts around it, so
 the boundary itself stays declared-typed; the Hosted Try Question Widening
 rule's adapter is one such generated caller.
+
+Every type reachable from a hosted or provided signature must have closed
+record and tag-union rows and must contain no runtime-optional (`?:`) record
+field. Both restrictions are checker errors over the solved type graph, before
+Monotype lowering or glue: the walk follows aliases, nominal backings,
+containers, function arguments, and returns, so hiding either `..` or `?:`
+behind another type does not make it ABI-legal. A platform must instead use a
+required field whose value explicitly represents absence when that state is
+part of its host contract. Defaulted (`??`) fields remain ordinary required
+inline slots at runtime and are legal at the boundary; construction defaults
+are Roc-side information and do not alter the host layout.
 
 A hosted declaration written with type variables is a scheme rather than one
 type, and a use instantiates it. The host's single C signature covers every

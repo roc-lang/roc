@@ -106,14 +106,23 @@ pub const Record = struct {
     ext: ?TypeId,
 };
 
-/// One record field. `optional` carries the field's published kind axis
-/// (design.md "Field Kinds (All-Dynamic Optional Fields)"): an `optional`
-/// (`name ?: T`) field is a different type from a required one, so a kind
-/// change must surface as an API change.
+/// One record field, including its complete published kind axis (design.md
+/// "Field Kinds" and "Defaulted Fields"). Default literals are canonical Roc
+/// source emitted from CIR, never compiler-local default identities. An
+/// undetermined kind points at its presence variable in this API's type pool,
+/// so ordinary per-item alpha normalization preserves sharing between every
+/// occurrence of the same generalized field kind.
 pub const Field = struct {
     name: []const u8,
     ty: TypeId,
-    optional: bool = false,
+    kind: Kind = .required,
+
+    pub const Kind = union(enum) {
+        required,
+        optional,
+        defaulted: []const u8,
+        undetermined: TypeId,
+    };
 };
 
 /// A structural tag union type.
@@ -272,7 +281,10 @@ fn normalizeType(self: *PackageApi, id: TypeId, state: *NormalizeState) std.mem.
         },
         .record => |*record| {
             std.mem.sort(Field, record.fields, {}, fieldLessThan);
-            for (record.fields) |field| try self.normalizeType(field.ty, state);
+            for (record.fields) |field| {
+                if (field.kind == .undetermined) try self.normalizeType(field.kind.undetermined, state);
+                try self.normalizeType(field.ty, state);
+            }
             if (record.ext) |ext| try self.normalizeType(ext, state);
         },
         .tuple => |elems| {
@@ -369,11 +381,26 @@ fn writeTypeSExpr(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, s
         .record => |record| {
             try writer.writeAll("(record");
             for (record.fields) |field| {
-                // The field kind is part of the canonical form: flipping a
-                // field between required and optional is a signature change.
-                try writer.writeAll(if (field.optional) " (optional-field \"" else " (field \"");
+                try writer.writeAll(switch (field.kind) {
+                    .required => " (field \"",
+                    .optional => " (optional-field \"",
+                    .defaulted => " (defaulted-field \"",
+                    .undetermined => " (undetermined-field \"",
+                });
                 try writeEscaped(writer, field.name);
-                try writer.writeAll("\" ");
+                switch (field.kind) {
+                    .required, .optional => try writer.writeAll("\" "),
+                    .defaulted => |default_literal| {
+                        try writer.writeAll("\" \"");
+                        try writeEscaped(writer, default_literal);
+                        try writer.writeAll("\" ");
+                    },
+                    .undetermined => |kind_var| {
+                        try writer.writeAll("\" ");
+                        try self.writeTypeSExpr(kind_var, writer, state);
+                        try writer.writeAll(" ");
+                    },
+                }
                 try self.writeTypeSExpr(field.ty, writer, state);
                 try writer.writeAll(")");
             }
@@ -568,8 +595,20 @@ fn renderType(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, state
             try writer.writeAll("{ ");
             for (record.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");
-                try writer.print("{s}{s}", .{ field.name, if (field.optional) " ?: " else " : " });
+                switch (field.kind) {
+                    .required, .defaulted => try writer.print("{s} : ", .{field.name}),
+                    .optional => try writer.print("{s} ?: ", .{field.name}),
+                    .undetermined => |kind_var| {
+                        try writer.print("{s} ?", .{field.name});
+                        try self.renderType(kind_var, writer, state);
+                        try writer.writeAll(": ");
+                    },
+                }
                 try self.renderType(field.ty, writer, state);
+                if (field.kind == .defaulted) {
+                    try writer.writeAll(" ?? ");
+                    try writer.writeAll(field.kind.defaulted);
+                }
             }
             if (record.ext) |ext| {
                 try writer.writeAll(", ..");
@@ -737,7 +776,7 @@ test "record fields and tags are sorted during normalization" {
     try std.testing.expectEqualStrings(str_a, str_b);
 }
 
-test "optional field kind is part of the canonical form" {
+test "every record field kind is part of the canonical form" {
     const gpa = std.testing.allocator;
 
     // Two records differing only in one field's kind (required vs optional,
@@ -758,7 +797,7 @@ test "optional field kind is part of the canonical form" {
     defer api_b.deinit();
     const b_str = try api_b.addType(.{ .named = .{ .origin = .builtin, .path = "Str", .args = &.{} } });
     const b_fields = try api_b.allocator().dupe(Field, &.{
-        .{ .name = "world", .ty = b_str, .optional = true },
+        .{ .name = "world", .ty = b_str, .kind = .optional },
     });
     const b_rec = try api_b.addType(.{ .record = .{ .fields = b_fields, .ext = null } });
     const module_b = try api_b.addModule("M");
@@ -776,6 +815,68 @@ test "optional field kind is part of the canonical form" {
     defer rendered.deinit();
     try api_b.renderItemSignature(gpa, api_b.modules.items[0].items.items[0], &rendered.writer);
     try std.testing.expect(std.mem.find(u8, rendered.written(), "world ?: Str") != null);
+}
+
+test "default literal and generalized kind identity are canonical API data" {
+    const gpa = std.testing.allocator;
+
+    var default_ten = PackageApi.init(gpa);
+    defer default_ten.deinit();
+    const ten_u8 = try default_ten.addType(.{ .named = .{ .origin = .builtin, .path = "U8", .args = &.{} } });
+    const ten_fields = try default_ten.allocator().dupe(Field, &.{
+        .{ .name = "count", .ty = ten_u8, .kind = .{ .defaulted = "10" } },
+    });
+    const ten_record = try default_ten.addType(.{ .record = .{ .fields = ten_fields, .ext = null } });
+    const ten_module = try default_ten.addModule("M");
+    try default_ten.addItem(ten_module, .{ .path = "M.config", .kind = .{ .value = ten_record } });
+    try default_ten.normalize();
+
+    var default_twenty = PackageApi.init(gpa);
+    defer default_twenty.deinit();
+    const twenty_u8 = try default_twenty.addType(.{ .named = .{ .origin = .builtin, .path = "U8", .args = &.{} } });
+    const twenty_fields = try default_twenty.allocator().dupe(Field, &.{
+        .{ .name = "count", .ty = twenty_u8, .kind = .{ .defaulted = "20" } },
+    });
+    const twenty_record = try default_twenty.addType(.{ .record = .{ .fields = twenty_fields, .ext = null } });
+    const twenty_module = try default_twenty.addModule("M");
+    try default_twenty.addItem(twenty_module, .{ .path = "M.config", .kind = .{ .value = twenty_record } });
+    try default_twenty.normalize();
+
+    const ten_canonical = try default_ten.itemCanonicalString(gpa, default_ten.modules.items[0].items.items[0]);
+    defer gpa.free(ten_canonical);
+    const twenty_canonical = try default_twenty.itemCanonicalString(gpa, default_twenty.modules.items[0].items.items[0]);
+    defer gpa.free(twenty_canonical);
+    try std.testing.expect(!std.mem.eql(u8, ten_canonical, twenty_canonical));
+
+    var generalized_a = PackageApi.init(gpa);
+    defer generalized_a.deinit();
+    const a_kind = try generalized_a.addType(.{ .variable = .{ .display_name = "presence_a" } });
+    const a_payload = try generalized_a.addType(.{ .variable = .{ .display_name = "payload_a" } });
+    const a_fields = try generalized_a.allocator().dupe(Field, &.{
+        .{ .name = "value", .ty = a_payload, .kind = .{ .undetermined = a_kind } },
+    });
+    const a_record = try generalized_a.addType(.{ .record = .{ .fields = a_fields, .ext = null } });
+    const a_module = try generalized_a.addModule("M");
+    try generalized_a.addItem(a_module, .{ .path = "M.make", .kind = .{ .value = a_record } });
+    try generalized_a.normalize();
+
+    var generalized_b = PackageApi.init(gpa);
+    defer generalized_b.deinit();
+    const b_kind = try generalized_b.addType(.{ .variable = .{ .display_name = "presence_b" } });
+    const b_payload = try generalized_b.addType(.{ .variable = .{ .display_name = "payload_b" } });
+    const b_fields = try generalized_b.allocator().dupe(Field, &.{
+        .{ .name = "value", .ty = b_payload, .kind = .{ .undetermined = b_kind } },
+    });
+    const b_record = try generalized_b.addType(.{ .record = .{ .fields = b_fields, .ext = null } });
+    const b_module = try generalized_b.addModule("M");
+    try generalized_b.addItem(b_module, .{ .path = "M.make", .kind = .{ .value = b_record } });
+    try generalized_b.normalize();
+
+    const generalized_a_canonical = try generalized_a.itemCanonicalString(gpa, generalized_a.modules.items[0].items.items[0]);
+    defer gpa.free(generalized_a_canonical);
+    const generalized_b_canonical = try generalized_b.itemCanonicalString(gpa, generalized_b.modules.items[0].items.items[0]);
+    defer gpa.free(generalized_b_canonical);
+    try std.testing.expectEqualStrings(generalized_a_canonical, generalized_b_canonical);
 }
 
 test "self-referential constraint does not loop" {

@@ -75,6 +75,7 @@ pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
+pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
