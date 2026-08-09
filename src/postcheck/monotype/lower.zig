@@ -15386,10 +15386,10 @@ const BodyContext = struct {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
             .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
-                    variable.numeric_default_phase,
-                    variable.row_default,
-                    self.view.types.rootKey(checked_ty).bytes,
-                ) }),
+                variable.numeric_default_phase,
+                variable.row_default,
+                self.view.types.rootKey(checked_ty).bytes,
+            ) }),
             .empty_record => try self.graph.newNode(.empty_record),
             .empty_tag_union => try self.graph.newNode(.empty_tag_union),
             .alias => |alias| try self.graph.newNode(.{ .named = .{

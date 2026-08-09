@@ -6931,7 +6931,6 @@ test "direct relation deduplicates equal canonical iterator identity" {
     try std.testing.expect(graph.sameClass(left_iter, right_iter));
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(left_iter).named.backing.?.authority);
     try std.testing.expect(graph.content(left_iter).named.def.generated != null);
-
 }
 
 test "opaque interface relation preserves nested generated-private backing" {
