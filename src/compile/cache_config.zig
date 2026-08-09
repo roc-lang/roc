@@ -126,7 +126,8 @@ pub const Constants = struct {
     /// 51: Checked iterator procedure identity includes List.iter_rev.
     /// 52: Checked iterator identity includes Dict/Set iteration and descending
     ///     numeric ranges.
-    pub const CACHE_VERSION = 52;
+    /// 53: Checked iterator identity includes the numeric to/until ranges.
+    pub const CACHE_VERSION = 53;
 };
 
 /// Configuration for the Roc cache system.

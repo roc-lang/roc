@@ -170,6 +170,8 @@ pub const IteratorProcedureId = enum(u8) {
     numeric_range_inclusive,
     numeric_down_to,
     numeric_down_until,
+    numeric_to,
+    numeric_until,
     iter_from_step,
     range_done,
 
@@ -206,6 +208,8 @@ pub const IteratorProcedureId = enum(u8) {
             .numeric_range_inclusive,
             .numeric_down_to,
             .numeric_down_until,
+            .numeric_to,
+            .numeric_until,
             .iter_from_step,
             => true,
         };
@@ -268,6 +272,12 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
         }
         if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".down_until")) {
             return .numeric_down_until;
+        }
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".to")) {
+            return .numeric_to;
+        }
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".until")) {
+            return .numeric_until;
         }
     }
     return null;
