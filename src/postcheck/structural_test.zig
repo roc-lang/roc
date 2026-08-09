@@ -379,21 +379,11 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(solve_source, "containsGeneratedPrivate");
 
-    const representation_finalizer = sourceSliceBetween(
-        solve_source,
-        "pub fn finalizeGeneratedIteratorRepresentations(",
-        "fn iteratorRootRequiresForcedDynamic(",
-    );
-    try expectContains(representation_finalizer, "self.generated_iterator_nodes.items");
-    try expectNotContains(representation_finalizer, "self.nodes.items");
-
-    const identity_finalizer = sourceSliceBetween(
-        solve_source,
-        "pub fn finalizeGeneratedIteratorIdentities(",
-        "pub fn finalizesAsClosedEmptyTagUnion(",
-    );
-    try expectContains(identity_finalizer, "self.generated_iterator_nodes.items");
-    try expectNotContains(identity_finalizer, "self.nodes.items");
+    try expectNotContains(solve_source, "finalizeGeneratedIteratorRepresentations");
+    try expectNotContains(solve_source, "finalizeGeneratedIteratorIdentities");
+    try expectNotContains(solve_source, "bindGeneratedIteratorAuthoritativeTypes");
+    try expectNotContains(solve_source, "InstGeneratedIterator");
+    try expectNotContains(solve_source, "generated_iterator:");
 
     const substitution = sourceSliceBetween(
         solve_source,
@@ -451,6 +441,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "const max_minted_iterator_chain_depth",
     );
     try expectContains(generated_iterator_producer, "lookupGeneratedIteratorFromNamed(");
+    try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
+    try expectContains(generated_iterator_producer, "generatedIteratorBackingNode(");
 
     const checked_request = sourceSliceBetween(
         lower_source,
@@ -484,7 +476,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectContains(solve_source, "immutable Monotype snapshot requested for an unresolved instantiation graph node");
-    try expectContains(solve_source, "GraphTypeFinals.initActiveSnapshot(self, &generated_identity_finalizer)");
+    try expectContains(solve_source, "GraphTypeFinals.initActiveSnapshot(self)");
     try expectNotContains(solve_source, "replaceGraphView");
     try expectNotContains(solve_source, "fn fillMono(");
 }

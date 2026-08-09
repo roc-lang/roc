@@ -6719,9 +6719,6 @@ const Builder = struct {
             Common.invariant("unfinished callable eval binding reached Monotype body sealing");
         }
         try self.prepareDraftDeferredExprs(body_draft, graph);
-        try graph.finalizeGeneratedIteratorRepresentations();
-        try graph.finalizeGeneratedIteratorIdentities();
-        try graph.bindGeneratedIteratorAuthoritativeTypes(&self.generated_types_by_identity);
         try graph.freezeRelations();
         var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
         defer impossibility_evaluator.deinit(self.allocator);
@@ -19390,8 +19387,7 @@ const BodyContext = struct {
             body: *BodyContext,
             public_source: solve.InstIteratorPublicSource,
             item_node: NodeId,
-            components: []const NodeId,
-            callable_evidence: ?names.TypeDigest,
+            identity: names.TypeDigest,
             kind: Type.IteratorKind,
             mint_depth: u8,
 
@@ -19399,7 +19395,7 @@ const BodyContext = struct {
                 const args = try ctx.body.graph.arena().alloc(NodeId, 1);
                 args[0] = ctx.item_node;
                 var def = ctx.public_source.def;
-                def.generated = null;
+                def.generated = ctx.identity;
                 def.iterator_representation = .minted;
                 def.iterator_kind = ctx.kind;
                 def.iterator_depth = ctx.mint_depth;
@@ -19419,11 +19415,6 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
-                        .callable_evidence = ctx.callable_evidence,
-                        .components = ctx.components,
-                        .public_source = ctx.public_source,
-                    },
                     .declared_order = ctx.public_source.declared_order,
                 } };
             }
@@ -19432,8 +19423,7 @@ const BodyContext = struct {
             .body = self,
             .public_source = public_source,
             .item_node = public_named.args[0],
-            .components = try self.graph.arena().dupe(NodeId, components),
-            .callable_evidence = callable_evidence,
+            .identity = lookup.digest,
             .kind = kind,
             .mint_depth = mint_depth,
         }, Context.fill);
@@ -19507,12 +19497,13 @@ const BodyContext = struct {
             body: *BodyContext,
             item_node: NodeId,
             public_source: solve.InstIteratorPublicSource,
+            identity: names.TypeDigest,
 
             fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
                 const args = try ctx.body.graph.arena().alloc(NodeId, 1);
                 args[0] = ctx.item_node;
                 var def = ctx.public_source.def;
-                def.generated = null;
+                def.generated = ctx.identity;
                 def.iterator_representation = .forced_dynamic;
                 def.iterator_kind = .forced_dynamic;
                 def.iterator_depth = 0;
@@ -19532,11 +19523,6 @@ const BodyContext = struct {
                         .use = ctx.public_source.backing.use,
                         .authority = .generated_private,
                     },
-                    .generated_iterator = .{
-                        .callable_evidence = null,
-                        .components = &.{},
-                        .public_source = ctx.public_source,
-                    },
                     .declared_order = ctx.public_source.declared_order,
                 } };
             }
@@ -19545,6 +19531,7 @@ const BodyContext = struct {
             .body = self,
             .item_node = item_node,
             .public_source = public_source,
+            .identity = lookup.digest,
         }, Context.fill);
         try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
         return generated;
@@ -30089,11 +30076,8 @@ const BodyContext = struct {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated interpolation iterator request was not a named Iter type"),
         };
-        const backing = if (named.generated_iterator) |generated|
-            generated.public_source.backing
-        else
-            named.backing orelse
-                Common.invariant("generated interpolation iterator request had no public backing");
+        const backing = named.backing orelse
+            Common.invariant("generated interpolation iterator request had no backing");
         const topology = try self.iteratorRepresentationNames();
         const len_node = try self.graph.recordFieldNode(backing.node, topology.len_field);
         const step_node = try self.graph.recordFieldNode(backing.node, topology.step_field);
