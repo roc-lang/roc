@@ -23,6 +23,7 @@ match person {
       ^^^^^^
 
 Is it misspelled, or is there an import missing?
+(pattern_destructure_nested.md:1:7):
 
 ── ! unused variable ──────────────────────── pattern_destructure_nested.md:2:38
 
@@ -32,7 +33,7 @@ Variable `zipCode` is defined here and then never used:
                                  ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_zipCode`
-to suppress this warning.
+to suppress this warning. (pattern_destructure_nested.md:2:38):
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

@@ -25,7 +25,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found `0` here. (fuzz_hang_001.md:1:1):
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_001.md:1:3
 
@@ -40,7 +40,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found `(` here. (fuzz_hang_001.md:1:3):
 # TOKENS
 ~~~zig
 Int,OpenRound,

@@ -23,6 +23,8 @@ This expression is used in an unexpected way.
 "<tr>${inner}</tr>"
        ^^^^^
 
+(unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12):
+
 It has the type:
 
     List(b) where [b.from_interpolation : Str, Iter((_field, Str)) -> b]

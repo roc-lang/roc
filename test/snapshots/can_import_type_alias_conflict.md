@@ -24,7 +24,9 @@ import json.Json exposing [JsonValue]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-In this scope, `Json` was already defined here (can_import_type_alias_conflict.md:1:1):
+(can_import_type_alias_conflict.md:1:1):
+
+In this scope, `Json` was already defined here (can_import_type_alias_conflict.md:1:1) (can_import_type_alias_conflict.md:1:1):
 
 import json.Json exposing [JsonValue]
 ^

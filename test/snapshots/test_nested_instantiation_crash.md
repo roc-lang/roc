@@ -31,6 +31,8 @@ This expression is used in an unexpected way.
 composed = |n| get_value(make_record(n))
                ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(test_nested_instantiation_crash.md:12:16):
+
 It has the type:
 
     List(a)

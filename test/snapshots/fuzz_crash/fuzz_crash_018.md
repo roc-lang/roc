@@ -28,7 +28,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found `0` here. (fuzz_crash_018.md:1:1):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
 
@@ -45,7 +45,7 @@ For example:
 
 I found `.R` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
+mod names in Roc. (fuzz_crash_018.md:2:1):
 
 ── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
 
@@ -54,6 +54,7 @@ The type `S` is not declared in this scope.
 0 b:S
     ^
 
+(fuzz_crash_018.md:1:5):
 
 ── ! declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
 
@@ -61,6 +62,9 @@ This declaration has a type annotation but no implementation.
 
 0 b:S
   ^^^
+
+(fuzz_crash_018.md:1:3):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

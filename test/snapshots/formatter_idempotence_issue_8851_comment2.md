@@ -19,6 +19,8 @@ I am part way through parsing this tuple, but it is empty.
 a=()->b()()()
   ^^
 
+(formatter_idempotence_issue_8851_comment2.md:1:3):
+
 If you want to represent nothing, try using an empty record: `{}`.
 
 ── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment2.md:1:7
@@ -29,6 +31,7 @@ a=()->b()()()
       ^
 
 Is it misspelled, or is there an import missing?
+(formatter_idempotence_issue_8851_comment2.md:1:7):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

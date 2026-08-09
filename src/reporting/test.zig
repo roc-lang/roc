@@ -30,8 +30,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try reporting.renderReportToMarkdown(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
     const expected =
         \\**Syntax Problem**
-        \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped.
-        \\**example.roc:1:10:1:20:**
+        \\Using more than one `+` like this requires parentheses, to clarify how things should be grouped. (example.roc:1:10):
         \\```roc
         \\example.roc
         \\```
@@ -40,7 +39,7 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\
         \\
     ;
-    try testing.expectEqualStrings(expected, writer.written());
+    try expectMultilineEqual(expected, writer.written());
 
     // HTML
     writer.clearRetainingCapacity();
@@ -49,12 +48,12 @@ test "SYNTAX_PROBLEM report along with all four render types" {
         \\<div class="report error">
         \\<h1 class="report-title">SYNTAX PROBLEM</h1>
         \\<div class="report-content">
-        \\Using more than one <span class="operator">+</span> like this requires parentheses, to clarify how things should be grouped.<br>
-        \\<div class="source-region"><span class="filename">example.roc:1:10:1:20:</span> <pre class="error">example.roc</pre></div></div>
+        \\Using more than one <span class="operator">+</span> like this requires parentheses, to clarify how things should be grouped. (example.roc:1:10):<br>
+        \\<div class="source-region"><pre class="error">example.roc</pre></div></div>
         \\</div>
         \\
     ;
-    try testing.expectEqualStrings(expected_html, writer.written());
+    try expectMultilineEqual(expected_html, writer.written());
 
     // Language Server Protocol
     writer.clearRetainingCapacity();
@@ -62,18 +61,18 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     const expected_lsp =
         \\SYNTAX PROBLEM
         \\
-        \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
-        \\example.roc:1:10:1:20: example.roc
+        \\Using more than one + like this requires parentheses, to clarify how things should be grouped. (example.roc:1:10):
+        \\example.roc
         \\
     ;
-    try testing.expectEqualStrings(expected_lsp, writer.written());
+    try expectMultilineEqual(expected_lsp, writer.written());
 
     // Plain-text header format
     writer.clearRetainingCapacity();
     try reporting.renderReportToBoxPlain(&r, &writer.writer, @import("config.zig").ReportingConfig.initMarkdown());
     const plain_out = writer.written();
-    try testing.expect(std.mem.find(u8, plain_out, "-- ❌ SYNTAX PROBLEM") != null);
-    try testing.expect(std.mem.find(u8, plain_out, "example.roc:1:10") != null);
+    try testing.expect(std.mem.find(u8, plain_out, "── ✗ syntax problem ") != null);
+    try testing.expect(std.mem.find(u8, plain_out, " (example.roc:1:10):") != null);
     try testing.expect(std.mem.find(u8, plain_out, "^^") != null);
 }
 

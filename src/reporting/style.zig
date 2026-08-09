@@ -82,19 +82,19 @@ pub const ColorPalette = struct {
     pub const ANSI = ColorPalette{
         // Core colors
         .primary = AnsiCodes.CYAN,
-        .secondary = "",
+        .secondary = AnsiCodes.BRIGHT_BLACK,
         .error_color = AnsiCodes.RED,
         .warning = AnsiCodes.YELLOW,
         .info = AnsiCodes.BLUE,
         .success = AnsiCodes.GREEN,
         .suggestion = AnsiCodes.GREEN,
-        .muted = "",
+        .muted = AnsiCodes.BRIGHT_BLACK,
 
         // Syntax colors
         .keyword = AnsiCodes.MAGENTA,
         .type_variable = AnsiCodes.BLUE,
         .literal = AnsiCodes.GREEN,
-        .comment = "",
+        .comment = AnsiCodes.BRIGHT_BLACK,
         .symbol = AnsiCodes.CYAN,
         .path = AnsiCodes.YELLOW,
 
@@ -110,13 +110,13 @@ pub const ColorPalette = struct {
     pub const ANSI_BRIGHT = ColorPalette{
         // Core colors
         .primary = AnsiCodes.BRIGHT_CYAN,
-        .secondary = "",
+        .secondary = AnsiCodes.BRIGHT_BLACK,
         .error_color = AnsiCodes.BRIGHT_RED,
         .warning = AnsiCodes.BRIGHT_YELLOW,
         .info = AnsiCodes.BRIGHT_BLUE,
         .success = AnsiCodes.BRIGHT_GREEN,
         .suggestion = AnsiCodes.BRIGHT_GREEN,
-        .muted = "",
+        .muted = AnsiCodes.BRIGHT_BLACK,
 
         // Syntax colors
         .keyword = AnsiCodes.BRIGHT_MAGENTA,

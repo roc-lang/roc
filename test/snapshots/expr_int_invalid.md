@@ -18,6 +18,8 @@ This number literal does not fit in the inferred type.
 99999999999999999999999999999999999999999
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(expr_int_invalid.md:1:1):
+
 The inferred type is:
 
     Dec

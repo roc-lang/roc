@@ -27,6 +27,7 @@ the same value.
 match ... {
       ^^^
 
+(record_pattern_edge_cases.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

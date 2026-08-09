@@ -21,6 +21,8 @@ I am inferring a weird self-referential type.
 bad = |x| bad([x])
 ^^^
 
+(local_binding_infinite_type.md:2:5):
+
 Here is my best effort at writing down the type. You will see `<RecursiveType>`
 for parts of the type that repeat infinitely.
 

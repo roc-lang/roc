@@ -29,6 +29,7 @@ this mod.
 a!,
 ^^
 
+(hosted.md:2:2):
 You can fix this by either defining `a!` in this mod, or by removing it from
 the list of exposed values.
 
@@ -40,6 +41,7 @@ this mod.
 b!,
 ^^
 
+(hosted.md:3:2):
 You can fix this by either defining `b!` in this mod, or by removing it from
 the list of exposed values.
 
@@ -50,6 +52,9 @@ This declaration has a type annotation but no implementation.
 a! : Str => Str
 ^^^^^^^^^^^^^^^
 
+(hosted.md:6:1):
+
+
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -59,6 +64,9 @@ This declaration has a type annotation but no implementation.
 
 b! : Str => Str
 ^^^^^^^^^^^^^^^
+
+(hosted.md:8:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

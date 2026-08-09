@@ -24,7 +24,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `0x` here.
+I found `0x` here. (parse_malformed_hex_number.md:1:1):
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,

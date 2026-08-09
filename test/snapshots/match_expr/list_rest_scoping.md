@@ -28,7 +28,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_scoping.md:2:13):
 
 ── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:3:6
 
@@ -41,7 +41,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_scoping.md:3:6):
 
 ── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:4:9
 
@@ -54,7 +54,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_scoping.md:4:9):
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

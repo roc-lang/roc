@@ -22,6 +22,7 @@ This `RGB` type is declared to be in `Color`, which does not exist.
 red : Color.RGB
            ^^^^
 
+(nominal_import_type.md:3:12):
 
 ── ✗ mod not found ────────────────────────────── nominal_import_type.md:4:12
 
@@ -30,6 +31,7 @@ This `RGB` type is declared to be in `Color`, which does not exist.
 red = Color.RGB.Red
            ^^^^
 
+(nominal_import_type.md:4:12):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

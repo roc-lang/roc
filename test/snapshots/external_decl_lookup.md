@@ -30,7 +30,9 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-In this scope, `Json` was already defined here (external_decl_lookup.md:1:1):
+(external_decl_lookup.md:4:1):
+
+In this scope, `Json` was already defined here (external_decl_lookup.md:1:1) (external_decl_lookup.md:1:1):
 
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 ^
@@ -42,7 +44,7 @@ Nothing is named `utf8` in this scope.
 result = Json.utf8("Hello from external mod!")
          ^^^^^^^^^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (external_decl_lookup.md:8:14):
 
 ── ✗ name not in scope ───────────────────────────── external_decl_lookup.md:9:5
 
@@ -51,7 +53,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!(result)
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (external_decl_lookup.md:9:5):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

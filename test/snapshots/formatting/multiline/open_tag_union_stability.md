@@ -23,6 +23,7 @@ This type annotation is malformed or contains invalid syntax.
 a,
 ^
 
+(open_tag_union_stability.md:2:2):
 
 ── ! declaration has no value ────────────────── open_tag_union_stability.md:1:1
 
@@ -33,6 +34,9 @@ r : [
 
     ..,
 ]
+
+(open_tag_union_stability.md:1:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

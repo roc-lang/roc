@@ -22,6 +22,8 @@ This string literal is being used where a non-string type is needed.
 main = (picked(1), picked("a"))
                           ^^^
 
+(generalize_alias_if_branches.md:5:27):
+
 The type was determined to be:
 
     Dec

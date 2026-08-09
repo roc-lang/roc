@@ -28,6 +28,8 @@ that method.
 Str.encode("hi", fmt)
 ^^^^^^^^^^
 
+(nominal_local.md:9:5):
+
 The value's type, which does not have a method named `encode_str`, is:
 
     [Utf8Format, ..]

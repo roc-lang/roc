@@ -23,6 +23,8 @@ The `identity` function expects 1 argument, but it got 2 instead.
 identity(1, 2)
 ^^^^^^^^^^^^^^
 
+(test_instantiation_arity_mismatch.md:5:5):
+
 The `identity` function has the type:
 
     (a, b) -> (a, b)

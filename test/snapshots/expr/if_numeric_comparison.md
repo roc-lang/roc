@@ -19,6 +19,7 @@ make the same choice.
 if 5 > 3 1 else 2
    ^^^^^
 
+(if_numeric_comparison.md:1:4):
 # TOKENS
 ~~~zig
 KwIf,Int,OpGreaterThan,Int,Int,KwElse,Int,

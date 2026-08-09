@@ -31,7 +31,7 @@ Close the parenthesized type after the final type expression.
 For example:
     (Str -> U64)
 
-I found `(` here.
+I found `(` here. (type_function_multi_arg.md:3:27):
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:40
 
@@ -46,7 +46,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_c` here.
+I found `_c` here. (type_function_multi_arg.md:3:40):
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:42
 
@@ -63,7 +63,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (type_function_multi_arg.md:3:42):
 
 ── ✗ malformed type ──────────────────────────── type_function_multi_arg.md:3:27
 
@@ -72,6 +72,7 @@ This type annotation is malformed or contains invalid syntax.
 curry : (_a, _b -> _c) -> (_a -> _b -> _c)
                           ^^^^^^^^^^^^
 
+(type_function_multi_arg.md:3:27):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

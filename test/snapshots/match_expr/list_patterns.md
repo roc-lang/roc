@@ -30,7 +30,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_patterns.md:3:13):
 
 ── ✗ name not in scope ──────────────────────────────────── list_patterns.md:1:7
 
@@ -39,7 +39,7 @@ Nothing is named `numbers` in this scope.
 match numbers {
       ^^^^^^^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (list_patterns.md:1:7):
 
 ── ✗ name not in scope ─────────────────────────────────── list_patterns.md:2:11
 
@@ -48,7 +48,7 @@ Nothing is named `acc` in this scope.
 [] => acc
       ^^^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (list_patterns.md:2:11):
 
 ── ! unused variable ────────────────────────────────────── list_patterns.md:3:6
 
@@ -58,7 +58,7 @@ Variable `first` is defined here and then never used:
  ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_first` to
-suppress this warning.
+suppress this warning. (list_patterns.md:3:6):
 
 ── ! unused variable ───────────────────────────────────── list_patterns.md:3:15
 
@@ -68,7 +68,7 @@ Variable `rest` is defined here and then never used:
           ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning.
+suppress this warning. (list_patterns.md:3:15):
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

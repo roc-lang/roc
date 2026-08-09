@@ -22,6 +22,8 @@ I am part way through parsing this tuple, but it is empty.
 r=|()|(()())
        ^^
 
+(fuzz_crash_101.md:2:8):
+
 If you want to represent nothing, try using an empty record: `{}`.
 
 ── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_101.md:2:3
@@ -30,6 +32,8 @@ This expression is used in an unexpected way.
 
 r=|()|(()())
   ^^^^^^^^^^
+
+(fuzz_crash_101.md:2:3):
 
 It has the type:
 

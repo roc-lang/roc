@@ -92,7 +92,7 @@ is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or
 ^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_is_char_in_hex_range` to suppress this warning.
+`_is_char_in_hex_range` to suppress this warning. (Color.md:21:5):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:41:34
 
@@ -101,6 +101,7 @@ If you don't need this variable, prefix it with an underscore like
 Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
                              ^^^^^^^^^^
 
+(Color.md:41:34):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:41:52
 
@@ -109,6 +110,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
 Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
                                                ^^^^^^^^^^
 
+(Color.md:41:52):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:41:70
 
@@ -117,6 +119,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
 Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
                                                                  ^^^^^^^^^^
 
+(Color.md:41:70):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:42:39
 
@@ -125,6 +128,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
 Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
                                   ^^^^^^^^^^
 
+(Color.md:42:39):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:42:57
 
@@ -133,6 +137,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
 Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
                                                     ^^^^^^^^^^
 
+(Color.md:42:57):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:42:75
 
@@ -141,6 +146,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
 Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
                                                                       ^^^^^^^^^^
 
+(Color.md:42:75):
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:42:93
 
@@ -149,6 +155,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
 Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
                                                                                         ^^^^^^^^^^
 
+(Color.md:42:93):
 
 ── ✗ missing method ───────────────────────────────────────────── Color.md:13:17
 
@@ -157,6 +164,8 @@ method.
 
 rounded = a.to_frac() / 255.0
             ^^^^^^^
+
+(Color.md:13:17):
 
 The value's type, which does not have a method named `to_frac`, is:
 
@@ -173,6 +182,8 @@ doesn't have that method.
 a.is_char_in_hex_range()
   ^^^^^^^^^^^^^^^^^^^^
 
+(Color.md:26:19):
+
 The value's type, which does not have a method named `is_char_in_hex_range`, is:
 
     U8
@@ -187,6 +198,8 @@ that method.
 
 if str.is_named_color()
        ^^^^^^^^^^^^^^
+
+(Color.md:53:12):
 
 The value's type, which does not have a method named `is_named_color`, is:
 
@@ -203,6 +216,8 @@ method.
 expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
                          ^^^^^^
 
+(Color.md:47:26):
+
 The value's type, which does not have a method named `to_str`, is:
 
     Color
@@ -217,6 +232,8 @@ method.
 
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
                                ^^^^^^
+
+(Color.md:48:32):
 
 The value's type, which does not have a method named `to_str`, is:
 

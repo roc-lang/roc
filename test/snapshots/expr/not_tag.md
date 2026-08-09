@@ -19,6 +19,8 @@ method.
 !(C(2))
 ^^^^^^^
 
+(not_tag.md:1:1):
+
 The value's type, which does not have a method named `not`, is:
 
     [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]

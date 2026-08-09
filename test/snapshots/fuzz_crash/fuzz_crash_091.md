@@ -18,6 +18,8 @@ This is not a record, so it does not have any fields to access.
 a=(0->X .a)
    ^^^^
 
+(fuzz_crash_091.md:1:4):
+
 It is:
 
     [X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]

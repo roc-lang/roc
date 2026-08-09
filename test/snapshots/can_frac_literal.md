@@ -22,6 +22,8 @@ This number literal does not fit in the inferred type.
 y = 1.23e45
     ^^^^^^^
 
+(can_frac_literal.md:3:5):
+
 The inferred type is:
 
     Dec

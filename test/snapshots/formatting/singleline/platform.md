@@ -27,6 +27,7 @@ this mod.
 provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
            ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(platform.md:5:13):
 You can fix this by either defining `pr1` in this mod, or by removing it
 from the list of exposed values.
 
@@ -38,6 +39,7 @@ this mod.
 provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(platform.md:5:41):
 You can fix this by either defining `pr2` in this mod, or by removing it
 from the list of exposed values.
 
@@ -49,6 +51,7 @@ this mod.
 exposes [E1, E2]
          ^^
 
+(platform.md:3:11):
 You can fix this by either defining `E1` in this mod, or by removing it from
 the list of exposed values.
 
@@ -60,6 +63,7 @@ this mod.
 exposes [E1, E2]
              ^^
 
+(platform.md:3:15):
 You can fix this by either defining `E2` in this mod, or by removing it from
 the list of exposed values.
 INVALID HOSTED SECTION

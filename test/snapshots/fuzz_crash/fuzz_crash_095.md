@@ -19,6 +19,8 @@ that method.
 t=0->(0)()
       ^
 
+(fuzz_crash_095.md:1:7):
+
 The value's type, which does not have a method named `from_numeral`, is:
 
     a -> _ret where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]

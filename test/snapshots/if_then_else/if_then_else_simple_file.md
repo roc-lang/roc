@@ -23,6 +23,8 @@ This number is being used where a non-number type is needed.
 foo = if 1 A
          ^
 
+(if_then_else_simple_file.md:1:10):
+
 Other code expects this to have the type:
 
     Bool
@@ -34,6 +36,8 @@ that method.
 
 "hello"
 ^^^^^^^
+
+(if_then_else_simple_file.md:4:2):
 
 The value's type, which does not have a method named `from_quote`, is:
 

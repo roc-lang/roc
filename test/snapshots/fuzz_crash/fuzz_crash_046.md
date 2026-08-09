@@ -30,6 +30,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(fuzz_crash_046.md:1:20):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,LowerIdent,UpperIdent,

@@ -29,6 +29,8 @@ method.
 [first, second] => first + second
                    ^^^^^^^^^^^^^^
 
+(list_destructure_variations.md:4:24):
+
 The value's type, which does not have a method named `plus`, is:
 
     [One, Two, ..]
@@ -40,6 +42,8 @@ that method.
 
 [] => 0
       ^
+
+(list_destructure_variations.md:2:11):
 
 The value's type, which does not have a method named `from_numeral`, is:
 
@@ -53,6 +57,8 @@ that method.
 [One, Two, .. as rest] => 3
                           ^
 
+(list_destructure_variations.md:6:31):
+
 The value's type, which does not have a method named `from_numeral`, is:
 
     [One, Two, ..]
@@ -64,6 +70,8 @@ method.
 
 [x, y, z, .. as more] => x + y + z
                          ^^^^^
+
+(list_destructure_variations.md:7:30):
 
 The value's type, which does not have a method named `plus`, is:
 

@@ -29,6 +29,7 @@ This value is not a tuple, so it has no .0 element.
 a=0O0\r.0
   ^^^^^^
 
+(fuzz_crash_106.md:1:3):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,DotInt,

@@ -26,6 +26,7 @@ The type `Person` is not declared in this scope.
 expectsPerson : Person -> Str
                 ^^^^^^
 
+(nominal_type_origin_mismatch.md:3:17):
 
 ── ! unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
 
@@ -35,7 +36,7 @@ expectsPerson = |p| "Got a person"
                  ^
 
 If you don't need this variable, prefix it with an underscore like `_p` to
-suppress this warning.
+suppress this warning. (nominal_type_origin_mismatch.md:4:18):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

@@ -26,6 +26,8 @@ so it was given the default type `Dec` instead.
 add_x(5).plus(add_y(5))
       ^
 
+(method_call_literal_boundary_default.md:4:8):
+
 Hint: To use a different numeric type here, add a suffix or a type annotation.
 
 ── ! literal defaulted ──────────── method_call_literal_boundary_default.md:4:22
@@ -35,6 +37,8 @@ so it was given the default type `Dec` instead.
 
 add_x(5).plus(add_y(5))
                     ^
+
+(method_call_literal_boundary_default.md:4:22):
 
 Hint: To use a different numeric type here, add a suffix or a type annotation.
 # TOKENS

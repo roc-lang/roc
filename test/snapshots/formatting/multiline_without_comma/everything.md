@@ -154,7 +154,7 @@ A(a) : a
         ) -> Str
     ]
 
-You're attempting do this here:
+You're attempting do this here (everything.md:12:1):
 
 ── ✗ where clause not allowed in type declaration ─────────── everything.md:23:1
 
@@ -172,7 +172,7 @@ B(b) : b
         ) -> Str
     ]
 
-You're attempting do this here:
+You're attempting do this here (everything.md:23:1):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:94:5
 
@@ -182,7 +182,7 @@ b
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning.
+suppress this warning. (everything.md:94:5):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:99:4
 
@@ -192,7 +192,7 @@ b
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning.
+suppress this warning. (everything.md:99:4):
 
 ── ! unused variable ─────────────────────────────────────── everything.md:104:5
 
@@ -202,7 +202,7 @@ b
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning.
+suppress this warning. (everything.md:104:5):
 
 ── ! unused variable ─────────────────────────────────────── everything.md:110:5
 
@@ -212,7 +212,7 @@ b
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning.
+suppress this warning. (everything.md:110:5):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:65:2
 
@@ -222,7 +222,7 @@ h1 = {
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h1` to
-suppress this warning.
+suppress this warning. (everything.md:65:2):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:73:2
 
@@ -232,7 +232,7 @@ h2 = h(
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h2` to
-suppress this warning.
+suppress this warning. (everything.md:73:2):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:77:2
 
@@ -242,7 +242,7 @@ h3 = A(
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h3` to
-suppress this warning.
+suppress this warning. (everything.md:77:2):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:81:2
 
@@ -252,7 +252,7 @@ h4 = [
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h4` to
-suppress this warning.
+suppress this warning. (everything.md:81:2):
 
 ── ! unused variable ──────────────────────────────────────── everything.md:85:2
 
@@ -262,7 +262,7 @@ h5 = (
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h5` to
-suppress this warning.
+suppress this warning. (everything.md:85:2):
 
 ── ✗ not a where alias ────────────────────────────────────── everything.md:60:4
 
@@ -270,6 +270,8 @@ A where clause can only name a where alias, but A is a type.
 
 e.A,
  ^^
+
+(everything.md:60:4):
 
 A where alias names a set of method constraints, declared like `a.Sortable :
 where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
@@ -281,6 +283,8 @@ A where clause can only name a where alias, but B is a type.
 
 e.B
  ^^
+
+(everything.md:61:4):
 
 A where alias names a set of method constraints, declared like `a.Sortable :
 where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
@@ -295,6 +299,9 @@ g : e -> e
         e.A,
         e.B
     ]
+
+(everything.md:58:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -327,6 +334,8 @@ match x {
         ]
     ) => a
 }
+
+(everything.md:90:2):
 
 The value being matched on has type:
         [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]

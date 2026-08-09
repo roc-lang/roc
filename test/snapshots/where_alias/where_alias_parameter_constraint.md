@@ -22,6 +22,8 @@ different type variable.
 fmt.finish : fmt -> Str,
 ^^^^^^^^^^^^^^^^^^^^^^^
 
+(where_alias_parameter_constraint.md:3:2):
+
 Write this constraint against `a`, or declare a separate where alias for the
 other type variable and apply it alongside this one.
 # TOKENS

@@ -32,7 +32,9 @@ x = 20  # Should shadow top-level x
 ^
 
 
-In this scope, `x` was already defined here (can_basic_scoping.md:2:1):
+(can_basic_scoping.md:7:5):
+
+In this scope, `x` was already defined here (can_basic_scoping.md:2:1) (can_basic_scoping.md:2:1):
 
 x = 5
 ^

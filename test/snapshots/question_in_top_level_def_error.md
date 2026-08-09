@@ -24,6 +24,7 @@ an early return.
 result = f(3)?
          ^^^^^
 
+(question_in_top_level_def_error.md:6:10):
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,

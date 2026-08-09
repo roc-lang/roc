@@ -21,6 +21,7 @@ The mod `SomeType` was not found in this Roc project.
 [something, SomeType]
             ^^^^^^^^
 
+(package_header_nonempty_multiline_1.md:2:14):
 
 ── ✗ exposed but not defined ──────── package_header_nonempty_multiline_1.md:2:3
 
@@ -30,6 +31,7 @@ anywhere in this mod.
 [something, SomeType]
  ^^^^^^^^^
 
+(package_header_nonempty_multiline_1.md:2:3):
 You can fix this by either defining `something` in this mod, or by removing
 it from the list of exposed values.
 # TOKENS

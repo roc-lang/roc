@@ -23,6 +23,7 @@ the same value.
 match ... {
       ^^^
 
+(s_quote_pattern.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

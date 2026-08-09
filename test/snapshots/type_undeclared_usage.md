@@ -28,6 +28,7 @@ The type `UnknownType` is not declared in this scope.
 MyType : UnknownType
          ^^^^^^^^^^^
 
+(type_undeclared_usage.md:1:10):
 
 ── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:3:16
 
@@ -36,6 +37,7 @@ The type `UndeclaredResult` is not declared in this scope.
 processValue : UndeclaredResult -> Str
                ^^^^^^^^^^^^^^^^
 
+(type_undeclared_usage.md:3:16):
 
 ── ! unused variable ───────────────────────────── type_undeclared_usage.md:4:17
 
@@ -45,7 +47,7 @@ processValue = |value| {
                 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_value` to
-suppress this warning.
+suppress this warning. (type_undeclared_usage.md:4:17):
 
 ── ✗ mod not imported ───────────────────────── type_undeclared_usage.md:8:15
 
@@ -54,6 +56,7 @@ There is no mod with the name `SomeMod` imported into this Roc file.
 AnotherType : SomeMod.MissingType
               ^^^^^^^^^^^^^^^^^^^
 
+(type_undeclared_usage.md:8:15):
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

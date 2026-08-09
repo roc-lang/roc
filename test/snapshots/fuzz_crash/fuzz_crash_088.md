@@ -19,6 +19,8 @@ This destructuring pattern doesn't cover all possible cases.
 main!=|0|""_=""
        ^
 
+(fuzz_crash_088.md:1:8):
+
 The value being destructured has type:
         a
   where [

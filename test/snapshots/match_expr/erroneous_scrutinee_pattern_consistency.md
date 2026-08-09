@@ -23,6 +23,8 @@ match undefined_scrutinee {
     { name, age } => age
 }
 
+(erroneous_scrutinee_pattern_consistency.md:1:1):
+
 This second branch is trying to match:
 
     { age: _field, name: _field2 }

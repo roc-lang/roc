@@ -20,6 +20,7 @@ MISSING NESTED TYPE - fuzz_crash_096.md:2:6:2:9
 A : T.A
     ^^^
 
+(fuzz_crash_096.md:2:6):
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

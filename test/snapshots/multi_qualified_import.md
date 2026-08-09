@@ -46,7 +46,7 @@ For example:
 
 I found `.Core` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
+mod names in Roc. (multi_qualified_import.md:12:12):
 
 ── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:17
 
@@ -65,7 +65,7 @@ For example:
 
 I found `.Utf8` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
+mod names in Roc. (multi_qualified_import.md:12:17):
 
 ── ✗ mod not found ─────────────────────────── multi_qualified_import.md:3:16
 
@@ -74,6 +74,7 @@ This `Encoder` type is declared to be in `json.Core`, which does not exist.
 json_encoder : Encoder
                ^^^^^^^
 
+(multi_qualified_import.md:3:16):
 
 ── ✗ does not exist ───────────────────────────── multi_qualified_import.md:4:16
 
@@ -83,6 +84,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 `Json` is in scope, but it has no associated `defaultEncoder`.
+(multi_qualified_import.md:4:16):
 
 ── ✗ mod not imported ──────────────────────── multi_qualified_import.md:7:11
 
@@ -91,6 +93,7 @@ There is no mod with the name `json.Core.Utf8` imported into this Roc file.
 process : json.Core.Utf8.Encoder -> Str
           ^^^^^^^^^^^^^^^^^^^^^^
 
+(multi_qualified_import.md:7:11):
 
 ── ! unused variable ──────────────────────────── multi_qualified_import.md:8:12
 
@@ -100,7 +103,7 @@ process = |encoder| "processing"
            ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_encoder`
-to suppress this warning.
+to suppress this warning. (multi_qualified_import.md:8:12):
 
 ── ✗ mod not imported ──────────────────────── multi_qualified_import.md:11:8
 
@@ -109,6 +112,7 @@ There is no mod with the name `json.Core.Utf8` imported into this Roc file.
 data : json.Core.Utf8.EncodedData
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(multi_qualified_import.md:11:8):
 
 ── ✗ unrecognized syntax ──────────────────────── multi_qualified_import.md:12:8
 
@@ -116,6 +120,8 @@ I don't recognize this syntax.
 
 data = json.Core.Utf8.encode("hello")
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(multi_qualified_import.md:12:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

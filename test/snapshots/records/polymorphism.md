@@ -25,6 +25,8 @@ method.
 { pair1, pair2, pair3 }.to_str()
                         ^^^^^^
 
+(polymorphism.md:6:29):
+
 The value's type, which does not have a method named `to_str`, is:
 
     { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: {

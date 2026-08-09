@@ -30,6 +30,7 @@ For example:
 
 I found `var` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(can_var_scoping_invalid_top_level.md:2:1):
 # TOKENS
 ~~~zig
 KwVar,LowerIdent,OpAssign,Int,

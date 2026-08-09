@@ -29,7 +29,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c
+    (a -> b) -> c (type_function_basic.md:3:26):
 
 ── ✗ unexpected statement ────────────────────────── type_function_basic.md:3:29
 
@@ -44,7 +44,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_b` here.
+I found `_b` here. (type_function_basic.md:3:29):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

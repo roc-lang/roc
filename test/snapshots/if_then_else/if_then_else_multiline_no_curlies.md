@@ -22,6 +22,7 @@ make the same choice.
 if Bool.True
    ^^^^^^^^^
 
+(if_then_else_multiline_no_curlies.md:1:4):
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,NoSpaceDotUpperIdent,

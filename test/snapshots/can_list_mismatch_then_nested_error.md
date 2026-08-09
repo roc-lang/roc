@@ -21,7 +21,9 @@ This number is being used where a non-number type is needed.
  ^
 
 
-The type was determined to be non-numeric here (can_list_mismatch_then_nested_error.md:1:14):
+(can_list_mismatch_then_nested_error.md:1:2):
+
+The type was determined to be non-numeric here (can_list_mismatch_then_nested_error.md:1:14) (can_list_mismatch_then_nested_error.md:1:14):
 
 [1, "hello", [3, "world"]]
              ^^^^^^^^^^^^
@@ -40,6 +42,8 @@ This string literal is being used where a non-string type is needed.
 [1, "hello", [3, "world"]]
     ^^^^^^^
 
+(can_list_mismatch_then_nested_error.md:1:5):
+
 The type was determined to be:
 
     List(a)
@@ -54,6 +58,8 @@ This string literal is being used where a non-string type is needed.
 
 [1, "hello", [3, "world"]]
                  ^^^^^^^
+
+(can_list_mismatch_then_nested_error.md:1:18):
 
 The type was determined to be:
 

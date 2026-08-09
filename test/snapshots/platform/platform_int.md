@@ -28,6 +28,7 @@ anywhere in this mod.
 provides { "roc_multiplyInts": multiplyInts }
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(platform_int.md:7:16):
 You can fix this by either defining `multiplyInts` in this mod, or by
 removing it from the list of exposed values.
 
@@ -37,6 +38,9 @@ This declaration has a type annotation but no implementation.
 
 multiplyInts : I64, I64 -> I64
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(platform_int.md:9:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

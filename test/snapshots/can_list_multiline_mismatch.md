@@ -22,6 +22,8 @@ This string literal is being used where a non-string type is needed.
 "hello world",
 ^^^^^^^^^^^^^
 
+(can_list_multiline_mismatch.md:3:5):
+
 The type was determined to be:
 
     Dec

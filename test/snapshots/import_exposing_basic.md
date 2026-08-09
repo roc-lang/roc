@@ -28,7 +28,9 @@ import json.Json exposing [decode, to_str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-In this scope, `Json` was already defined here (import_exposing_basic.md:1:1):
+(import_exposing_basic.md:1:1):
+
+In this scope, `Json` was already defined here (import_exposing_basic.md:1:1) (import_exposing_basic.md:1:1):
 
 import json.Json exposing [decode, to_str]
 ^
@@ -41,6 +43,7 @@ encoded = to_str(data)
           ^^^^^^
 
 Is it misspelled, or is there an import missing?
+(import_exposing_basic.md:5:15):
 
 ── ✗ name not in scope ─────────────────────────── import_exposing_basic.md:6:15
 
@@ -50,6 +53,7 @@ decoded = decode(encoded)
           ^^^^^^
 
 Is it misspelled, or is there an import missing?
+(import_exposing_basic.md:6:15):
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

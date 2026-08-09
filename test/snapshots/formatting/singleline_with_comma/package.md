@@ -25,6 +25,7 @@ this mod.
 package [a!, b!,] { a: "a", b: "b", }
          ^^
 
+(package.md:1:10):
 You can fix this by either defining `a!` in this mod, or by removing it from
 the list of exposed values.
 
@@ -36,6 +37,7 @@ this mod.
 package [a!, b!,] { a: "a", b: "b", }
              ^^
 
+(package.md:1:14):
 You can fix this by either defining `b!` in this mod, or by removing it from
 the list of exposed values.
 
@@ -46,6 +48,9 @@ This declaration has a type annotation but no implementation.
 a! : Str => Str
 ^^^^^^^^^^^^^^^
 
+(package.md:3:1):
+
+
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -55,6 +60,9 @@ This declaration has a type annotation but no implementation.
 
 b! : Str => Str
 ^^^^^^^^^^^^^^^
+
+(package.md:4:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

@@ -97,6 +97,7 @@ compact_call = make(
                ^^^^
 
 Is it misspelled, or is there an import missing?
+(trailing_comma_layout.md:13:16):
 
 ── ✗ name not in scope ────────────────────────── trailing_comma_layout.md:18:17
 
@@ -106,6 +107,7 @@ expanded_call = make(1, 2,)
                 ^^^^
 
 Is it misspelled, or is there an import missing?
+(trailing_comma_layout.md:18:17):
 
 ── ! unused variable ───────────────────────────── trailing_comma_layout.md:32:2
 
@@ -115,7 +117,7 @@ two
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:32:2):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:35:31
 
@@ -125,7 +127,7 @@ expanded_lambda_ident = |one, two,| one
                               ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:35:31):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:36:26
 
@@ -135,7 +137,7 @@ expanded_lambda_block = |one, two,| {}
                          ^^^
 
 If you don't need this variable, prefix it with an underscore like `_one` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:36:26):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:36:31
 
@@ -145,7 +147,7 @@ expanded_lambda_block = |one, two,| {}
                               ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:36:31):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:37:30
 
@@ -155,7 +157,7 @@ expanded_lambda_list = |one, two,| [one]
                              ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:37:30):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:39:27
 
@@ -165,7 +167,7 @@ expanded_lambda_nested = |one, two,| |value| value
                           ^^^
 
 If you don't need this variable, prefix it with an underscore like `_one` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:39:27):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:39:32
 
@@ -175,7 +177,7 @@ expanded_lambda_nested = |one, two,| |value| value
                                ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:39:32):
 
 ── ! unused variable ───────────────────────────── trailing_comma_layout.md:59:4
 
@@ -185,7 +187,7 @@ two
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_two` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:59:4):
 
 ── ! unused variable ──────────────────────────── trailing_comma_layout.md:61:16
 
@@ -195,7 +197,7 @@ ExpandedPair(one, two,) => two
              ^^^
 
 If you don't need this variable, prefix it with an underscore like `_one` to
-suppress this warning.
+suppress this warning. (trailing_comma_layout.md:61:16):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,

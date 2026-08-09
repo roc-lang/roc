@@ -23,6 +23,9 @@ match (value, other) {
     (None, x) => x * 2
 }
 
+(variable_shadowing.md:1:1):
+
+
 Its type is:
 a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.

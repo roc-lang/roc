@@ -23,6 +23,8 @@ match person {
     { name } as simplePerson => (simplePerson, name, "unknown")
 }
 
+(pattern_as_nested.md:1:1):
+
 This second branch is trying to match:
 
     { name: _field }

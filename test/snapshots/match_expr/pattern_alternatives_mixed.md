@@ -26,6 +26,7 @@ the same value.
 match ... {
       ^^^
 
+(pattern_alternatives_mixed.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

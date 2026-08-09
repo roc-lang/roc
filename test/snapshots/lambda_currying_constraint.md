@@ -32,6 +32,8 @@ The value before this `+` operator has a type that doesn't have a `plus` method.
 makeAdder = |x| |y| x + y
                     ^^^^^
 
+(lambda_currying_constraint.md:3:21):
+
 The value's type, which does not have a method named `plus`, is:
 
     a

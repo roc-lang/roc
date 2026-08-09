@@ -22,6 +22,8 @@ The where alias Looping names itself.
 a.Looping : where [a.Looping, a.to_str : a -> Str]
                     ^^^^^^^^
 
+(where_alias_recursive.md:1:21):
+
 A where alias is expanded where it is used, so it cannot reach itself, directly
 or through other where aliases.
 
@@ -32,6 +34,8 @@ method.
 
 describe = |value| value.to_str()
                          ^^^^^^
+
+(where_alias_recursive.md:4:26):
 
 The value's type, which does not have a method named `to_str`, is:
 

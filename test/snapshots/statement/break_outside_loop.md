@@ -25,6 +25,7 @@ exit the loop early.
 break
 ^^^^^
 
+(break_outside_loop.md:4:2):
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

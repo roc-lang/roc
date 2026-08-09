@@ -25,6 +25,9 @@ This declaration has a type annotation but no implementation.
 launchTheNukes : {} => Try Bool LaunchNukeErr
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(ann_effectful_fn.md:2:5):
+
+
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -34,6 +37,8 @@ This expression produces a value, but it's not being used.
 
 launchTheNukes : {} => Try Bool LaunchNukeErr
                            ^^^^
+
+(ann_effectful_fn.md:2:32):
 
 It has the type:
 
@@ -48,6 +53,8 @@ This expression produces a value, but it's not being used.
 
 launchTheNukes : {} => Try Bool LaunchNukeErr
                                 ^^^^^^^^^^^^^
+
+(ann_effectful_fn.md:2:37):
 
 It has the type:
 

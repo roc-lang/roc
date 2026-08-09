@@ -18,6 +18,8 @@ This number literal does not fit in the inferred type.
 1.0e-100
 ^^^^^^^^
 
+(frac_tiny_scientific.md:1:1):
+
 The inferred type is:
 
     Dec

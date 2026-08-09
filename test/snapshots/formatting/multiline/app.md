@@ -26,6 +26,7 @@ this mod.
 a2!,
 ^^^
 
+(app.md:3:2):
 You can fix this by either defining `a2!` in this mod, or by removing it
 from the list of exposed values.
 
@@ -37,6 +38,7 @@ this mod.
 a1!,
 ^^^
 
+(app.md:2:2):
 You can fix this by either defining `a1!` in this mod, or by removing it
 from the list of exposed values.
 # TOKENS

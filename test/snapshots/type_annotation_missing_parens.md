@@ -28,6 +28,7 @@ For example:
     List(U8)
 
 I reached the end of the file before this construct was complete.
+(type_annotation_missing_parens.md:2:1):
 
 ── ✗ too few args ──────────────────────── type_annotation_missing_parens.md:1:8
 
@@ -36,6 +37,7 @@ The type List expects 1 argument, but got 0 instead.
 nums : List U8
        ^^^^
 
+(type_annotation_missing_parens.md:1:8):
 
 ── ! declaration has no value ──────────── type_annotation_missing_parens.md:1:1
 
@@ -43,6 +45,9 @@ This declaration has a type annotation but no implementation.
 
 nums : List U8
 ^^^^^^^^^^^
+
+(type_annotation_missing_parens.md:1:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

@@ -23,9 +23,9 @@ A : B
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared here:
+This type is declared here (canon_revamp_mutual_type_aliases.md:1:1):
 
-And it references B declared here (canon_revamp_mutual_type_aliases.md:2:1):
+And it references B declared here (canon_revamp_mutual_type_aliases.md:2:1) (canon_revamp_mutual_type_aliases.md:2:1):
 
 B : A
 ^^^^^
@@ -40,9 +40,9 @@ B : A
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared here:
+This type is declared here (canon_revamp_mutual_type_aliases.md:2:1):
 
-And it references A declared here (canon_revamp_mutual_type_aliases.md:1:1):
+And it references A declared here (canon_revamp_mutual_type_aliases.md:1:1) (canon_revamp_mutual_type_aliases.md:1:1):
 
 A : B
 ^^^^^

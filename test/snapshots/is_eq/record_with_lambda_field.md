@@ -19,6 +19,8 @@ equality.
 { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25", process: |y| y }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(record_with_lambda_field.md:1:1):
+
 The type is:
 
     { age: a, name: b, process: c -> c }

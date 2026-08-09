@@ -21,6 +21,8 @@ This expression is used in an unexpected way.
 y = "value: ${x}"
               ^
 
+(string_interpolation_type_mismatch.md:4:15):
+
 It has the type:
 
     U8

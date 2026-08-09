@@ -24,6 +24,7 @@ For example:
     import Json/Decode exposing [decode]
 
 I reached the end of the file before this construct was complete.
+(fuzz_crash_078.md:2:1):
 # TOKENS
 ~~~zig
 KwImport,

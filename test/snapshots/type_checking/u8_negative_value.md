@@ -19,6 +19,8 @@ This number literal does not fit in the inferred type.
 x = -1
     ^^
 
+(u8_negative_value.md:2:5):
+
 The inferred type is:
 
     U8

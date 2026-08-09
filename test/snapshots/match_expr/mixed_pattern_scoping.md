@@ -27,6 +27,9 @@ match data {
     Err(y) => y / 2
 }
 
+(mixed_pattern_scoping.md:1:1):
+
+
 Its type is:
 a
   where [

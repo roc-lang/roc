@@ -28,7 +28,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_042.md:1:11):
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_042.md:1:20
 
@@ -37,6 +37,7 @@ This `a.E` type is declared to be in `u.R`, which does not exist.
 import u.R}g:r->R.a.E
                    ^^
 
+(fuzz_crash_042.md:1:20):
 
 ── ! declaration has no value ─────────────────────────── fuzz_crash_042.md:1:12
 
@@ -44,6 +45,9 @@ This declaration has a type annotation but no implementation.
 
 import u.R}g:r->R.a.E
            ^^^^^^^^^^
+
+(fuzz_crash_042.md:1:12):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

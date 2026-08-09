@@ -18,6 +18,9 @@ This top-level value still has an unresolved polymorphic type.
 -rec1.field
 ^^^^^^^^^^^
 
+(unary_negation_access.md:1:1):
+
+
 Its type is:
 a where [a.negate : a -> a]
 Add an annotation or use this value in a way that fixes its concrete type.

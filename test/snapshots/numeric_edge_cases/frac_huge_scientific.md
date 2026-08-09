@@ -18,6 +18,8 @@ This number literal does not fit in the inferred type.
 1.0e100
 ^^^^^^^
 
+(frac_huge_scientific.md:1:1):
+
 The inferred type is:
 
     Dec

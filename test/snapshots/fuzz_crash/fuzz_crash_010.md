@@ -31,6 +31,7 @@ This string is missing a closing quote.
 "on        (string 'onmo %')))
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(fuzz_crash_010.md:5:5):
 
 ── ✗ type application needs parentheses ────────────────── fuzz_crash_010.md:1:2
 
@@ -46,7 +47,7 @@ not `List U8`.
 For example:
     List(U8)
 
-I found `{` here.
+I found `{` here. (fuzz_crash_010.md:1:2):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:3
 
@@ -63,7 +64,7 @@ For example:
 
 I found `o` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_010.md:1:3):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:4
 
@@ -80,6 +81,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_010.md:1:4):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:2:6
 
@@ -96,7 +98,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_010.md:2:6):
 # TOKENS
 ~~~zig
 UpperIdent,OpenCurly,LowerIdent,Comma,

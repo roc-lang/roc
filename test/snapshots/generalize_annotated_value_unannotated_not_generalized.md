@@ -28,6 +28,8 @@ This expression is used in an unexpected way.
 strs = bare
        ^^^^
 
+(generalize_annotated_value_unannotated_not_generalized.md:9:8):
+
 It has the type:
 
     List(U64)

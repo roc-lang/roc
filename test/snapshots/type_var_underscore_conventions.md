@@ -45,7 +45,7 @@ single_use = |x| "hello"
               ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning.
+suppress this warning. (type_var_underscore_conventions.md:5:15):
 
 ── ! unused variable ─────────────────── type_var_underscore_conventions.md:9:20
 
@@ -55,7 +55,7 @@ starting_dollar = |list| "default"
                    ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_list` to
-suppress this warning.
+suppress this warning. (type_var_underscore_conventions.md:9:20):
 
 ── ! unused variable ────────────────── type_var_underscore_conventions.md:13:17
 
@@ -65,7 +65,7 @@ combo_single = |x| "combo"
                 ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning.
+suppress this warning. (type_var_underscore_conventions.md:13:17):
 
 ── ! unused variable ────────────────── type_var_underscore_conventions.md:17:17
 
@@ -75,7 +75,7 @@ valid_single = |x| "valid"
                 ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning.
+suppress this warning. (type_var_underscore_conventions.md:17:17):
 
 ── ! unused variable ─────────────────── type_var_underscore_conventions.md:22:9
 
@@ -85,7 +85,7 @@ main = |x| "done"
         ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning.
+suppress this warning. (type_var_underscore_conventions.md:22:9):
 
 ── ✗ type mismatch ───────────────────── type_var_underscore_conventions.md:9:26
 
@@ -93,6 +93,8 @@ This string literal is being used where a non-string type is needed.
 
 starting_dollar = |list| "default"
                          ^^^^^^^^^
+
+(type_var_underscore_conventions.md:9:26):
 
 The type was determined to be:
 

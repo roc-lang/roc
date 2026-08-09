@@ -22,6 +22,7 @@ hello! = Stdout.line!("Hello")
          ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+(simple_mod_no_blanks.md:2:10):
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

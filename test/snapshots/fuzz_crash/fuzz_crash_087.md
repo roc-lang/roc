@@ -18,7 +18,7 @@ Nothing is named `b` in this scope.
 a=(0->b .c())
       ^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (fuzz_crash_087.md:1:7):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpArrow,LowerIdent,DotLowerIdent,NoSpaceOpenRound,CloseRound,CloseRound,

@@ -66,6 +66,8 @@ method.
 e: !\\
    ^^^
 
+(multiline_string_complex.md:40:5):
+
 The value's type, which does not have a method named `not`, is:
 
     Str
@@ -79,6 +81,8 @@ The `minus` method on `Dec` has an incompatible type.
 
 0 - \\
 ^
+
+(multiline_string_complex.md:37:3):
 
 The method `minus` has the type:
 

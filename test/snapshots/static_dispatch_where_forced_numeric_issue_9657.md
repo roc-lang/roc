@@ -39,6 +39,8 @@ variable, but unresolved type variables have no methods.
 output.encode()
 ^^^^^^^^^^^^^^^
 
+(static_dispatch_where_forced_numeric_issue_9657.md:12:9):
+
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.

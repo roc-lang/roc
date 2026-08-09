@@ -18,6 +18,8 @@ This string literal is being used where a non-string type is needed.
 [[1, "hello"], [2, 3]]
      ^^^^^^^
 
+(can_nested_heterogeneous_lists.md:1:6):
+
 The type was determined to be:
 
     Dec

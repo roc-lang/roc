@@ -18,6 +18,8 @@ This string literal is being used where a non-string type is needed.
 [42, 4.2, "hello"]
           ^^^^^^^
 
+(let_polymorphism_error.md:1:11):
+
 The type was determined to be:
 
     Dec

@@ -58,7 +58,7 @@ For example:
 
 I found `d` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_025.md:9:1):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:3
 
@@ -73,7 +73,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here.
+I found `=` here. (fuzz_crash_025.md:9:3):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
 
@@ -88,7 +88,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `18446744073709551615` here.
+I found `18446744073709551615` here. (fuzz_crash_025.md:9:5):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
 
@@ -103,7 +103,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here.
+I found `:` here. (fuzz_crash_025.md:12:48):
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
 
@@ -121,7 +121,7 @@ For example:
 
 I found `f` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_025.md:13:1):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:3
 
@@ -136,7 +136,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here.
+I found `=` here. (fuzz_crash_025.md:13:3):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
 
@@ -151,7 +151,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `8` here.
+I found `8` here. (fuzz_crash_025.md:13:4):
 
 ── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
 
@@ -159,6 +159,8 @@ This number literal does not fit in the inferred type.
 
 e = 3402823669209384634633746074317682114553.14: I8
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(fuzz_crash_025.md:12:5):
 
 The inferred type is:
 

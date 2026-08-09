@@ -19,6 +19,7 @@ The mod `SomeType` was not found in this Roc project.
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
                     ^^^^^^^^
 
+(package_header_nonempty_singleline_1.md:1:21):
 
 ── ✗ exposed but not defined ────── package_header_nonempty_singleline_1.md:1:10
 
@@ -28,6 +29,7 @@ anywhere in this mod.
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
          ^^^^^^^^^
 
+(package_header_nonempty_singleline_1.md:1:10):
 You can fix this by either defining `something` in this mod, or by removing
 it from the list of exposed values.
 # TOKENS

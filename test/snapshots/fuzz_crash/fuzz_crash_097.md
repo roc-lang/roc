@@ -21,6 +21,8 @@ that method.
 a=(0(0->X)
    ^
 
+(fuzz_crash_097.md:1:4):
+
 The value's type, which does not have a method named `from_numeral`, is:
 
     [X(b), ..] -> _ret
@@ -32,6 +34,8 @@ This is not a record, so it does not have any fields to access.
 
 a=(0(0->X)
 ->X .a)
+
+(fuzz_crash_097.md:1:4):
 
 It is:
 

@@ -21,6 +21,7 @@ The type Encodable expects 1 argument, but got 0 instead.
 encode_once : a -> Str where [a.Encodable]
                               ^^^^^^^^^^^
 
+(where_alias_arity_mismatch.md:3:31):
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseSquare,

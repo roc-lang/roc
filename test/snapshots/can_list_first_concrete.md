@@ -18,6 +18,8 @@ This string literal is being used where a non-string type is needed.
 [42, "world", 3.14]
      ^^^^^^^
 
+(can_list_first_concrete.md:1:6):
+
 The type was determined to be:
 
     Dec

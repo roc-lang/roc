@@ -25,6 +25,7 @@ the same value.
 match ... {
       ^^^
 
+(nested_record_patterns.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

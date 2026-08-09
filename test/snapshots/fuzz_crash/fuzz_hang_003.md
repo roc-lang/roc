@@ -31,7 +31,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.70000c` here.
+I found `.70000c` here. (fuzz_hang_003.md:4:4):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_003.md:4:11
 
@@ -46,7 +46,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here.
+I found `:` here. (fuzz_hang_003.md:4:11):
 
 ── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:1:3
 
@@ -55,6 +55,7 @@ The type `F` is not declared in this scope.
 a:F
   ^
 
+(fuzz_hang_003.md:1:3):
 
 ── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:3:3
 
@@ -63,6 +64,7 @@ The type `F` is not declared in this scope.
 b:F
   ^
 
+(fuzz_hang_003.md:3:3):
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

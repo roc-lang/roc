@@ -36,7 +36,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.*` here.
+I found `.*` here. (nominal_import_wildcard.md:1:13):
 
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:3:7
 
@@ -45,6 +45,7 @@ The type `Color` is not declared in this scope.
 red : Color
       ^^^^^
 
+(nominal_import_wildcard.md:3:7):
 
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:6:8
 
@@ -53,6 +54,7 @@ The type `Color` is not declared in this scope.
 blue : Color
        ^^^^^
 
+(nominal_import_wildcard.md:6:8):
 
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:9:9
 
@@ -61,6 +63,7 @@ The type `Color` is not declared in this scope.
 green : Color
         ^^^^^
 
+(nominal_import_wildcard.md:9:9):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,DotStar,

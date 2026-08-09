@@ -21,6 +21,8 @@ The nominal type MyList refers to itself in a way that would make it infinite.
 MyList := List(MyList)
 ^^^^^^^^^^^^^^^^^^^^^^
 
+(recursion_through_builtin_arg.md:1:1):
+
 Its definition is:
 
     List(MyList)

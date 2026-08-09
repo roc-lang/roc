@@ -23,7 +23,7 @@ Use `..<` for an exclusive range or `..=` for an inclusive range.
 
 For example:
     1..<10
-    1..=10
+    1..=10 (range_bare_double_dot_error.md:1:8):
 
 ── ✗ unrecognized syntax ──────────────────── range_bare_double_dot_error.md:1:8
 
@@ -31,6 +31,8 @@ I don't recognize this syntax.
 
 r = 1..5
        ^
+
+(range_bare_double_dot_error.md:1:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

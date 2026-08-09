@@ -18,6 +18,9 @@ This declaration has a type annotation but no implementation.
 x : { ..a, }
 ^^^^^^^^^^^^
 
+(fmt_record_type_extension_trailing_comma_issue_9374.md:1:1):
+
+
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 # TOKENS

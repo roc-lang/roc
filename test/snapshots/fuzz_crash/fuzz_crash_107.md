@@ -20,6 +20,8 @@ fields required).
 e={{e:\\
 }.U{}}
 
+(fuzz_crash_107.md:1:4):
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 # TOKENS

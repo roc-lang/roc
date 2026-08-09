@@ -23,6 +23,7 @@ match person {
       ^^^^^^
 
 Is it misspelled, or is there an import missing?
+(pattern_destructure_simple.md:1:7):
 
 ── ! unused variable ──────────────────────── pattern_destructure_simple.md:2:13
 
@@ -32,7 +33,7 @@ Variable `age` is defined here and then never used:
         ^^^
 
 If you don't need this variable, prefix it with an underscore like `_age` to
-suppress this warning.
+suppress this warning. (pattern_destructure_simple.md:2:13):
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

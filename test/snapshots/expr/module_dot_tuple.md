@@ -18,6 +18,7 @@ This value is not a tuple, so it has no .5 element.
 I.5
 ^^^
 
+(mod_dot_tuple.md:1:1):
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotInt,

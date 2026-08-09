@@ -37,7 +37,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0o0` here.
+I found `0o0` here. (fuzz_crash_015.md:1:1):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:1:4
 
@@ -52,7 +52,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.0` here.
+I found `.0` here. (fuzz_crash_015.md:1:4):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:2:1
 
@@ -67,7 +67,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0_0` here.
+I found `0_0` here. (fuzz_crash_015.md:2:1):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:1
 
@@ -82,7 +82,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0u8` here.
+I found `0u8` here. (fuzz_crash_015.md:3:1):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:4
 
@@ -97,7 +97,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.0` here.
+I found `.0` here. (fuzz_crash_015.md:3:4):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:4:1
 
@@ -112,7 +112,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0_` here.
+I found `0_` here. (fuzz_crash_015.md:4:1):
 # TOKENS
 ~~~zig
 Int,NoSpaceDotInt,

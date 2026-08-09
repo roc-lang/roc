@@ -23,6 +23,8 @@ The `from_numeral` method on `Foo` has an incompatible type.
 main = 123.Foo
        ^^^^^^^
 
+(number_suffix_custom_type.md:6:8):
+
 The method `from_numeral` has the type:
 
     I64, U8 -> Foo

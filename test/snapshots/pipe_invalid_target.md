@@ -25,7 +25,7 @@ parenthesized expression.
 For example:
     value |> next
 
-I found `2` here.
+I found `2` here. (pipe_invalid_target.md:1:6):
 # TOKENS
 ~~~zig
 Int,OpPizza,Int,

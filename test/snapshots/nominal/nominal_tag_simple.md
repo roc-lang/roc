@@ -24,6 +24,8 @@ I'm having trouble with this nominal tag.
 yellow = Color.Yellow
          ^^^^^^^^^^^^
 
+(nominal_tag_simple.md:7:10):
+
 The tag is:
 
     Yellow

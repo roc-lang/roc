@@ -22,6 +22,8 @@ This expression is used in an unexpected way.
 { x } = { x: 1, y: 2, z: 3 }
         ^^^^^^^^^^^^^^^^^^^^
 
+(destructure_closed_hint_multi.md:3:13):
+
 It has the type:
 
     { x: a, y: b, z: c }

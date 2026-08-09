@@ -18,6 +18,9 @@ This top-level value still has an unresolved polymorphic type.
 person.age + 5
 ^^^^^^^^^^^^^^
 
+(record_access_in_expression.md:1:1):
+
+
 Its type is:
 a where [a.plus : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.

@@ -414,6 +414,10 @@ pub const Document = struct {
         else
             null;
 
+        if (display_region.filename) |fname| {
+            try self.injectLocation(fname, display_region.start_line, display_region.start_column);
+        }
+
         try self.elements.append(.{
             .source_code_with_underlines = .{
                 .display_region = .{
@@ -456,6 +460,93 @@ pub const Document = struct {
         const text = try std.fmt.allocPrint(self.allocator, fmt, args);
         defer self.allocator.free(text);
         try self.addText(text);
+    }
+
+    fn injectLocation(self: *Document, filename: []const u8, line: u32, col: u32) std.mem.Allocator.Error!void {
+        const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
+        const sanitized_filename = sanitisePathForSnapshots(filename);
+
+        var i: usize = self.elements.items.len;
+        while (i > 0) {
+            i -= 1;
+            const el = &self.elements.items[i];
+            switch (el.*) {
+                .line_break, .annotation_start, .annotation_end, .indent, .space => continue,
+                .reflowing_text => |*text| {
+                    if (std.mem.endsWith(u8, text.*, ":")) {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            text.*[0 .. text.*.len - 1],
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(text.*);
+                        text.* = new_text;
+                    } else {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            text.*,
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(text.*);
+                        text.* = new_text;
+                    }
+                    return;
+                },
+                .text => |*text| {
+                    if (std.mem.endsWith(u8, text.*, ":")) {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            text.*[0 .. text.*.len - 1],
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(text.*);
+                        text.* = new_text;
+                    } else {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            text.*,
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(text.*);
+                        text.* = new_text;
+                    }
+                    return;
+                },
+                .annotated => |*annotated| {
+                    if (std.mem.endsWith(u8, annotated.content, ":")) {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            annotated.content[0 .. annotated.content.len - 1],
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(annotated.content);
+                        annotated.content = new_text;
+                    } else {
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                            annotated.content,
+                            sanitized_filename,
+                            line,
+                            col,
+                        });
+                        self.allocator.free(annotated.content);
+                        annotated.content = new_text;
+                    }
+                    return;
+                },
+                else => break,
+            }
+        }
+        
+        // If we get here, we either hit an element that stops the search or reached the beginning without finding text.
+        // We append a new text element before the source region, and also a line break so it doesn't stick to the code block.
+        const new_text = try std.fmt.allocPrint(self.allocator, "({s}:{d}:{d}):", .{ sanitized_filename, line, col });
+        try self.elements.append(.{ .text = new_text });
+        try self.elements.append(.line_break);
     }
 
     /// Add multiple line breaks.
@@ -581,6 +672,10 @@ pub const Document = struct {
         else
             null;
 
+        if (owned_filename) |fname| {
+            try self.injectLocation(fname, region_info.start_line_idx + 1, region_info.start_col_idx + 1);
+        }
+
         try self.elements.append(.{
             .source_code_region = .{
                 .line_text = owned_line_text,
@@ -602,6 +697,9 @@ pub const Document = struct {
         filename: ?[]const u8,
     ) std.mem.Allocator.Error!void {
         if (regions.len == 0) return;
+        if (filename) |fname| {
+            try self.injectLocation(fname, regions[0].start_line, regions[0].start_column);
+        }
         const owned_regions = try self.allocator.dupe(SourceRegion, regions);
         try self.elements.append(.{
             .source_code_multi_region = .{

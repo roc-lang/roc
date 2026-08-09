@@ -37,7 +37,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_invalid.md:2:13):
 
 ── ✗ old list rest pattern ──────────────────────────── list_rest_invalid.md:3:6
 
@@ -50,7 +50,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_invalid.md:3:6):
 
 ── ✗ old list rest pattern ──────────────────────────── list_rest_invalid.md:4:9
 
@@ -63,7 +63,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest]
+    [first, .. as rest] (list_rest_invalid.md:4:9):
 
 ── ✗ name not in scope ──────────────────────────────── list_rest_invalid.md:1:7
 
@@ -72,7 +72,7 @@ Nothing is named `items` in this scope.
 match items {
       ^^^^^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (list_rest_invalid.md:1:7):
 
 ── ! unused variable ────────────────────────────────── list_rest_invalid.md:2:6
 
@@ -82,7 +82,7 @@ Variable `first` is defined here and then never used:
  ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_first` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:2:6):
 
 ── ! unused variable ───────────────────────────────── list_rest_invalid.md:2:15
 
@@ -92,7 +92,7 @@ Variable `rest` is defined here and then never used:
           ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:2:15):
 
 ── ! unused variable ────────────────────────────────── list_rest_invalid.md:3:8
 
@@ -102,7 +102,7 @@ Variable `rest` is defined here and then never used:
    ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:3:8):
 
 ── ! unused variable ───────────────────────────────── list_rest_invalid.md:3:14
 
@@ -112,7 +112,7 @@ Variable `last` is defined here and then never used:
          ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_last` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:3:14):
 
 ── ! unused variable ────────────────────────────────── list_rest_invalid.md:4:6
 
@@ -122,7 +122,7 @@ Variable `x` is defined here and then never used:
  ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:4:6):
 
 ── ! unused variable ───────────────────────────────── list_rest_invalid.md:4:11
 
@@ -132,7 +132,7 @@ Variable `rest` is defined here and then never used:
       ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:4:11):
 
 ── ! unused variable ───────────────────────────────── list_rest_invalid.md:4:17
 
@@ -142,7 +142,7 @@ Variable `y` is defined here and then never used:
             ^
 
 If you don't need this variable, prefix it with an underscore like `_y` to
-suppress this warning.
+suppress this warning. (list_rest_invalid.md:4:17):
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

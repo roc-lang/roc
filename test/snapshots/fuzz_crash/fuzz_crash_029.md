@@ -58,7 +58,7 @@ For example:
 
 I found `vides` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_029.md:11:3):
 
 ── ✗ expected provides ────────────────────────────────── fuzz_crash_029.md:12:3
 
@@ -72,7 +72,7 @@ A platform header must map host symbols to Roc functions in a `provides` record.
 For example:
     provides { "roc_main": main }
 
-I found `{` here.
+I found `{` here. (fuzz_crash_029.md:12:3):
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_029.md:13:6
 
@@ -87,7 +87,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here.
+I found `"` here. (fuzz_crash_029.md:13:6):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:13:7
 
@@ -102,7 +102,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `..l` here.
+I found `..l` here. (fuzz_crash_029.md:13:7):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:10
 
@@ -117,7 +117,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found `"` here. (fuzz_crash_029.md:13:10):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:11
 
@@ -134,6 +134,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_029.md:13:11):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:13
 
@@ -150,7 +151,7 @@ For example:
 
 I found `mmen` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_029.md:13:13):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:19
 
@@ -167,7 +168,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_029.md:13:19):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:14:2
 
@@ -184,6 +185,7 @@ For example:
 
 I found `provides` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(fuzz_crash_029.md:14:2):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:15:3
 
@@ -198,7 +200,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found `[` here. (fuzz_crash_029.md:15:3):
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_029.md:15:14
 
@@ -216,6 +218,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_029.md:15:14):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:16
 
@@ -230,7 +233,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found `(` here. (fuzz_crash_029.md:15:16):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:17
 
@@ -247,7 +250,7 @@ For example:
 
 I found `n` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_029.md:15:17):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:1
 
@@ -264,7 +267,7 @@ For example:
 
 I found `ar` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_029.md:16:1):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:16:3
 
@@ -281,6 +284,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_029.md:16:3):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:17:3
 
@@ -297,7 +301,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_029.md:17:3):
 
 ── ✗ malformed type ───────────────────────────────────── fuzz_crash_029.md:13:6
 
@@ -306,6 +310,7 @@ This type annotation is malformed or contains invalid syntax.
 pkg: "..l", mmen  } # Cose
      ^
 
+(fuzz_crash_029.md:13:6):
 
 ── ! declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
 
@@ -313,6 +318,9 @@ This declaration has a type annotation but no implementation.
 
 pkg: "..l", mmen  } # Cose
 ^^^^^^
+
+(fuzz_crash_029.md:13:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

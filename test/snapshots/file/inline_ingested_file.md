@@ -23,7 +23,8 @@ The file users.json was not found.
 import "users.json" as data : Str
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Make sure the file exists relative to your source file:
+Make sure the file exists relative to your source file
+(inline_ingested_file.md:1:1):
 
 ── ! duplicate definition ────────────────────────── inline_ingested_file.md:2:1
 
@@ -33,7 +34,9 @@ import Json
 ^^^^^^^^^^^
 
 
-In this scope, `Json` was already defined here (inline_ingested_file.md:1:1):
+(inline_ingested_file.md:2:1):
+
+In this scope, `Json` was already defined here (inline_ingested_file.md:1:1) (inline_ingested_file.md:1:1):
 
 import "users.json" as data : Str
 ^
@@ -45,6 +48,8 @@ variable, but unresolved type variables have no methods.
 
 foo = Json.parse(data)
       ^^^^^^^^^^
+
+(inline_ingested_file.md:4:7):
 
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a

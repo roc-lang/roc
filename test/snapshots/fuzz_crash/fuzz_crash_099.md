@@ -26,9 +26,9 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                        ^
 
 
-This field is duplicated here:
+This field is duplicated here (fuzz_crash_099.md:3:28):
 
-The field `a` was first defined here (fuzz_crash_099.md:3:22):
+The field `a` was first defined here (fuzz_crash_099.md:3:22) (fuzz_crash_099.md:3:22):
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                  ^
@@ -43,7 +43,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
          ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_insert` to
-suppress this warning.
+suppress this warning. (fuzz_crash_099.md:3:14):
 
 ── ! unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
@@ -53,7 +53,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                                 ^^
 
 If you don't need this variable, prefix it with an underscore like `_nt` to
-suppress this warning.
+suppress this warning. (fuzz_crash_099.md:3:37):
 
 ── ! unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
@@ -63,7 +63,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_fn1` to
-suppress this warning.
+suppress this warning. (fuzz_crash_099.md:3:5):
 
 ── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
 
@@ -71,6 +71,8 @@ This destructuring pattern doesn't cover all possible cases.
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                ^^^^^^^^^^^^^^^^^
+
+(fuzz_crash_099.md:3:20):
 
 The value being destructured has type:
         ({ a: c }, d)

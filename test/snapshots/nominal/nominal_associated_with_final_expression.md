@@ -31,6 +31,7 @@ For example:
 I found `x` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
+(nominal_associated_with_final_expression.md:2:1):
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,

@@ -50,7 +50,7 @@ entries.
 For example:
     package [main, Result, Result.*]
 
-I found `.` here.
+I found `.` here. (fuzz_crash_030.md:8:5):
 
 ── ✗ expected closing brace ───────────────────────────── fuzz_crash_030.md:11:3
 
@@ -64,7 +64,7 @@ Close the packages record after the last package entry.
 For example:
     packages { base: "../base/main.roc" }
 
-I found `{` here.
+I found `{` here. (fuzz_crash_030.md:11:3):
 
 ── ✗ expected provides ────────────────────────────────── fuzz_crash_030.md:12:9
 
@@ -78,7 +78,7 @@ A platform header must map host symbols to Roc functions in a `provides` record.
 For example:
     provides { "roc_main": main }
 
-I found `..c` here.
+I found `..c` here. (fuzz_crash_030.md:12:9):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_030.md:12:12
 
@@ -93,7 +93,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found `"` here. (fuzz_crash_030.md:12:12):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_030.md:12:13
 
@@ -110,6 +110,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_030.md:12:13):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_030.md:12:15
 
@@ -126,7 +127,7 @@ For example:
 
 I found `mm` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_030.md:12:15):
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_030.md:12:17
 
@@ -143,7 +144,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_030.md:12:17):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_030.md:13:2
 
@@ -160,6 +161,7 @@ For example:
 
 I found `provides` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(fuzz_crash_030.md:13:2):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_030.md:14:3
 
@@ -174,7 +176,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found `[` here. (fuzz_crash_030.md:14:3):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_030.md:15:1
 
@@ -191,7 +193,7 @@ For example:
 
 I found `ar` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (fuzz_crash_030.md:15:1):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_030.md:15:3
 
@@ -208,6 +210,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
+(fuzz_crash_030.md:15:3):
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_030.md:16:3
 
@@ -224,7 +227,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_030.md:16:3):
 # TOKENS
 ~~~zig
 KwPlatform,

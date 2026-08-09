@@ -47,7 +47,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (where_clauses_error_cases.md:3:10):
 
 ── ✗ expected where clause end ──────────────── where_clauses_error_cases.md:3:3
 
@@ -63,6 +63,7 @@ For example:
 
 I found `where [a.method ->` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(where_clauses_error_cases.md:3:3):
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:22
 
@@ -79,7 +80,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
+depending on the surrounding syntax. (where_clauses_error_cases.md:3:22):
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:23
 
@@ -96,7 +97,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (where_clauses_error_cases.md:3:23):
 
 ── ✗ expected where constraint ──────────────── where_clauses_error_cases.md:7:3
 
@@ -112,6 +113,7 @@ For example:
 
 I found `where [` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+(where_clauses_error_cases.md:7:3):
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:7:10
 
@@ -128,7 +130,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (where_clauses_error_cases.md:7:10):
 
 ── ✗ malformed where clause ────────────────── where_clauses_error_cases.md:3:10
 
@@ -136,6 +138,8 @@ This where clause could not be parsed correctly.
 
 where [a.method -> b]
        ^^^^^^^^^^^
+
+(where_clauses_error_cases.md:3:10):
 
 Check the syntax of your where clause.
 
@@ -146,6 +150,8 @@ This where clause could not be parsed correctly.
 where []
 ^^^^^^^
 
+(where_clauses_error_cases.md:7:3):
+
 Check the syntax of your where clause.
 
 ── ! declaration has no value ───────────────── where_clauses_error_cases.md:2:1
@@ -154,6 +160,9 @@ This declaration has a type annotation but no implementation.
 
 broken_fn1 : a -> b
   where [a.method -> b]
+
+(where_clauses_error_cases.md:2:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -164,6 +173,9 @@ This declaration has a type annotation but no implementation.
 
 broken_fn2 : a -> b
   where []
+
+(where_clauses_error_cases.md:6:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -177,6 +189,8 @@ method to it.
 where [c.method : c -> d]
        ^^^^^^^^^^^^^^^^^
 
+(where_clauses_error_cases.md:11:10):
+
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `c` to the annotation, or remove this constraint.
@@ -187,6 +201,9 @@ This declaration has a type annotation but no implementation.
 
 broken_fn3 : a -> b
   where [c.method : c -> d]
+
+(where_clauses_error_cases.md:10:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

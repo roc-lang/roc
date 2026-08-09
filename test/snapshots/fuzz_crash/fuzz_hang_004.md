@@ -23,6 +23,8 @@ I am part way through parsing this tuple, but it is empty.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
                        ^^
 
+(fuzz_hang_004.md:1:24):
+
 If you want to represent nothing, try using an empty record: `{}`.
 
 ── ✗ type mismatch ─────────────────────────────────────── fuzz_hang_004.md:1:10
@@ -33,7 +35,9 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
          ^
 
 
-The type was determined to be non-numeric here (fuzz_hang_004.md:1:12):
+(fuzz_hang_004.md:1:10):
+
+The type was determined to be non-numeric here (fuzz_hang_004.md:1:12) (fuzz_hang_004.md:1:12):
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
            ^^
@@ -48,6 +52,7 @@ This value is not a tuple, so it has no .70000 element.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
                           ^^^^^^^^
 
+(fuzz_hang_004.md:1:27):
 
 ── ! redundant pattern ──────────────────────────────────── fuzz_hang_004.md:1:4
 
@@ -55,6 +60,8 @@ The second branch of this `match` is redundant.
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(fuzz_hang_004.md:1:4):
 
 This pattern can never match because earlier patterns already cover all the
 values it would match.
@@ -65,6 +72,8 @@ This match expression doesn't cover all possible cases.
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+(fuzz_hang_004.md:1:4):
 
 The value being matched on has type:
         List(_b)

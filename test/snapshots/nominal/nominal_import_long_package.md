@@ -21,6 +21,7 @@ This `CE` type is declared to be in `design.Styles`, which does not exist.
 red : CE
       ^^
 
+(nominal_import_long_package.md:3:7):
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,KwAs,UpperIdent,CloseSquare,

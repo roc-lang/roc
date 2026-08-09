@@ -26,6 +26,9 @@ This function performs an effect, so its name must end in `!`.
 topThunk = || echo!("top")
 ^^^^^^^^
 
+(repro_issue_9962_effectful_local_function_name.md:1:1):
+
+
 Add a trailing `!` to this function name.
 
 ── ! effectful function name ───── repro_issue_9962_effectful_local_function_name.md:4:5
@@ -34,6 +37,9 @@ This function performs an effect, so its name must end in `!`.
 
 thunk = || echo!("local")
 ^^^^^
+
+(repro_issue_9962_effectful_local_function_name.md:4:5):
+
 
 Add a trailing `!` to this function name.
 # TOKENS

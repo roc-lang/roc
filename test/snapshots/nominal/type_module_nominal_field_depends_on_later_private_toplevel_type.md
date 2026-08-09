@@ -25,6 +25,7 @@ field : InternalType,
 
 Other mods can see this field because ModType is exposed and not opaque, but
 they cannot name this private type.
+(type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13):
 
 
 

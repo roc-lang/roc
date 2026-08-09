@@ -23,6 +23,8 @@ The first argument being passed to this function has the wrong type.
 main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
+(type_record_basic.md:6:13):
+
 This argument has the type:
 
     { age: a, namee: b }

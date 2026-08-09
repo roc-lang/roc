@@ -53,6 +53,7 @@ DOES NOT EXIST - can_import_nested_mods.md:24:24:24:41
 parseConfig : Config.Settings -> Str
               ^^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:6:15):
 
 ── ✗ does not exist ────────────────────────── can_import_nested_mods.md:7:26
 
@@ -62,6 +63,7 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 `Config` is in scope, but it has no associated `toString`.
+(can_import_nested_mods.md:7:26):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:10:28
 
@@ -70,6 +72,7 @@ parseConfig = |settings| Config.toString(settings)
 authenticate : Str, Str -> HttpAuth.Token
                            ^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:10:28):
 
 ── ✗ does not exist ───────────────────────── can_import_nested_mods.md:11:29
 
@@ -79,6 +82,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 `HttpAuth` is in scope, but it has no associated `login`.
+(can_import_nested_mods.md:11:29):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:15
 
@@ -87,6 +91,7 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
 processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
               ^^^^^^^^^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:14:15):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:55
 
@@ -95,6 +100,7 @@ processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
 processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
                                                       ^^^^^^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:14:55):
 
 ── ✗ does not exist ────────────────────────── can_import_nested_mods.md:16:5
 
@@ -104,6 +110,7 @@ Config.Parser.Advanced.parseWith(advancedConfig, input)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 `Config.Parser.Advanced` is in scope, but it has no associated `parseWith`.
+(can_import_nested_mods.md:16:5):
 
 ── ✗ name not in scope ────────────────────── can_import_nested_mods.md:20:23
 
@@ -113,6 +120,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                       ^^^^^^^
 
 Is it misspelled, or is there an import missing?
+(can_import_nested_mods.md:20:23):
 
 ── ✗ does not exist ───────────────────────── can_import_nested_mods.md:20:37
 
@@ -122,6 +130,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 `Config` is in scope, but it has no associated `defaultPadding`.
+(can_import_nested_mods.md:20:37):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:16
 
@@ -130,6 +139,7 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
 validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
                ^^^^^^^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:23:16):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:44
 
@@ -138,6 +148,7 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
                                            ^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:23:44):
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:60
 
@@ -146,6 +157,7 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
                                                            ^^^^^^^^^^^^^^
 
+(can_import_nested_mods.md:23:60):
 
 ── ✗ does not exist ───────────────────────── can_import_nested_mods.md:24:24
 
@@ -155,6 +167,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
                        ^^^^^^^^^^^^^^^^^
 
 `HttpAuth` is in scope, but it has no associated `validate`.
+(can_import_nested_mods.md:24:24):
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,

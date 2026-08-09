@@ -23,6 +23,7 @@ the same value.
 match ... {
       ^^^
 
+(record_destructure.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

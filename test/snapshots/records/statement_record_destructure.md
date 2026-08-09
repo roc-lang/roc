@@ -19,6 +19,7 @@ Nothing is named `person` in this scope.
                        ^^^^^^
 
 Is it misspelled, or is there an import missing?
+(statement_record_destructure.md:1:24):
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseCurly,OpAssign,LowerIdent,

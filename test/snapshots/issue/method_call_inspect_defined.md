@@ -26,6 +26,7 @@ For example:
 
 I found `;` here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
+(method_call_inspect_defined.md:1:14):
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

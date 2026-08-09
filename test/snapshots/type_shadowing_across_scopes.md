@@ -41,7 +41,7 @@ For example:
 
 I found `Try` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
+mod names in Roc. (type_shadowing_across_scopes.md:9:5):
 
 ── ✗ expected record type separator ─────── type_shadowing_across_scopes.md:9:21
 
@@ -57,7 +57,7 @@ For example:
 
 I found `Failure` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
+mod names in Roc. (type_shadowing_across_scopes.md:9:21):
 
 ── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:9:28
 
@@ -74,7 +74,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (type_shadowing_across_scopes.md:9:28):
 
 ── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:10:1
 
@@ -91,7 +91,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (type_shadowing_across_scopes.md:10:1):
 
 ── ! builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
 
@@ -102,7 +102,7 @@ Try(a, b) : [Ok(a), Err(b)]
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is here:
+The new declaration is here (type_shadowing_across_scopes.md:1:1):
 
 ── ! unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
 
@@ -112,7 +112,7 @@ processData = |data|
                ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_data` to
-suppress this warning.
+suppress this warning. (type_shadowing_across_scopes.md:4:16):
 
 ── ✗ malformed type ─────────────────────── type_shadowing_across_scopes.md:9:21
 
@@ -121,6 +121,7 @@ This type annotation is malformed or contains invalid syntax.
 Try : [Success, Failure]
                 ^^^^^^^
 
+(type_shadowing_across_scopes.md:9:21):
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseSquare,

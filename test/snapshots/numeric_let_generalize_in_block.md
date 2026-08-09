@@ -23,6 +23,8 @@ The first argument being passed to this function has the wrong type.
 b = Dec.to_str(n)
                ^
 
+(numeric_let_generalize_in_block.md:4:20):
+
 This argument has the type:
 
     I64

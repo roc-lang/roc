@@ -18,6 +18,8 @@ This number literal does not fit in the inferred type.
 1.23456789012345678e-10
 ^^^^^^^^^^^^^^^^^^^^^^^
 
+(dec_scientific_negative_exp.md:1:1):
+
 The inferred type is:
 
     Dec

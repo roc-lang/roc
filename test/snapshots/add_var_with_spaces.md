@@ -18,7 +18,7 @@ Nothing is named `x` in this scope.
 add2 = x +      2
        ^
 
-Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing? (add_var_with_spaces.md:1:8):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,OpPlus,Int,

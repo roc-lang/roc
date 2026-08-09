@@ -29,6 +29,7 @@ This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 handleTry : MyTryMod.MyTryType(Str, I32) -> Str
                     ^^^^^^^^^^
 
+(nominal_external_fully_qualified.md:3:21):
 
 ── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:6:17
 
@@ -37,6 +38,7 @@ This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 MyTryMod.MyTryType.Ok(value) => value
         ^^^^^^^^^^
 
+(nominal_external_fully_qualified.md:6:17):
 
 ── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:7:17
 
@@ -45,6 +47,7 @@ This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
 MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
         ^^^^^^^^^^
 
+(nominal_external_fully_qualified.md:7:17):
 
 ── ! unused variable ────────────────── nominal_external_fully_qualified.md:7:32
 
@@ -54,7 +57,7 @@ MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
                        ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_code` to
-suppress this warning.
+suppress this warning. (nominal_external_fully_qualified.md:7:32):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

@@ -18,6 +18,7 @@ This escape sequence is not recognized.
 "abc\qdef"
     ^^
 
+(weird_escape.md:1:5):
 # TOKENS
 ~~~zig
 StringStart,MalformedStringPart,StringEnd,

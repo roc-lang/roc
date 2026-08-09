@@ -19,6 +19,8 @@ The value before this `..<` operator has a type that doesn't have a
 r = "a"..<"z"
     ^^^^^^^^^
 
+(range_missing_method_error.md:1:5):
+
 The value's type, which does not have a method named `range_exclusive`, is:
 
     Str

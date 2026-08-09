@@ -26,6 +26,8 @@ f = |x| match x {
     _ => 0
 }
 
+(match_redundant_exact_numeral.md:2:9):
+
 This pattern can never match because earlier patterns already cover all the
 values it would match.
 # TOKENS

@@ -22,6 +22,8 @@ I'm having trouble with this nominal type that wraps a record.
 inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
                     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(issue_10195_nominal_record_update_rewrapped.md:4:22):
+
 The record I found is:
 
     Wrap

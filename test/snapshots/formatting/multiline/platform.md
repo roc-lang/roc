@@ -38,6 +38,7 @@ this mod.
 "roc_not implemented": pr1,
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(platform.md:14:3):
 You can fix this by either defining `pr1` in this mod, or by removing it
 from the list of exposed values.
 
@@ -49,6 +50,7 @@ this mod.
 "roc_not implemented": pr2,
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+(platform.md:15:3):
 You can fix this by either defining `pr2` in this mod, or by removing it
 from the list of exposed values.
 
@@ -60,6 +62,7 @@ this mod.
 E1,
 ^^
 
+(platform.md:6:3):
 You can fix this by either defining `E1` in this mod, or by removing it from
 the list of exposed values.
 
@@ -71,6 +74,7 @@ this mod.
 E2,
 ^^
 
+(platform.md:7:3):
 You can fix this by either defining `E2` in this mod, or by removing it from
 the list of exposed values.
 INVALID HOSTED SECTION

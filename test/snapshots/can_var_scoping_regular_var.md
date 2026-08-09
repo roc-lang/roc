@@ -47,7 +47,7 @@ processItems = |items| {
                 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_items` to
-suppress this warning.
+suppress this warning. (can_var_scoping_regular_var.md:2:17):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

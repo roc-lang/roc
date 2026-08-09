@@ -18,6 +18,7 @@ This Unicode escape sequence is not valid.
 "\u(FFFFFF)"
  ^^^^^^^^^^
 
+(unicode_overflow_str.md:1:2):
 # TOKENS
 ~~~zig
 StringStart,MalformedStringPart,StringEnd,

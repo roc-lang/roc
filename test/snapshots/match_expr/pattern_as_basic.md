@@ -21,6 +21,7 @@ the same value.
 match (1, 2) {
       ^^^^^^
 
+(pattern_as_basic.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,Int,Comma,Int,CloseRound,OpenCurly,

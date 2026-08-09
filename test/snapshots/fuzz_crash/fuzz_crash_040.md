@@ -29,7 +29,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found `{` here. (fuzz_crash_040.md:1:20):
 
 ── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_040.md:2:3
 
@@ -44,7 +44,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here.
+I found `0` here. (fuzz_crash_040.md:2:3):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_040.md:2:4
 
@@ -61,7 +61,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it.
+item before it. (fuzz_crash_040.md:2:4):
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_040.md:2:3
 
@@ -70,6 +70,7 @@ This type annotation is malformed or contains invalid syntax.
 o:0)
   ^
 
+(fuzz_crash_040.md:2:3):
 
 ── ! declaration has no value ──────────────────────────── fuzz_crash_040.md:2:1
 
@@ -77,6 +78,9 @@ This declaration has a type annotation but no implementation.
 
 o:0)
 ^^^
+
+(fuzz_crash_040.md:2:1):
+
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

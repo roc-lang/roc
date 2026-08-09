@@ -23,9 +23,9 @@ A : [Tag(B)]
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared here:
+This type is declared here (canon_revamp_tag_payloads_are_type_dependencies.md:1:1):
 
-And it references B declared here (canon_revamp_tag_payloads_are_type_dependencies.md:2:1):
+And it references B declared here (canon_revamp_tag_payloads_are_type_dependencies.md:2:1) (canon_revamp_tag_payloads_are_type_dependencies.md:2:1):
 
 B : A
 ^^^^^
@@ -40,9 +40,9 @@ B : A
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared here:
+This type is declared here (canon_revamp_tag_payloads_are_type_dependencies.md:2:1):
 
-And it references A declared here (canon_revamp_tag_payloads_are_type_dependencies.md:1:1):
+And it references A declared here (canon_revamp_tag_payloads_are_type_dependencies.md:1:1) (canon_revamp_tag_payloads_are_type_dependencies.md:1:1):
 
 A : [Tag(B)]
 ^^^^^^^^^^^^

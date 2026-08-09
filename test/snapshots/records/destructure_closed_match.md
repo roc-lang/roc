@@ -22,6 +22,8 @@ describe = |rec| match rec {
     { x, y } => x + y
 }
 
+(destructure_closed_match.md:2:18):
+
 The first pattern is trying to match:
 
     { x: _field, y: U64 }
