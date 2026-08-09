@@ -63,6 +63,17 @@ pub const FormattingResult = struct {
     }
 };
 
+/// Parse diagnostics whose recovery AST is an explicit source migration that
+/// the formatter owns. Every other parse diagnostic still blocks formatting so
+/// a malformed file is never overwritten from a lossy recovery tree.
+fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
+    for (diagnostics) |diagnostic| switch (diagnostic.tag) {
+        .optional_field_mark_after_colon => {},
+        else => return false,
+    };
+    return true;
+}
+
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
@@ -271,8 +282,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
+    // Explicit formatter migrations may consume their parser recovery AST.
+    // Every other parsing problem is reported and leaves the file untouched.
+    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
@@ -320,8 +332,9 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
     const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
+    // Keep stdin behavior identical to file formatting: only explicit source
+    // migrations may proceed through a parser recovery AST.
+    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
@@ -4508,6 +4521,49 @@ test "legacy optional marker after the colon formats to the leading form" {
         "value : { x : U32, y ?: U32, z ?: U32 }\n",
         result,
     );
+}
+
+test "formatFilePath migrates a legacy optional field marker" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input = "v : { a :? U8 }";
+    const file = try tmp.dir.createFile(io, "legacy.roc", .{});
+    try file.writeStreamingAll(io, input);
+    file.close(io);
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    try formatFilePath(gpa, tmp.dir, "legacy.roc", null, .{}, io, &stderr.writer);
+
+    const formatted = try tmp.dir.readFileAlloc(io, "legacy.roc", gpa, .limited(1024));
+    defer gpa.free(formatted);
+    try std.testing.expectEqualStrings("v : { a ?: U8 }\n", formatted);
+}
+
+test "formatFilePath leaves unrelated parse failures untouched" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input = "v : { a U8 }";
+    const file = try tmp.dir.createFile(io, "invalid.roc", .{});
+    try file.writeStreamingAll(io, input);
+    file.close(io);
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    try std.testing.expectError(
+        error.ParsingFailed,
+        formatFilePath(gpa, tmp.dir, "invalid.roc", null, .{}, io, &stderr.writer),
+    );
+
+    const after = try tmp.dir.readFileAlloc(io, "invalid.roc", gpa, .limited(1024));
+    defer gpa.free(after);
+    try std.testing.expectEqualStrings(input, after);
 }
 
 test "optional field access formats as a tight postfix accessor" {
