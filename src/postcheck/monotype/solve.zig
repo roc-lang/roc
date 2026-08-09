@@ -194,7 +194,6 @@ pub const GraphDiagnostics = struct {
     produced_type_pairs_visited: u64 = 0,
     produced_type_joins: u64 = 0,
     function_request_builds: u64 = 0,
-    function_request_noop_reuses: u64 = 0,
     function_request_pairs_visited: u64 = 0,
     function_request_replacements: u64 = 0,
     function_request_nodes_materialized: u64 = 0,
@@ -267,6 +266,15 @@ const MaterializedNodes = struct {
     changed: bool,
 };
 
+/// Handles a representation-producing named type exactly where the ordinary
+/// request traversal reaches that named node. The traversal never asks a
+/// parent whether it contains such a node and never descends into the private
+/// backing returned here.
+pub const GeneratedTypeCanonicalizer = struct {
+    context: *anyopaque,
+    canonicalize: *const fn (*anyopaque, *InstGraph, NodeId) Allocator.Error!NodeId,
+};
+
 const FunctionRequestSubstitution = struct {
     replacements: collections.DenseMap(NodeId, NodeId),
     materialized: std.AutoHashMap(FunctionRequestMaterialization, MaterializedNode),
@@ -274,16 +282,18 @@ const FunctionRequestSubstitution = struct {
     /// This closes recursive edges without merging completed sibling copies.
     active_materialized: [materialization_mode_count]collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
-    /// Whether collecting produced inputs added or changed a replacement
-    /// after an existing request span was seeded.
-    changed_after_seed: bool = false,
+    generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
 
-    fn init(allocator: Allocator) FunctionRequestSubstitution {
+    fn init(
+        allocator: Allocator,
+        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+    ) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
             .materialized = std.AutoHashMap(FunctionRequestMaterialization, MaterializedNode).init(allocator),
             .active_materialized = .{collections.DenseMap(NodeId, NodeId).init(allocator)} ** materialization_mode_count,
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
+            .generated_type_canonicalizer = generated_type_canonicalizer,
         };
     }
 
@@ -295,31 +305,12 @@ const FunctionRequestSubstitution = struct {
     }
 };
 
-/// One checker-authored source cell and the produced cell selected for it by a
-/// completed function request.
-pub const RequestSubstitution = struct {
-    checked: NodeId,
-    produced: NodeId,
-};
-
 /// Result of hashing one complete generated-iterator construction request.
 /// A vacant result carries the digest into registration so a cache miss never
 /// hashes the same inputs twice.
 pub const GeneratedIteratorLookup = struct {
     existing: ?NodeId,
     digest: names.TypeDigest,
-};
-
-const RequestSubstitutionSpan = struct {
-    start: u32,
-    len: u32,
-
-    const uninitialized_len = std.math.maxInt(u32);
-    const uninitialized: RequestSubstitutionSpan = .{ .start = 0, .len = uninitialized_len };
-
-    fn isInitialized(self: RequestSubstitutionSpan) bool {
-        return self.len != uninitialized_len;
-    }
 };
 
 const ProducedJoinMemo = union(enum) {
@@ -462,11 +453,6 @@ pub const InstGraph = struct {
     /// consumers read this field instead of deriving it from the produced
     /// function's type shape.
     request_checked_sources: std.ArrayList(?NodeId),
-    /// Complete substitutions already discovered while each function request
-    /// was constructed. Request refinement and body lowering consume this
-    /// explicit output instead of traversing the previous interface again.
-    request_substitution_spans: std.ArrayList(RequestSubstitutionSpan),
-    request_substitutions: std.ArrayList(RequestSubstitution),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -502,8 +488,6 @@ pub const InstGraph = struct {
             .generated_iterator_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedIteratorInternContext, 80).init(allocator),
             .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
-            .request_substitution_spans = .empty,
-            .request_substitutions = .empty,
         };
         return graph;
     }
@@ -543,8 +527,6 @@ pub const InstGraph = struct {
         self.nominal_backings.deinit();
         self.generated_iterator_intern.deinit();
         self.generated_iterator_nodes.deinit(allocator);
-        self.request_substitutions.deinit(allocator);
-        self.request_substitution_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
@@ -588,11 +570,26 @@ pub const InstGraph = struct {
         return self.find(source_fn);
     }
 
-    pub fn requestSubstitutions(self: *const InstGraph, request_fn: NodeId) []const RequestSubstitution {
-        const span = self.request_substitution_spans.items[@intFromEnum(request_fn)];
-        if (!span.isInitialized()) return &.{};
-        const start: usize = span.start;
-        return self.request_substitutions.items[start .. start + span.len];
+    /// Publish the exact result produced by a completed function body while
+    /// retaining the stable function handle already held by callers and
+    /// recursive references. The request-derived return available during
+    /// recursion and the body-produced return are deterministically the same
+    /// runtime representation; post-check lowering does not re-check that
+    /// fact by merging or comparing their type graphs.
+    pub fn publishFunctionResult(
+        self: *InstGraph,
+        raw_fn_node: NodeId,
+        produced_ret: NodeId,
+    ) Allocator.Error!void {
+        const fn_node = self.find(raw_fn_node);
+        const function = switch (self.nodes.items[@intFromEnum(fn_node)]) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("function result publication received a non-function node"),
+        };
+        try self.setContent(fn_node, .{ .func = .{
+            .args = function.args,
+            .ret = self.find(produced_ret),
+        } });
     }
 
     pub fn nodeIsGeneratedPrivateRoot(self: *InstGraph, node: NodeId) bool {
@@ -903,7 +900,6 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
-        try self.request_substitution_spans.append(self.allocator, .uninitialized);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -1205,9 +1201,9 @@ pub const InstGraph = struct {
     }
 
     /// Finish an otherwise unconstrained leaf at the value producer that owns
-    /// it. The checked artifact supplies the exact language default; callers
-    /// may not use this to complete compiler placeholders or recover missing
-    /// type relations.
+    /// it, after every contextual input has been applied. A genuinely
+    /// unconstrained checked variable has the language's empty-union default;
+    /// compiler placeholders and row extensions still require explicit data.
     pub fn materializeProducedDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
         const node = self.find(raw_node);
@@ -1225,7 +1221,7 @@ pub const InstGraph = struct {
             .empty_record => .empty_record,
             .empty_tag_union => .empty_tag_union,
         } else switch (variable.origin) {
-            .checked_variable => Common.invariant("value producer received an unconstrained type without an explicit checked default"),
+            .checked_variable => .empty_tag_union,
             .row_extension => Common.invariant("value producer received a row extension without its checked default"),
             .placeholder => Common.invariant("value producer received a compiler placeholder instead of explicit type data"),
         };
@@ -1900,10 +1896,48 @@ pub const InstGraph = struct {
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
     ) Allocator.Error!NodeId {
-        return (try self.functionRequestFromProducedArgumentsAndComponents(
+        return try self.functionRequestFromProducedArgumentsWithCanonicalizer(
+            null,
             checked_fn_node,
             current_request_fn_node,
             produced_args,
+        );
+    }
+
+    pub fn functionRequestFromProducedArgumentsWithCanonicalizer(
+        self: *InstGraph,
+        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+    ) Allocator.Error!NodeId {
+        return (try self.functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
+            generated_type_canonicalizer,
+            checked_fn_node,
+            current_request_fn_node,
+            produced_args,
+            &.{},
+        )).request;
+    }
+
+    /// Build a request from the operands that have actually completed. A
+    /// false entry is a contextual or nested operand that will be lowered
+    /// against the request produced by the true entries; its current request
+    /// node is materialized but contributes no substitution evidence.
+    pub fn functionRequestFromAvailableProducedArgumentsWithCanonicalizer(
+        self: *InstGraph,
+        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+        produced_available: []const bool,
+    ) Allocator.Error!NodeId {
+        return (try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
+            generated_type_canonicalizer,
+            checked_fn_node,
+            current_request_fn_node,
+            produced_args,
+            produced_available,
             &.{},
         )).request;
     }
@@ -1924,6 +1958,42 @@ pub const InstGraph = struct {
         produced_args: []const NodeId,
         checked_components: []const NodeId,
     ) Allocator.Error!MaterializedFunctionRequest {
+        return try self.functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
+            null,
+            checked_fn_node,
+            current_request_fn_node,
+            produced_args,
+            checked_components,
+        );
+    }
+
+    pub fn functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
+        self: *InstGraph,
+        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+        checked_components: []const NodeId,
+    ) Allocator.Error!MaterializedFunctionRequest {
+        return try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
+            generated_type_canonicalizer,
+            checked_fn_node,
+            current_request_fn_node,
+            produced_args,
+            null,
+            checked_components,
+        );
+    }
+
+    pub fn functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
+        self: *InstGraph,
+        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        produced_args: []const NodeId,
+        produced_available: ?[]const bool,
+        checked_components: []const NodeId,
+    ) Allocator.Error!MaterializedFunctionRequest {
         self.countDiagnostic("function_request_builds");
         const checked_fn = try self.functionNodes(checked_fn_node);
         const current_request_fn = switch (self.content(try self.functionRequestRoot(current_request_fn_node))) {
@@ -1935,8 +2005,13 @@ pub const InstGraph = struct {
         {
             Common.invariant("exact function request had different arity from its checked source");
         }
-
-        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        if (produced_available) |available| if (available.len != produced_args.len) {
+            Common.invariant("function request availability differed from its produced argument arity");
+        };
+        var substitution = FunctionRequestSubstitution.init(
+            self.allocator,
+            generated_type_canonicalizer,
+        );
         defer substitution.deinit();
 
         const checked_source_root = try self.functionRequestRoot(checked_fn_node);
@@ -1945,80 +2020,45 @@ pub const InstGraph = struct {
             !self.sameClass(try self.functionRequestRoot(source), checked_source_root)
         else
             false;
-        const stored = self.request_substitution_spans.items[@intFromEnum(current_request_fn_node)];
-        if (current_source != null and
-            stored.isInitialized() and
-            !source_changed and
-            checked_components.len == 0)
-        {
-            var arguments_unchanged = true;
-            for (current_request_fn.args, produced_args) |current_arg, produced_arg| {
-                if (!self.sameClass(current_arg, produced_arg)) {
-                    arguments_unchanged = false;
-                    break;
-                }
-            }
-            if (arguments_unchanged) {
-                self.countDiagnostic("function_request_noop_reuses");
-                return .{ .request = current_request_fn_node, .components = &.{} };
-            }
-        }
-        if (stored.isInitialized() and !source_changed) {
-            for (self.requestSubstitutions(current_request_fn_node)) |selection| {
-                try self.seedFunctionRequestReplacement(
-                    self.find(selection.checked),
-                    self.find(selection.produced),
-                    &substitution,
-                );
-            }
-        } else {
-            for (checked_fn.args, current_request_fn.args) |checked_arg, current_arg| {
-                try self.collectFunctionRequestSubstitutions(
-                    checked_arg,
-                    current_arg,
-                    &substitution,
-                );
-            }
-            if (self.content(current_request_fn.ret) != .unresolved) {
-                try self.collectFunctionRequestSubstitutions(
-                    checked_fn.ret,
-                    current_request_fn.ret,
-                    &substitution,
-                );
-            }
-            substitution.compared.clearRetainingCapacity();
-        }
-        for (checked_fn.args, produced_args) |checked_arg, produced_arg| {
+        for (checked_fn.args, produced_args, 0..) |checked_arg, produced_arg, index| {
+            if (produced_available) |available| if (!available[index]) continue;
             try self.collectFunctionRequestSubstitutions(
                 checked_arg,
                 produced_arg,
                 &substitution,
             );
         }
-
+        // The caller's checked return context may determine ordinary generic
+        // variables that no argument determines. It never selects a generated
+        // nominal root: generated roots are produced independently by the
+        // body from the now-complete declared arguments.
+        try self.collectFunctionRequestSubstitutions(
+            checked_fn.ret,
+            current_request_fn.ret,
+            &substitution,
+        );
         const changed_args = try self.materializeFunctionRequestArgumentNodes(
             checked_fn.args,
             current_request_fn.args,
             produced_args,
+            produced_available,
             &substitution,
         );
-        // The return cell is the caller's exact destination, not a fresh
-        // checked-public occurrence. Preserve a definition-private structural
-        // destination just as nested callable outputs preserve their produced
-        // representation.
-        const return_source = if (self.content(current_request_fn.ret) == .unresolved)
-            checked_fn.ret
-        else
-            current_request_fn.ret;
-        const request_ret = try self.materializeFunctionRequestNodeMode(
+        // The call is a value producer. Once ordinary substitutions have
+        // completed its declared return arguments, generated named
+        // occurrences in the return schema are canonical immediately. A
+        // recursive caller therefore observes the same content identity the
+        // body independently produces; it never waits on an unpublished
+        // placeholder or repairs the return after body lowering.
+        const request_ret = (try self.materializeFunctionRequestNodeResult(
             checked_fn.ret,
-            return_source,
+            current_request_fn.ret,
             &substitution,
             .produced_callable,
-        );
-        const ret_changed = !self.sameClass(current_request_fn.ret, request_ret);
-
-        const request_fn = if (changed_args != null or ret_changed or source_changed)
+        )).node;
+        const request_fn = if (changed_args != null or
+            !self.sameClass(current_request_fn.ret, request_ret) or
+            source_changed)
             try self.newNode(.{ .func = .{
                 .args = changed_args orelse current_request_fn.args,
                 .ret = request_ret,
@@ -2026,12 +2066,6 @@ pub const InstGraph = struct {
         else
             current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_source_root);
-        if (request_fn != current_request_fn_node or
-            !stored.isInitialized() or
-            substitution.changed_after_seed)
-        {
-            try self.recordRequestSubstitutions(request_fn, &substitution);
-        }
         const components = try self.arena().alloc(NodeId, checked_components.len);
         for (checked_components, components) |checked_component, *component| {
             component.* = try self.materializeFunctionRequestNode(
@@ -2041,25 +2075,6 @@ pub const InstGraph = struct {
             );
         }
         return .{ .request = request_fn, .components = components };
-    }
-
-    fn recordRequestSubstitutions(
-        self: *InstGraph,
-        request_fn: NodeId,
-        substitution: *FunctionRequestSubstitution,
-    ) Allocator.Error!void {
-        const start = self.request_substitutions.items.len;
-        var replacements = substitution.replacements.iterator();
-        while (replacements.next()) |entry| {
-            try self.request_substitutions.append(self.allocator, .{
-                .checked = self.find(entry.key_ptr.*),
-                .produced = self.find(entry.value_ptr.*),
-            });
-        }
-        self.request_substitution_spans.items[@intFromEnum(request_fn)] = .{
-            .start = @intCast(start),
-            .len = @intCast(self.request_substitutions.items.len - start),
-        };
     }
 
     fn collectFunctionRequestSubstitutions(
@@ -2080,6 +2095,11 @@ pub const InstGraph = struct {
         const checked_content = self.nodes.items[@intFromEnum(checked_node)];
         const produced_content = self.nodes.items[@intFromEnum(produced_node)];
 
+        // A contextual operand that has not produced a representation yet
+        // contributes no substitution. Other completed operands may still
+        // determine this checked slot before the operand itself is lowered.
+        if (produced_content == .unresolved) return;
+
         if (checked_content == .unresolved) {
             if (checked_node == produced_node) return;
             try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
@@ -2093,14 +2113,13 @@ pub const InstGraph = struct {
                 Common.invariant("generated nominal had a different declared argument arity from its public declaration");
             }
             // A generated nominal is atomic with respect to its private
-            // backing, but its declared arguments remain ordinary explicit
-            // interface data. Propagate those arguments to correlated checked
-            // slots, then replace this complete occurrence so consumers retain
-            // the producer's exact nominal without traversing its backing.
+            // backing. Its declared arguments are ordinary generic inputs, so
+            // bind those inputs here. Do not propagate the generated root:
+            // another occurrence independently derives the same canonical
+            // identity from those completed declared arguments.
             for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
                 try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
             }
-            try self.recordFunctionRequestReplacement(checked_node, produced_node, substitution);
             return;
         }
 
@@ -2244,40 +2263,15 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
-        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, true);
-    }
-
-    fn seedFunctionRequestReplacement(
-        self: *InstGraph,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        substitution: *FunctionRequestSubstitution,
-    ) Allocator.Error!void {
-        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, false);
-    }
-
-    fn putFunctionRequestReplacement(
-        self: *InstGraph,
-        checked_node: NodeId,
-        produced_node: NodeId,
-        substitution: *FunctionRequestSubstitution,
-        count_discovery: bool,
-    ) Allocator.Error!void {
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
-            if (count_discovery) {
-                substitution.changed_after_seed = true;
-                self.countDiagnostic("function_request_replacements");
-            }
+            self.countDiagnostic("function_request_replacements");
             return;
         }
         if (self.sameClass(entry.value_ptr.*, produced_node)) return;
         const previous = entry.value_ptr.*;
         entry.value_ptr.* = try self.joinProducedTypeRepresentations(previous, produced_node);
-        if (count_discovery and !self.sameClass(previous, entry.value_ptr.*)) {
-            substitution.changed_after_seed = true;
-        }
     }
 
     fn materializeFunctionRequestNode(
@@ -2300,7 +2294,7 @@ pub const InstGraph = struct {
     /// Later checked-source relations can then refine their own request roots
     /// without changing argument cells the body has already emitted.
     pub fn isolateFunctionAbi(self: *InstGraph, fn_node: NodeId) Allocator.Error!NodeId {
-        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        var substitution = FunctionRequestSubstitution.init(self.allocator, null);
         defer substitution.deinit();
         const isolated = try self.materializeFunctionRequestNodeMode(
             fn_node,
@@ -2308,20 +2302,7 @@ pub const InstGraph = struct {
             &substitution,
             .body_abi,
         );
-        self.inheritRequestSubstitutions(fn_node, isolated);
         return isolated;
-    }
-
-    /// Share a completed request's immutable substitution span with a generated
-    /// callable wrapper or isolated body ABI that gets its own function node.
-    pub fn inheritRequestSubstitutions(
-        self: *InstGraph,
-        source_fn: NodeId,
-        destination_fn: NodeId,
-    ) void {
-        if (source_fn == destination_fn) return;
-        const source = self.request_substitution_spans.items[@intFromEnum(source_fn)];
-        self.request_substitution_spans.items[@intFromEnum(destination_fn)] = source;
     }
 
     /// Build one detached request whose explicitly selected descendant cells
@@ -2338,7 +2319,7 @@ pub const InstGraph = struct {
         if (request_nodes.len != stored_nodes.len) {
             Common.invariant("reassigned storage request received different selection lengths");
         }
-        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        var substitution = FunctionRequestSubstitution.init(self.allocator, null);
         defer substitution.deinit();
         for (request_nodes, stored_nodes) |request, stored| {
             try self.recordFunctionRequestReplacement(
@@ -2384,7 +2365,6 @@ pub const InstGraph = struct {
             const replacement = self.find(raw_replacement);
             return .{ .node = replacement, .changed = !self.sameClass(node, replacement) };
         }
-        if (isGeneratedPrivateRootContent(node_content)) return .{ .node = node, .changed = false };
         const pair = NodePair{ .left = checked_node, .right = node };
         const materialization_key = FunctionRequestMaterialization{ .pair = pair, .mode = mode };
         if (substitution.materialized.get(materialization_key)) |materialized| return .{
@@ -2399,8 +2379,71 @@ pub const InstGraph = struct {
 
         const checked_content = self.nodes.items[@intFromEnum(checked_node)];
         if (isGeneratedPrivateRootContent(checked_content)) {
+            if (isGeneratedPrivateRootContent(node_content) and
+                sameTypeDef(checked_content.named.def, node_content.named.def))
+            {
+                return .{ .node = node, .changed = false };
+            }
             Common.invariant("generated-private request was not satisfied by the producer's exact nominal");
         }
+        if (checked_content == .named and
+            checked_content.named.def.generated == null and
+            checked_content.named.builtin_owner != null and
+            static_dispatch.isIteratorOwner(checked_content.named.builtin_owner.?))
+        {
+            // The checked public occurrence is the complete construction
+            // request. Materialize its declared inputs, derive its canonical
+            // private nominal immediately, and treat that result as atomic.
+            // An existing exact occurrence may supply the declared inputs,
+            // but its private backing is never traversed or compared.
+            const current_args = if (node_content == .named and
+                sameTypeDef(checked_content.named.def, node_content.named.def) and
+                checked_content.named.args.len == node_content.named.args.len)
+                node_content.named.args
+            else
+                checked_content.named.args;
+            const changed_args = try self.materializeFunctionRequestNodesResult(
+                checked_content.named.args,
+                current_args,
+                substitution,
+                mode,
+            );
+            const canonical_args = changed_args.nodes orelse current_args;
+            var args_differ_from_checked = false;
+            for (checked_content.named.args, canonical_args) |checked_arg, canonical_arg| {
+                if (!self.sameClass(checked_arg, canonical_arg)) {
+                    args_differ_from_checked = true;
+                    break;
+                }
+            }
+            const public_node = if (args_differ_from_checked)
+                try self.newNode(.{ .named = .{
+                    .named_type = checked_content.named.named_type,
+                    .def = checked_content.named.def,
+                    .kind = checked_content.named.kind,
+                    .builtin_owner = checked_content.named.builtin_owner,
+                    .args = canonical_args,
+                    .backing = checked_content.named.backing,
+                    .declared_order = checked_content.named.declared_order,
+                } })
+            else
+                checked_node;
+            const canonicalizer = substitution.generated_type_canonicalizer orelse
+                Common.invariant("function request reached a public iterator without a generated-type producer");
+            const canonical = try canonicalizer.canonicalize(
+                canonicalizer.context,
+                self,
+                public_node,
+            );
+            const materialized = MaterializedNode{
+                .node = canonical,
+                .changed = !self.sameClass(node, canonical),
+            };
+            try substitution.materialized.put(materialization_key, materialized);
+            if (materialized.changed) self.countDiagnostic("function_request_nodes_materialized");
+            return materialized;
+        }
+        if (isGeneratedPrivateRootContent(node_content)) return .{ .node = node, .changed = false };
         if (checked_content == .named and node_content != .named) {
             const backing = checked_content.named.backing orelse
                 Common.invariant("function request materialization found a checked named view without backing");
@@ -2626,6 +2669,7 @@ pub const InstGraph = struct {
                     substitution,
                     mode,
                 );
+
                 if (!changed_args.changed and changed_args.nodes == null and
                     mode != .body_abi and mode != .reassigned_storage)
                 {
@@ -2739,11 +2783,15 @@ pub const InstGraph = struct {
         checked_nodes: []const NodeId,
         current_nodes: []const NodeId,
         produced_nodes: []const NodeId,
+        produced_available: ?[]const bool,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
         if (checked_nodes.len != current_nodes.len or current_nodes.len != produced_nodes.len) {
             Common.invariant("function request argument materialization received different arities");
         }
+        if (produced_available) |available| if (available.len != produced_nodes.len) {
+            Common.invariant("function request argument availability differed from its arity");
+        };
         var changed_nodes: ?[]NodeId = null;
         for (checked_nodes, current_nodes, produced_nodes, 0..) |checked_source, current, produced, index| {
             // A producer may leave a representation-free child at its checked
@@ -2754,7 +2802,10 @@ pub const InstGraph = struct {
             // lowered, instead of repairing its parameter later.
             const materialized = (try self.materializeFunctionRequestNodeResult(
                 checked_source,
-                produced,
+                if (produced_available) |available|
+                    if (available[index]) produced else current
+                else
+                    produced,
                 substitution,
                 .produced_callable,
             )).node;
@@ -6770,33 +6821,8 @@ test "function request follows checked occurrence identity and keeps independent
     defer graph.destroy();
 
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12) };
-    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const public_backing = try graph.newNode(.empty_record);
-    const public = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    var exact_def = def;
-    exact_def.generated = .{ .bytes = [_]u8{0xD0} ** 32 };
-    const exact = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = exact_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
+    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const exact = try graph.newNode(.{ .primitive = .u64 });
     const slot = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const checked_list = try graph.newNode(.{ .list = slot });
     const checked_fn = try graph.newNode(.{ .func = .{
@@ -6822,22 +6848,12 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
-    const request_selections = graph.requestSubstitutions(request);
-    try std.testing.expectEqual(@as(usize, 1), request_selections.len);
-    try std.testing.expect(graph.sameClass(request_selections[0].checked, slot));
-    try std.testing.expect(graph.sameClass(request_selections[0].produced, exact));
-
     const isolated_request = try graph.isolateFunctionAbi(request);
     const isolated_request_fn = try graph.functionNodes(isolated_request);
     try std.testing.expect(!graph.sameClass(isolated_request, request));
     try std.testing.expect(graph.sameClass(isolated_request_fn.args[0], request_fn.args[0]));
     try std.testing.expect(graph.sameClass(isolated_request_fn.args[1], request_fn.args[1]));
     try std.testing.expect(graph.sameClass(isolated_request_fn.ret, request_fn.ret));
-    const isolated_selections = graph.requestSubstitutions(isolated_request);
-    try std.testing.expectEqual(@as(usize, 1), isolated_selections.len);
-    try std.testing.expect(graph.sameClass(isolated_selections[0].checked, slot));
-    try std.testing.expect(graph.sameClass(isolated_selections[0].produced, exact));
-
     const recursive_type_name = try name_store.internTypeName("Node");
     const recursive = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const recursive_backing = try graph.newNode(.{ .list = recursive });
@@ -6851,15 +6867,13 @@ test "function request follows checked occurrence identity and keeps independent
     } });
     const recursive_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{recursive}),
-        .ret = item,
+        .ret = exact,
     } });
     const isolated_recursive_fn = try graph.isolateFunctionAbi(recursive_fn);
     const isolated_recursive = try graph.functionNodes(isolated_recursive_fn);
     try std.testing.expect(!graph.sameClass(isolated_recursive_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(isolated_recursive.args[0], recursive));
 
-    var refinement_diagnostics: GraphDiagnostics = .{};
-    graph.setDiagnostics(&refinement_diagnostics);
     const refined_request = try graph.functionRequestFromProducedArguments(
         checked_fn,
         request,
@@ -6868,48 +6882,6 @@ test "function request follows checked occurrence identity and keeps independent
     const refined_fn = try graph.functionNodes(refined_request);
     try std.testing.expect(graph.sameClass(try graph.listElementNode(refined_fn.args[0]), exact));
     try std.testing.expect(graph.sameClass(refined_fn.args[1], exact));
-    // Refinement seeds the existing replacement from request metadata. A
-    // previous-interface walk would rediscover and count that replacement.
-    try std.testing.expectEqual(@as(u64, 0), refinement_diagnostics.function_request_replacements);
-
-    const checked_view_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{public}),
-        .ret = public,
-    } });
-    const structural_view_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{public_backing}),
-        .ret = public_backing,
-    } });
-    const structural_request = try graph.functionRequestFromProducedArguments(
-        checked_view_fn,
-        structural_view_fn,
-        &.{public_backing},
-    );
-    const structural_request_fn = try graph.functionNodes(structural_request);
-    try std.testing.expect(graph.sameClass(structural_request, structural_view_fn));
-    try std.testing.expect(graph.sameClass(structural_request_fn.args[0], public_backing));
-    try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
-
-    const unique_concrete_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{public}),
-        .ret = public,
-    } });
-    const unique_concrete_request = try graph.functionRequestFromProducedArguments(
-        unique_concrete_fn,
-        unique_concrete_fn,
-        &.{exact},
-    );
-    const unique_concrete_request_fn = try graph.functionNodes(unique_concrete_request);
-    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.args[0], exact));
-    try std.testing.expect(graph.sameClass(unique_concrete_request_fn.ret, exact));
-    const substitutions_before_noop = graph.request_substitutions.items.len;
-    const repeated_unique_request = try graph.functionRequestFromProducedArguments(
-        unique_concrete_fn,
-        unique_concrete_request,
-        &.{exact},
-    );
-    try std.testing.expectEqual(unique_concrete_request, repeated_unique_request);
-    try std.testing.expectEqual(substitutions_before_noop, graph.request_substitutions.items.len);
 
     const independent_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const independent_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -6930,92 +6902,6 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(independent_request_fn.args[0], exact));
     try std.testing.expect(graph.sameClass(independent_request_fn.args[1], public));
     try std.testing.expect(graph.sameClass(independent_request_fn.ret, public));
-
-    const mixed_concrete_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ public, public }),
-        .ret = public,
-    } });
-    const mixed_concrete_request = try graph.functionRequestFromProducedArguments(
-        mixed_concrete_fn,
-        mixed_concrete_fn,
-        &.{ public, exact },
-    );
-    const mixed_concrete_request_fn = try graph.functionNodes(mixed_concrete_request);
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], exact));
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[1], exact));
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.ret, exact));
-
-    var second_def = def;
-    second_def.generated = .{ .bytes = [_]u8{0xA2} ** 32 };
-    const second_exact = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = second_def,
-        .kind = .@"opaque",
-        .builtin_owner = null,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-    const second_public = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-        },
-    } });
-    const return_public = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-        },
-    } });
-    const concrete_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ public, second_public }),
-        .ret = return_public,
-    } });
-    const distinct_request = try graph.functionRequestFromProducedArguments(
-        concrete_fn,
-        concrete_fn,
-        &.{ exact, second_exact },
-    );
-    const distinct_request_fn = try graph.functionNodes(distinct_request);
-    try std.testing.expect(graph.sameClass(distinct_request_fn.args[0], exact));
-    try std.testing.expect(graph.sameClass(distinct_request_fn.args[1], second_exact));
-    try std.testing.expect(!graph.sameClass(distinct_request_fn.args[0], distinct_request_fn.args[1]));
-    try std.testing.expect(graph.sameClass(distinct_request_fn.ret, return_public));
-    const distinct_selections = graph.requestSubstitutions(distinct_request);
-    try std.testing.expectEqual(@as(usize, 2), distinct_selections.len);
-    var found_first = false;
-    var found_second = false;
-    for (distinct_selections) |selection| {
-        if (graph.sameClass(selection.checked, public) and graph.sameClass(selection.produced, exact)) {
-            found_first = true;
-        }
-        if (graph.sameClass(selection.checked, second_public) and graph.sameClass(selection.produced, second_exact)) {
-            found_second = true;
-        }
-    }
-    try std.testing.expect(found_first);
-    try std.testing.expect(found_second);
-
-    const stored_public_list = try graph.newNode(.{ .list = public });
-    const requested_exact_list = try graph.newNode(.{ .list = exact });
-    try graph.applyCompoundStorageRepresentation(requested_exact_list, stored_public_list);
-    try std.testing.expect(graph.sameClass(requested_exact_list, stored_public_list));
-    try std.testing.expect(graph.sameClass(try graph.listElementNode(stored_public_list), exact));
-    try std.testing.expect(!graph.sameClass(public, exact));
 
     const first_tag = try name_store.internTagLabel("First");
     const second_tag = try name_store.internTagLabel("Second");
