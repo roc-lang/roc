@@ -489,6 +489,35 @@ test "optional field with default is rejected at canonicalization" {
     try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), y.default_value);
 }
 
+test "unnamed nominal field with a default reports the padding restriction" {
+    const allocator = std.testing.allocator;
+    const source = "Opt7 := { a : U8, _pad : U8 ?? 3 }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try env.diagnosticToReport(diagnostics[0], allocator, "Test.roc");
+    defer report.deinit();
+    try std.testing.expectEqualStrings("Unnamed Field Cannot Have A Default", report.title);
+}
+
 test "local-binding default is rejected as non-literal at canonicalization" {
     const allocator = std.testing.allocator;
     const source =

@@ -18625,8 +18625,13 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                 // pointless) nor unnamed padding; the default is dropped and
                 // the error reported (design.md "Defaulted Fields").
                 var ast_default_value = ast_field.default_value;
-                if (ast_default_value != null and (ast_field.optional_mark != null or is_unnamed)) {
+                if (ast_default_value != null and ast_field.optional_mark != null) {
                     try self.env.pushDiagnostic(Diagnostic{ .optional_field_cannot_have_default = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
+                } else if (ast_default_value != null and is_unnamed) {
+                    try self.env.pushDiagnostic(Diagnostic{ .unnamed_field_cannot_have_default = .{
                         .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     } });
                     ast_default_value = null;

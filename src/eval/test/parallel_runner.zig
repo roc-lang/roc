@@ -1761,6 +1761,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .open_ext_not_allowed_in_type_decl,
         .unnamed_field_not_allowed_in_structural_record,
         .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
         .record_default_not_literal,
         .var_across_function_boundary,
         .type_redeclared,

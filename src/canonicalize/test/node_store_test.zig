@@ -920,6 +920,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .unnamed_field_cannot_have_default = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .record_default_not_literal = .{
             .field_name = rand_ident_idx(),
             .region = rand_region(),

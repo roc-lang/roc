@@ -2853,6 +2853,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .unnamed_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Unnamed Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("Unnamed fields (");
+            try report.headline.addInlineCode("_");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("_name");
+            try report.headline.addReflowingText(") reserve padding in a nominal record layout, so they cannot have a ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .unnamed_field_not_allowed_in_structural_record => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

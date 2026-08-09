@@ -171,6 +171,9 @@ pub const Diagnostic = union(enum) {
     optional_field_cannot_have_default: struct {
         region: Region,
     },
+    unnamed_field_cannot_have_default: struct {
+        region: Region,
+    },
     record_default_not_literal: struct {
         field_name: Ident.Idx,
         region: Region,
@@ -461,6 +464,7 @@ pub const Diagnostic = union(enum) {
             .open_ext_not_allowed_in_type_decl => |d| d.region,
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .optional_field_cannot_have_default => |d| d.region,
+            .unnamed_field_cannot_have_default => |d| d.region,
             .record_default_not_literal => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,

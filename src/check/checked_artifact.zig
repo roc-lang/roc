@@ -31222,6 +31222,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_mutually_recursive_type_aliases,
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
+            .diag_unnamed_field_cannot_have_default,
             => {},
         }
     }
