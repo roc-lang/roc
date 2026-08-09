@@ -128,6 +128,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10395_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10508_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10503_test.zig"));
+    std.testing.refAllDecls(@import("test/loop_selected_exit_local_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10561_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10571_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10617_test.zig"));
