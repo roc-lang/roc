@@ -435,6 +435,7 @@ const Extractor = struct {
                 }
                 break :blk .{ .undetermined = api_var };
             },
+            .err => return self.fail(.unpublished_public_type, "record field presence failed type checking"),
         };
     }
 

@@ -2662,7 +2662,9 @@ pub const CheckedFieldDefault = extern struct {
 /// fields are plain inline slots—`defaulted` additionally carries the
 /// default identity in `default`—while `optional` is the tagged slot,
 /// lowered by every layout/monotype consumer as the closed two-variant
-/// union `[#Missing, #Present(value)]`. The encoding is canonical:
+/// union `[#Missing, #Present(value)]`. `err` explicitly preserves a poisoned
+/// presence axis in analysis artifacts without discarding the independent field
+/// value type. The encoding is canonical:
 /// `default` carries an identity exactly when `tag == .defaulted`, so one
 /// kind has one bit pattern and structural comparisons stay byte compares.
 pub const CheckedFieldKind = extern struct {
@@ -2670,7 +2672,7 @@ pub const CheckedFieldKind = extern struct {
     default: CheckedFieldDefault = .none,
     variable: OptionalCheckedTypeId = .none,
 
-    pub const Tag = enum(u32) { required, optional, defaulted, undetermined };
+    pub const Tag = enum(u32) { required, optional, defaulted, undetermined, err };
 
     // Inline element of the serialized `record_field_pool`: tag word plus the
     // 8-byte default identity.
@@ -2681,6 +2683,7 @@ pub const CheckedFieldKind = extern struct {
 
     pub const required: CheckedFieldKind = .{};
     pub const optional: CheckedFieldKind = .{ .tag = .optional };
+    pub const err: CheckedFieldKind = .{ .tag = .err };
 
     pub fn undetermined(variable: CheckedTypeId) CheckedFieldKind {
         return .{ .tag = .undetermined, .variable = .some(variable) };
@@ -7085,7 +7088,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         // types (design.md "Defaulted Fields"), and the identity is written
         // in canonical form (the declaring module's content hash), matching
         // what was published. An OPTIONAL field keys the same
-        // "presence_optional_field" tag the solver writes.
+        // "presence_optional_field" tag the solver writes, and an ERROR kind
+        // keys the solver's same "err" tag before the field value type.
         switch (kind.tag) {
             .required => self.writeBool(false),
             .optional => self.writeTag("presence_optional_field"),
@@ -7102,6 +7106,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
                 self.writeTag("presence_variable");
                 try self.writeType(variable);
             },
+            .err => self.writeTag("err"),
         }
     }
 
@@ -8026,11 +8031,14 @@ fn copyCheckedRecordFields(
                     break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_);
                 },
                 // A poisoned presence var (a presence mismatch merges to err,
-                // unify.zig `unifyFieldPresence`) publishes the field through
-                // the established explicit err path: the `.err` payload, the
-                // same poisoning `appendCheckedTypePayloadFromContent` applies
-                // to a standalone `.field_presence` content.
-                .err => try appendExplicitCheckedTypePayload(allocator, names, store, .err),
+                // unify.zig `unifyFieldPresence`) poisons the KIND axis while
+                // preserving the field's independent VALUE axis. Keeping both
+                // explicit also preserves the solver key's `"err"` + value
+                // encoding at the checked boundary.
+                .err => blk: {
+                    kind = .err;
+                    break :blk try appendCheckedTypeRoot(allocator, module, names, imports, store, active, unknown.var_);
+                },
                 // A presence variable may only hold a committed
                 // `.field_presence` kind, a still-undetermined `.flex`, or a
                 // poisoned `.err` (same inventory as the canonical key
@@ -8574,6 +8582,61 @@ test "optional record fields publish through solver-side record copy" {
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), record_var);
     const checked_key = store.roots.items[@intFromEnum(checked_record)].key;
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &checked_key.bytes);
+}
+
+test "poisoned record field presence preserves its value type and canonical key" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "value = {}");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    // This is the solver state produced after a required-field destructure is
+    // unified with an optional annotation: the field-presence axis is poisoned,
+    // while the independent value-type axis remains valid.
+    const field_name = try test_env.module_env.insertIdent(Ident.for_text("a"));
+    const value_var = try test_env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const presence_var = try test_env.module_env.types.freshFromContent(.err);
+    const ext_var = try test_env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const source_fields = try test_env.module_env.types.appendRecordFields(&.{.{
+        .name = field_name,
+        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = value_var } },
+    }});
+    const record_var = try test_env.module_env.types.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = source_fields,
+        .ext = ext_var,
+    } } });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var active = CheckedSourceTypeRoots.init(allocator);
+    defer active.deinit();
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+
+    const checked_record = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, record_var);
+    const checked_value = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, value_var);
+    const fields = switch (store.payload(checked_record)) {
+        .record => |record| record.fields,
+        .record_unbound => |record_fields| record_fields,
+        .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 1), fields.len);
+    try testing.expectEqual(checked_value, fields[0].ty);
+
+    const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), record_var);
+    const checked_key_info = try substitutedCheckedTypeKeyInfo(allocator, &names, &store, checked_record, &.{}, &.{});
+    try testing.expectEqualSlices(u8, &source_key.bytes, &checked_key_info.key.bytes);
 }
 
 test "optional record fields publish through the declaration annotation path" {

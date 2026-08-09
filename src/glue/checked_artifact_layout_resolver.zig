@@ -516,6 +516,7 @@ pub const Resolver = struct {
                 return .{ .local = node_id };
             },
             .undetermined => return error.UnresolvedByValue,
+            .err => return error.UnresolvedByValue,
         }
     }
 

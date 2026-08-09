@@ -4749,6 +4749,7 @@ const Builder = struct {
                     .required, .defaulted => value_ty,
                     .optional => try self.optionalSlotType(value_ty),
                     .undetermined => Common.invariant("undetermined checked field kind reached direct record lowering"),
+                    .err => Common.invariant("poisoned checked field kind reached direct record lowering"),
                 },
                 .value_ty = if (field.kind.tag == .optional) value_ty else null,
                 .default = try self.monoFieldDefault(view, field),
@@ -4826,6 +4827,7 @@ const Builder = struct {
                     .required, .defaulted => value_ty,
                     .optional => try self.optionalSlotType(value_ty),
                     .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
+                    .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
                 },
                 .value_ty = if (field.kind.tag == .optional) value_ty else null,
                 .default = try self.monoFieldDefault(view, field),
@@ -16112,6 +16114,7 @@ const BodyContext = struct {
                         .default = null,
                     };
                 },
+                .err => Common.invariant("poisoned checked field kind reached Monotype instantiation"),
             };
         }
         return out;
