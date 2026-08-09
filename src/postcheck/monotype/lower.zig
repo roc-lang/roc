@@ -32366,7 +32366,17 @@ const BodyContext = struct {
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
-        const lowered = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, &.{});
+        const callable = try self.graph.functionNodes(callable_node);
+        var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
+        defer pre_lowered.deinit(self.allocator);
+        try self.preLowerDispatchOperands(plan_args, callable.args, &pre_lowered);
+        const lowered = try self.lowerResolvedDispatchAtNode(
+            plan,
+            resolved,
+            callable_node,
+            self,
+            pre_lowered.items,
+        );
         const call_expr = try self.addExprWithTypeCell(lowered.ret_ty, lowered.data);
         return .{ .call = call_expr, .try_ty = try self.activeTypeFromCell(lowered.ret_ty) };
     }
