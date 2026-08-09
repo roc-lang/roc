@@ -673,6 +673,8 @@ pub const PublishInputs = struct {
     hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
     problem_store: ?*problem.Store = null,
+    /// See `CheckedModuleArtifact.canonicalization_failed`.
+    canonicalization_failed: bool = false,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -24844,6 +24846,12 @@ pub const CompileTimeRootKind = enum {
 /// Public `CompileTimeRootPayload` declaration.
 pub const CompileTimeRootPayload = union(enum) {
     pending,
+    /// The module this root belongs to is built over a malformed declaration,
+    /// here or upstream through its imports, so the root has no value to
+    /// evaluate. It is completed with this instead: the request is answered,
+    /// and any attempt to read the value is an error the compiler already
+    /// reported.
+    unevaluable,
     const_node: ConstNodeId,
     fn_value: ConstFnId,
     expect,
@@ -25230,10 +25238,13 @@ fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) vo
 }
 
 fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: CompileTimeRootPayload) void {
+    // Every kind of root can be unevaluable: the taint is a property of the
+    // module, not of what the root would have produced.
+    if (payload == .unevaluable) return;
     const matches = switch (kind) {
         .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .unevaluable, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             // A callable initializer that reaches an explicit checked error is
@@ -25241,15 +25252,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .expect => false,
+            .pending, .unevaluable, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value => false,
+            .pending, .unevaluable, .const_node, .fn_value => false,
         },
         .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .unevaluable, .fn_value, .expect => false,
         },
     };
     if (matches) return;
@@ -29764,6 +29775,12 @@ pub const DispatchEvidenceFailure = struct {
 /// Public `CheckedModuleArtifact` declaration.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
+    /// Whether canonicalization reported problems for this module or for any
+    /// module reachable through its imports. Carried on the artifact so the
+    /// taint travels transitively with the types it describes: a module built
+    /// over a malformed declaration has checked types that can disagree with
+    /// one another, which makes evaluating it meaningless.
+    canonicalization_failed: bool = false,
     canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
@@ -29929,6 +29946,7 @@ pub const CheckedModuleArtifact = struct {
         // a `NameInterner`/`SafeList` header) are not default-constructible, so a
         // uniform "no defaults" rule keeps this struct valid.
         key: CheckedModuleArtifactKey,
+        canonicalization_failed: bool,
         module_identity: ModuleIdentitySerialized,
         direct_import_artifact_keys: SerializedSlice(CheckedModuleArtifactKey),
         canonical_names: canonical.CanonicalNameStore.Serialized,
@@ -30004,6 +30022,7 @@ pub const CheckedModuleArtifact = struct {
             writer: *CompactWriter,
         ) Allocator.Error!void {
             self.key = artifact.key;
+            self.canonicalization_failed = artifact.canonicalization_failed;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
             try self.direct_import_artifact_keys.serialize(artifact.direct_import_artifact_keys, gpa, writer);
             try self.canonical_names.serialize(&artifact.canonical_names, gpa, writer);
@@ -30092,6 +30111,7 @@ pub const CheckedModuleArtifact = struct {
             const base_addr = @intFromPtr(backing.ptr);
             return .{
                 .key = self.key,
+                .canonicalization_failed = self.canonicalization_failed,
                 .module_identity = self.module_identity.decode(),
                 .module_env = module_env,
                 .serialized_backing = backing,
@@ -30374,14 +30394,14 @@ pub const CheckedModuleArtifact = struct {
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
                 .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
-                    .pending => {},
+                    .pending, .unevaluable => {},
                     .const_node,
                     .fn_value,
                     .expect,
                     => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
                 .expect => switch (root.payload) {
-                    .expect => {},
+                    .expect, .unevaluable => {},
                     .pending,
                     .const_node,
                     .fn_value,
@@ -31122,7 +31142,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             if (root.kind == .expect) {
                 switch (root.payload) {
-                    .expect => {},
+                    .expect, .unevaluable => {},
                     .pending, .const_node, .fn_value => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
@@ -31134,7 +31154,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .expect => {
+                .const_node, .fn_value, .expect, .unevaluable => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
@@ -31616,8 +31636,20 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
 }
 
 /// Public `ImportedModuleView` declaration.
+/// Whether any imported module carries a canonicalization failure. Read from
+/// the artifacts rather than their envs: each already recorded its own imports'
+/// answer, which is what makes the taint transitive.
+fn importsReportCanonicalizationFailure(imports: []const PublishImportArtifact) bool {
+    for (imports) |imported| {
+        if (imported.view.canonicalization_failed) return true;
+    }
+    return false;
+}
+
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
+    /// See `CheckedModuleArtifact.canonicalization_failed`.
+    canonicalization_failed: bool = false,
     module_env: *const ModuleEnv,
     canonical_names: *const canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
@@ -31665,6 +31697,7 @@ pub const LoweringModuleView = struct {
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .key = artifact.key,
+        .canonicalization_failed = artifact.canonicalization_failed,
         .module_env = artifact.moduleEnvConst(),
         .canonical_names = &artifact.canonical_names,
         .module_identity = artifact.module_identity,
@@ -33946,6 +33979,19 @@ pub fn publishFromTypedModule(
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
 
+    artifact.canonicalization_failed = inputs.canonicalization_failed or
+        importsReportCanonicalizationFailure(inputs.imports);
+    if (artifact.canonicalization_failed) {
+        // Nothing here is sound to evaluate, so answer every request with the
+        // payload that says so and skip finalization entirely.
+        for (artifact.compile_time_roots.roots) |*root| {
+            if (compileTimeRootHasRootRequest(artifact.root_requests.requests, root.*)) {
+                root.payload = .unevaluable;
+            }
+        }
+        try artifact.verifyComplete();
+        return artifact;
+    }
     try inputs.compile_time_finalizer.run(
         allocator,
         &artifact,
@@ -34438,6 +34484,7 @@ test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootRequestEligibility, "ineligible") != null);
 
     try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "unevaluable"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "const_node"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "fn_value"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
@@ -36476,8 +36523,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xAD, 0x9B, 0xE6, 0x26, 0x52, 0x3B, 0x28, 0x45, 0x85, 0x7D, 0xD2, 0x74, 0x71, 0x9B, 0x52, 0x4C,
-        0x14, 0x26, 0xA4, 0x8A, 0x82, 0x00, 0x5A, 0x42, 0xA6, 0x36, 0x07, 0x24, 0xE3, 0xFB, 0x4D, 0x13,
+        0x65, 0x3A, 0xFF, 0xE5, 0x66, 0x3F, 0x77, 0xB2, 0x9E, 0xDE, 0x93, 0xF8, 0xA5, 0x98, 0x49, 0x02,
+        0x5E, 0xF8, 0xFD, 0x69, 0x6E, 0x28, 0xF9, 0xF8, 0x4C, 0x37, 0xD1, 0x85, 0x62, 0x2F, 0xF3, 0xE8,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

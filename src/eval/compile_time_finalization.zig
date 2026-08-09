@@ -1686,7 +1686,7 @@ fn finishLiteralConversionRootDetailed(
 ) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
-        .pending, .fn_value, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
+        .pending, .unevaluable, .fn_value, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
     };
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
@@ -2110,6 +2110,7 @@ fn finishConstRoot(
     const node = switch (payload) {
         .const_node => |id| id,
         .pending,
+        .unevaluable,
         .fn_value,
         .expect,
         => finalizationInvariant("constant root finalized with non-constant payload"),

@@ -139,6 +139,16 @@ pub const PlatformRequirementsCheckOutput = struct {
 };
 
 /// Public `ArtifactPublicationInputs` declaration.
+/// Whether this module or any module it imports reported canonicalization
+/// problems; see `CheckedModuleArtifact.canonicalization_failed`.
+fn canonicalizationFailedAnywhere(env: *const ModuleEnv, imported_envs: []const *ModuleEnv) bool {
+    if (env.diagnostics.span.len != 0) return true;
+    for (imported_envs) |imported| {
+        if (imported.diagnostics.span.len != 0) return true;
+    }
+    return false;
+}
+
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
@@ -148,6 +158,8 @@ pub const ArtifactPublicationInputs = struct {
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
+    /// See `CheckedModuleArtifact.canonicalization_failed`.
+    canonicalization_failed: bool = false,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
 };
 
@@ -587,6 +599,7 @@ pub fn typeCheckModule(
             .hoisted_roots = checker.selectedHoistedRoots(),
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
+            .canonicalization_failed = canonicalizationFailedAnywhere(env, imported_envs),
             .ctfe_options = ctfe_options,
         },
     );
@@ -672,6 +685,8 @@ pub fn publishFromPrebuiltModules(
             .hoisted_roots = publication.hoisted_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .problem_store = publication.problem_store,
+            .canonicalization_failed = publication.canonicalization_failed or
+                module_env_storage.envConst().diagnostics.span.len != 0,
         },
     );
 }

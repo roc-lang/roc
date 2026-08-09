@@ -3079,7 +3079,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .expect, .unevaluable => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -19394,7 +19394,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .expect, .unevaluable => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -19458,7 +19458,7 @@ const BodyContext = struct {
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .const_node, .expect => Common.invariant("callable eval binding root did not output a callable value"),
+            .const_node, .expect, .unevaluable => Common.invariant("callable eval binding root did not output a callable value"),
         };
     }
 
@@ -33391,7 +33391,7 @@ const BodyContext = struct {
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
             .pending => null,
-            .fn_value, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+            .fn_value, .expect, .unevaluable => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
     }
 

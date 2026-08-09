@@ -148,7 +148,10 @@ pub const Constants = struct {
     ///     instead of reserving a fresh root the artifact names nowhere.
     /// 64: a deferred specialization is keyed by its sealed request type, so two
     ///     requests with one sealed request share one specialization.
-    pub const CACHE_VERSION = 64;
+    /// 65: the artifact records whether canonicalization failed for it or for
+    ///     anything it imports, and completes its compile-time roots as
+    ///     unevaluable when it did.
+    pub const CACHE_VERSION = 65;
 };
 
 /// Configuration for the Roc cache system.
