@@ -251,6 +251,43 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(tuple_access.tuple_access.expr)));
 }
 
+test "grouped pipe target ending in a field access starts a new suffix path" {
+    const gpa = std.testing.allocator;
+
+    const cases = [_]struct {
+        source: []const u8,
+        outer_mode: AST.FieldAccessMode,
+    }{
+        .{ .source = "a |> (b.c).d", .outer_mode = .required },
+        .{ .source = "a |> (b.c).?d", .outer_mode = .optional },
+    };
+
+    for (cases) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+        const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+        try std.testing.expectEqual(.arrow_call, std.meta.activeTag(root));
+
+        const outer = ast.store.getExpr(root.arrow_call.right).field_access;
+        const outer_segments = ast.store.fieldAccessSegmentSlice(outer.segments);
+        try std.testing.expectEqual(@as(usize, 1), outer_segments.len);
+        try std.testing.expectEqual(case.outer_mode, outer_segments[0].mode);
+
+        const inner = ast.store.getExpr(outer.receiver).field_access;
+        const inner_segments = ast.store.fieldAccessSegmentSlice(inner.segments);
+        try std.testing.expectEqual(@as(usize, 1), inner_segments.len);
+        const inner_ident = ast.tokens.resolveIdentifier(inner_segments[0].field_token).?;
+        try std.testing.expectEqualStrings("c", env.getIdent(inner_ident));
+    }
+}
+
 test "optional record type fields preserve their source marker" {
     const gpa = std.testing.allocator;
     const source = "value : { x : U32, y ? : U32, z?: U32 }";

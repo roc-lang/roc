@@ -1698,12 +1698,12 @@ pub fn addOrExtendFieldAccess(
     if (receiver_node.tag == .field_access) {
         const segment_start: usize = receiver_node.data.rhs;
         const segment_len: usize = receiver_node.main_token;
-        const segments_are_tail = segment_len <= store.field_access_segments.items.len and
-            segment_start == store.field_access_segments.items.len - segment_len;
+        const path_is_open_tail = segment_len <= store.field_access_segments.items.len and
+            segment_start == store.field_access_segments.items.len - segment_len and
+            receiver_node.region.start == region.start;
 
-        if (segments_are_tail) {
+        if (path_is_open_tail) {
             if (receiver_node.main_token == std.math.maxInt(u32)) return error.OutOfMemory;
-            std.debug.assert(receiver_node.region.start == region.start);
             try store.field_access_segments.append(store.gpa, segment);
             receiver_node.main_token += 1;
             receiver_node.region.end = region.end;
