@@ -162,16 +162,6 @@ pub const FunctionNodes = struct {
     ret: NodeId,
 };
 
-/// Immutable alpha-normalized bytes for one open function interface, scoped to
-/// the producing instantiation graph. The digest selects lookup candidates;
-/// exact bytes remain the collision authority after body relations mutate the
-/// live request nodes.
-pub const OpenFunctionInterfaceShape = struct {
-    digest: names.TypeDigest,
-    bytes: []const u8,
-    resolved: bool,
-};
-
 /// Deterministic operation counts for diagnosing Monotype graph workloads.
 /// `InstGraph.diagnostics` remains null unless detailed diagnostics were
 /// requested, so ordinary lowering does not count hot-path operations.
@@ -202,9 +192,6 @@ pub const GraphDiagnostics = struct {
     generated_identity_intern_misses: u64 = 0,
     generated_type_store_hits: u64 = 0,
     generated_type_store_misses: u64 = 0,
-    open_function_shape_requests: u64 = 0,
-    open_function_shape_nodes_visited: u64 = 0,
-    open_function_shape_bytes_written: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -641,7 +628,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_named: InstNamed,
     ) Allocator.Error!names.TypeDigest {
-        var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self);
+        var writer = GeneratedIdentityWriter.init(self);
         defer writer.deinit();
         // Every iterator producer implements the same runtime interface: one
         // length value and one zero-argument step closure returning the shared
@@ -664,7 +651,7 @@ pub const InstGraph = struct {
     }
 
     fn generatedIdentityInputDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
-        var writer = OpenFunctionInterfaceShapeWriter.initGeneratedIdentity(self);
+        var writer = GeneratedIdentityWriter.init(self);
         defer writer.deinit();
         writer.writeBytes("roc.generated_private.identity_input.v3");
         try writer.writeNode(node);
@@ -1066,36 +1053,6 @@ pub const InstGraph = struct {
             if (!self.sameClass(left_arg, right_arg)) return false;
         }
         return self.sameClass(left_fn.ret, right_fn.ret);
-    }
-
-    /// Alpha-normalized shape of an open function interface. This is a
-    /// graph-local lookup key for unresolved draft requests: concrete
-    /// structure is written directly, while unresolved union-find classes are
-    /// numbered by first occurrence so interface aliasing is preserved without
-    /// depending on fresh node ids. Producer-owned source-interface and
-    /// recursive-representation evidence participate because they can change
-    /// how an otherwise identical open shape finalizes.
-    /// Capture the exact open-interface shape before a callee body can refine
-    /// its live graph nodes. The bytes are graph-arena owned and must not escape
-    /// draft specialization lookup.
-    pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
-        self.countDiagnostic("open_function_shape_requests");
-        var output = std.ArrayList(u8).empty;
-        defer output.deinit(self.allocator);
-        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, &output);
-        defer writer.deinit();
-        try writer.writeFunctionInterface(node);
-        if (writer.output_error) |output_error| return output_error;
-        if (writer.output_len != output.items.len) {
-            Common.invariant("open function-interface shape wrote an incomplete byte snapshot");
-        }
-        self.countDiagnosticBy("open_function_shape_bytes_written", output.items.len);
-        const bytes = try self.arena().dupe(u8, output.items);
-        return .{
-            .digest = .{ .bytes = writer.hasher.finalResult() },
-            .bytes = bytes,
-            .resolved = writer.primary_resolved,
-        };
     }
 
     /// Whether a live graph type is already closed and can be snapshotted
@@ -5098,126 +5055,62 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
     return right == null;
 }
 
-/// Writes canonical exact type identities for producer requests and open
-/// specialization keys. Generated-private nominals are atomic digest leaves.
-const OpenFunctionInterfaceShapeWriter = struct {
-    const Mode = enum {
-        open_interface,
-        generated_identity,
-    };
-
+/// Writes the canonical content identity of a generated producer input.
+/// Generated-private nominals are atomic digest leaves.
+const GeneratedIdentityWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
-    unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
-    mode: Mode,
-    next_unresolved: u32 = 0,
-    output: ?*std.ArrayList(u8) = null,
-    output_error: ?Allocator.Error = null,
-    output_len: usize = 0,
-    primary_resolved: bool = true,
 
-    fn init(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
+    fn init(graph: *InstGraph) GeneratedIdentityWriter {
         return .{
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
-            .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
-            .mode = .open_interface,
         };
     }
 
-    fn initGeneratedIdentity(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
-        var writer = init(graph);
-        writer.mode = .generated_identity;
-        return writer;
-    }
-
-    fn initWithOutput(graph: *InstGraph, output: *std.ArrayList(u8)) OpenFunctionInterfaceShapeWriter {
-        var writer = init(graph);
-        writer.output = output;
-        return writer;
-    }
-
-    fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
+    fn deinit(self: *GeneratedIdentityWriter) void {
         self.visiting.deinit(self.graph.allocator);
-        self.unresolved_ids.deinit();
     }
 
-    fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v5");
-        try self.writeFunctionNodes(try self.graph.functionNodes(node));
-        self.primary_resolved = self.next_unresolved == 0;
-        if (self.graph.requestCheckedSource(node)) |source| {
-            self.writeBytes("source-interface");
-            try self.writeFunctionNodes(try self.graph.functionNodes(source));
-        } else {
-            self.writeBytes("no-source-interface");
-        }
-    }
-
-    fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeWriter, function: FunctionNodes) Allocator.Error!void {
-        self.writeU32(@intCast(function.args.len));
-        for (function.args) |arg| try self.writeNode(arg);
-        try self.writeNode(function.ret);
-    }
-
-    fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
-        if (self.mode == .open_interface) {
-            self.graph.countDiagnostic("open_function_shape_nodes_visited");
-        }
+    fn writeNode(self: *GeneratedIdentityWriter, raw_node: NodeId) Allocator.Error!void {
+        self.graph.countDiagnostic("generated_identity_input_nodes_hashed");
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
         if (InstGraph.isGeneratedPrivateRootContent(content)) {
             const digest = content.named.def.generated orelse
                 Common.invariant("generated-private identity writer encountered an unstamped nominal");
-            if (self.mode == .generated_identity) {
-                self.graph.countDiagnostic("generated_identity_input_nodes_hashed");
-            }
             self.writeBytes("generated-private-nominal");
             self.writeBytes(&digest.bytes);
             return;
         }
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
-            if (self.mode == .generated_identity) {
-                // This is the final producer boundary for the identity input.
-                // Contextual substitutions have already run; if the checker
-                // deliberately left a leaf polymorphic (for example the item
-                // of an entirely empty iterator), commit its declared language
-                // default at the exact leaf encountered by this hash traversal.
-                // There is no separate probe or graph scan, and the node cannot
-                // be refined after it becomes part of a generated identity.
-                const completed: InstNode = if (content.unresolved.numeric_default_phase) |phase| blk: {
-                    const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-                        Common.invariant("checking-finalized numeric variable reached generated identity production");
-                    break :blk switch (target) {
-                        .dec => .{ .primitive = .dec },
-                        .str => .{ .primitive = .str },
-                    };
-                } else if (content.unresolved.row_default) |row_default| switch (row_default) {
-                    .empty_record => .empty_record,
-                    .empty_tag_union => .empty_tag_union,
-                } else switch (content.unresolved.origin) {
-                    .checked_variable => .empty_tag_union,
-                    .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
-                    .placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
+            // This is the final producer boundary for the identity input.
+            // Contextual substitutions have already run; if the checker
+            // deliberately left a leaf polymorphic (for example the item
+            // of an entirely empty iterator), commit its declared language
+            // default at the exact leaf encountered by this hash traversal.
+            // There is no separate probe or graph scan, and the node cannot
+            // be refined after it becomes part of a generated identity.
+            const completed: InstNode = if (content.unresolved.numeric_default_phase) |phase| blk: {
+                const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                    Common.invariant("checking-finalized numeric variable reached generated identity production");
+                break :blk switch (target) {
+                    .dec => .{ .primitive = .dec },
+                    .str => .{ .primitive = .str },
                 };
-                try self.graph.setContent(node, completed);
-                return self.writeNode(node);
-            }
-            const entry = try self.unresolved_ids.getOrPut(node);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = self.next_unresolved;
-                self.next_unresolved += 1;
-                self.writeBytes("unresolved-new");
-                self.writeU32(entry.value_ptr.*);
-                self.writeVariable(content.unresolved);
-            } else {
-                self.writeBytes("unresolved-ref");
-                self.writeU32(entry.value_ptr.*);
-            }
-            return;
+            } else if (content.unresolved.row_default) |row_default| switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            } else switch (content.unresolved.origin) {
+                .checked_variable => .empty_tag_union,
+                .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
+                .placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
+            };
+            try self.graph.setContent(node, completed);
+            return self.writeNode(node);
         }
 
         for (self.visiting.items, 0..) |open_node, position| {
@@ -5290,10 +5183,6 @@ const OpenFunctionInterfaceShapeWriter = struct {
                 self.writeBytes(@tagName(named.kind));
                 self.writeOptionalBuiltinOwner(named.builtin_owner);
                 try self.writeNodeSpan(named.args);
-                if (self.mode == .open_interface) {
-                    try self.writeOptionalBacking(named.backing);
-                    try self.writeDeclaredFieldSpan(named.declared_order);
-                }
             },
             .erased => |digest| {
                 self.writeBytes("erased");
@@ -5303,18 +5192,12 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
+    fn writeNodeSpan(self: *GeneratedIdentityWriter, nodes: []const NodeId) Allocator.Error!void {
         self.writeU32(@intCast(nodes.len));
         for (nodes) |node| try self.writeNode(node);
     }
 
-    fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) void {
-        self.writeBytes(@tagName(variable.origin));
-        self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
-        self.writeOptionalRowDefault(variable.row_default);
-    }
-
-    fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) void {
+    fn writeTypeDef(self: *GeneratedIdentityWriter, def: Type.TypeDef) void {
         self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
         self.writeOptionalU32(def.source_decl);
         if (def.source_decl == null) {
@@ -5324,42 +5207,8 @@ const OpenFunctionInterfaceShapeWriter = struct {
         self.writeOptionalIteratorTopology(def.iterator_topology);
     }
 
-    fn writeOptionalBacking(self: *OpenFunctionInterfaceShapeWriter, backing: ?InstBacking) Allocator.Error!void {
-        if (backing) |actual| {
-            self.writeU8(1);
-            try self.writeBacking(actual);
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeBacking(self: *OpenFunctionInterfaceShapeWriter, backing: InstBacking) Allocator.Error!void {
-        self.writeBytes(@tagName(backing.use));
-        self.writeBytes(@tagName(backing.authority));
-        try self.writeNode(backing.node);
-    }
-
-    fn writeDeclaredFieldSpan(
-        self: *OpenFunctionInterfaceShapeWriter,
-        declared_order: []const InstDeclaredField,
-    ) Allocator.Error!void {
-        self.writeU32(@intCast(declared_order.len));
-        for (declared_order) |entry| {
-            switch (entry) {
-                .named => |field_name| {
-                    self.writeBytes("named");
-                    self.writeBytes(self.graph.name_store.recordFieldLabelText(field_name));
-                },
-                .padding => |padding| {
-                    self.writeBytes("padding");
-                    try self.writeNode(padding);
-                },
-            }
-        }
-    }
-
     fn writeOptionalIteratorTopology(
-        self: *OpenFunctionInterfaceShapeWriter,
+        self: *GeneratedIdentityWriter,
         topology: ?Type.IteratorTopology,
     ) void {
         const value = topology orelse {
@@ -5379,7 +5228,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn writeOptionalBuiltinOwner(
-        self: *OpenFunctionInterfaceShapeWriter,
+        self: *GeneratedIdentityWriter,
         owner: ?static_dispatch.BuiltinOwner,
     ) void {
         if (owner) |actual| {
@@ -5390,31 +5239,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeOptionalNumericDefaultPhase(
-        self: *OpenFunctionInterfaceShapeWriter,
-        phase: ?checked.NumericDefaultPhase,
-    ) void {
-        if (phase) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalRowDefault(
-        self: *OpenFunctionInterfaceShapeWriter,
-        row_default: ?checked.RowDefault,
-    ) void {
-        if (row_default) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeWriter, digest: ?names.TypeDigest) void {
+    fn writeOptionalDigest(self: *GeneratedIdentityWriter, digest: ?names.TypeDigest) void {
         if (digest) |actual| {
             self.writeU8(1);
             self.writeBytes(&actual.bytes);
@@ -5423,7 +5248,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeWriter, value: ?u32) void {
+    fn writeOptionalU32(self: *GeneratedIdentityWriter, value: ?u32) void {
         if (value) |actual| {
             self.writeU8(1);
             self.writeU32(actual);
@@ -5432,30 +5257,22 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
+    fn writeBytes(self: *GeneratedIdentityWriter, bytes: []const u8) void {
         self.writeU32(@intCast(bytes.len));
         self.writeRawBytes(bytes);
     }
 
-    fn writeU8(self: *OpenFunctionInterfaceShapeWriter, value: u8) void {
+    fn writeU8(self: *GeneratedIdentityWriter, value: u8) void {
         self.writeRawBytes(&.{value});
     }
 
-    fn writeU32(self: *OpenFunctionInterfaceShapeWriter, value: u32) void {
+    fn writeU32(self: *GeneratedIdentityWriter, value: u32) void {
         var little = std.mem.nativeToLittle(u32, value);
         self.writeRawBytes(std.mem.asBytes(&little));
     }
 
-    fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
+    fn writeRawBytes(self: *GeneratedIdentityWriter, bytes: []const u8) void {
         self.hasher.update(bytes);
-        if (self.output) |output| {
-            if (self.output_error == null) {
-                output.appendSlice(self.graph.allocator, bytes) catch |err| {
-                    self.output_error = err;
-                };
-            }
-        }
-        self.output_len += bytes.len;
     }
 };
 
@@ -5687,177 +5504,6 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
-}
-
-test "open function interface shape snapshot alpha-normalizes variables and survives refinement" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const left_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const left = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ left_var, left_var }),
-        .ret = left_var,
-    } });
-    const equivalent_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const equivalent = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ equivalent_var, equivalent_var }),
-        .ret = equivalent_var,
-    } });
-
-    const left_shape = try graph.openFunctionInterfaceShape(left);
-    const equivalent_shape = try graph.openFunctionInterfaceShape(equivalent);
-    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &equivalent_shape.digest.bytes);
-    try std.testing.expectEqualSlices(u8, left_shape.bytes, equivalent_shape.bytes);
-    var exact_bytes_digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(left_shape.bytes, &exact_bytes_digest, .{});
-    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &exact_bytes_digest);
-
-    const distinct_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const distinct_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const distinct = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ distinct_first, distinct_second }),
-        .ret = distinct_first,
-    } });
-    const distinct_shape = try graph.openFunctionInterfaceShape(distinct);
-    try std.testing.expect(!std.mem.eql(u8, &left_shape.digest.bytes, &distinct_shape.digest.bytes));
-    try std.testing.expect(!std.mem.eql(u8, left_shape.bytes, distinct_shape.bytes));
-
-    const stored_equivalent_bytes = equivalent_shape.bytes;
-    const str = try graph.newNode(.{ .primitive = .str });
-    try graph.unify(equivalent_var, str);
-    const refined_shape = try graph.openFunctionInterfaceShape(equivalent);
-    try std.testing.expect(!std.mem.eql(u8, stored_equivalent_bytes, refined_shape.bytes));
-    try std.testing.expectEqualSlices(u8, left_shape.bytes, stored_equivalent_bytes);
-}
-
-test "open function interface shape preserves defaults and recursive structure" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const ret = try graph.newNode(.{ .primitive = .bool });
-    const record_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_record) });
-    const record_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{record_default}),
-        .ret = ret,
-    } });
-    const tag_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
-    const tag_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{tag_default}),
-        .ret = ret,
-    } });
-    const record_shape = try graph.openFunctionInterfaceShape(record_fn);
-    const tag_shape = try graph.openFunctionInterfaceShape(tag_fn);
-    try std.testing.expect(!std.mem.eql(u8, record_shape.bytes, tag_shape.bytes));
-
-    const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
-    const left_recursive = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{left_cycle}),
-        .ret = ret,
-    } });
-    const right_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{right_cycle}) });
-    const right_recursive = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{right_cycle}),
-        .ret = ret,
-    } });
-    const left_recursive_shape = try graph.openFunctionInterfaceShape(left_recursive);
-    const right_recursive_shape = try graph.openFunctionInterfaceShape(right_recursive);
-    try std.testing.expectEqualSlices(u8, left_recursive_shape.bytes, right_recursive_shape.bytes);
-}
-
-test "open function interface shape treats generated identities atomically" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const ret = try graph.newNode(.{ .primitive = .bool });
-    const left_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const left = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{left_arg}),
-        .ret = ret,
-    } });
-    const right_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const right = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{right_arg}),
-        .ret = ret,
-    } });
-    const initial_left_shape = try graph.openFunctionInterfaceShape(left);
-    const initial_right_shape = try graph.openFunctionInterfaceShape(right);
-    try std.testing.expectEqualSlices(u8, initial_left_shape.bytes, initial_right_shape.bytes);
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
-    const type_name = try name_store.internTypeName("PrivateShape");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
-    const def: Type.TypeDef = .{
-        .module = module_identity,
-        .type_name = type_name,
-        .generated = .{ .bytes = [_]u8{0xA7} ** 32 },
-    };
-    const private_left = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .inspectable,
-            .authority = .generated_private,
-        },
-    } });
-    const private_right = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .inspectable,
-            .authority = .generated_private,
-        },
-    } });
-    const private_left_request = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{private_left}),
-        .ret = ret,
-    } });
-    const private_right_request = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{private_right}),
-        .ret = ret,
-    } });
-    const source_bool = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ret}),
-        .ret = ret,
-    } });
-    const source_str_arg = try graph.newNode(.{ .primitive = .str });
-    const source_str = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{source_str_arg}),
-        .ret = ret,
-    } });
-    try graph.registerRequestCheckedSource(private_left_request, source_bool);
-    try graph.registerRequestCheckedSource(private_right_request, source_str);
-
-    const private_left_shape = try graph.openFunctionInterfaceShape(private_left_request);
-    const private_right_shape = try graph.openFunctionInterfaceShape(private_right_request);
-    try std.testing.expect(!std.mem.eql(u8, private_left_shape.bytes, private_right_shape.bytes));
 }
 
 test "cyclic row extension is not a resolved graph type" {

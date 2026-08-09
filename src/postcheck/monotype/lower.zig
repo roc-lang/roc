@@ -3492,8 +3492,8 @@ const Builder = struct {
         // Unresolved requests remain graph-native until relations close them.
         var selection = DraftOpenCandidateSelection{};
         const resolved_request_ty = try source_ctx.activeIdentityTypeFromNode(request_fn_node);
-        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (caller_owned_body and resolved_request_ty == null)
-            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
+        const open_request_key: ?[32]u8 = if (caller_owned_body and resolved_request_ty == null)
+            try draftOpenRequestKey(source_ctx.graph, request_fn_node)
         else
             null;
         const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_ty| .{
@@ -3502,11 +3502,11 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_ty).bytes,
         } else null;
-        const open_shape_lookup_address: ?DraftTemplateLookupAddress = if (open_request_shape) |shape| .{
+        const open_lookup_address: ?DraftTemplateLookupAddress = if (open_request_key) |key| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
-            .request_kind = 2,
-            .request_fn_key = shape.digest.bytes,
+            .request_kind = 1,
+            .request_fn_key = key,
         } else null;
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
@@ -3528,7 +3528,7 @@ const Builder = struct {
             }
         }
         if (selection.selected() == null) {
-            if (open_shape_lookup_address) |address| {
+            if (open_lookup_address) |address| {
                 if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                     for (candidates.items) |raw_spec| {
                         const spec = &source_ctx.draft.template_specs.items[raw_spec];
@@ -3536,8 +3536,7 @@ const Builder = struct {
                         if (!spec.caller_owned_body) continue;
                         if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                         if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                        const spec_shape = spec.open_request_shape orelse continue;
-                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
+                        if (!source_ctx.graph.sameFunctionInterface(spec.body_request_fn_node, request_fn_node)) continue;
                         selection.add(raw_spec);
                     }
                 }
@@ -3663,7 +3662,7 @@ const Builder = struct {
             .lexical_context_key = lexical_context_key,
             .initial_request_ty = resolved_request_ty,
             .produced_request_ty = null,
-            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
+            .open_request_key = open_request_key,
             .fn_id = fn_id,
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
@@ -3671,7 +3670,7 @@ const Builder = struct {
         if (resolved_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
-        if (open_shape_lookup_address) |address| {
+        if (open_lookup_address) |address| {
             try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
@@ -3739,6 +3738,15 @@ const Builder = struct {
                 .evidence_digest = evidence_digest.bytes,
                 .request_kind = 0,
                 .request_fn_key = self.specializationTypeDigest(completed_fn_ty).bytes,
+            }, @intCast(spec_index));
+        } else {
+            const completed_open_key = try draftOpenRequestKey(source_ctx.graph, completed_fn_node);
+            source_ctx.draft.template_specs.items[spec_index].open_request_key = completed_open_key;
+            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, .{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 1,
+                .request_fn_key = completed_open_key,
             }, @intCast(spec_index));
         }
         source_ctx.draft.template_specs.items[spec_index].state = .lowered;
@@ -5097,8 +5105,8 @@ const Builder = struct {
         // Only an unresolved nested request needs an alpha-normalized graph
         // shape. Resolved requests use the same immutable TypeId identity as
         // top-level template requests.
-        const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
-            try source_ctx.graph.openFunctionInterfaceShape(request_fn_node)
+        const open_request_key: ?[32]u8 = if (resolved_request_ty == null)
+            try draftOpenRequestKey(source_ctx.graph, request_fn_node)
         else
             null;
         const resolved_lookup_address: ?DraftNestedLookupAddress = if (resolved_request_ty) |request_ty| .{
@@ -5107,11 +5115,11 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_ty).bytes,
         } else null;
-        const open_shape_lookup_address: ?DraftNestedLookupAddress = if (open_request_shape) |shape| .{
+        const open_lookup_address: ?DraftNestedLookupAddress = if (open_request_key) |key| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
-            .request_kind = 2,
-            .request_fn_key = shape.digest.bytes,
+            .request_kind = 1,
+            .request_fn_key = key,
         } else null;
         // Nested draft requests use the same graph-native identity discipline
         // as template requests; no resolved node becomes a durable cache key
@@ -5143,7 +5151,7 @@ const Builder = struct {
             }
         }
         if (selection.selected() == null) {
-            if (open_shape_lookup_address) |address| {
+            if (open_lookup_address) |address| {
                 if (source_ctx.draft.nested_spec_lookup.get(address)) |candidates| {
                     for (candidates.items) |raw_spec| {
                         const spec = &source_ctx.draft.nested_specs.items[raw_spec];
@@ -5156,8 +5164,7 @@ const Builder = struct {
                         {
                             continue;
                         }
-                        const spec_shape = spec.open_request_shape orelse continue;
-                        if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
+                        if (!source_ctx.graph.sameFunctionInterface(spec.body_request_fn_node, request_fn_node)) continue;
                         selection.add(raw_spec);
                     }
                 }
@@ -5227,12 +5234,12 @@ const Builder = struct {
             .fn_id = fn_id,
             .initial_request_ty = resolved_request_ty,
             .produced_request_ty = null,
-            .open_request_shape = if (open_request_shape) |shape| shape.bytes else null,
+            .open_request_key = open_request_key,
         });
         if (resolved_lookup_address) |address| {
             try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
-        if (open_shape_lookup_address) |address| {
+        if (open_lookup_address) |address| {
             try registerNestedSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
@@ -5278,6 +5285,15 @@ const Builder = struct {
                 .evidence_digest = evidence_digest.bytes,
                 .request_kind = 0,
                 .request_fn_key = self.specializationTypeDigest(completed_fn_ty).bytes,
+            }, @intCast(spec_index));
+        } else {
+            const completed_open_key = try draftOpenRequestKey(source_ctx.graph, completed_fn_node);
+            source_ctx.draft.nested_specs.items[spec_index].open_request_key = completed_open_key;
+            try registerNestedSpecLookup(source_ctx.draft, self.allocator, .{
+                .family = family,
+                .evidence_digest = evidence_digest.bytes,
+                .request_kind = 1,
+                .request_fn_key = completed_open_key,
             }, @intCast(spec_index));
         }
         source_ctx.draft.nested_specs.items[spec_index].state = .lowered;
@@ -9469,6 +9485,26 @@ const DraftNestedLookupAddress = struct {
     request_fn_key: [32]u8,
 };
 
+/// Hash only the explicit function-interface slots of an unresolved request.
+/// The key is graph-local: root ids name the exact cells produced by the
+/// caller, and `sameFunctionInterface` remains collision authority. This does
+/// not traverse any argument or return type and therefore cannot discover or
+/// propagate properties of generated-private descendants.
+fn draftOpenRequestKey(graph: *InstGraph, request_fn_node: NodeId) Allocator.Error![32]u8 {
+    const function = try graph.functionNodes(request_fn_node);
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.monotype.direct_open_request.v1");
+    var arity = std.mem.nativeToLittle(u32, @intCast(function.args.len));
+    hasher.update(std.mem.asBytes(&arity));
+    for (function.args) |arg| {
+        var raw = std.mem.nativeToLittle(u32, @intFromEnum(graph.rootNode(arg)));
+        hasher.update(std.mem.asBytes(&raw));
+    }
+    var raw_ret = std.mem.nativeToLittle(u32, @intFromEnum(graph.rootNode(function.ret)));
+    hasher.update(std.mem.asBytes(&raw_ret));
+    return hasher.finalResult();
+}
+
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
@@ -9509,10 +9545,9 @@ const DraftTemplateSpec = struct {
     /// Immutable identity of the function representation produced after this
     /// specialization body contributed its relations.
     produced_request_ty: ?Type.TypeId = null,
-    /// Exact alpha-normalized shape of a caller-owned request before its body
-    /// contributed relations. This graph-local snapshot is the collision
-    /// authority and never becomes durable specialization identity.
-    open_request_shape: ?[]const u8 = null,
+    /// Direct graph-local identity of the unresolved function slots after the
+    /// caller completed them. Exact slot equality is collision authority.
+    open_request_key: ?[32]u8 = null,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
 };
@@ -10002,10 +10037,9 @@ const DraftNestedSpec = struct {
     fn_id: DraftFnId,
     initial_request_ty: ?Type.TypeId = null,
     produced_request_ty: ?Type.TypeId = null,
-    /// Exact alpha-normalized shape of the unresolved request before this nested
-    /// body contributed its relations. This graph-local snapshot is the collision
-    /// authority and never becomes durable specialization identity.
-    open_request_shape: ?[]const u8 = null,
+    /// Direct graph-local identity of the unresolved function slots after the
+    /// caller completed them. Exact slot equality is collision authority.
+    open_request_key: ?[32]u8 = null,
 };
 
 /// One reuse of a completed (or actively lowering) draft specialization from a

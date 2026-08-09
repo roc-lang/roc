@@ -15221,12 +15221,9 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]
     };
 }
 
-fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [8]progress.Counter {
+fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [5]progress.Counter {
     const graph = diagnostics.graph;
     return .{
-        .{ .name = "Open function shapes captured", .count = graph.open_function_shape_requests },
-        .{ .name = "Open function shape nodes visited", .count = graph.open_function_shape_nodes_visited },
-        .{ .name = "Open function shape bytes written", .count = graph.open_function_shape_bytes_written },
         .{ .name = "Generated identity input nodes hashed", .count = graph.generated_identity_input_nodes_hashed },
         .{ .name = "Generated identity intern hits", .count = graph.generated_identity_intern_hits },
         .{ .name = "Generated identity intern misses", .count = graph.generated_identity_intern_misses },
@@ -15322,7 +15319,7 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.graph.nodes_created = 201;
     diagnostics.graph.produced_type_pairs_visited = 202;
     diagnostics.graph.function_request_pairs_visited = 203;
-    diagnostics.graph.open_function_shape_nodes_visited = 204;
+    diagnostics.graph.generated_identity_input_nodes_hashed = 204;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
@@ -15343,8 +15340,8 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqualStrings("Function request pairs visited", graph[20].name);
     try std.testing.expectEqual(@as(u64, 203), graph[20].count);
     const graph_identity = monotypeGraphIdentityCounters(diagnostics);
-    try std.testing.expectEqualStrings("Open function shape nodes visited", graph_identity[1].name);
-    try std.testing.expectEqual(@as(u64, 204), graph_identity[1].count);
+    try std.testing.expectEqualStrings("Generated identity input nodes hashed", graph_identity[0].name);
+    try std.testing.expectEqual(@as(u64, 204), graph_identity[0].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
