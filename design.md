@@ -150,16 +150,14 @@ Exhaustion therefore retains the ordinary exact IR; it is never cached as
 `disproven` and never selects a guessed runtime
 representation.
 
-Representation finiteness is different from proof-query termination. Monotype
-bounds minted iterator identities at the single graph-owned construction choke
-point (`generatedIteratorNode` plus graph finalization); crossing that declared
-type-universe boundary produces the explicit `forced_dynamic` representation.
-SpecConstr's shape, substitution, structural-work, and constructor-size
-queries instead use typed proof exhaustion solely to decline an optional
-rewrite. Code-growth admission is likewise separate from rewrite-legality proof: a
-growth limit may retain the ordinary shared control-flow form after a rewrite
-has been proven legal, but it cannot change a proof result or choose a runtime
-encoding.
+Iterator representation is finite by construction: every `Iter(item)` uses one
+canonical self-recursive runtime nominal for its public declaration and exact
+item type. It does not grow with adapter depth. SpecConstr's shape,
+substitution, structural-work, and constructor-size queries use typed proof
+exhaustion solely to decline an optional rewrite. Code-growth admission is
+likewise separate from rewrite-legality proof: a growth limit may retain the
+ordinary shared control-flow form after a rewrite has been proven legal, but it
+cannot change a proof result or choose a runtime encoding.
 
 Cycles in a constructor-specialization `Value` graph form through a nominal
 value's backing, a static-data candidate's runtime value, or a callable capture
@@ -2431,7 +2429,8 @@ closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder
 callbacks retain the complete Monotype function graph supplied when they are
 created. Later stages do not rebuild their argument or result types from the
 checked source signature; in particular, a generated iterator step's result
-keeps the exact recursive `rest` identity minted by its enclosing iterator.
+keeps the canonical recursive `rest` identity produced by its enclosing
+iterator.
 
 Ordinary calls and method dispatches to the same intrinsic consume this exact
 identity through one Monotype lowering path. A call-site intrinsic never becomes
@@ -2643,22 +2642,16 @@ argument and result cells through the compound just like any other child value;
 it is not an ordinary checked-public field merely because the procedure has not
 been called at that occurrence.
 
-Generated representation identity is content-addressed. When all identity
-inputs are already resolved or share graph cells, the construction boundary
-interns them immediately: equal complete inputs select one dense in-session
-type identity before backing construction or body lowering is repeated. It is
-unsound to equate two independent unresolved cells merely because both are
-currently open, since later relations may resolve them differently. Such
-producers remain distinct only while relations are still being written. At the
-single relation-finalization barrier, their language-defined defaults and all
-other identity inputs are final, so Monotype computes their stable SHA-256
-identities and coalesces equal roots and backings before any type is sealed,
-specialization key is committed, or later IR is built. This is the earliest
-point at which those formerly open identities can safely deduplicate; there is
-no late Lambda/LIR repair or graph-wide rediscovery pass. Repeated in-session
-access after either interning point uses the dense identity rather than
-rehashing a type graph. Different representation inputs remain different exact
-types even when checking assigned them the same public Roc type.
+Generated iterator identity is content-addressed at the producer. Its complete
+identity inputs are the public iterator declaration and the exact item type.
+Every iterator-producing operation first obtains that item type from its
+completed operands, computes the stable SHA-256 identity, and interns it before
+constructing a backing. Equal inputs select one dense in-session node; a
+cross-body hit imports the already-sealed authoritative Monotype. The producer
+operation, adapter chain, captures, and runtime values are deliberately not
+identity inputs: they are possible inhabitants of the callable slot in the one
+shared runtime interface. There is no later identity-finalization pass,
+coalescing pass, or Lambda/LIR repair.
 
 The construction lookup computes its graph-local input digest once. A vacant
 lookup carries that digest into registration, so building a cache miss does not
@@ -2666,53 +2659,28 @@ walk and hash the same inputs again. Collision authority may compare the exact
 inputs reached by that digest, but registration may not independently repeat
 the lookup traversal.
 
-The same construction boundary appends the produced root to an explicit dense
-generated-representation registry. Representation-tier and durable-identity
-finalization iterate only that registry, resolving duplicate union classes and
-coalescing equal finalized content addresses as they go. They never search the
-full Monotype graph to rediscover which nodes are generated representations;
-unrelated graph nodes do no work in either pass.
-
-Function-request materialization may create another root that retains an exact
-producer's generated-representation provenance while substituting its checked
-interface. That creation site appends the new root to the same registry
-immediately. Copying producer provenance onto an unregistered root is invalid:
-the finalizers deliberately do not discover it by searching the graph.
+The same construction boundary appends a cache miss to an explicit dense
+generated-root registry. Sealing iterates only that registry so a completed root
+can enter the durable interner before a deferred nested body requests it. It
+never searches the Monotype graph to rediscover generated nodes, and it never
+changes an identity. Function-request materialization does not copy generated
+roots: it selects the canonical root directly at the exact occurrence.
 
 A stable control-flow or storage selection does not create such a copy. When
 its chosen representation is a generated nominal, the selection redirects to
 the already-registered content identity itself. Only structural selections
 copy child structure into their stable cell.
 
-Recursive value slots and roots selected for the forced-dynamic fixed point are
-direct-indexed permanent-node sets. A query walks only the current union class
-and tests those sets; it never scans every recursive or forced root accumulated
-by the body.
-
 The durable generated-identity table owns one authoritative Monotype tree per
-finalized content address across body graphs. After identity finalization and
-before relation freezing, a graph whose generated root hits that table imports
-the authoritative root and explicitly relates the complete authoritative
-backing to the producer's live backing. Every imported descendant retains its
-`TypeId` through sealing. Reusing only the named root is invalid: an
-independently requested step function, state, or recursive-rest descendant
-would otherwise be sealed under a fresh identity and later callable solving
-would treat the apparent root and its actual backing as unrelated types. A
-cache miss seals and commits the complete tree once; a cache hit preserves
-that tree's root and descendant identities without a late structural scan.
-
-For a minted iterator, the stable generated `TypeDigest` is SHA-256 over an
-explicit domain separator, the public source declaration identity, the producer
-kind, the exact item-type digest, the ordered digests of every
-representation-determining input type, and any callable-specialization digest.
-The digest is computed after the complete input graph is known and before the
-durable Monotype leaves its owning graph. Equal inputs therefore produce the
-same nominal identity; distinct inputs do not require a later representation
-merge merely because checking gave them the same public `Iter` type.
-When an input contains another generated representation, the input digest uses
-that representation's stable digest as an opaque, fixed-size identity. One
-graph-local dense memo computes each generated digest once; an outer producer
-must not recursively rehash the nested producer's implementation history.
+stable content address across body graphs. A hit imports that complete tree,
+including the canonical self-recursive `rest` edge. A miss seals and commits
+the complete tree once. Reusing only a named shell is invalid: its independently
+sealed descendants could otherwise acquire unrelated callable type variables.
+The stable generated `TypeDigest` is SHA-256 over an explicit domain separator,
+the public source declaration identity, and the exact item-type digest. A
+nested generated type contributes its already-stored digest as one opaque,
+fixed-size identity; an outer digest never expands its backing or implementation
+history.
 
 Every representation producer consumes its current exact operand cells. An
 expected result type is a destination request, never a source from which the
@@ -2841,8 +2809,9 @@ already in the request argument's union class, refinement is a true no-op. It
 returns the existing request and empty component span immediately; rebuilding
 or rematerializing the same request graph is forbidden unnecessary work.
 
-Each completed argument is its own structural authority, so two independent
-concrete `Iter(U64)` parameters may retain two different exact identities.
+Each completed argument is its own value authority, so two independent
+concrete `Iter(U64)` parameters retain distinct value cells while selecting the
+same canonical iterator type identity.
 Checker-authored node recurrence is the explicit declaration that two source
 occurrences share one substitution slot; independent source occurrences have
 distinct checked nodes even when their public shapes are identical. Fresh call
@@ -2856,9 +2825,9 @@ polymorphic occurrences therefore cannot disagree: specializing
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
 lowered. Ordinary compound nodes are rebuilt only along changed paths, and an
 exact generated nominal is an atomic replacement rather than a graph to scan.
-Two different exact values for the same checked slot invoke the explicit common
-representation operation at that call boundary; they are never resolved by
-last-write-wins substitution or a later whole-type merge.
+Two different exact values for the same checked slot must select the same exact
+type at that call boundary; they are never resolved by last-write-wins
+substitution or a later whole-type merge.
 
 When a stored value meets a compound argument or continuation request,
 Monotype selects their common representation at that explicit edge and writes
@@ -2909,13 +2878,16 @@ might eventually occur.
 One function specialization owns an immutable checked interface and a flat
 dense substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
-operands. The specialization key reads the checked interface through the span,
-and the body reads the same span when instantiating its arguments. Neither step
-copies the function type, walks matching checked and produced trees, or
-materializes changed paths. The body stores the exact `NodeId` it actually
-returns; the call expression uses that node directly. A recursive
-specialization reserves one result cell before lowering and redirects that cell
-to the stored exact identity when the body completes.
+operands. Collecting ordinary polymorphic substitutions visits only the checked
+and produced operand structures that the call relates. Materialization then
+rebuilds only paths changed by those substitutions; it treats a canonical
+generated nominal as an atomic leaf and never enters its private backing. The
+specialization key reads the checked interface through the span, and the body
+uses the same span to return exact selected nodes directly from checked
+occurrences instead of reconstructing the function graph. The body stores the
+exact `NodeId` it actually returns; the call expression uses that node directly.
+A recursive specialization reserves one result cell before lowering and
+redirects that cell to the stored exact identity when the body completes.
 
 An empty substitution span is the exact proof that a body may reuse an
 independent specialization. Reuse is decided from that explicit span and the
@@ -2923,16 +2895,16 @@ resolved evidence vector, never from a transitive prediction about the body.
 Consequently a body is caller-owned only when the concrete call interface has
 actual substitutions that require it; a parameter or local whose type could
 theoretically carry a generated nominal causes no work by itself.
-Once a body's generated identities are final and its relations are frozen, it
-commits those identities to the durable Monotype interner before lowering any
-deferred nested specialization. Nested lowering can therefore reuse the
-already-authoritative type; it cannot win an ordering race after the outer
-graph is no longer able to bind relations.
-There is no function-request materialization traversal. Request copies by
-purpose, recursive provisional named copies, and checked/produced pair maps are
-forbidden. Storage reassignment records direct destination-to-value selections;
-body ABI isolation records direct function-slot substitutions. Both are flat
-spans consumed at the operation that owns them.
+Before lowering a deferred nested specialization, a body commits each canonical
+generated root it actually produced to the durable Monotype interner. Nested
+lowering can therefore reuse the authoritative type. Refining a partial request
+seeds the new request from its immutable prior span and visits only newly
+completed operands; it never replays the previous interface relation. Request
+copies by purpose, recursive provisional named copies, and transitive
+generated-type maps are forbidden. Storage reassignment records direct
+destination-to-value selections; body ABI isolation records direct
+function-slot substitutions. Both are flat spans consumed at the operation
+that owns them.
 
 Callee specialization starts only after argument expressions have completed
 and reuses those exact operands in the emitted call. The specialization does
@@ -2995,189 +2967,60 @@ ordinary compound structure already required by substitution and handles a
 generated nominal only at the exact edge where it occurs. It does not propagate
 a generated-private classification to parents.
 
-If independently produced values meet, equal exact identities need no
-representation selection. Different exact identities require an explicit
-producer-authored common representation before the values share storage or a
-single continuation; alternatively, lowering may explicitly clone the
-continuation so the values never join. A growing recursive edge selects the
-declared finite fixed-point representation. These are deterministic runtime
-representation decisions over already-valid checked values, never post-check
-type validation.
-
-An exact destination request is not itself such a meeting point. If the request
-already carries one generated-private identity and the current producer returns
-a different identity, directed substitution relates only their public checked
-arguments and keeps the producer root. It neither merges the private roots nor
-chooses a common representation. Equal complete identities may be deduplicated;
-different identities can meet only at the explicit join described above.
+If independently produced iterator values meet at storage or control flow,
+their checker-approved declaration and item type are equal, so their canonical
+generated identity is equal too. The boundary selects that one nominal without
+opening its backing. Reaching such a boundary—or an exact destination
+request—with two different generated identities is a compiler invariant: some
+producer used incomplete or incorrect identity inputs. Monotype does not repair
+the error by merging private roots, minting a third representation, or choosing
+one side.
 
 After Monotype seals an exact produced type, Monotype Lifted, Lambda Solved,
-LIR, ARC, and every backend consume that exact type and its layout. They do not
-receive a checked-public/generated-private distinction and cannot reconstruct
-one by scanning type structure.
+LIR, ARC, and every backend consume its ordinary nominal identity and layout.
+Backing authority remains explicit solely so compiler-generated code may open
+the producer-owned runtime backing without violating source opacity. It is not
+a compatibility relation, containment property, or permission to scan parent
+types.
 
-#### Explicit Iterator Representation Tiers
+#### Canonical Iterator Runtime Nominals
 
-A Monotype named type definition records an explicit iterator representation
-decision:
+`TypeDef.generated` is `null` for the checked-public iterator declaration and
+contains the canonical `TypeDigest` for an exact runtime iterator nominal.
+There are no iterator tiers, producer kinds, adapter depths, join identities, or
+late representation decisions. These would all duplicate types whose runtime
+interface is identical.
 
-```zig
-const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
+For each public iterator declaration and exact item type, Monotype constructs
+one self-recursive nominal backing. Its `step` result uses that same nominal for
+every `rest` field. `List.iter`, custom iterators, ranges, every adapter,
+recursion, and control-flow selection therefore produce values of the same
+canonical nominal whenever they produce the same item type. Their different
+step closures become members of the callable slot in that common backing; a
+closure identity is not part of the surrounding iterator type.
 
-const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    str,
-    single,
-    range_exclusive,
-    range_inclusive,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    join,
-    forced_dynamic,
-};
-
-const TypeDef = struct {
-    // declaration identity fields
-    generated: ?TypeDigest = null,
-    iterator_representation: IteratorRepresentation = .none,
-    iterator_kind: IteratorKind = .none,
-    iterator_depth: u8 = 0,
-};
-```
-
-The fields have these meanings:
-
-- `none` is the ordinary public nominal. It carries no internal chain identity.
-- `minted` is a statically bounded internal chain representation.
-  `generated` is its chain/callable-evidence digest and `iterator_depth` is
-  the producer-computed chain depth. `iterator_kind` records the exact source
-  or adapter that produced it.
-- `forced_dynamic` is the explicit fixed-point representation selected at the
-  mint-depth boundary. It retains the public declaration identity while the
-  representation field keeps it distinct from the ordinary public nominal.
-- `join` is the explicit common representation of two distinct exact minted
-  identities at a declared storage or control-flow meeting point. Its ordered
-  runtime backing is produced by the representation join, while its stable
-  identity hashes the two input identities in digest order. Reversing source
-  branches therefore cannot change the joined nominal. A join contributes the
-  maximum input mint depth; it is not another adapter layer.
-
-These fields participate in named-type equality, cross-store equality, and type
-digests. Every type-store translation copies them. A later stage never derives a
-tier, producer kind, or mint depth from lowered type shape.
-
-For a minted iterator, Monotype rewrites the public recursive `rest` type in the
-step result to the minted self type. Concrete adapter inputs remain temporary
-producer provenance until depth and stable identity are finalized; they never
-become durable nominal arguments. Each generated iterator keeps exactly the
-public checked item argument, while its content-addressed definition identity
-distinguishes the concrete adapter chain. A bounded chain is therefore a finite
-tower of distinct nominal identities rather than one public nominal with a
-recursive self edge.
-
-The representation producer is `generatedIteratorNode` in
-`src/postcheck/monotype/lower.zig`, together with
-`InstGraph.finalizeGeneratedIteratorRepresentations` in
-`src/postcheck/monotype/solve.zig`. Construction records the exact public
-source, producer kind, component nodes, callable evidence, and private backing
-in the active instantiation graph. Finalization consumes that complete graph
-before any durable Monotype type is sealed. Together they compute:
-
-- `List.iter` as a first-class source representation rather than a public
-  recursive `Iter` boundary;
-- source depth 1;
-- adapter depth as one plus the maximum minted depth reachable by value through
-  its components;
-- exact minted depths 1 through 254, with 255 reserved as the
-  forced-dynamic sentinel in the serialized `u8` metadata.
+The sole construction choke point is `generatedIteratorNode` in
+`src/postcheck/monotype/lower.zig`. It receives the checker-authored public
+declaration and the exact item node already produced by the operation. A dense
+item-node index answers repeated in-graph requests without hashing. On a dense
+miss, one structural digest lookup finds a cross-graph canonical type or carries
+the computed digest into one backing construction and registration; the inputs
+are never hashed twice for one miss.
 
 A public `Iter` expected type has already constrained the expression during
-checking. The checked producer identity and checked item arguments direct
-Monotype to mint the concrete result from the exact inputs; Monotype does not
-relate that result back to a public type graph. This keeps constant and
-non-constant chains on the same representation path.
+checking. It is only a destination request. The concrete producer constructs
+the canonical result independently from its exact operands, and directed
+request application handles the public/canonical pair at that exact nominal
+edge without traversing either backing. A request whose ordinary generic
+substitution completes an `Iter(item)` occurrence invokes the same choke point,
+so recursive calls can reserve the already-canonical ABI before the body is
+lowered. The body must independently produce that same identity.
 
-A `minted` child contributes its recorded depth. A `forced_dynamic` child
-contributes the cap, so every adapter above it remains dynamic. Ordinary named
-arguments, records, tuples, tag payloads, lists, and boxes propagate the maximum
-depth of values they contain. Function types do not contribute stored chain
-depth, and named backings are not traversed.
-
-If the next finite chain would exceed the representable minted depth, Monotype interns one
-`forced_dynamic` iterator type per item-type digest. Its public-shaped backing
-is recursively rewritten to its own type, giving recursive construction a
-finite type fixed point. An exact memoized walk over the finite instantiation
-graph computes the maximum stored iterator depth; a value cycle selects the
-explicit forced-dynamic fixed point. Graph size alone never changes the
-representation decision.
-
-Recursive specialization contributes an explicit second proof of the dynamic
-tier. Each in-progress specialization snapshots every permanent member of each
-ordered argument's union class. When a recursive edge reaches that
-specialization, a request argument introduced after the snapshot is recorded as
-a representation-growing recursive slot before the two function interfaces are
-related. If that slot subsequently joins distinct minted iterator identities,
-the graph records that the resulting iterator class must use the forced-dynamic
-fixed point. Recursion through any alias already present in the initial class is
-not representation growth and remains eligible for the minted tier. This makes
-the distinction producer-authored: finalization consumes the recorded recursive
-edge and minted join instead of inferring recursion from a finished type shape,
-union-find root selection, or call-stack depth.
-
-Relating the recursive edge joins each ordered argument and the return through
-the explicit common-representation operation, then installs that completed
-interface on both requests. It never ordinarily unifies the two whole function
-roots; doing so would descend into public/generated nominal pairs and repeat
-work whose direction is already explicit at the interface slots.
-
-A loop `continue` edge is likewise explicit producer-authored recursive value
-flow, so every loop-carried slot on that edge is recorded even if an earlier
-assignment already joined it to the loop parameter. Recording the slot does not
-by itself force dynamic representation; only its later join of distinct minted
-identities does.
-
-An imported finished Monotype can participate in such a minted join, but it has
-no live graph provenance because its producer has already sealed its identity.
-When exactly one side of the join is a graph-owned iterator, union preserves
-that side as the class authority. Representation finalization then consumes its
-explicit public source and producer topology. It must not depend on operand
-order or keep the imported root and thereby discard the only data capable of
-authoring a forced-dynamic representation.
-
-A finished generated iterator still retains the checker-declared outer
-iterator topology, public declaration identity, public item argument, and exact
-backing. When a later adapter or join needs a producer source, Monotype consumes
-those explicit fields directly: it clears only the generated tier fields from
-the declaration identity and follows the recorded topology roles through the
-exact backing. It does not import a second public backing tree, search by field
-text, or reconstruct an iterator contract from lowered function shape.
-
-The recursive edge itself is also producer-authored. Every draft function and
-globally reserved root records the owner that created it, forming an explicit
-active ownership tree. A partial open-interface match may reuse an in-progress
-specialization only when the current owner descends from that specialization in
-this tree. Shared graph cells alone cannot classify two sibling calls as
-recursion. Exact completed interfaces may still deduplicate normally, but only
-an explicit ancestor edge invokes recursive-interface unification and records
-recursive representation growth.
-
-Finalization rebuilds a selected forced-dynamic class with exactly one public
-item argument and an exact self-recursive backing before identity sealing.
-It does not restamp a minted backing whose component arguments still encode the
-growing chain. Once representation finalization, identity sealing, and graph
-freezing finish, the durable Monotype is immutable and no consumer may reopen,
-widen, or reinterpret it.
+Recursive procedures and loops need no iterator-specific growth analysis,
+owner snapshots, depth caps, or representation finalization. Their argument,
+result, and loop-carried slots use the same canonical nominal as ordinary
+control flow. Once relation production is frozen, the durable Monotype is
+immutable and no consumer may reopen, widen, or reinterpret it.
 
 Iterator-for lowering obtains the step result shape from the exact generated
 iterator node when one is present. The checked step type supplies the public
@@ -3203,9 +3046,9 @@ uses it directly.
 
 A value-producing `if` or `match` owns one explicit exact result selection for
 all of its inhabited branches. Each branch is lowered exactly once and returns
-its exact graph cell. Equal identities are already one type. Distinct identities
-select the explicit common representation required by their producer topology,
-or the continuation is explicitly cloned so no shared result storage exists.
+its exact graph cell. Iterator branches with the same declaration and item type
+already have the same canonical identity. Ordinary compound structure is joined
+only where the shared storage boundary requires it.
 The emitted branch IR retains those live graph cells until the selection is
 complete and types are sealed, so the deterministic joined root is visible to
 every branch without a producer-discovery pre-pass, re-lowering, or rewriting
@@ -3214,15 +3057,14 @@ exact scrutinee, so branch-local lookups produce from those cells directly.
 Source order cannot change the joined identity, and lowering never relates the
 selected result back to a public interface.
 
-The stable selection cell is refined by a representation join that walks only
-the two structures meeting at that declared boundary. It reuses either input
-when all joined children already come from that input and allocates new
-compound structure only when the result combines children from both. At the
-exact node where a checker-public generated nominal meets a private generated
-nominal, the public node is only a request and the private node remains the
-child authority. Two distinct private identities invoke the explicit generated
-representation join. A graph-local pair memo allocates an indirection only on
-a real recursive re-entry; acyclic joins do not manufacture memo nodes.
+The stable selection cell walks only the two ordinary structures meeting at
+that declared boundary. It reuses either input when all selected children
+already come from that input and allocates new compound structure only when the
+result combines children from both. A generated nominal is an atomic child: an
+equal identity is selected directly, a public occurrence is only a request for
+the canonical child, and different generated identities are an invariant. A
+graph-local pair memo allocates an indirection only on a real recursive
+re-entry; acyclic selections do not manufacture memo nodes.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -3244,11 +3086,12 @@ nominal layer that neither checking nor the producer requested.
 
 A procedure specialization retains its exact checked source scheme and the
 explicit substitution from that scheme to its exact argument and result types.
-Input and output identities therefore remain distinct when the source signature
-uses one public `Iter` type variable for both; no source-interface graph is
-merged with the produced function graph. Every call, dispatch, procedure-value,
-root-procedure, lambda, and closure boundary that creates a specialization
-request records that checked source on the request's structural function root.
+When the source signature uses one type variable for input and output, the same
+explicit substitution is reused at both occurrences; independent checked slots
+remain independent. No source-interface graph is merged with the produced
+function graph. Every call, dispatch, procedure-value, root-procedure, lambda,
+and closure boundary that creates a specialization request records that checked
+source on the request's structural function root.
 Named callable wrappers are normalized to that root before provenance is
 recorded, so body lowering consumes the explicit source mapping instead of
 reconstructing it from the request shape.
@@ -3268,39 +3111,15 @@ body is lowered. Later pattern materialization consumes the same cells. It does
 not relate a checked pattern graph to the scrutinee or recover representation
 evidence from the public pattern type.
 
-The cap is a type-universe bound, not a call-depth or specialization-request
-counter. Every generated iterator passes through the same graph-owned producer
-and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
-receive the same finite representation decision.
+#### Canonical Iterator Callable Flow
 
-#### Exact Tier Joins And Callable Flow
-
-Monotype representation joins and Lambda Solved consume the representation tier
-explicitly:
-
-- a forced-dynamic iterator wins an explicit exact join with a minted iterator
-  that has the same public source declaration and item type;
-- distinct minted iterator identities join their item and backing information
-  without discarding callable members, and mint a content-addressed `join`
-  identity over the two exact input identities;
-- equal generated identities are ordinary named-type equality;
-- an ordinary public iterator never participates in a runtime representation
-  join.
-
-At a forced-dynamic join, Lambda Solved unifies the exact item types and carries
-the minted peer's callable members into the dynamic backing. Callable evidence
-already resides in the exact produced Monotype; Lambda Solved does not perform a
-second public-to-generated structural walk. A SpecConstr-authored callable
-worker becomes visible by updating the callable slots of that exact type.
-Monotype therefore selects the existing forced-dynamic fixed point after
-joining its item cell; it does not recursively join the minted and dynamic
-backings, because the dynamic backing is the declared universal
-representation and its callable membership is owned by Lambda Solved.
-Encountering a checked-public iterator beside an exact generated iterator in
-Lambda Solved is an invariant violation: it means an earlier producer, call
-signature, binder, or join discarded its exact Monotype. Lambda Solved must not
-repair that loss by relating the two roots, walking their children, or copying
-generated backing evidence into the public type.
+Lambda Solved receives the canonical nominal and its self-recursive backing.
+Each concrete step closure inhabiting that nominal contributes through the
+ordinary callable slot in the backing. Lambda Solved never chooses an iterator
+representation, relates a public iterator to a canonical iterator, or walks a
+type to discover iterator descendants. Compiler-generated backing patterns may
+open the explicitly marked producer-owned backing; this is ordinary access to
+the exact nominal's runtime fields, not compatibility repair.
 
 Low-level list insertion, concatenation, replacement, and prepend operations
 can place callable values into storage without making their independently
@@ -3310,19 +3129,8 @@ exact Monotypes are equal. A checker-public empty list and a list containing an
 exact generated item deliberately remain independent until Monotype selects
 the concrete storage representation.
 
-When a complete Monotype type clone contains a forced-dynamic iterator,
-Lambda Solved marks the callable in that iterator's backing as erased. The mark
-runs only after the clone is structurally complete, so the erased callable's
-source-function digest never observes a partially built type. The erased
-callable then accumulates exact finite members through normal Lambda Solved
-unification.
-
-Minted iterator backings keep finite callable slots inline. Only
-forced-dynamic backings take this explicit erased-callable boundary. The direct
-LIR lowerer dumbly consumes the solved result: finite callables become generated
-tag-union values; erased callables become packed erased-callable values and
-indirect calls. It does not apply iterator depth policy or repair callable
-variant sets.
+The direct LIR lowerer dumbly consumes the solved callable result. It does not
+apply iterator policy or repair callable variant sets.
 
 #### SpecConstr And Loop Scalarization
 
@@ -3413,12 +3221,9 @@ result shape through the separate demand path, which propagates through the
 callee's exact used-argument plan.
 
 Inlining a call additionally requires exact closed Monotype identity between
-the call-site result and the callee body's result. Independently specialized
-graphs may prove a public/generated or minted/forced-dynamic relation without
-giving the two results the same runtime representation; that relation is not
-permission to substitute the callee's private value into the caller. Such a
-call remains explicit for Lambda Solved to consume at the representation
-boundary. Rewritten callable workers are likewise keyed by the source template,
+the call-site result and the callee body's result. A public request is not exact
+identity and therefore cannot authorize substituting a private value into the
+caller. Rewritten callable workers are likewise keyed by the source template,
 the exact callable-use ABI, and the exact capture ABI, so one worker is never
 shared across distinct specialization graphs merely because its lexical source
 and captures happen to match.
@@ -3598,11 +3403,11 @@ specialization mode may change compile-time work and generated shape only.
 
 The following properties require focused tests:
 
-- bounded iterator chains remain minted and have no iterator-attributable box or
-  erased callable;
-- recursive and over-cap chains terminate and use the forced-dynamic callable
-  representation;
-- forced-dynamic callable sets contain every member that can reach the boundary;
+- all iterator producers with the same declaration and item type use one
+  canonical self-recursive nominal;
+- adapter depth and recursion do not create additional iterator types;
+- every concrete step closure that can inhabit the canonical backing reaches
+  its ordinary callable slot;
 - wrapper mode and ordinary mode agree on values and effects;
 - iterator loop scalarization preserves every reachable transition, including
   adapter-state changes across `continue` edges;
@@ -3612,8 +3417,7 @@ The following properties require focused tests:
   verifier.
 
 Backends receive only ordinary LIR and explicit ARC statements. They must not
-know whether a value originated as a public iterator, a minted iterator,
-forced-dynamic callable state, or a scalarized loop.
+know which iterator producer or optimization produced a value.
 
 ## Solver-Mutating Rewrites
 
@@ -3967,14 +3771,7 @@ const TypeDef = struct {
     type_name: TypeNameId,
     source_decl: ?u32,
     generated: ?TypeDigest,
-    iterator_representation: IteratorRepresentation,
-    iterator_depth: u8,
-};
-
-const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
+    iterator_topology: ?IteratorTopology,
 };
 
 const Fn = struct {
@@ -4158,29 +3955,15 @@ callee's function tree.
 
 Repeated dependencies are memoized by the complete procedure family (template,
 method scope, and checked source-function key), exact evidence topology,
-immutable substitution span, and its alpha-normalized graph-native identity.
-Digests select an expected O(1) bucket only; exact substitution and identity
-bytes are the collision authorities. An active memo entry is one recursive call
-to the same specialization and returns its reserved result cell. Requests with
-different concrete substitutions, checked source identities, method scopes, or
-evidence can never share an entry. Work is therefore proportional to unique
-explicit substitutions and unique specializations, not to the size of matching
-checked and produced type trees.
-
-The alpha-normalized open-shape stream writes a graph-owned generated iterator as
-the same content-addressed nominal identity that representation finalization
-will stamp on the type. The identity hashes the public source, item type,
-producer kind, ordered component identities, and callable evidence; nested
-generated producers contribute their memoized identities. The stream never
-expands the generated iterator's runtime backing or producer history. A live
-identity with unresolved inputs keeps the interface open, while a finished
-imported generated type uses its stored identity directly. Generated-lookup
-keys that precede durable identity finalization encode graph-owned generated
-nodes as first-encounter definitions and dense references so shared producer
-history is still traversed linearly without turning graph ids into durable
-type identity. Capturing one open shape serializes and hashes the graph in one
-pass, retaining the emitted bytes as collision authority; a sizing pass may not
-walk and hash the same interface a second time.
+immutable substitution span, and graph-native request identity. A resolved
+request uses its durable type digest. An unresolved request key hashes only the
+dense root IDs of its immediate argument and return slots; it does not serialize
+or traverse their type graphs. Exact slot equality is collision authority. An
+active memo entry is one recursive call to the same specialization and returns
+its reserved result cell. Requests with different concrete substitutions,
+checked source identities, method scopes, or evidence can never share an entry.
+Work is therefore proportional to unique explicit substitutions and unique
+specializations, not to the size of matching checked and produced type trees.
 
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
@@ -4321,11 +4104,11 @@ sealing then assigns durable `TypeId`s exactly once.
 
 Anything that needs specialization identity before freezing consumes a
 graph-native identity view. That view reads the authoritative nodes through the
-call's explicit substitution span and writes an alpha-normalized stream without
-allocating Monotype nodes. Resolved and unresolved inputs use this same route.
-A generated nominal contributes its content address as one atomic item and its
-private backing is not traversed. The view is owned by the specialization
-request that needs it; it is not cached as a mutable graph-wide snapshot.
+call's explicit substitution span. Resolved requests use their durable type
+digest; unresolved requests hash only their immediate dense function-slot IDs.
+A generated nominal is already one atomic slot and its private backing is not
+traversed. The view is owned by the specialization request that needs it; it is
+not cached as a mutable graph-wide snapshot.
 
 Interface reuse compares the immutable checked interface, flat substitution
 span, evidence identity, and graph-native identity bytes. A memo hit reuses the
@@ -5468,13 +5251,9 @@ The producers are:
   callable parameter or result
 - checked root ABI metadata for values that will later be consumed by LirImage
   or glue, when that metadata explicitly names erased callable slots
-- a Monotype iterator type explicitly marked `forced_dynamic`, whose recursive
-  step callable crosses the dynamic representation boundary
 
 Monotype lowering carries boundary requirements as typed annotations into
-Lambda Solved IR. Lambda solving also consumes the explicit iterator
-representation tier and marks a completed forced-dynamic backing callable as
-erased. It unifies all requirements through the same function
+Lambda Solved IR. It unifies all requirements through the same function
 `args/callable/ret` graph used for finite lambda sets. If a callable slot is
 forced to `erased`, direct LIR lowering produces packed erased callable values
 and indirect erased calls. If no explicit erased requirement reaches a callable
@@ -5482,7 +5261,7 @@ slot, finite lambda-set dispatch is used.
 
 No ordinary source expression becomes erased because direct lowering finds
 finite dispatch inconvenient. Erasure is introduced only by explicit checked
-boundary data or the explicit Monotype forced-dynamic iterator tier.
+boundary data.
 
 ## Direct LIR Callable Decisions
 

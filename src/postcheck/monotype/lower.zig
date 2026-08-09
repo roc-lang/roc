@@ -5102,9 +5102,9 @@ const Builder = struct {
         const stored_evidence = try self.constFnEvidence(requested_evidence);
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
         const resolved_request_ty = try source_ctx.activeIdentityTypeFromNode(request_fn_node);
-        // Only an unresolved nested request needs an alpha-normalized graph
-        // shape. Resolved requests use the same immutable TypeId identity as
-        // top-level template requests.
+        // An unresolved nested request is keyed by its immediate dense
+        // function slots. Resolved requests use the same immutable TypeId
+        // identity as top-level template requests.
         const open_request_key: ?[32]u8 = if (resolved_request_ty == null)
             try draftOpenRequestKey(source_ctx.graph, request_fn_node)
         else
@@ -19073,11 +19073,7 @@ const BodyContext = struct {
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
         }
-        if (public_named.def.generated != null) {
-            if (public_named.args.len == 1 and self.graph.sameClass(public_named.args[0], item_node)) {
-                return self.graph.rootNode(public_iterator);
-            }
-        }
+        const existing_identity = public_named.def.generated;
         var lookup_args = [_]NodeId{item_node};
         public_named.args = &lookup_args;
         const owner = public_named.builtin_owner orelse
@@ -19087,6 +19083,13 @@ const BodyContext = struct {
         }
         const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
         const lookup = try self.graph.lookupGeneratedIteratorFromNamed(public_named);
+        if (existing_identity) |identity| {
+            if (!std.mem.eql(u8, &identity.bytes, &lookup.digest.bytes)) {
+                Common.invariant("iterator producer received a canonical result for a different exact item type");
+            }
+            return (try self.existingGeneratedIteratorNode(lookup)) orelse
+                Common.invariant("canonical iterator identity was absent from its interner");
+        }
         if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
 
         const Context = struct {
@@ -29221,8 +29224,8 @@ const BodyContext = struct {
             .record => |record| try self.relateRecordExprAtNode(record, expected_node),
             // These forms propagate the exact result cell while their own
             // lowering establishes branch-local binders and statement state.
-            // Relating their shared checked result node here would collapse
-            // distinct generated-private representations across branches.
+            // Their lowering owns the one explicit value-selection boundary;
+            // relating the checked result here would duplicate that work.
             .block, .match_, .if_, .runtime_error => {},
             .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => _ = try self.graph.applyCheckedTypeMapping(

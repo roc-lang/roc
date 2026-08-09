@@ -382,6 +382,10 @@ test "Monotype instantiation does not reopen empty tag union views" {
 test "Monotype lowering carries exact produced types without containment scans" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(solve_source, "containsGeneratedPrivate");
+    try expectNotContains(solve_source, "nodeIsGeneratedPrivateRoot");
+    try expectNotContains(solve_source, "unifyIteratorOwnerStampedPublic");
+    try expectNotContains(solve_source, "class_member_next");
+    try expectNotContains(solve_source, "OpenFunctionInterfaceShape");
 
     try expectNotContains(solve_source, "finalizeGeneratedIteratorRepresentations");
     try expectNotContains(solve_source, "finalizeGeneratedIteratorIdentities");
@@ -408,6 +412,10 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const lower_source = @embedFile("monotype/lower.zig");
     try expectNotContains(lower_source, "containsGeneratedPrivate");
+    try expectNotContains(lower_source, "nodeIsGeneratedPrivateRoot");
+    try expectNotContains(lower_source, "unifyIteratorOwnerStampedPublic");
+    try expectNotContains(lower_source, "class_member_next");
+    try expectNotContains(lower_source, "OpenFunctionInterfaceShape");
     try expectNotContains(lower_source, "selectRequestRepresentation");
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
@@ -445,8 +453,20 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn generatedIteratorBackingNode(",
     );
     try expectContains(generated_iterator_producer, "lookupGeneratedIteratorFromNamed(");
+    try expectContains(generated_iterator_producer, "existing_identity");
+    try expectContains(generated_iterator_producer, "&identity.bytes, &lookup.digest.bytes");
     try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
     try expectContains(generated_iterator_producer, "generatedIteratorBackingNode(");
+
+    try expectContains(solve_source, "generated_iterators_by_item: collections.DenseMap(NodeId");
+    try expectContains(solve_source, "request_substitutions: std.ArrayList(RequestSubstitution)");
+    const open_request_key = sourceSliceBetween(
+        lower_source,
+        "fn draftOpenRequestKey(",
+        "const DraftTemplateSpec = struct",
+    );
+    try expectContains(open_request_key, "graph.rootNode(arg)");
+    try expectNotContains(open_request_key, "writeNode");
 
     const checked_request = sourceSliceBetween(
         lower_source,
@@ -462,7 +482,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
     try expectContains(dispatch_instantiation, "const request_fn = try functionRequestNode(");
-    try expectContains(dispatch_instantiation, "self.graph.functionRequestFromProducedArgumentsAndComponents(");
+    try expectContains(dispatch_instantiation, "self.graph.functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(");
+    try expectContains(dispatch_instantiation, "self.generatedTypeCanonicalizer()");
     try expectContains(dispatch_instantiation, "&.{checked_dispatcher_node}");
     try expectNotContains(dispatch_instantiation, "self.graph.applyCheckedTypeMapping(fn_graph.args[index]");
 

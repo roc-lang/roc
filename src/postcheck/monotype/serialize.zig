@@ -30,7 +30,6 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
 /// Version 13: generated iterator types have one canonical identity and no
 /// representation tier, producer kind, or chain-depth metadata.
-/// Version 12: generated iterator producer kinds include explicit joins.
 /// Version 11: low-level nodes may carry an explicit produced-type source.
 /// Version 10: generated nominal identities include their exact producer data.
 /// Version 9: function metadata records whether a signature is independent

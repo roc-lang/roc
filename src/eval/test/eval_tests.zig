@@ -3945,7 +3945,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
-        .name = "inspect: independent procedure arguments preserve distinct exact iterators",
+        .name = "inspect: independent procedure arguments preserve both canonical iterator values",
         .source_kind = .module,
         .source =
         \\fold_two : Iter(I64), Iter(I64) -> List(I64)
@@ -4298,7 +4298,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3]" },
     },
     .{
-        .name = "inspect: control flow joins distinct exact iterator implementations",
+        .name = "inspect: control flow shares the canonical iterator representation",
         .source_kind = .module,
         .source =
         \\choose = |condition|

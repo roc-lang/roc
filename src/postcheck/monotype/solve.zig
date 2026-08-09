@@ -1454,11 +1454,9 @@ pub const InstGraph = struct {
                 // node as authority without recursively relating a stale
                 // request backing that may still contain public cells.
                 try self.union_(private_node, public_node);
+                return;
             }
-            // Different exact identities remain distinct. Their producers
-            // already consumed all checked inputs; a control-flow join is the
-            // only operation allowed to choose a third representation.
-            return;
+            Common.invariant("one exact request received two different canonical generated identities");
         }
         switch (private_content) {
             .named => |private_named| if (private_named.backing) |backing| {
@@ -6871,7 +6869,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
     try std.testing.expect(graph.sameClass(retained.args[0], item));
 }
 
-test "opaque interface relation deduplicates only identical generated-private iterator requests" {
+test "direct relation deduplicates equal canonical iterator identity" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6934,28 +6932,6 @@ test "opaque interface relation deduplicates only identical generated-private it
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(left_iter).named.backing.?.authority);
     try std.testing.expect(graph.content(left_iter).named.def.generated != null);
 
-    const distinct_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const distinct_iter = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{distinct_item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-
-    _ = try graph.applyProducedTypeToRequest(left_iter, distinct_iter);
-
-    try std.testing.expect(!graph.sameClass(left_iter, distinct_iter));
-    try std.testing.expect(!graph.sameClass(item, distinct_item));
 }
 
 test "opaque interface relation preserves nested generated-private backing" {
