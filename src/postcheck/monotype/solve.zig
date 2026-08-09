@@ -66,6 +66,10 @@ pub const InstVariable = struct {
     origin: InstVariableOrigin,
     numeric_default_phase: ?checked.NumericDefaultPhase = null,
     row_default: ?checked.RowDefault = null,
+    /// Stable checked identity for a polymorphic substitution slot. This is
+    /// absent on graph-only variables created by tests and compiler-owned
+    /// structural work.
+    checked_key: ?[32]u8 = null,
 
     pub fn checkedVariable(
         numeric_default_phase: ?checked.NumericDefaultPhase,
@@ -75,6 +79,19 @@ pub const InstVariable = struct {
             .origin = .checked_variable,
             .numeric_default_phase = numeric_default_phase,
             .row_default = row_default,
+        };
+    }
+
+    pub fn checkedVariableAtKey(
+        numeric_default_phase: ?checked.NumericDefaultPhase,
+        row_default: ?checked.RowDefault,
+        checked_key: [32]u8,
+    ) InstVariable {
+        return .{
+            .origin = .checked_variable,
+            .numeric_default_phase = numeric_default_phase,
+            .row_default = row_default,
+            .checked_key = checked_key,
         };
     }
 
@@ -270,6 +287,9 @@ const FunctionRequestSubstitution = struct {
     active_materialized: [materialization_mode_count]collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
     generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+    /// Whether collecting newly completed producers changed a replacement
+    /// after the current request's immutable span was seeded.
+    changed_after_seed: bool = false,
 
     fn init(
         allocator: Allocator,
@@ -289,6 +309,28 @@ const FunctionRequestSubstitution = struct {
         self.materialized.deinit();
         for (&self.active_materialized) |*active| active.deinit();
         self.compared.deinit();
+    }
+};
+
+/// One checker-authored polymorphic slot and the exact node selected for it by
+/// a completed function request. The checked key lets a callee consume the
+/// selection directly even when its checked graph was instantiated in another
+/// module view.
+pub const RequestSubstitution = struct {
+    checked: NodeId,
+    produced: NodeId,
+    checked_key: ?[32]u8,
+};
+
+const RequestSubstitutionSpan = struct {
+    start: u32,
+    len: u32,
+
+    const uninitialized_len = std.math.maxInt(u32);
+    const uninitialized: RequestSubstitutionSpan = .{ .start = 0, .len = uninitialized_len };
+
+    fn isInitialized(self: RequestSubstitutionSpan) bool {
+        return self.len != uninitialized_len;
     }
 };
 
@@ -433,6 +475,11 @@ pub const InstGraph = struct {
     /// consumers read this field instead of deriving it from the produced
     /// function's type shape.
     request_checked_sources: std.ArrayList(?NodeId),
+    /// Immutable flat substitutions selected for each function request.
+    /// Refinement and body instantiation consume these exact entries instead
+    /// of rediscovering them by walking an older function interface.
+    request_substitution_spans: std.ArrayList(RequestSubstitutionSpan),
+    request_substitutions: std.ArrayList(RequestSubstitution),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -465,6 +512,8 @@ pub const InstGraph = struct {
             .generated_iterator_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedIteratorInternContext, 80).init(allocator),
             .generated_iterator_nodes = .empty,
             .request_checked_sources = .empty,
+            .request_substitution_spans = .empty,
+            .request_substitutions = .empty,
         };
         return graph;
     }
@@ -504,6 +553,8 @@ pub const InstGraph = struct {
         self.nominal_backings.deinit();
         self.generated_iterator_intern.deinit();
         self.generated_iterator_nodes.deinit(allocator);
+        self.request_substitutions.deinit(allocator);
+        self.request_substitution_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
@@ -542,6 +593,26 @@ pub const InstGraph = struct {
     pub fn requestCheckedSource(self: *InstGraph, request_fn: NodeId) ?NodeId {
         const source_fn = self.request_checked_sources.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
+    }
+
+    pub fn requestSubstitutions(self: *const InstGraph, request_fn: NodeId) []const RequestSubstitution {
+        const span = self.request_substitution_spans.items[@intFromEnum(request_fn)];
+        if (!span.isInitialized()) return &.{};
+        const start: usize = span.start;
+        return self.request_substitutions.items[start .. start + span.len];
+    }
+
+    /// Share an immutable substitution span with another function node that
+    /// names the same request, such as its stable result-publication handle.
+    pub fn inheritRequestSubstitutions(self: *InstGraph, source_fn: NodeId, destination_fn: NodeId) void {
+        if (source_fn == destination_fn) return;
+        const source = self.request_substitution_spans.items[@intFromEnum(source_fn)];
+        if (!source.isInitialized()) return;
+        const destination = &self.request_substitution_spans.items[@intFromEnum(destination_fn)];
+        if (destination.isInitialized() and !std.meta.eql(destination.*, source)) {
+            Common.invariant("function request inherited two different substitution spans");
+        }
+        destination.* = source;
     }
 
     /// Publish the exact result produced by a completed function body while
@@ -871,6 +942,7 @@ pub const InstGraph = struct {
         try self.versions.append(self.allocator, 0);
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
+        try self.request_substitution_spans.append(self.allocator, .uninitialized);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
@@ -1915,6 +1987,33 @@ pub const InstGraph = struct {
             !self.sameClass(try self.functionRequestRoot(source), checked_source_root)
         else
             false;
+        const stored = self.request_substitution_spans.items[@intFromEnum(current_request_fn_node)];
+        if (current_source != null and
+            stored.isInitialized() and
+            !source_changed and
+            checked_components.len == 0)
+        {
+            var arguments_unchanged = true;
+            for (current_request_fn.args, produced_args, 0..) |current_arg, produced_arg, index| {
+                if (produced_available) |available| if (!available[index]) continue;
+                if (!self.sameClass(current_arg, produced_arg)) {
+                    arguments_unchanged = false;
+                    break;
+                }
+            }
+            if (arguments_unchanged) {
+                return .{ .request = current_request_fn_node, .components = &.{} };
+            }
+        }
+        if (stored.isInitialized() and !source_changed) {
+            for (self.requestSubstitutions(current_request_fn_node)) |selection| {
+                try self.seedFunctionRequestReplacement(
+                    self.find(selection.checked),
+                    self.find(selection.produced),
+                    &substitution,
+                );
+            }
+        }
         for (checked_fn.args, produced_args, 0..) |checked_arg, produced_arg, index| {
             if (produced_available) |available| if (!available[index]) continue;
             try self.collectFunctionRequestSubstitutions(
@@ -1961,6 +2060,12 @@ pub const InstGraph = struct {
         else
             current_request_fn_node;
         try self.registerRequestCheckedSource(request_fn, checked_source_root);
+        if (request_fn != current_request_fn_node or
+            !stored.isInitialized() or
+            substitution.changed_after_seed)
+        {
+            try self.recordRequestSubstitutions(request_fn, &substitution);
+        }
         const components = try self.arena().alloc(NodeId, checked_components.len);
         for (checked_components, components) |checked_component, *component| {
             component.* = try self.materializeFunctionRequestNode(
@@ -1970,6 +2075,31 @@ pub const InstGraph = struct {
             );
         }
         return .{ .request = request_fn, .components = components };
+    }
+
+    fn recordRequestSubstitutions(
+        self: *InstGraph,
+        request_fn: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const start = self.request_substitutions.items.len;
+        var replacements = substitution.replacements.iterator();
+        while (replacements.next()) |entry| {
+            const checked_node = self.find(entry.key_ptr.*);
+            const checked_content = self.nodes.items[@intFromEnum(checked_node)];
+            try self.request_substitutions.append(self.allocator, .{
+                .checked = checked_node,
+                .produced = self.find(entry.value_ptr.*),
+                .checked_key = if (checked_content == .unresolved)
+                    checked_content.unresolved.checked_key
+                else
+                    null,
+            });
+        }
+        self.request_substitution_spans.items[@intFromEnum(request_fn)] = .{
+            .start = @intCast(start),
+            .len = @intCast(self.request_substitutions.items.len - start),
+        };
     }
 
     fn collectFunctionRequestSubstitutions(
@@ -2158,15 +2288,40 @@ pub const InstGraph = struct {
         produced_node: NodeId,
         substitution: *FunctionRequestSubstitution,
     ) Allocator.Error!void {
+        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, true);
+    }
+
+    fn seedFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        return self.putFunctionRequestReplacement(checked_node, produced_node, substitution, false);
+    }
+
+    fn putFunctionRequestReplacement(
+        self: *InstGraph,
+        checked_node: NodeId,
+        produced_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+        count_discovery: bool,
+    ) Allocator.Error!void {
         const entry = try substitution.replacements.getOrPut(checked_node);
         if (!entry.found_existing) {
             entry.value_ptr.* = produced_node;
-            self.countDiagnostic("function_request_replacements");
+            if (count_discovery) {
+                substitution.changed_after_seed = true;
+                self.countDiagnostic("function_request_replacements");
+            }
             return;
         }
         if (self.sameClass(entry.value_ptr.*, produced_node)) return;
         const previous = entry.value_ptr.*;
         entry.value_ptr.* = try self.joinProducedTypeRepresentations(previous, produced_node);
+        if (count_discovery and !self.sameClass(previous, entry.value_ptr.*)) {
+            substitution.changed_after_seed = true;
+        }
     }
 
     fn materializeFunctionRequestNode(
@@ -2197,6 +2352,7 @@ pub const InstGraph = struct {
             &substitution,
             .body_abi,
         );
+        self.inheritRequestSubstitutions(fn_node, isolated);
         return isolated;
     }
 
@@ -6387,7 +6543,8 @@ test "function request follows checked occurrence identity and keeps independent
     const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
     const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const exact = try graph.newNode(.{ .primitive = .u64 });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const checked_key = [_]u8{0xCE} ** 32;
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(null, null, checked_key) });
     const checked_list = try graph.newNode(.{ .list = slot });
     const checked_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{ checked_list, slot }),
@@ -6412,6 +6569,11 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
+    const substitutions = graph.requestSubstitutions(request);
+    try std.testing.expectEqual(@as(usize, 1), substitutions.len);
+    try std.testing.expect(graph.sameClass(substitutions[0].checked, slot));
+    try std.testing.expect(graph.sameClass(substitutions[0].produced, exact));
+    try std.testing.expectEqual(checked_key, substitutions[0].checked_key.?);
     const isolated_request = try graph.isolateFunctionAbi(request);
     const isolated_request_fn = try graph.functionNodes(isolated_request);
     try std.testing.expect(!graph.sameClass(isolated_request, request));
@@ -6438,6 +6600,8 @@ test "function request follows checked occurrence identity and keeps independent
     try std.testing.expect(!graph.sameClass(isolated_recursive_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(isolated_recursive.args[0], recursive));
 
+    var refinement_diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&refinement_diagnostics);
     const refined_request = try graph.functionRequestFromProducedArguments(
         checked_fn,
         request,
@@ -6446,6 +6610,7 @@ test "function request follows checked occurrence identity and keeps independent
     const refined_fn = try graph.functionNodes(refined_request);
     try std.testing.expect(graph.sameClass(try graph.listElementNode(refined_fn.args[0]), exact));
     try std.testing.expect(graph.sameClass(refined_fn.args[1], exact));
+    try std.testing.expectEqual(@as(u64, 0), refinement_diagnostics.function_request_replacements);
 
     const independent_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const independent_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });

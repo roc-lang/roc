@@ -5250,6 +5250,7 @@ const Builder = struct {
         nested_ctx.evidence = requested_evidence;
         defer nested_ctx.deinit();
         const body_fn_node = request_fn_node;
+        nested_ctx.active_request_substitutions = source_ctx.graph.requestSubstitutions(body_fn_node);
         const root_node = try nested_ctx.instNode(source_fn_ty);
         _ = owned_scope;
         const lowered = try nested_ctx.lowerNestedFunctionAtNode(
@@ -12174,6 +12175,10 @@ const BodyContext = struct {
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
+    /// Flat polymorphic selections authored by the exact function request
+    /// currently being lowered. Checked-type instantiation consumes these
+    /// entries directly by stable checked identity.
+    active_request_substitutions: []const solve.RequestSubstitution = &.{},
     /// Checked-type cache and declaration-scope stack for this exact
     /// instantiation identity. Separate contexts give every checked graph a
     /// fresh relation-production identity.
@@ -14157,6 +14162,7 @@ const BodyContext = struct {
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.enclosing_function = self.enclosing_function;
         child.enclosing_function_args = self.enclosing_function_args;
+        child.active_request_substitutions = self.active_request_substitutions;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -15366,10 +15372,20 @@ const BodyContext = struct {
         return switch (checkedPayload(self.view, checked_ty)) {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
-            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
-                variable.numeric_default_phase,
-                variable.row_default,
-            ) }),
+            .flex, .rigid => |variable| blk: {
+                const checked_key = self.view.types.rootKey(checked_ty).bytes;
+                for (self.active_request_substitutions) |selection| {
+                    const selection_key = selection.checked_key orelse continue;
+                    if (std.meta.eql(selection_key, checked_key)) {
+                        break :blk self.graph.rootNode(selection.produced);
+                    }
+                }
+                break :blk try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+                    variable.numeric_default_phase,
+                    variable.row_default,
+                    checked_key,
+                ) });
+            },
             .empty_record => try self.graph.newNode(.empty_record),
             .empty_tag_union => try self.graph.newNode(.empty_tag_union),
             .alias => |alias| try self.graph.newNode(.{ .named = .{
@@ -15651,6 +15667,7 @@ const BodyContext = struct {
         if (!names.procedureTemplateRefEql(self.owner_template, template_ref)) {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }
+        self.active_request_substitutions = self.graph.requestSubstitutions(raw_fn_node);
         const checked_fn_node = try self.instNode(template.checked_fn_root);
         const fn_node = raw_fn_node;
         const fn_nodes = try self.graph.functionNodes(fn_node);
@@ -15872,6 +15889,7 @@ const BodyContext = struct {
             body_request_fn_node;
         const publication = try self.graphFunctionNode(body_request.args, body_request.ret);
         try self.graph.registerRequestCheckedSource(publication, checked_source);
+        self.graph.inheritRequestSubstitutions(body_request_fn_node, publication);
         return publication;
     }
 
@@ -24343,6 +24361,7 @@ const BodyContext = struct {
                         destination_request,
                     )) |exact_request| {
                         try self.graph.registerRequestCheckedSource(exact_request, checked_fn_node);
+                        self.graph.inheritRequestSubstitutions(destination_request, exact_request);
                         operand_fn_node = exact_request;
                     }
                 }
@@ -24400,6 +24419,7 @@ const BodyContext = struct {
                 const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node)) |private_fn_node| {
                     try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
+                    self.graph.inheritRequestSubstitutions(fn_node, private_fn_node);
                     fn_node = private_fn_node;
                 }
             }
@@ -25428,6 +25448,7 @@ const BodyContext = struct {
             const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
             if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node)) |private_fn_node| {
                 try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
+                self.graph.inheritRequestSubstitutions(fn_node, private_fn_node);
                 fn_node = private_fn_node;
             }
         }
@@ -26600,6 +26621,7 @@ const BodyContext = struct {
                 request_fn_node,
             )) |generated_request| {
                 try self.graph.registerRequestCheckedSource(generated_request, source_fn_node);
+                self.graph.inheritRequestSubstitutions(request_fn_node, generated_request);
                 request_fn_node = generated_request;
             }
         }
@@ -33583,6 +33605,7 @@ const BodyContext = struct {
             request_node,
         )) orelse return null;
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
+        self.graph.inheritRequestSubstitutions(request_node, private_node);
         return private_node;
     }
 
@@ -33600,6 +33623,7 @@ const BodyContext = struct {
             request_node,
         )) orelse return null;
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
+        self.graph.inheritRequestSubstitutions(request_node, private_node);
         return private_node;
     }
 
