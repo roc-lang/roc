@@ -6564,86 +6564,104 @@ const Builder = struct {
         body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
     }
 
-    /// Resolve context-free procedure requests only after their caller's graph
-    /// has frozen. The sealed callable interface is the complete specialization
-    /// key; a missing body is lowered by `lowerTemplateWithMono` in a fresh
-    /// graph owned by that specialization. No callee body is ever reconstructed
-    /// from, or lowered into, the caller's graph.
+    /// Resolve one context-free procedure request from an immutable view of its
+    /// caller-owned interface. The callee body lowers in its own instantiation
+    /// graph; only its completed function type can flow back to a live caller.
+    fn resolveDeferredTemplateSpecAtType(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        spec_index: usize,
+        fn_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (spec_index >= body_draft.template_specs.items.len) {
+            Common.invariant("deferred template specialization index was outside the draft table");
+        }
+        const spec = &body_draft.template_specs.items[spec_index];
+        if (spec.state != .deferred) return;
+
+        const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
+        draft_fn.source.mono_fn_ty = .{ .sealed = fn_ty };
+
+        const requested_evidence = StoredConstFnEvidence{
+            .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
+            .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
+            .head = draft_fn.source.const_evidence_frame_head,
+        };
+        const request_digest = self.specializationTypeDigest(fn_ty);
+        const identity = templateSpecIdentity(
+            spec.template_ref,
+            spec.method_scope,
+            spec.source_fn_key,
+            draft_fn.source.evidence_digest,
+            fn_ty,
+            request_digest,
+        );
+
+        var found_local = false;
+        const loaded_slot: ?Ast.FnSlot = if (spec.requires_local)
+            null
+        else if (try self.spec_store.find(identity, specializationEvidenceView(requested_evidence))) |hit|
+            switch (hit) {
+                // `lowerTemplateWithMono` owns the validation and recursive
+                // state handling for local specializations.
+                .local => blk: {
+                    found_local = true;
+                    break :blk null;
+                },
+                .loaded => |imported| blk: {
+                    if (draft_fn.signature_relation == .exact_graph and
+                        self.importedFnSignatureRelation(imported) != .exact_graph)
+                    {
+                        break :blk null;
+                    }
+                    if (!storedConstFnEvidenceEql(self.importedFnEvidence(imported), requested_evidence)) {
+                        Common.invariant("loaded procedure specialization disagreed on dispatch evidence topology");
+                    }
+                    break :blk Ast.FnSlot{ .imported = imported };
+                },
+            }
+        else
+            null;
+
+        if (found_local or loaded_slot != null) {
+            self.countBodyDiagnostic("deferred_template_reuses");
+        } else {
+            self.countBodyDiagnostic("deferred_template_bodies_lowered");
+        }
+        spec.resolved_slot = loaded_slot orelse blk: {
+            const def = try self.lowerTemplateWithMono(
+                spec.template_ref,
+                self.moduleForId(spec.method_scope),
+                spec.source_fn_ty,
+                spec.source_fn_key,
+                fn_ty,
+                spec.evidence,
+                draft_fn.signature_relation,
+                .already_counted,
+                request_digest,
+                null,
+                null,
+            );
+            break :blk .{ .local = self.defFnId(def) };
+        };
+        spec.state = .resolved;
+    }
+
+    /// Resolve context-free procedure requests that no representation-sensitive
+    /// caller needed earlier. Their sealed callable interface is the complete
+    /// specialization key. No callee body is reconstructed from, or lowered
+    /// into, the caller's graph.
     fn resolveDeferredTemplateSpecs(
         self: *Builder,
         body_draft: *BodyDraftStore,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        for (body_draft.template_specs.items) |*spec| {
+        var spec_index: usize = 0;
+        while (spec_index < body_draft.template_specs.items.len) : (spec_index += 1) {
+            const spec = &body_draft.template_specs.items[spec_index];
             if (spec.state != .deferred) continue;
-
             const fn_ty = try sealer.sealNode(spec.request_fn_node);
-            const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
-            draft_fn.source.mono_fn_ty = .{ .sealed = fn_ty };
-
-            const requested_evidence = StoredConstFnEvidence{
-                .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
-                .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
-                .head = draft_fn.source.const_evidence_frame_head,
-            };
-            const request_digest = self.specializationTypeDigest(fn_ty);
-            const identity = templateSpecIdentity(
-                spec.template_ref,
-                spec.method_scope,
-                spec.source_fn_key,
-                draft_fn.source.evidence_digest,
-                fn_ty,
-                request_digest,
-            );
-
-            var found_local = false;
-            const loaded_slot: ?Ast.FnSlot = if (spec.requires_local)
-                null
-            else if (try self.spec_store.find(identity, specializationEvidenceView(requested_evidence))) |hit|
-                switch (hit) {
-                    // `lowerTemplateWithMono` owns the validation and recursive
-                    // state handling for local specializations.
-                    .local => blk: {
-                        found_local = true;
-                        break :blk null;
-                    },
-                    .loaded => |imported| blk: {
-                        if (draft_fn.signature_relation == .exact_graph and
-                            self.importedFnSignatureRelation(imported) != .exact_graph)
-                        {
-                            break :blk null;
-                        }
-                        if (!storedConstFnEvidenceEql(self.importedFnEvidence(imported), requested_evidence)) {
-                            Common.invariant("loaded procedure specialization disagreed on dispatch evidence topology");
-                        }
-                        break :blk Ast.FnSlot{ .imported = imported };
-                    },
-                }
-            else
-                null;
-
-            if (found_local or loaded_slot != null) {
-                self.countBodyDiagnostic("deferred_template_reuses");
-            } else {
-                self.countBodyDiagnostic("deferred_template_bodies_lowered");
-            }
-            spec.resolved_slot = loaded_slot orelse blk: {
-                const def = try self.lowerTemplateWithMono(
-                    spec.template_ref,
-                    self.moduleForId(spec.method_scope),
-                    spec.source_fn_ty,
-                    spec.source_fn_key,
-                    fn_ty,
-                    spec.evidence,
-                    draft_fn.signature_relation,
-                    .already_counted,
-                    request_digest,
-                    null,
-                    null,
-                );
-                break :blk .{ .local = self.defFnId(def) };
-            };
-            spec.state = .resolved;
+            try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty);
         }
     }
 
@@ -27715,14 +27733,110 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         return switch (slot) {
             .local => |local| switch (local) {
-                .draft => |draft_fn| try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph),
-                .final => |final_fn| try self.activeNodeFromType(self.builder.program.fnSource(final_fn).mono_fn_ty),
+                .draft => |draft_fn| try self.completeDeferredIteratorResult(draft_fn),
+                .final => |final_fn| try self.adoptCompletedIteratorResult(
+                    imported_fallback,
+                    try self.activeNodeFromType(self.builder.program.fnSource(final_fn).mono_fn_ty),
+                ),
             },
             // Imported slots were selected from this exact request. Their
             // durable signature belongs to another shard, while the active
             // graph request is already the local representation witness.
             .imported => imported_fallback,
         };
+    }
+
+    /// Relate a callee-authored iterator representation to the checked public
+    /// request that selected it. The completed type is immutable producer
+    /// output; the caller only records that explicit witness in its own graph.
+    fn adoptCompletedIteratorResult(
+        self: *BodyContext,
+        request_node: NodeId,
+        completed_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const completed_fn = try self.graph.functionNodes(completed_node);
+        if (!try self.graph.containsGeneratedPrivate(completed_fn.ret)) return completed_node;
+
+        const request_fn = try self.graph.functionNodes(request_node);
+        if (!self.isIteratorInterfaceNode(request_fn.ret)) {
+            Common.invariant("callee completed an iterator representation for a non-iterator request");
+        }
+        const source_interface = self.graph.requestSourceInterface(request_node) orelse request_node;
+        if (self.graph.requestSourceInterface(completed_node) == null) {
+            try self.graph.registerRequestSourceInterface(completed_node, source_interface);
+        }
+        try relateFunctionRequestInterface(self.graph, source_interface, completed_node);
+        return completed_node;
+    }
+
+    /// A public iterator result can carry a producer-authored private witness
+    /// that only the callee body discovers. Resolve that context-free callee in
+    /// its own graph before the caller consumes the result, then import the
+    /// completed function type into the still-live caller graph. Other results
+    /// keep the ordinary end-of-graph deferred path.
+    fn completeDeferredIteratorResult(
+        self: *BodyContext,
+        draft_fn: DraftFnId,
+    ) Allocator.Error!NodeId {
+        const current_node = try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
+        const current_fn = try self.graph.functionNodes(current_node);
+        if (try self.graph.containsGeneratedPrivate(current_fn.ret) or
+            !self.isIteratorInterfaceNode(current_fn.ret))
+        {
+            return current_node;
+        }
+        // Representation-bearing inputs still belong to the caller's live
+        // graph. Recursive adapters can change those inputs at each edge, so
+        // their explicit forced-dynamic join must finish before the request is
+        // converted to an immutable specialization key.
+        for (current_fn.args) |arg| {
+            if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
+        }
+
+        const spec_index = for (self.draft.template_specs.items, 0..) |spec, index| {
+            if (spec.fn_id == draft_fn) break index;
+        } else return current_node;
+        const spec = &self.draft.template_specs.items[spec_index];
+        if (spec.state != .deferred) return current_node;
+        // A same-family request inside the active root is an explicit
+        // recursive edge. Its live graph must join the recursive argument and
+        // result representations (and select forced-dynamic when required)
+        // before any immutable specialization can be produced.
+        if (self.builder.active_template_root) |active_root| {
+            const family = DraftTemplateFamilyAddress.init(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+            );
+            if (active_root.graph == self.graph and
+                active_root.family.sameRecursiveCallable(family) and
+                specEvidenceVectorEql(active_root.evidence, spec.evidence))
+            {
+                return current_node;
+            }
+        }
+        if (!try self.graph.typeIsResolved(spec.request_fn_node)) return current_node;
+
+        const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
+        try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty);
+
+        const resolved = self.draft.template_specs.items[spec_index].resolved_slot orelse
+            Common.invariant("eager iterator-result completion produced no specialization target");
+        const completed_ty = switch (resolved) {
+            .local => |final_fn| self.builder.program.fnSource(final_fn).mono_fn_ty,
+            // Loaded specializations are indexed only by their solved shape.
+            // A public request that needs new private evidence therefore
+            // lowers locally; an exact loaded request already carries that
+            // evidence in `current_node`.
+            .imported => return current_node,
+        };
+        const completed_node = try self.activeNodeFromType(completed_ty);
+        if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
+
+        _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
+        self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
+        self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
+        return completed_node;
     }
 
     fn constUseMonoType(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Type.TypeId {
@@ -32046,6 +32160,12 @@ const BodyContext = struct {
                         callable_node = private_node;
                     }
                 }
+                callable_node = try self.completeIteratorMethodResultAtNode(
+                    initial_lookup,
+                    callable_node,
+                    try self.evidenceForDispatchTarget(plan),
+                    direct_graph_call,
+                );
             },
             .structural => {},
         }
@@ -32376,12 +32496,25 @@ const BodyContext = struct {
             });
             break :blk created;
         };
-        const call = try self.addExprWithTypeCell(expected_ret_cell, .{ .call_proc = .{
+        const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
+        const completed_function = try self.graph.functionNodes(completed_callable_node);
+        if (completed_function.args.len != operands.len) {
+            Common.invariant("completed closed direct procedure call changed its argument arity");
+        }
+        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(completed_function.ret))
+            DraftTypeCell.fromGraphNode(completed_function.ret)
+        else
+            expected_ret_cell;
+        const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(slot),
             .args = lowered,
             .captures = try self.methodTargetCaptureSpan(lookup),
         } });
-        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
+        return try self.applyDispatchResultMode(
+            plan.result_mode,
+            call,
+            try self.activeTypeFromNode(completed_function.ret),
+        );
     }
 
     const ClosedDispatchOperands = union(enum) {
@@ -33194,10 +33327,11 @@ const BodyContext = struct {
 
     /// Consume a CheckedModule-proved closed direct call without constructing a
     /// dispatch graph. The producer's runtime category is authoritative:
-    /// ordinary procedures and exact low-level operations have a sealed
-    /// checked callable interface, while graph-participating operations and
-    /// parametric/local/evidence-dependent calls continue through the relation
-    /// path below.
+    /// exact low-level operations and ordinary procedures with ordinary result
+    /// types have a sealed checked callable interface. Ordinary procedures
+    /// returning a public iterator may complete private result evidence in
+    /// their bodies, so those continue through the relation path below along
+    /// with graph-participating and parametric/local/evidence-dependent calls.
     fn closedDirectGraphFreeResultNode(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -33235,7 +33369,8 @@ const BodyContext = struct {
             .procedure => |procedure| procedure,
             .local_proc, .structural => return null,
         };
-        switch (procedure.runtime_target) {
+        const runtime_target = procedure.runtime_target;
+        switch (runtime_target) {
             .intrinsic, .graph_participating => return null,
             .procedure, .low_level => {},
         }
@@ -33245,7 +33380,15 @@ const BodyContext = struct {
             callable_ty,
             "checked closed direct call had a non-function callable type",
         );
-        return function.ret;
+        return switch (runtime_target) {
+            .low_level => function.ret,
+            .procedure => if (self.typeHasBuiltinOwner(function.ret, .iter) or
+                self.typeHasBuiltinOwner(function.ret, .stream))
+                null
+            else
+                function.ret,
+            .intrinsic, .graph_participating => unreachable,
+        };
     }
 
     fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
@@ -33299,6 +33442,17 @@ const BodyContext = struct {
                 )) |private_node| {
                     callable_node = private_node;
                 }
+                callable_node = try self.completeIteratorMethodResultAtNode(
+                    lookup,
+                    callable_node,
+                    try self.evidenceForDispatchTarget(plan),
+                    switch (plan.resolution) {
+                        .direct_closed, .direct_parametric => true,
+                        .evidence_dependent => false,
+                        .direct_pending => Common.invariant("unfinalized direct call reached Monotype result lookup"),
+                        .structural, .checked_error, .@"unreachable" => false,
+                    },
+                );
             },
             .structural => {},
         }
@@ -34787,6 +34941,37 @@ const BodyContext = struct {
             },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
         };
+    }
+
+    /// Ask an ordinary procedure for its completed iterator result before a
+    /// caller chooses representation-sensitive lowering. This consumes only
+    /// the private witness emitted by that producer's own body.
+    fn completeIteratorMethodResultAtNode(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        request_fn_node: NodeId,
+        evidence: SpecEvidenceVector,
+        direct: bool,
+    ) Allocator.Error!NodeId {
+        const request_fn = try self.graph.functionNodes(request_fn_node);
+        if (try self.graph.containsGeneratedPrivate(request_fn.ret) or
+            !self.isIteratorInterfaceNode(request_fn.ret))
+        {
+            return request_fn_node;
+        }
+        switch (lookup.target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .procedure => {},
+                .intrinsic, .low_level, .graph_participating => return request_fn_node,
+            },
+            .local_proc => {},
+            .structural => return request_fn_node,
+        }
+        const slot = if (direct)
+            try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, evidence)
+        else
+            try self.methodTargetCalleeAtNode(lookup, request_fn_node, evidence);
+        return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
 
     fn lowerResolvedDispatchAtNode(
@@ -44137,6 +44322,12 @@ const BodyContext = struct {
         )) |private_node| {
             callable_node = private_node;
         }
+        const callee = try self.methodTargetCalleeAtNode(
+            lookup,
+            callable_node,
+            try self.evidenceForIteratorCall(plan),
+        );
+        callable_node = try self.draftFnSlotTypeNode(callee, callable_node);
         const plan_fn = try self.graph.functionNodes(callable_node);
         if (expected_ret_ty) |expected| {
             if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
@@ -44166,7 +44357,7 @@ const BodyContext = struct {
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
             .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(lookup, callable_node, try self.evidenceForIteratorCall(plan))),
+                .callee = draftProcCalleeForSlot(callee),
                 .args = try self.addExprSpan(args),
                 .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
                 .captures = try self.methodTargetCaptureSpan(lookup),

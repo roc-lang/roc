@@ -3969,6 +3969,35 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        .name = "inspect: wrapper iterator with distinct branch producers stays correct",
+        .source_kind = .module,
+        .source =
+        \\Mixed := { xs : List(U64), n : U64 }.{
+        \\    iter : Mixed -> Iter(U64)
+        \\    iter = |mixed| if mixed.n == 0 {
+        \\        mixed.xs.iter()
+        \\    } else {
+        \\        mixed.xs.iter_rev()
+        \\    }
+        \\}
+        \\
+        \\digits : Mixed -> U64
+        \\digits = |mixed| {
+        \\    var $out = 0
+        \\    for x in mixed {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 0 }),
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 1 }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(123, 321)" },
+    },
+    .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
         \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {

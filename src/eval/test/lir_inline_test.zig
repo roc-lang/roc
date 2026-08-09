@@ -3661,17 +3661,16 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
-// Iteration fuses into a scalar loop only for iterator producers the compiler
-// has registered (`List.iter`, the numeric ranges, `Dict.iter`, `Set.iter`, ...).
-// A plain type alias is transparent and so still fuses. A *user-defined*
-// collection whose `iter` delegates to `List.iter` does NOT fuse today — it
-// steps through the public `Iter` boundary with a callable per item — and user
-// code has no way to register. That gap is covered by the companion test below
-// so the day it is closed, someone is told.
-test "registered iterator producers and aliases fuse into a scalar loop" {
+// A producer-authored concrete iterator representation must survive ordinary
+// procedure returns and all supported static-dispatch invocation forms. Each
+// case below must reach `sum_it` (the debug-name sanity probe), avoid the public
+// `Iter.next` boundary, and lower without iterator-state heap or ARC operations.
+// List-backed cases retain exactly the one decref required to release their
+// concrete source list; range-backed cases have none.
+test "iterator producers and delegating wrappers fuse into a scalar loop" {
     const allocator = std.testing.allocator;
-    const cases = [_]struct { name: []const u8, src: []const u8 }{
-        .{ .name = "direct List (baseline)", .src =
+    const cases = [_]struct { name: []const u8, decrefs: usize, src: []const u8 }{
+        .{ .name = "direct List (baseline)", .decrefs = 1, .src =
         \\sum_it : List(U64) -> U64
         \\sum_it = |xs| {
         \\    var $sum = 0
@@ -3681,10 +3680,10 @@ test "registered iterator producers and aliases fuse into a scalar loop" {
         \\    $sum
         \\}
         \\
-        \\main : List(U64) -> U64
-        \\main = |xs| sum_it(xs)
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
         },
-        .{ .name = "type alias of List", .src =
+        .{ .name = "type alias of List", .decrefs = 1, .src =
         \\Nums : List(U64)
         \\
         \\sum_it : Nums -> U64
@@ -3696,57 +3695,10 @@ test "registered iterator producers and aliases fuse into a scalar loop" {
         \\    $sum
         \\}
         \\
-        \\main : Nums -> U64
-        \\main = |xs| sum_it(xs)
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
         },
-        .{ .name = "method-syntax ascending range", .src =
-        \\sum_it : U8 -> U64
-        \\sum_it = |n| {
-        \\    var $sum = 0
-        \\    for x in n.until(0) {
-        \\        $sum = $sum + x.to_u64()
-        \\    }
-        \\    $sum
-        \\}
-        \\
-        \\main : U8 -> U64
-        \\main = |n| sum_it(n)
-        },
-        .{ .name = "method-syntax descending range", .src =
-        \\sum_it : U8 -> U64
-        \\sum_it = |n| {
-        \\    var $sum = 0
-        \\    for x in n.down_to(1) {
-        \\        $sum = $sum + x.to_u64()
-        \\    }
-        \\    $sum
-        \\}
-        \\
-        \\main : U8 -> U64
-        \\main = |n| sum_it(n)
-        },
-    };
-
-    for (cases) |c| {
-        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
-        defer opt.deinit(allocator);
-        if (try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next")) {
-            std.debug.print("iterator fusion lost for case: {s}\n", .{c.name});
-            return error.TestUnexpectedResult;
-        }
-    }
-}
-
-// Companion to the test above, pinning a known limitation rather than desired
-// behavior: a user-defined collection that implements `iter` by delegating to
-// `List.iter` — the pattern docs/langref/static-dispatch.md recommends to
-// package authors — still steps through the public `Iter` boundary, because
-// only compiler-registered producers mint a concrete representation and user
-// code cannot register. If this assertion starts failing, the gap was closed
-// and this test should become part of the test above.
-test "user-defined collection iteration does not fuse (known gap)" {
-    const allocator = std.testing.allocator;
-    const src =
+        .{ .name = "record wrapper with method delegate", .decrefs = 1, .src =
         \\Rows := { items : List(U64) }.{
         \\    iter : Rows -> Iter(U64)
         \\    iter = |rows| rows.items.iter()
@@ -3761,13 +3713,200 @@ test "user-defined collection iteration does not fuse (known gap)" {
         \\    $sum
         \\}
         \\
-        \\main : Rows -> U64
-        \\main = |rows| sum_it(rows)
-    ;
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "tag wrapper with qualified delegate", .decrefs = 1, .src =
+        \\Bag(a) := [Items({ entries : List(a) })].{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| match bag {
+        \\        Bag.Items(data) => List.iter(data.entries)
+        \\    }
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.Items({ entries: [1, 2, 3] }))
+        },
+        .{ .name = "generic record wrapper", .decrefs = 1, .src =
+        \\Bag(a) := { entries : List(a) }.{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [1, 2, 3] })
+        },
+        .{ .name = "two-parameter generic tuple wrapper", .decrefs = 1, .src =
+        \\Bag(k, v) := { entries : List((k, v)) }.{
+        \\    iter : Bag(k, v) -> Iter((k, v))
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64, U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for pair in bag {
+        \\        $sum = $sum + pair.0 + pair.1
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [(1, 10), (2, 20)] })
+        },
+        .{ .name = "explicit method invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = rows.iter()
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "fully qualified invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = Rows.iter(rows)
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "reverse-list delegate", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter_rev()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "range delegate", .decrefs = 0, .src =
+        \\Span := { first : U8, last : U8 }.{
+        \\    iter : Span -> Iter(U8)
+        \\    iter = |span| span.first.until(span.last)
+        \\}
+        \\
+        \\sum_it : Span -> U64
+        \\sum_it = |span| {
+        \\    var $sum = 0
+        \\    for x in span {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Span.{ first: 1, last: 4 })
+        },
+        .{ .name = "method-syntax ascending range", .decrefs = 0, .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in n.until(0) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(4)
+        },
+        .{ .name = "method-syntax descending range", .decrefs = 0, .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in n.down_to(1) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(4)
+        },
+    };
 
-    var opt = try lowerModuleWithProcDebugNames(allocator, src, .wrappers, true);
-    defer opt.deinit(allocator);
-    try std.testing.expect(try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next"));
+    for (cases) |c| {
+        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
+        defer opt.deinit(allocator);
+        if (!try reachableProcDebugName(allocator, &opt.lowered, "sum_it")) {
+            std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        if (try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next")) {
+            std.debug.print("iterator fusion lost for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        inline for (.{
+            "box_box_count",
+            "erased_call_count",
+            "packed_erased_fn_count",
+            "list_with_capacity_count",
+            "incref_count",
+        }) |field_name| {
+            const actual = try reachableProcShapeFieldTotal(allocator, &opt.lowered, field_name);
+            if (actual != 0) {
+                std.debug.print("unexpected {s}={d} for case: {s}\n", .{ field_name, actual, c.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+        const actual_decrefs = try reachableProcShapeFieldTotal(allocator, &opt.lowered, "decref_count");
+        if (actual_decrefs != c.decrefs) {
+            std.debug.print("unexpected decref_count={d} for case: {s}\n", .{ actual_decrefs, c.name });
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &opt.lowered);
+        try expectReachableProcShapeFieldEqual(allocator, &opt.lowered, "incref_count", 0);
+        try expectReachableProcShapeFieldEqual(allocator, &opt.lowered, "decref_count", c.decrefs);
+    }
 }
 
 fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
