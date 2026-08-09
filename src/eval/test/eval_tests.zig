@@ -102,6 +102,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "37" },
     },
     .{
+        .name = "defaulted record field: expect-block local materializes multiple omitted defaults",
+        .source_kind = .module,
+        .source =
+        \\T1 := [].{}
+        \\
+        \\expect {
+        \\    c : { x : U8 ?? 3, y : U8 ?? 4 }
+        \\    c = {}
+        \\    c.x == 3
+        \\}
+        \\
+        \\main : U8
+        \\main = 0
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
         .name = "optional record field: supplied at construction and .? hits",
         .source_kind = .module,
         .source =

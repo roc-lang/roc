@@ -2956,7 +2956,7 @@ pub const InstGraph = struct {
     pub fn recordConstructionNodes(self: *InstGraph, raw_record: NodeId) Allocator.Error!RecordNodes {
         const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
         const structural_content = self.content(structural);
-        if (structural_content == .record) return .{ .fields = structural_content.record.fields };
+        if (structural_content == .record) return .{ .fields = (try self.flattenRecordRow(structural)).fields };
         if (structural_content == .empty_record) return .{ .fields = &.{} };
         Common.invariant("instantiation record constructor had a non-record runtime backing");
     }
