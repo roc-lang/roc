@@ -3765,19 +3765,14 @@ pub const InstGraph = struct {
         checked_nodes: []const NodeId,
         current_nodes: []const NodeId,
         produced_nodes: []const NodeId,
-        substitution: *FunctionRequestSubstitution,
+        _: *FunctionRequestSubstitution,
     ) Allocator.Error!?[]NodeId {
         if (checked_nodes.len != current_nodes.len or current_nodes.len != produced_nodes.len) {
             Common.invariant("function request argument materialization received different arities");
         }
         var changed_nodes: ?[]NodeId = null;
-        for (checked_nodes, current_nodes, produced_nodes, 0..) |checked_node, current, produced, index| {
-            const materialized = try self.materializeFunctionRequestNodeMode(
-                checked_node,
-                produced,
-                substitution,
-                .produced_value,
-            );
+        for (current_nodes, produced_nodes, 0..) |current, produced, index| {
+            const materialized = self.find(produced);
             if (changed_nodes) |out| {
                 out[index] = materialized;
             } else if (!self.sameClass(current, materialized)) {
@@ -8511,7 +8506,7 @@ test "function request follows checked occurrence identity and keeps independent
     const request_fn = try graph.functionNodes(request);
 
     try std.testing.expect(!graph.sameClass(request, current_fn));
-    try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.args[0]), exact));
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.args[0]), public));
     try std.testing.expect(graph.sameClass(request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(try graph.listElementNode(request_fn.ret), exact));
     try std.testing.expect(!graph.sameClass(public, exact));
@@ -8559,7 +8554,7 @@ test "function request follows checked occurrence identity and keeps independent
         &.{ produced_list, exact },
     );
     const refined_fn = try graph.functionNodes(refined_request);
-    try std.testing.expect(graph.sameClass(try graph.listElementNode(refined_fn.args[0]), exact));
+    try std.testing.expect(graph.sameClass(try graph.listElementNode(refined_fn.args[0]), public));
     try std.testing.expect(graph.sameClass(refined_fn.args[1], exact));
     // Refinement seeds the existing replacement from request metadata. A
     // previous-interface walk would rediscover and count that replacement.
@@ -8579,12 +8574,8 @@ test "function request follows checked occurrence identity and keeps independent
         &.{public_backing},
     );
     const structural_request_fn = try graph.functionNodes(structural_request);
-    try std.testing.expect(!graph.sameClass(structural_request, structural_view_fn));
-    try std.testing.expect(graph.content(structural_request_fn.args[0]) == .named);
-    const structural_arg = graph.namedNodes(structural_request_fn.args[0]);
-    try std.testing.expect(structural_arg.backing != null);
-    const structural_arg_backing = structural_arg.backing.?;
-    try std.testing.expect(graph.sameClass(structural_arg_backing.node, public_backing));
+    try std.testing.expect(graph.sameClass(structural_request, structural_view_fn));
+    try std.testing.expect(graph.sameClass(structural_request_fn.args[0], public_backing));
     try std.testing.expect(graph.content(structural_request_fn.ret) == .empty_record);
 
     const unique_concrete_fn = try graph.newNode(.{ .func = .{
@@ -8638,7 +8629,7 @@ test "function request follows checked occurrence identity and keeps independent
         &.{ public, exact },
     );
     const mixed_concrete_request_fn = try graph.functionNodes(mixed_concrete_request);
-    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], exact));
+    try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[0], public));
     try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.args[1], exact));
     try std.testing.expect(graph.sameClass(mixed_concrete_request_fn.ret, exact));
 
