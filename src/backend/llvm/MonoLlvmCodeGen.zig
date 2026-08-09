@@ -5123,6 +5123,10 @@ pub const MonoLlvmCodeGen = struct {
                 return;
             }
         }
+        if (args.len >= 1 and isDecToIntTrunc(op)) {
+            try self.emitDecToIntTruncConversion(target, GuardedList.at(args, 0));
+            return;
+        }
         if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
             std.mem.find(u8, name, "_try") == null and
             std.mem.find(u8, name, "_str") == null)
@@ -5146,6 +5150,38 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    fn isDecToIntTrunc(op: lir.LowLevel) bool {
+        const DecToIntTrunc = enum {
+            dec_to_i8_trunc,
+            dec_to_u8_trunc,
+            dec_to_i16_trunc,
+            dec_to_u16_trunc,
+            dec_to_i32_trunc,
+            dec_to_u32_trunc,
+            dec_to_i64_trunc,
+            dec_to_u64_trunc,
+            dec_to_i128_trunc,
+            dec_to_u128_trunc,
+        };
+        return std.meta.stringToEnum(DecToIntTrunc, @tagName(op)) != null;
+    }
+
+    /// A Dec's payload is its value scaled by 10^18, so recovering the whole
+    /// part means dividing the payload by that scale before wrapping it into
+    /// the destination width. The quotient is divided at the full i128 width so
+    /// whole parts beyond i64 wrap rather than trap, and dividing by a constant
+    /// keeps the sequence foldable instead of calling into the builtins.
+    fn emitDecToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const payload = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const scale = builder.intValue(.i128, builtins.dec.RocDec.one_point_zero_i128) catch return error.OutOfMemory;
+        const whole = wip.bin(.sdiv, payload, scale, "") catch return error.OutOfMemory;
+        const target_layout = self.localLayout(target);
+        const wrapped = try self.coerceScalar(whole, self.scalarType(target_layout), true);
+        try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
     }
 
     const FloatToIntTruncInfo = struct {
@@ -6838,12 +6874,17 @@ pub const MonoLlvmCodeGen = struct {
 
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
         const key: u32 = @intFromEnum(backing);
-        if (self.static_refcounted_backings.get(key)) |existing| return existing;
-
         const builder = self.builder orelse return error.CompilationFailed;
         const word_size: usize = self.targetWordSize();
         const backing_alignment = @max(word_size, @as(usize, self.store.strings.alignment(backing)));
         const data_offset = std.mem.alignForward(usize, word_size, backing_alignment);
+        // Only the backing global may be cached across proc bodies: the GEP to
+        // its data offset is an instruction in whichever WipFunction is being
+        // compiled, so it must be emitted fresh per function.
+        if (self.static_refcounted_backings.get(key)) |existing| {
+            return try self.offsetPtrValue(existing, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
+        }
+
         const bytes = self.store.getString(backing);
         const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
         defer self.allocator.free(storage);
@@ -6861,9 +6902,8 @@ pub const MonoLlvmCodeGen = struct {
         variable.setInitializer(builder.stringConst(builder.string(storage) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
         const base = variable.toValue(builder);
-        const value = try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
-        try self.static_refcounted_backings.put(key, value);
-        return value;
+        try self.static_refcounted_backings.put(key, base);
+        return try self.offsetPtrValue(base, builder.intValue(self.ptrSizedIntType(), data_offset) catch return error.OutOfMemory);
     }
 
     fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {
@@ -8171,6 +8211,19 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
+        // Reserving room for zero-sized elements needs no memory, and every
+        // other zero-sized branch in this backend represents such a list as a
+        // null pointer with zero capacity. Going to the builtin here would
+        // hand back a refcounted zero-byte allocation instead, which those
+        // branches then drop on the floor.
+        if (abi.elem_size == 0) {
+            const out_ptr = self.slot(target).ptr;
+            const zero = builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory;
+            try self.storePointer(out_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+            try self.storeListLen(out_ptr, zero);
+            try self.storeListCapacity(out_ptr, zero);
+            return;
+        }
         const cap = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), .i64, false);
         try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1, try self.ptrType() }, &.{
             self.slot(target).ptr,
@@ -8184,6 +8237,28 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListAppendUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        // A zero-sized element has no bytes to copy, so appending one only
+        // bumps the length. Handled here for the same reason emitListConcat
+        // handles it here: there is no data pointer to walk. The pointer and
+        // capacity still travel across, so this stays correct for a list that
+        // does hold an allocation rather than depending on the zero-sized
+        // representation being unallocated.
+        if (abi.elem_size == 0) {
+            const builder = self.builder orelse return error.CompilationFailed;
+            const wip = self.wip orelse return error.CompilationFailed;
+            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+            const out_ptr = self.slot(target).ptr;
+            const len = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset()));
+            const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
+            const new_len = wip.bin(.add, len, one, "") catch return error.OutOfMemory;
+            // listAppendUnsafe hands the incoming list's allocation to its
+            // result, so carry the pointer and capacity across rather than
+            // dropping them, which would leak whatever the source owned.
+            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
+            try self.storeListLen(out_ptr, new_len);
+            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
+            return;
+        }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -8569,10 +8644,18 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
-        // Zero-sized elements make the capacity bookkeeping degenerate; leave
-        // them entirely to the builtin.
+        // A list of zero-sized elements owns no allocation, so it carries a
+        // length and nothing else and a reserve cannot change anything
+        // observable. Passing it to the builtin instead goes through capacity
+        // bookkeeping that a zero-width element makes degenerate, which loses
+        // the length, so copy the list across here.
         if (abi.elem_size == 0) {
-            return self.emitListReserveCall(target, args, unique_args);
+            const src_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+            const out_ptr = self.slot(target).ptr;
+            try self.storePointer(out_ptr, try self.loadPointer(src_ptr));
+            try self.storeListLen(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListLenOffset())));
+            try self.storeListCapacity(out_ptr, try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset())));
+            return;
         }
 
         const builder = self.builder orelse return error.CompilationFailed;

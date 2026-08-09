@@ -3796,10 +3796,13 @@ fn canonicalizeAssociatedItems(
                     }
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
-                    const derived_method_kind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
-                        self.derivedMethodKind(name_ident)
+                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
+                        if (self.derivedMethodKind(name_ident)) |kind|
+                            .{ .derived = kind }
+                        else
+                            .unsupported_generated_method
                     else
-                        null;
+                        .ordinary;
                     const qualified_idx = try self.insertQualifiedIdent(parent_text, name_text);
                     const assoc_key: ?AST.DeclIndex.AssocValue = if (owner_type_path) |owner|
                         .{ .owner = owner, .item = name_ident }
@@ -3848,9 +3851,9 @@ fn canonicalizeAssociatedItems(
                     };
 
                     const def_idx = if (adopted_pattern_idx) |adopted|
-                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region)
+                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region)
                     else
-                        try self.createAnnotationDef(qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region, null);
+                        try self.createAnnotationDef(qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, null);
 
                     if (owner_is_module_visible) {
                         try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
@@ -4326,7 +4329,7 @@ pub fn canonicalizeFile(
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
                                 const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                                 try self.env.store.addScratchDef(def_idx);
                                 try self.recordGlobalValueDef(def_idx);
 
@@ -4342,7 +4345,7 @@ pub fn canonicalizeFile(
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
                             const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                             try self.env.store.addScratchDef(def_idx);
                             try self.recordGlobalValueDef(def_idx);
 
@@ -4362,7 +4365,7 @@ pub fn canonicalizeFile(
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
                     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                     try self.env.store.addScratchDef(def_idx);
                     try self.recordGlobalValueDef(def_idx);
 
@@ -4385,6 +4388,7 @@ pub fn canonicalizeFile(
 
     try self.resolvePlatformProvides();
     try self.resolvePlatformHosted();
+    try self.resolveQualifiedExposedTypes();
 
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
@@ -4523,16 +4527,27 @@ fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind
     return null;
 }
 
+const AnnotationExprKind = union(enum) {
+    ordinary,
+    derived: CIR.DerivedMethodKind,
+    unsupported_generated_method,
+};
+
 fn addAnnotationExpr(
     self: *Self,
     ident: Ident.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     region: Region,
 ) std.mem.Allocator.Error!Expr.Idx {
-    return self.env.addExpr(if (derived_method_kind) |kind|
-        Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } }
-    else
-        Expr{ .e_anno_only = .{ .ident = ident } }, region);
+    const expr = switch (annotation_expr_kind) {
+        .ordinary => Expr{ .e_anno_only = .{ .ident = ident } },
+        .derived => |kind| Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } },
+        .unsupported_generated_method => Expr{ .e_anno_only = .{
+            .ident = ident,
+            .kind = .unsupported_generated_method,
+        } },
+    };
+    return self.env.addExpr(expr, region);
 }
 
 fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
@@ -4647,7 +4662,7 @@ fn createAnnotationDef(
     self: *Self,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
     parser_decl_idx: ?AST.DeclIndex.DeclIdx,
@@ -4688,7 +4703,7 @@ fn createAnnotationDef(
     // (canonicalizeAssociatedItems) will update all three identifiers (qualified,
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
-    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -4767,13 +4782,13 @@ fn createAnnotationDefWithPattern(
     pattern_idx: CIR.Pattern.Idx,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
 
-    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
@@ -5231,6 +5246,15 @@ fn addToExposedScope(
                 }
             },
             .upper_ident => |type_name| {
+                if (type_name.qualifiers.span.len > 0) {
+                    try self.addQualifiedExposedType(
+                        type_name.qualifiers,
+                        type_name.ident,
+                        type_name.region,
+                    );
+                    continue;
+                }
+
                 // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_name.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
@@ -5262,6 +5286,15 @@ fn addToExposedScope(
                 }
             },
             .upper_ident_star => |type_with_constructors| {
+                if (type_with_constructors.qualifiers.span.len > 0) {
+                    try self.addQualifiedExposedType(
+                        type_with_constructors.qualifiers,
+                        type_with_constructors.ident,
+                        type_with_constructors.region,
+                    );
+                    continue;
+                }
+
                 // Get the text for tracking redundant exposures
                 const token_region = self.parse_ir.tokens.resolve(@intCast(type_with_constructors.ident));
                 const type_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
@@ -5296,6 +5329,28 @@ fn addToExposedScope(
                 // Malformed exposed items are already captured as diagnostics during parsing
             },
         }
+    }
+}
+
+fn addQualifiedExposedType(
+    self: *Self,
+    qualifiers: AST.Token.Span,
+    final_token: Token.Idx,
+    tokenized_region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!void {
+    const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .DotUpperIdent };
+    const type_text = self.parse_ir.resolveQualifiedName(qualifiers, final_token, &strip_tokens);
+    const region = self.parse_ir.tokenizedRegionToRegion(tokenized_region);
+
+    if (self.exposed_type_texts.get(type_text)) |original_region| {
+        const ident = try self.env.insertIdent(base.Ident.for_text(type_text));
+        try self.env.pushDiagnostic(Diagnostic{ .redundant_exposed = .{
+            .ident = ident,
+            .region = region,
+            .original_region = original_region,
+        } });
+    } else {
+        try self.exposed_type_texts.put(self.env.gpa, type_text, region);
     }
 }
 
@@ -5683,6 +5738,64 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
 
     // Create the exports span from the scratch space
     self.env.exports = try self.env.store.defSpanFrom(scratch_exports_start);
+}
+
+fn resolveQualifiedExposedTypes(self: *Self) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const header = self.parse_ir.store.getHeader(file.header);
+    const exposes = switch (header) {
+        .module => |item| item.exposes,
+        .package => |item| item.exposes,
+        .platform => |item| item.exposes,
+        .hosted => |item| item.exposes,
+        .app => |item| item.provides,
+        .type_module, .default_app, .malformed => return,
+    };
+    const collection = self.parse_ir.store.getCollection(exposes);
+
+    for (self.parse_ir.store.exposedItemSlice(.{ .span = collection.span })) |exposed_idx| {
+        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
+        const qualifiers, const final_token = switch (exposed) {
+            .upper_ident => |item| .{ item.qualifiers, item.ident },
+            .upper_ident_star => |item| .{ item.qualifiers, item.ident },
+            .lower_ident, .malformed => continue,
+        };
+        if (qualifiers.span.len == 0) continue;
+
+        const qualifier_tokens = self.parse_ir.store.tokenSlice(qualifiers);
+        const first_token: Token.Idx = @intCast(qualifier_tokens[0]);
+        const first_ident = self.parse_ir.tokens.resolveIdentifier(first_token) orelse continue;
+        const module_info = (try self.scopeLookupOrPrepareModule(first_ident)) orelse continue;
+        const imported = self.lookupAvailableModuleEnv(module_info.module_name) orelse continue;
+
+        if (!try self.qualifiedExposedTypeExists(imported.env, qualifier_tokens[1..], final_token)) continue;
+
+        const strip_tokens = [_]tokenize.Token.Tag{ .NoSpaceDotUpperIdent, .DotUpperIdent };
+        const full_type_text = self.parse_ir.resolveQualifiedName(qualifiers, final_token, &strip_tokens);
+        _ = self.exposed_type_texts.remove(full_type_text);
+    }
+}
+
+fn qualifiedExposedTypeExists(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    intermediate_tokens: []const u32,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!bool {
+    const scratch_top = self.scratchBytesTop();
+    defer self.clearScratchBytesFrom(scratch_top);
+
+    for (intermediate_tokens) |raw_token| {
+        const token_idx: Token.Idx = @intCast(raw_token);
+        const ident = self.parse_ir.tokens.resolveIdentifier(token_idx) orelse return false;
+        if (self.scratchBytesFrom(scratch_top).len > 0) try self.scratchAppendByte('.');
+        try self.scratchAppendSlice(self.env.getIdent(ident));
+    }
+    if (self.scratchBytesFrom(scratch_top).len > 0) try self.scratchAppendByte('.');
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse return false;
+    try self.scratchAppendSlice(self.env.getIdent(final_ident));
+
+    return (try self.lookupImportedExposedTypeNode(imported_env, self.scratchBytesFrom(scratch_top))) != null;
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
@@ -6680,47 +6793,50 @@ fn introduceItemsAliased(
 
         const module_env = module_entry.env;
 
-        // Auto-expose the module's main type for type modules
-        if (module_env.module_kind == .type_module) {
+        // A resolved statement index is the exact type selected by this public
+        // import. Usually that is a type module's main type; a package header
+        // can instead select one of the source module's nested types.
+        const AutoExposedType = struct {
+            ident: Ident.Idx,
+            target_node_idx: u32,
+        };
+        const auto_exposed_type: ?AutoExposedType = if (module_entry.statement_idx) |stmt_idx| blk: {
+            const target_node_idx = module_env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse break :blk null;
+            break :blk .{
+                .ident = module_entry.qualified_type_ident,
+                .target_node_idx = target_node_idx,
+            };
+        } else if (module_env.module_kind == .type_module) blk: {
             const main_type_ident = module_env.module_kind.type_module;
-            if (module_env.containsExposedById(main_type_ident)) {
-                const original_type_name = module_env.getIdent(main_type_ident);
-                const original_ident = try self.env.insertIdent(base.Ident.for_text(original_type_name));
+            if (!module_env.containsExposedById(main_type_ident)) break :blk null;
+            const target_node_idx = module_env.getExposedTypeNodeIndexById(main_type_ident) orelse break :blk null;
+            const original_type_name = module_env.getIdent(main_type_ident);
+            break :blk .{
+                .ident = try self.env.insertIdent(base.Ident.for_text(original_type_name)),
+                .target_node_idx = target_node_idx,
+            };
+        } else null;
 
-                const maybe_target_node_idx = blk: {
-                    // Use the already-captured envs_map from the outer scope
-                    if (envs_map.get(module_name)) |auto_imported| {
-                        if (auto_imported.statement_idx) |stmt_idx| {
-                            if (module_env.getExposedNodeIndexByStatementIdx(stmt_idx)) |node_idx| {
-                                break :blk node_idx;
-                            }
-                        }
-                    }
-                    // If we can't find it via statement_idx, look it up by ident.
-                    break :blk module_env.getExposedTypeNodeIndexById(main_type_ident);
-                };
+        if (auto_exposed_type) |selected| {
+            const original_type_name = self.env.getIdent(selected.ident);
+            const item_info = Scope.ExposedItemInfo{
+                .module_name = module_name,
+                .original_name = selected.ident,
+                .target = collections.ExposedItemTarget.typeDecl(selected.target_node_idx),
+            };
+            try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
 
-                if (maybe_target_node_idx) |target_node_idx| {
-                    const item_info = Scope.ExposedItemInfo{
-                        .module_name = module_name,
-                        .original_name = original_ident,
-                        .target = collections.ExposedItemTarget.typeDecl(target_node_idx),
-                    };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
-
-                    try self.setExternalTypeBinding(
-                        current_scope_idx,
-                        module_alias,
-                        module_name,
-                        original_ident,
-                        original_type_name,
-                        target_node_idx,
-                        module_import_idx,
-                        import_region,
-                        .module_was_found,
-                    );
-                }
-            }
+            try self.setExternalTypeBinding(
+                current_scope_idx,
+                module_alias,
+                module_name,
+                selected.ident,
+                original_type_name,
+                selected.target_node_idx,
+                module_import_idx,
+                import_region,
+                .module_was_found,
+            );
         }
 
         // Validate each exposed item
@@ -8837,7 +8953,7 @@ fn createBlockAnnoOnlyStatement(
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, null, where_clauses, region, null);
+    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, .ordinary, where_clauses, region, null);
     try self.env.store.addScratchDef(def_idx);
 
     const def = self.env.store.getDef(def_idx);

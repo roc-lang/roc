@@ -111,6 +111,21 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "List.fold with numeric accumulators",
     },
     .{
+        .roc_file = "test/fx/runtime_dec_to_u8_wrap.roc",
+        .io_spec = "0<72623859790382856|1>[56, 1, 1]",
+        .description = "Regression test: wrapping Dec-to-integer conversion in runtime code (issue #10626)",
+    },
+    .{
+        .roc_file = "test/fx/runtime_dec_to_int_wrap_widths.roc",
+        .io_spec = "0<3|1>widths: 3 3 3 3 3 3 3 3 3 3|1>trunc: 3 -3 -3|1>wide: 11553255926290448384 30000000000000000000 0",
+        .description = "Every runtime Dec-to-integer width recovers the whole part, truncates toward zero, and wraps past the destination range",
+    },
+    .{
+        .roc_file = "test/fx/runtime_zst_list_ownership.roc",
+        .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
+        .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",
+    },
+    .{
         .roc_file = "test/fx/list_for_each.roc",
         .io_spec = "1>Item: apple|1>Item: banana|1>Item: cherry",
         .description = "List.for_each! with effectful callback",
@@ -329,6 +344,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/erased_small_first_arg.roc",
         .io_spec = "1>2",
         .description = "Regression test: LLVM erased callable ABI preserves a sub-word first argument (issue #10364)",
+    },
+    .{
+        .roc_file = "test/fx/packed_list_two_bodies.roc",
+        .io_spec = "0<three|1>165|1>168",
+        .description = "Regression test: a packed compile-time list constant restored in two proc bodies must not reuse the first body's GEP instruction (issue #10697)",
     },
     .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",

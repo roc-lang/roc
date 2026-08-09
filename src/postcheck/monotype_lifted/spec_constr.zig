@@ -6176,28 +6176,27 @@ const Cloner = struct {
         value_expr: Ast.ExprId,
         selection: LoopExitSelection,
     ) Common.LowerError!Ast.ExprId {
-        const value_data = self.pass.program.getExpr(value_expr).data;
-        if (value_data != .tuple) Common.invariant("selected loop exit did not carry compiler-generated tuple state");
-        const tuple = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(value_data.tuple));
-        defer self.pass.allocator.free(tuple);
-        if (tuple.len != selection.source_arity) {
+        var bindings: BindingChain = .{};
+        const exit_value = try self.cloneExprValueDemandingShapeInto(value_expr, &bindings);
+        const tuple = tupleFromValue(exit_value) orelse Common.invariant("selected loop exit did not carry compiler-generated tuple state");
+        if (tuple.items.len != selection.source_arity) {
             Common.invariant("selected loop exit tuple arity differed from its source ABI");
         }
 
-        return switch (selection.transfer) {
+        const projected = switch (selection.transfer) {
             .break_value => blk: {
                 if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
-                const projected = try self.addExpr(.{
+                const projected_expr = try self.addExpr(.{
                     .ty = break_ty,
-                    .data = .{ .break_ = try self.cloneExpr(tuple[selection.kept_indices[0]]) },
+                    .data = .{ .break_ = try self.materialize(tuple.items[selection.kept_indices[0]]) },
                 });
-                try self.selected_loop_exit_tys.put(projected, selection.result_ty);
-                break :blk projected;
+                try self.selected_loop_exit_tys.put(projected_expr, selection.result_ty);
+                break :blk projected_expr;
             },
             .jump => |jump_transfer| blk: {
                 const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
                 defer self.pass.allocator.free(args);
-                for (selection.kept_indices, args) |index, *out| out.* = try self.cloneExpr(tuple[index]);
+                for (selection.kept_indices, args) |index, *out| out.* = try self.materialize(tuple.items[index]);
                 const jump = try self.addExpr(.{
                     .ty = break_ty,
                     .data = .{ .jump = .{
@@ -6209,6 +6208,8 @@ const Cloner = struct {
                 break :blk jump;
             },
         };
+
+        return try self.wrapBindings(bindings, projected);
     }
 
     fn inlineLoopExitAtSite(
@@ -10254,21 +10255,62 @@ const Cloner = struct {
         outer: Ast.InlineScopeId,
     ) Allocator.Error!Ast.InlineScopeId {
         if (source == Ast.InlineScopeId.none) return outer;
-        if (source == outer or self.inline_scope_origins.get(outer) == source) return outer;
+        if (self.inlineScopeCovers(outer, source)) return outer;
         const key = InlineScopeRebasePair{ .source = source, .outer = outer };
         if (self.rebased_inline_scopes.get(key)) |existing| return existing;
 
-        const original = self.pass.program.inlineScope(source);
-        const parent = try self.rebaseInlineScope(original.parent, outer);
-        const rebased = try self.pass.program.addInlineScope(.{
-            .source_symbol = original.source_symbol,
-            .source_loc = original.source_loc,
-            .call_site = original.call_site,
-            .parent = parent,
-        });
-        try self.rebased_inline_scopes.put(key, rebased);
-        try self.inline_scope_origins.put(rebased, source);
-        return rebased;
+        // Collect the frames of `source` that `outer` does not already carry,
+        // innermost first. Walking iteratively keeps a deep inline stack from
+        // overflowing the compiler's own stack.
+        var chain = std.ArrayList(Ast.InlineScopeId).empty;
+        defer chain.deinit(self.pass.allocator);
+
+        var base = outer;
+        var cursor = source;
+        while (cursor != Ast.InlineScopeId.none) {
+            if (self.inlineScopeCovers(outer, cursor)) break;
+            if (self.rebased_inline_scopes.get(.{ .source = cursor, .outer = outer })) |existing| {
+                base = existing;
+                break;
+            }
+            try chain.append(self.pass.allocator, cursor);
+            cursor = self.pass.program.inlineScope(cursor).parent;
+        }
+
+        var i = chain.items.len;
+        while (i > 0) {
+            i -= 1;
+            const src = chain.items[i];
+            const original = self.pass.program.inlineScope(src);
+            const rebased = try self.pass.program.addInlineScope(.{
+                .source_symbol = original.source_symbol,
+                .source_loc = original.source_loc,
+                .call_site = original.call_site,
+                .parent = base,
+            });
+            try self.rebased_inline_scopes.put(.{ .source = src, .outer = outer }, rebased);
+            try self.inline_scope_origins.put(rebased, src);
+            base = rebased;
+        }
+        return base;
+    }
+
+    /// Whether `outer` already stands for the frame `frame`, either because
+    /// `frame` is `outer` itself, because `frame` is one of `outer`'s ancestors,
+    /// or because `outer` is a re-based copy of `frame`.
+    ///
+    /// Re-basing a frame `outer` already carries would append a duplicate copy
+    /// of it. SpecConstr re-clones an already-inlined body once per
+    /// distribution step, so every duplicate is re-duplicated by the next step
+    /// and the inline stack grows without bound.
+    fn inlineScopeCovers(self: *Cloner, outer: Ast.InlineScopeId, frame: Ast.InlineScopeId) bool {
+        if (self.inline_scope_origins.get(outer) == frame) return true;
+        var cursor = outer;
+        while (cursor != Ast.InlineScopeId.none) {
+            if (cursor == frame) return true;
+            cursor = self.pass.program.inlineScope(cursor).parent;
+        }
+        return false;
     }
 
     fn enterInlineScope(self: *Cloner, callee: Ast.FnId, call_site: SourceLoc) Allocator.Error!void {

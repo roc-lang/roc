@@ -140,7 +140,26 @@ a = || {}
 (can-ir
 	(d-let
 		(p-assign (ident "s"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(e-match
+				(match
+					(cond
+						(e-runtime-error (tag "erroneous_value_expr")))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list
+										(patterns))))
+							(value
+								(e-empty_list)))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-list
+										(patterns))))
+							(value
+								(e-runtime-error (tag "erroneous_value_expr")))))))))
 	(d-let
 		(p-assign (ident "a"))
 		(e-lambda
@@ -151,9 +170,9 @@ a = || {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error"))
+		(patt (type "List(_b)"))
 		(patt (type "({}) -> {}")))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "List(_b)"))
 		(expr (type "({}) -> {}"))))
 ~~~

@@ -1318,6 +1318,39 @@ history; it never guesses which variables are source occurrences from their
 storage parents. Error recovery must use this explicit operation rather than
 calling ordinary union or writing a raw redirect.
 
+An already-erroneous operand cannot overwrite a solved type or a flex carrying
+constraints. Encountering `.err` against either terminates the current
+unification successfully for diagnostic recovery, before any enclosing
+structure is merged. An unconstrained flex placeholder may adopt `.err`; this
+is how an erroneous expression explicitly fills its owning binding or
+annotation slot without contaminating an independently constrained producer.
+Checker sites that own a reported error use `markErroneous` to poison the owning
+solved class directly. No successful ordinary unification propagates an
+existing `.err` into a type that already carries information.
+
+A relation an expression merely consults is not a relation it may destroy. A
+call checks its callee and its arguments, and a field access checks the record
+it reads from, against a shape the consuming expression demands; each operand is
+an independently solved producer that other expressions also read. Those sites
+unify through `unifyOwnedRelation`, which suppresses mismatch poisoning, records
+the diagnostic itself, and marks only the consuming expression erroneous. The
+producer keeps the type it was solved to, so a rejected relation neither
+cascades into unrelated uses of that producer nor leaves an `.err` on a binding
+whose value post-check lowering must still instantiate.
+
+Because `.err` no longer merges, it also no longer relates the operands unified
+against it. A checker site that relies on one variable to carry a relation
+between several others has to supply that relation itself once the carrier is
+erroneous. `match` is the one such site: every branch pattern describes the same
+scrutinee value, and that mutual consistency normally travels through the
+scrutinee's variable. When the scrutinee is already erroneous, the patterns
+unify against a shared fresh variable instead, so a disagreement between two
+patterns is still reported at the pattern that disagrees rather than surfacing
+later as an unexplained branch-body mismatch. The scrutinee's own error is not
+re-reported, the patterns are never related back to it, and the first
+disagreement poisons the shared variable so later patterns short-circuit exactly
+as they do when the scrutinee carries the relation.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -1816,6 +1849,13 @@ problem store, selected hoisted roots,
 requirement context, imported diagnostic environments, and CTFE options. A
 checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
 bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
+
+A relation-less platform output preserves its complete `provides` metadata for
+glue and interface consumers. If it also declares app requirements, it does not
+output provided runtime roots and cannot enter Monotype;
+runtime commands reject it until an app relation exists. This decision depends
+only on the explicit relation state and requirement surface, never on scanning
+provided bodies to guess whether the missing requirements happen to be used.
 
 ### Compile-Time Constants and Hoisted Roots
 
@@ -3048,6 +3088,12 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+LLVM codegen interns one refcounted backing global per blob for the whole
+module, but the pointer to the blob's data offset is a WipFunction
+instruction: every proc body that restores a view must emit its own GEP from
+the interned global. Caching the offset pointer itself would leak the first
+body's instruction into every later function sharing that backing.
+
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves
 its id beside the stored root node. Restoration lowers the saved root type first
@@ -3324,6 +3370,15 @@ Other solved-graph mutations:
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.
+- `markErroneous` (`setVarContent(.err)`)—mechanism: diagnostic recovery after
+  an already-reported error. It marks the checker node's solved class directly,
+  preserving the class-wide cascade suppression previously provided by
+  unifying that node with a fresh error variable.
+- `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
+  an already-reported error. An erroneous scrutinee cannot relate the branch
+  patterns to each other, so they unify against a shared fresh variable instead
+  of the scrutinee's. An error-free program never reaches the probe, so no
+  program's typechecking or checked-module output changes.
 - `resetAnnotationNodes` (`resetVarToUnbound`)—mechanism: recycles
   annotation node vars after the scheme was copied off as a disjoint orphan.
 - `finalizeTypeDeclarationValidity` and occurs-check poisoning

@@ -994,6 +994,8 @@ pub const RootRequestTable = struct {
         procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
         relation_substitutions: *const PlatformRelationTypeSubstitutions,
+        platform_app_relation: ?PlatformAppRelationKey,
+        platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
         checked_bodies: *const CheckedBodyStore,
@@ -1045,6 +1047,8 @@ pub const RootRequestTable = struct {
             top_level_values,
             top_level_procedure_bindings,
             relation_substitutions,
+            platform_app_relation,
+            platform_required_declarations,
         );
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
@@ -2187,30 +2191,37 @@ fn appendPublishedEntrypointRoots(
     top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     relation_substitutions: *const PlatformRelationTypeSubstitutions,
+    platform_app_relation: ?PlatformAppRelationKey,
+    platform_required_declarations: *const PlatformRequiredDeclarationTable,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
 
-    for (provided_exports.exports) |provided| {
-        switch (provided) {
-            .procedure => |procedure| {
-                const checked_type = try relation_substitutions.specializeRoot(
-                    allocator,
-                    names,
-                    &checked_types.store,
-                    procedure.checked_type,
-                );
-                try appendRoot(requests, allocator, .{
-                    .module_idx = module.moduleIndex(),
-                    .kind = .provided_export,
-                    .source = .{ .def = procedure.def },
-                    .checked_type = checked_type,
-                    .abi = .platform,
-                    .exposure = .exported,
-                    .procedure_template = procedureTemplateForTopLevelBinding(top_level_procedure_bindings, procedure.binding),
-                    .procedure_binding = procedure.binding,
-                });
-            },
-            .data => {},
+    const provided_runtime_roots_ready = module_env.module_kind != .platform or
+        platform_required_declarations.declarations.len == 0 or
+        platform_app_relation != null;
+    if (provided_runtime_roots_ready) {
+        for (provided_exports.exports) |provided| {
+            switch (provided) {
+                .procedure => |procedure| {
+                    const checked_type = try relation_substitutions.specializeRoot(
+                        allocator,
+                        names,
+                        &checked_types.store,
+                        procedure.checked_type,
+                    );
+                    try appendRoot(requests, allocator, .{
+                        .module_idx = module.moduleIndex(),
+                        .kind = .provided_export,
+                        .source = .{ .def = procedure.def },
+                        .checked_type = checked_type,
+                        .abi = .platform,
+                        .exposure = .exported,
+                        .procedure_template = procedureTemplateForTopLevelBinding(top_level_procedure_bindings, procedure.binding),
+                        .procedure_binding = procedure.binding,
+                    });
+                },
+                .data => {},
+            }
         }
     }
 
@@ -21951,6 +21962,21 @@ pub const CompileTimeRoot = struct {
     payload: CompileTimeRootPayload,
 };
 
+fn topLevelDefHasValueImplementation(
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    global_value_defs: []const CIR.Def.Idx,
+    source_name: canonical.ExportNameId,
+) Allocator.Error!bool {
+    for (global_value_defs) |other_def_idx| {
+        const other_def = module.def(other_def_idx);
+        if (other_def.expr.data == .e_anno_only) continue;
+        const other_name = (try topLevelDefSourceName(module, names, other_def)) orelse continue;
+        if (other_name == source_name) return true;
+    }
+    return false;
+}
+
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -21997,6 +22023,7 @@ pub const CompileTimeRootTable = struct {
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
             const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
             if (seen_source_name.found_existing) continue;
             seen_source_name.value_ptr.* = {};
@@ -23340,6 +23367,7 @@ pub const TopLevelValueTable = struct {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
+            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
             const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
             if (seen_source_name.found_existing) continue;
             seen_source_name.value_ptr.* = {};
@@ -26881,6 +26909,14 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
+    /// A platform with declared app requirements is runtime-lowerable only
+    /// after checking has published its exact app relation.
+    pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
+        return self.module_identity.kind == .platform and
+            self.platform_required_declarations.declarations.len > 0 and
+            self.checking_context_identity.platform_app_relation == null;
+    }
+
     /// Look up the root request with the given metadata order.
     /// Returns null if not found (callers that rely on an invariant can assert).
     pub fn lookupRootRequestByOrder(self: *const CheckedModuleArtifact, order: u32) ?RootRequest {
@@ -28050,6 +28086,17 @@ pub const CheckedModuleArtifact = struct {
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
         self.verifyMethodIntrinsicRuntimeTargets();
+
+        if (self.hasUnboundPlatformRequirements()) {
+            for (self.root_requests.runtime_requests) |request| {
+                if (request.kind == .provided_export) {
+                    std.debug.panic(
+                        "checked artifact invariant violated: relationless required platform published a provided runtime root",
+                        .{},
+                    );
+                }
+            }
+        }
 
         if (self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
@@ -30683,6 +30730,8 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
         &entry_wrappers,
         &relation_type_substitutions,
+        checking_context_identity.platform_app_relation,
+        &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
         checked_bodies,
@@ -31357,6 +31406,8 @@ fn expectProvidedExportKind(
         &checked_procedure_templates,
         &entry_wrappers,
         &relation_type_substitutions,
+        null,
+        &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
         checked_bodies,
@@ -32026,6 +32077,25 @@ test "provided procedure remains a runtime root" {
 
     try expectProvidedExportKind(source, .{
         .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
+test "relationless required platform does not publish provided runtime roots" {
+    const source =
+        \\platform ""
+        \\    requires { main : U8 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host }
+        \\
+        \\main_for_host : () -> U8
+        \\main_for_host = || main
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 0,
         .data_exports = 0,
         .procedure_exports = 1,
     });
