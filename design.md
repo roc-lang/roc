@@ -2659,6 +2659,17 @@ coalescing equal finalized content addresses as they go. They never search the
 full Monotype graph to rediscover which nodes are generated representations;
 unrelated graph nodes do no work in either pass.
 
+Function-request materialization may create another root that retains an exact
+producer's generated-representation provenance while substituting its checked
+interface. That creation site appends the new root to the same registry
+immediately. Copying producer provenance onto an unregistered root is invalid:
+the finalizers deliberately do not discover it by searching the graph.
+
+A stable control-flow or storage selection does not create such a copy. When
+its chosen representation is a generated nominal, the selection redirects to
+the already-registered content identity itself. Only structural selections
+copy child structure into their stable cell.
+
 Recursive value slots and roots selected for the forced-dynamic fixed point are
 direct-indexed permanent-node sets. A query walks only the current union class
 and tests those sets; it never scans every recursive or forced root accumulated

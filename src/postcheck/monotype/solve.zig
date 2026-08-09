@@ -3487,6 +3487,9 @@ pub const InstGraph = struct {
                 .generated_iterator = checked_content.named.generated_iterator,
                 .declared_order = declared_order,
             } });
+            if (checked_content.named.generated_iterator != null) {
+                try self.registerGeneratedIterator(reserved);
+            }
             const materialized = MaterializedNode{ .node = reserved, .changed = true };
             try substitution.materialized.put(materialization_key, materialized);
             self.countDiagnostic("function_request_nodes_materialized");
@@ -4151,7 +4154,16 @@ pub const InstGraph = struct {
         const selection_root = self.find(selection);
         const produced_root = self.find(produced);
         if (selection_root == produced_root) return;
-        try self.setContent(selection_root, self.nodes.items[@intFromEnum(produced_root)]);
+        const produced_content = self.nodes.items[@intFromEnum(produced_root)];
+        if (isGeneratedPrivateRootContent(produced_content)) {
+            // A generated nominal is already one exact content identity. The
+            // selection points at that identity; copying its provenance onto a
+            // second root would create redundant finalization work and leave
+            // the copy outside the producer's explicit registry.
+            try self.union_(produced_root, selection_root);
+            return;
+        }
+        try self.setContent(selection_root, produced_content);
     }
 
     fn orderedNodePair(left: NodeId, right: NodeId) NodePair {
@@ -4194,11 +4206,6 @@ pub const InstGraph = struct {
             },
             .cycle => |placeholder| blk: {
                 try self.writeProducedTypeSelection(placeholder, built);
-                if (isGeneratedPrivateRootContent(self.content(placeholder)) and
-                    self.content(placeholder).named.generated_iterator != null)
-                {
-                    try self.registerGeneratedIterator(placeholder);
-                }
                 entry.* = .{ .done = placeholder };
                 break :blk self.find(placeholder);
             },
@@ -9079,6 +9086,61 @@ test "active snapshot gives a graph-owned generated iterator an immutable conten
     } });
     try graph.registerGeneratedIterator(open_generated);
     try std.testing.expect(try graph.activeIdentityViewForNode(open_generated) == null);
+}
+
+test "control-flow selection reuses a generated iterator identity" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x79} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(15) };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+        .declared_order = &.{},
+    };
+    const generated = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .components = &.{item},
+            .public_source = public_source,
+        },
+    } });
+    try graph.registerGeneratedIterator(generated);
+
+    const selection = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.writeProducedTypeSelection(selection, generated);
+
+    try std.testing.expect(graph.sameClass(selection, generated));
+    try std.testing.expectEqual(@as(usize, 1), graph.generated_iterator_nodes.items.len);
 }
 
 test "opaque interface relation deduplicates only identical generated-private iterator requests" {
