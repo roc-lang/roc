@@ -1431,8 +1431,6 @@ test "Monotype consumes producer-recorded runtime-mode divergence and explicit u
     try expectContains(lower_source, "exprEvaluationMayBeElidedForInspect");
     try expectNotContains(lower_source, "exprIsSideEffectFreeCallableSyntax");
     try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "evaluation_may_be_elided_for_inspect"));
-    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedExpr, "produces_exact_graph"));
-    try std.testing.expect(@hasField(check.CheckedModule.StoredCheckedPattern, "produces_exact_graph"));
 }
 
 test "Monotype inspect-only lowering is gated by explicit demand" {

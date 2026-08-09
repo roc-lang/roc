@@ -288,11 +288,6 @@ pub const ProcedureMethodTarget = struct {
     /// `MethodTarget.def_idx` when an associated method is bound by reference.
     source_def_idx: CIR.Def.Idx,
     runtime_target: ProcedureRuntimeTarget = .procedure,
-    /// Evaluating this target can return an exact Monotype selected by its
-    /// body or caller-supplied arguments.
-    produces_exact_graph: bool = false,
-    /// Whether exact result production depends on this target's evidence.
-    exact_graph_from_evidence: bool = false,
 };
 
 fn procedureRuntimeTargetForDef(
@@ -336,12 +331,6 @@ pub const LocalProcedureMethodTarget = struct {
     /// Whether this local procedure consumes or produces an exact Monotype
     /// graph that must become its specialization interface.
     graph_participating: bool = false,
-    /// Evaluating this local procedure can return an exact Monotype selected
-    /// by its body or by an exact caller-supplied argument.
-    produces_exact_graph: bool = false,
-    /// Whether exact result production depends on the concrete dispatch
-    /// evidence supplied to this local procedure's lexical scope.
-    exact_graph_from_evidence: bool = false,
 };
 
 /// Public `MethodTargetKind` declaration.
@@ -465,10 +454,6 @@ pub const MethodRegistry = struct {
                             .template = template,
                             .source_def_idx = def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner, method_requires_exact_graph),
-                            .produces_exact_graph = if (iteratorProcedureForDef(module, def_idx)) |procedure|
-                                procedure.producesIteratorValue()
-                            else
-                                false,
                         } };
                     },
                 }
@@ -687,10 +672,6 @@ fn referencedProcedureTargetForMethodBinding(
                             .template = template_entry.template,
                             .source_def_idx = target_def_idx,
                             .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner, method_requires_exact_graph),
-                            .produces_exact_graph = if (iteratorProcedureForDef(module, target_def_idx)) |procedure|
-                                procedure.producesIteratorValue()
-                            else
-                                false,
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },

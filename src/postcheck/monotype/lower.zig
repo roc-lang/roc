@@ -1202,54 +1202,6 @@ fn specEvidenceContainsStructural(evidence: []const SpecEvidence) bool {
     return false;
 }
 
-fn methodTargetProducesExactGraph(target: static_dispatch.MethodTarget) bool {
-    return switch (target.kind) {
-        .procedure => |procedure| procedure.produces_exact_graph or
-            if (procedure.runtime_target.iteratorProcedure()) |iterator|
-                iterator.producesIteratorValue()
-            else
-                false,
-        .local_proc => |local| local.produces_exact_graph,
-        .structural => false,
-    };
-}
-
-fn methodTargetMayProduceExactGraph(target: static_dispatch.MethodTarget) bool {
-    if (methodTargetProducesExactGraph(target)) return true;
-    return switch (target.kind) {
-        .procedure => |procedure| procedure.exact_graph_from_evidence,
-        .local_proc => |local| local.exact_graph_from_evidence,
-        .structural => false,
-    };
-}
-
-fn specEvidenceProducesExactGraph(evidence: []const SpecEvidence) bool {
-    for (evidence) |entry| switch (entry) {
-        .target => |target| {
-            if (methodTargetProducesExactGraph(target.target)) return true;
-            const depends_on_nested_evidence = switch (target.target.kind) {
-                .procedure => |procedure| procedure.exact_graph_from_evidence,
-                .local_proc => |local| local.exact_graph_from_evidence,
-                .structural => false,
-            };
-            if (depends_on_nested_evidence) switch (target.nested) {
-                .resolved => |nested| if (specEvidenceProducesExactGraph(nested)) return true,
-                .synthesize => {},
-            };
-        },
-        .structural, .unreachable_value, .checked_error => {},
-    };
-    return false;
-}
-
-fn evidenceChainProducesExactGraph(evidence: EvidenceChain) bool {
-    var frame = evidence;
-    while (true) {
-        if (specEvidenceProducesExactGraph(frame.vector)) return true;
-        frame = (frame.parent orelse return false).*;
-    }
-}
-
 fn optionalTypeDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left) |left_digest| {
         const right_digest = right orelse return false;
@@ -3504,10 +3456,7 @@ const Builder = struct {
             partial_evidence
         else
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
-        var signature_relation = raw_signature_relation;
-        const evidence_produces_exact_graph = template.exact_graph_from_evidence and
-            specEvidenceProducesExactGraph(evidence);
-        if (evidence_produces_exact_graph) signature_relation = .exact_graph;
+        const signature_relation = raw_signature_relation;
         const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
@@ -3574,9 +3523,11 @@ const Builder = struct {
             null;
         const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
         const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
-        const caller_owned_body = local_context_dependent or
-            template.produces_exact_graph or
-            evidence_produces_exact_graph;
+        // A Roc body must complete before its call expression can return the
+        // body's authoritative result node. Concrete request substitutions
+        // decide specialization identity and reuse; no transitive prediction
+        // about what the body might produce is involved.
+        const caller_owned_body = local_context_dependent or template.target != .hosted;
         const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
             source_ctx.draft.current_owner
         else
@@ -7828,7 +7779,6 @@ const Builder = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -7963,7 +7913,6 @@ const Builder = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -15910,27 +15859,21 @@ const BodyContext = struct {
         return try self.graph.applySelectedCheckedSubstitutions(fresh, current);
     }
 
-    /// Return the shared checked node for an ordinary expression result. Only
-    /// a checker-recorded exact producer needs an isolated occurrence whose
-    /// generated representation may differ from another use of the same
-    /// checked substitution slot.
+    /// Instantiate one checked occurrence used as explicit source mapping for
+    /// a value. The value returned by lowering remains the runtime authority;
+    /// this occurrence is never a prediction about its eventual contents.
     fn checkedExprOccurrenceNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!NodeId {
         const expr = self.view.bodies.expr(expr_id);
-        return try self.checkedTypeOccurrenceNode(
-            expr.ty,
-            self.view.bodies.exprProducesExactGraph(expr_id),
-        );
+        return try self.checkedTypeOccurrenceNode(expr.ty);
     }
 
     fn checkedTypeOccurrenceNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        isolate_exact_result: bool,
     ) Allocator.Error!NodeId {
-        if (!isolate_exact_result) return try self.instNode(checked_ty);
         return try self.freshInstNode(checked_ty);
     }
 
@@ -15939,9 +15882,6 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
     ) Allocator.Error!NodeId {
         const pattern = self.view.bodies.pattern(pattern_id);
-        if (!self.view.bodies.patternProducesExactGraph(pattern_id)) {
-            return try self.instNode(pattern.ty);
-        }
         return try self.freshInstNode(pattern.ty);
     }
 
@@ -18976,34 +18916,6 @@ const BodyContext = struct {
         };
     }
 
-    fn resolvedTargetMayProduceExactGraph(
-        self: *BodyContext,
-        target: checked.ResolvedValueId,
-    ) bool {
-        const raw = @intFromEnum(target);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked direct call target is outside resolved value table");
-        }
-        const procedure: checked.ProcedureUseTemplate = switch (self.view.resolved_refs.records[raw].ref) {
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            .promoted_top_level_proc,
-            => |proc| proc,
-            .platform_required_proc => |required| required.procedure,
-            .local_proc => |local| return local.produces_exact_graph or local.exact_graph_from_evidence,
-            // First-class callable values do not carry a procedure result-flow
-            // column on the resolved reference itself.
-            .local_param, .local_value, .local_mutable_version, .pattern_binder => return true,
-            .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => return false,
-        };
-        if (procedure.produces_exact_graph or procedure.exact_graph_from_evidence) return true;
-        return if (procedure.iterator_procedure) |iterator|
-            iterator.producesIteratorValue()
-        else
-            false;
-    }
-
     fn iteratorProcedureForMethodTarget(
         _: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -19016,43 +18928,30 @@ const BodyContext = struct {
 
     fn procedureUseSignatureRelation(
         _: *BodyContext,
-        procedure: checked.ProcedureUseTemplate,
+        _: checked.ProcedureUseTemplate,
     ) Ast.SignatureRelation {
-        if (procedure.iterator_procedure != null and !procedure.graph_participating) {
-            Common.invariant("checked iterator procedure use did not preserve graph participation");
-        }
-        return if (procedure.graph_participating or procedure.produces_exact_graph)
-            .exact_graph
-        else
-            .independent_roots;
+        return .exact_graph;
     }
 
     fn procedureRuntimeSignatureRelation(
         _: *BodyContext,
-        procedure: static_dispatch.ProcedureMethodTarget,
+        _: static_dispatch.ProcedureMethodTarget,
     ) Ast.SignatureRelation {
-        if (procedure.produces_exact_graph) return .exact_graph;
-        return switch (procedure.runtime_target) {
-            .graph_participating => .exact_graph,
-            .procedure, .low_level, .intrinsic => .independent_roots,
-        };
+        return .exact_graph;
     }
 
     fn localProcedureUseSignatureRelation(
         _: *BodyContext,
-        procedure: checked.LocalProcedureBinding,
+        _: checked.LocalProcedureBinding,
     ) Ast.SignatureRelation {
-        return if (procedure.produces_exact_graph) .exact_graph else .independent_roots;
+        return .exact_graph;
     }
 
     fn localProcedureMethodSignatureRelation(
         _: *BodyContext,
-        target: static_dispatch.LocalProcedureMethodTarget,
+        _: static_dispatch.LocalProcedureMethodTarget,
     ) Ast.SignatureRelation {
-        return if (target.graph_participating or target.produces_exact_graph)
-            .exact_graph
-        else
-            .independent_roots;
+        return .exact_graph;
     }
 
     fn callsiteIntrinsicForMethodTarget(
@@ -25487,7 +25386,6 @@ const BodyContext = struct {
                 call.args,
                 expected_ret_node,
                 try self.hostedTryCapabilityForResolvedTarget(target),
-                self.resolvedTargetMayProduceExactGraph(target),
             );
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
             const initial_fn_nodes = try self.graph.functionNodes(fn_node);
@@ -25643,7 +25541,6 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             null,
-            true,
         );
         const request_fn = try self.graph.functionNodes(fn_node);
         const callee = try self.lowerExprAtTypeCell(
@@ -25924,7 +25821,6 @@ const BodyContext = struct {
         checked_args: []const checked.CheckedExprId,
         expected_ret_node: ?NodeId,
         hosted_try_capability: ?HostedTryAdapterCapability,
-        result_may_produce_exact_graph: bool,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != checked_args.len) {
@@ -25958,10 +25854,7 @@ const BodyContext = struct {
             // caller's cached checked node here would let later result
             // refinement flow backward into arguments with the same checked
             // variable.
-            const caller_ret = try caller.checkedTypeOccurrenceNode(
-                checked_ret_ty,
-                result_may_produce_exact_graph,
-            );
+            const caller_ret = try caller.checkedTypeOccurrenceNode(checked_ret_ty);
             if (hosted_try_capability) |capability| {
                 if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
                     return request_fn;
@@ -26000,7 +25893,6 @@ const BodyContext = struct {
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
-        result_may_produce_exact_graph: bool,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
         return (try self.instantiateCallableDispatchPlanRequestFromCallerAtNode(
@@ -26008,7 +25900,6 @@ const BodyContext = struct {
             caller,
             checked_ret_ty,
             expected_ret_node,
-            result_may_produce_exact_graph,
             phase,
         )).callable;
     }
@@ -26019,7 +25910,6 @@ const BodyContext = struct {
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
-        result_may_produce_exact_graph: bool,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!CallableDispatchRequest {
         const plan = callable_plan.plan;
@@ -26064,10 +25954,7 @@ const BodyContext = struct {
         const request_ret = if (expected_ret_node) |expected| blk: {
             break :blk expected;
         } else blk: {
-            break :blk try caller.checkedTypeOccurrenceNode(
-                checked_ret_ty,
-                result_may_produce_exact_graph,
-            );
+            break :blk try caller.checkedTypeOccurrenceNode(checked_ret_ty);
         };
         const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
         const materialized = try self.graph.functionRequestFromProducedArgumentsAndComponents(
@@ -26214,18 +26101,15 @@ const BodyContext = struct {
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) return fn_nodes.ret;
-                    if (self.resolvedTargetMayProduceExactGraph(target)) {
-                        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
-                        const callee = try self.fnTemplateForDirectCallAtNode(
-                            target,
-                            source_fn_ty,
-                            self.view.types.rootKey(source_fn_ty),
-                            fn_node,
-                        );
-                        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
-                        return (try self.graph.functionNodes(completed_fn_node)).ret;
-                    }
-                    return fn_nodes.ret;
+                    try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+                    const callee = try self.fnTemplateForDirectCallAtNode(
+                        target,
+                        source_fn_ty,
+                        self.view.types.rootKey(source_fn_ty),
+                        fn_node,
+                    );
+                    const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+                    return (try self.graph.functionNodes(completed_fn_node)).ret;
                 }
                 return try self.callResultTypeNode(expr.ty, call, expected_ty);
             },
@@ -26522,7 +26406,6 @@ const BodyContext = struct {
                 call.args,
                 if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
                 null,
-                true,
             );
             return switch (self.graph.content(fn_node)) {
                 .func => |function| function.ret,
@@ -26567,7 +26450,6 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
-            self.resolvedTargetMayProduceExactGraph(call.direct_target.?),
         );
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
@@ -26722,11 +26604,6 @@ const BodyContext = struct {
             }
             break :blk context.evidence;
         };
-        const effective_signature_relation = if (local.exact_graph_from_evidence and
-            evidenceChainProducesExactGraph(requested_evidence))
-            Ast.SignatureRelation.exact_graph
-        else
-            signature_relation;
         const lexical_owner_scope = try self.draft.enterOwner(context.lexical_owner);
         defer lexical_owner_scope.leave();
         // The declaration context's capture types are part of the
@@ -26749,7 +26626,7 @@ const BodyContext = struct {
             capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
-            effective_signature_relation,
+            signature_relation,
         );
     }
 
@@ -29471,7 +29348,6 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29620,7 +29496,6 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             request_fn_node,
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29798,7 +29673,6 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             try fn_ctx.activeNodeFromType(ty),
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -29964,7 +29838,6 @@ const BodyContext = struct {
             &fn_ctx,
             expr.ty,
             request_fn_node,
-            fn_view.bodies.exprProducesExactGraph(runtime.expr),
             .expression_lowering,
         );
         const callable_node = dispatch_request.callable;
@@ -30395,7 +30268,6 @@ const BodyContext = struct {
             call.args,
             expected_ret_node,
             hosted_try_capability,
-            if (call.direct_target) |target| self.resolvedTargetMayProduceExactGraph(target) else true,
         );
         const fn_nodes = try self.graph.functionNodes(fn_node);
         _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
@@ -32842,7 +32714,6 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             expected_ret_node,
-            self.dispatchPlanMayProduceExactGraph(plan),
             .expression_lowering,
         );
         var callable_node = dispatch_request.callable;
@@ -33897,9 +33768,7 @@ const BodyContext = struct {
         };
         switch (procedure.runtime_target) {
             .intrinsic, .graph_participating => return null,
-            .procedure => {
-                if (procedure.produces_exact_graph or procedure.exact_graph_from_evidence) return null;
-            },
+            .procedure => return null,
             .low_level => |op| if (op.producedTypeFlow() != .none) return null,
         }
 
@@ -33946,7 +33815,6 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             expected_ret_node,
-            self.dispatchPlanMayProduceExactGraph(plan),
             phase,
         );
         const resolution = self.evidenceResolution(plan) orelse
@@ -34331,17 +34199,6 @@ const BodyContext = struct {
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
-    }
-
-    fn dispatchPlanMayProduceExactGraph(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-    ) bool {
-        return switch (self.evidenceResolution(plan) orelse
-            Common.invariant("callable dispatch exact-result query had no resolved evidence")) {
-            .target => |lookup| methodTargetMayProduceExactGraph(lookup.target),
-            .structural => false,
-        };
     }
 
     const DispatchCrashReason = enum { unreachable_value, checked_error };
@@ -35372,8 +35229,6 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
-                        .produces_exact_graph = local.produces_exact_graph,
-                        .exact_graph_from_evidence = local.exact_graph_from_evidence,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse
@@ -35461,8 +35316,6 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .dispatch_scope = local.dispatch_scope,
-                        .produces_exact_graph = local.produces_exact_graph,
-                        .exact_graph_from_evidence = local.exact_graph_from_evidence,
                     },
                     lookup.view,
                     lookup.local_proc_context orelse
