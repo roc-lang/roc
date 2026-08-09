@@ -28,7 +28,7 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
-/// Version 13: generated iterator types have one canonical identity and no
+/// Version 13: generated iterator types have one content-addressed identity and no
 /// representation tier, producer kind, or chain-depth metadata.
 /// Version 11: low-level nodes may carry an explicit produced-type source.
 /// Version 10: generated nominal identities include their exact producer data.

@@ -151,7 +151,7 @@ Exhaustion therefore retains the ordinary exact IR; it is never cached as
 representation.
 
 Iterator representation is finite by construction: every `Iter(item)` uses one
-canonical self-recursive runtime nominal for its public declaration and exact
+content-addressed self-recursive runtime nominal for its public declaration and exact
 item type. It does not grow with adapter depth. SpecConstr's shape,
 substitution, structural-work, and constructor-size queries use typed proof
 exhaustion solely to decline an optional rewrite. Code-growth admission is
@@ -2429,7 +2429,7 @@ closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder
 callbacks retain the complete Monotype function graph supplied when they are
 created. Later stages do not rebuild their argument or result types from the
 checked source signature; in particular, a generated iterator step's result
-keeps the canonical recursive `rest` identity produced by its enclosing
+keeps the exact recursive `rest` identity produced by its enclosing
 iterator.
 
 Ordinary calls and method dispatches to the same intrinsic consume this exact
@@ -2664,7 +2664,7 @@ generated-root registry. Sealing iterates only that registry so a completed root
 can enter the durable interner before a deferred nested body requests it. It
 never searches the Monotype graph to rediscover generated nodes, and it never
 changes an identity. Function-request materialization does not copy generated
-roots: it selects the canonical root directly at the exact occurrence.
+roots: it selects the content-addressed root directly at the exact occurrence.
 
 A stable control-flow or storage selection does not create such a copy. When
 its chosen representation is a generated nominal, the selection redirects to
@@ -2673,7 +2673,7 @@ copy child structure into their stable cell.
 
 The durable generated-identity table owns one authoritative Monotype tree per
 stable content address across body graphs. A hit imports that complete tree,
-including the canonical self-recursive `rest` edge. A miss seals and commits
+including the exact self-recursive `rest` edge. A miss seals and commits
 the complete tree once. Reusing only a named shell is invalid: its independently
 sealed descendants could otherwise acquire unrelated callable type variables.
 The stable generated `TypeDigest` is SHA-256 over an explicit domain separator,
@@ -2684,7 +2684,7 @@ history.
 
 Every representation producer consumes its current exact operand cells. An
 expected result type is a destination request, never a source from which the
-producer may recover adapter inputs, state, callable evidence, or a prior
+producer may read adapter inputs, state, callable evidence, or a prior
 function interface. This remains true when the expected result is an imported
 finished generated nominal: the current producer constructs its own exact
 identity from its explicit inputs, then applies that output to the request.
@@ -2717,7 +2717,7 @@ expression; it must not look up an argument position in the node's post-lift
 containing function, whose ABI may have been changed by specialization or
 inlining.
 Neither stage may maintain a second handwritten operation classification,
-stamp the low-level result with the checker-public type, or reconstruct
+stamp the low-level result with the checker-public type, or derive
 callable identity from operation-specific syntax.
 
 Every checked procedure use that names a compiler-provided low-level operation
@@ -2751,7 +2751,7 @@ ordered public arguments directly. It never merges the generated nominal with
 the public nominal.
 
 A checked-view mapping may relate an ordinary checked nominal view to its
-declared structural backing. This is not a recovered type relation: the
+declared structural backing. This is not an inferred type relation: the
 nominal's checker-authored backing edge is the explicit authorization. An
 exact producer relation does not erase an ordinary nominal constructor layer;
 generated-private nominals remain atomic exact roots as described above.
@@ -2775,7 +2775,7 @@ from those operands' exact output cells and the requested result cell. The
 checked callable is retained only as the source contract for the directed
 substitution. In particular, a compiler-generated interpolation iterator enters
 `from_interpolation` as its exact generated nominal; dispatch must not reuse the
-original checked-public callable argument and ask the callee to reconstruct or
+original checked-public callable argument and ask the callee to derive or
 repair the representation.
 
 An already-produced operand cell enters that request directly. Monotype does
@@ -2802,7 +2802,7 @@ the refined arguments and requested return consumes that same substitution
 table. Isolated body ABIs and generated callable wrappers share the immutable
 span as explicit request metadata; they do not copy its entries. At body entry,
 Monotype consumes the span directly and selects its generated-private roots; it
-does not reconstruct them by walking the complete function type.
+does not derive them by walking the complete function type.
 If a request already has that explicit source and substitution span, its source
 is unchanged, it has no new checked components, and every produced argument is
 already in the request argument's union class, refinement is a true no-op. It
@@ -2811,7 +2811,7 @@ or rematerializing the same request graph is forbidden unnecessary work.
 
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the
-same canonical iterator type identity.
+same content-addressed iterator type identity.
 Checker-authored node recurrence is the explicit declaration that two source
 occurrences share one substitution slot; independent source occurrences have
 distinct checked nodes even when their public shapes are identical. Fresh call
@@ -2880,11 +2880,11 @@ dense substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
 operands. Collecting ordinary polymorphic substitutions visits only the checked
 and produced operand structures that the call relates. Materialization then
-rebuilds only paths changed by those substitutions; it treats a canonical
+materializes only paths changed by those substitutions; it treats a generated
 generated nominal as an atomic leaf and never enters its private backing. The
 specialization key reads the checked interface through the span, and the body
 uses the same span to return exact selected nodes directly from checked
-occurrences instead of reconstructing the function graph. The body stores the
+occurrences instead of copying the function graph. The body stores the
 exact `NodeId` it actually returns; the call expression uses that node directly.
 A recursive specialization reserves one result cell before lowering and
 redirects that cell to the stored exact identity when the body completes.
@@ -2895,7 +2895,7 @@ resolved evidence vector, never from a transitive prediction about the body.
 Consequently a body is caller-owned only when the concrete call interface has
 actual substitutions that require it; a parameter or local whose type could
 theoretically carry a generated nominal causes no work by itself.
-Before lowering a deferred nested specialization, a body commits each canonical
+Before lowering a deferred nested specialization, a body commits each content-addressed
 generated root it actually produced to the durable Monotype interner. Nested
 lowering can therefore reuse the authoritative type. Refining a partial request
 seeds the new request from its immutable prior span and visits only newly
@@ -2922,7 +2922,7 @@ already-lowered body and retain that body's exact result cell.
 Match and conditional branches likewise lower to their own completed exact
 cells before the control-flow selection relates or joins them with the declared
 destination. A branch is never lowered into the checker-public destination and
-then asked to recover the representation it would have produced.
+then asked to determine again the representation it would have produced.
 The declared destination and each completed branch meet through the same
 explicit common-representation operation used by stored arguments, so an
 empty compound branch can adopt the selected nested representation while a
@@ -2968,7 +2968,7 @@ generated nominal only at the exact edge where it occurs. It does not propagate
 a generated-private classification to parents.
 
 If independently produced iterator values meet at storage or control flow,
-their checker-approved declaration and item type are equal, so their canonical
+their checker-approved declaration and item type are equal, so their content
 generated identity is equal too. The boundary selects that one nominal without
 opening its backing. Reaching such a boundary—or an exact destination
 request—with two different generated identities is a compiler invariant: some
@@ -2983,10 +2983,10 @@ the producer-owned runtime backing without violating source opacity. It is not
 a compatibility relation, containment property, or permission to scan parent
 types.
 
-#### Canonical Iterator Runtime Nominals
+#### Content-Addressed Iterator Runtime Nominals
 
 `TypeDef.generated` is `null` for the checked-public iterator declaration and
-contains the canonical `TypeDigest` for an exact runtime iterator nominal.
+contains the exact `TypeDigest` for a generated runtime iterator nominal.
 There are no iterator tiers, producer kinds, adapter depths, join identities, or
 late representation decisions. These would all duplicate types whose runtime
 interface is identical.
@@ -2995,7 +2995,7 @@ For each public iterator declaration and exact item type, Monotype constructs
 one self-recursive nominal backing. Its `step` result uses that same nominal for
 every `rest` field. `List.iter`, custom iterators, ranges, every adapter,
 recursion, and control-flow selection therefore produce values of the same
-canonical nominal whenever they produce the same item type. Their different
+generated nominal whenever they produce the same item type. Their different
 step closures become members of the callable slot in that common backing; a
 closure identity is not part of the surrounding iterator type.
 
@@ -3003,22 +3003,22 @@ The sole construction choke point is `generatedIteratorNode` in
 `src/postcheck/monotype/lower.zig`. It receives the checker-authored public
 declaration and the exact item node already produced by the operation. A dense
 item-node index answers repeated in-graph requests without hashing. On a dense
-miss, one structural digest lookup finds a cross-graph canonical type or carries
+miss, one structural digest lookup finds a cross-graph exact type or carries
 the computed digest into one backing construction and registration; the inputs
 are never hashed twice for one miss.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs
-the canonical result independently from its exact operands, and directed
-request application handles the public/canonical pair at that exact nominal
+the exact result independently from its operands, and directed
+request application handles the public/generated pair at that exact nominal
 edge without traversing either backing. A request whose ordinary generic
 substitution completes an `Iter(item)` occurrence invokes the same choke point,
-so recursive calls can reserve the already-canonical ABI before the body is
+so recursive calls can reserve the already-exact ABI before the body is
 lowered. The body must independently produce that same identity.
 
 Recursive procedures and loops need no iterator-specific growth analysis,
 owner snapshots, depth caps, or representation finalization. Their argument,
-result, and loop-carried slots use the same canonical nominal as ordinary
+result, and loop-carried slots use the same generated nominal as ordinary
 control flow. Once relation production is frozen, the durable Monotype is
 immutable and no consumer may reopen, widen, or reinterpret it.
 
@@ -3047,7 +3047,7 @@ uses it directly.
 A value-producing `if` or `match` owns one explicit exact result selection for
 all of its inhabited branches. Each branch is lowered exactly once and returns
 its exact graph cell. Iterator branches with the same declaration and item type
-already have the same canonical identity. Ordinary compound structure is joined
+already have the same content digest. Ordinary compound structure is joined
 only where the shared storage boundary requires it.
 The emitted branch IR retains those live graph cells until the selection is
 complete and types are sealed, so the deterministic joined root is visible to
@@ -3062,7 +3062,7 @@ that declared boundary. It reuses either input when all selected children
 already come from that input and allocates new compound structure only when the
 result combines children from both. A generated nominal is an atomic child: an
 equal identity is selected directly, a public occurrence is only a request for
-the canonical child, and different generated identities are an invariant. A
+the exact child, and different generated identities are an invariant. A
 graph-local pair memo allocates an indirection only on a real recursive
 re-entry; acyclic selections do not manufacture memo nodes.
 
@@ -3094,7 +3094,7 @@ and closure boundary that creates a specialization request records that checked
 source on the request's structural function root.
 Named callable wrappers are normalized to that root before provenance is
 recorded, so body lowering consumes the explicit source mapping instead of
-reconstructing it from the request shape.
+deriving it from the request shape.
 
 Checked output records exact-result production for local procedures as well as
 top-level and imported procedures. Direct calls, first-class uses, recursive
@@ -3108,15 +3108,15 @@ with the generated identity it constructs before the specialization is sealed.
 Match lowering projects exact field and payload cells from the exact scrutinee
 and binds its pre-registered locals to those cells before the guard or branch
 body is lowered. Later pattern materialization consumes the same cells. It does
-not relate a checked pattern graph to the scrutinee or recover representation
+not relate a checked pattern graph to the scrutinee or infer representation
 evidence from the public pattern type.
 
-#### Canonical Iterator Callable Flow
+#### Iterator Callable Flow
 
-Lambda Solved receives the canonical nominal and its self-recursive backing.
+Lambda Solved receives the exact generated nominal and its self-recursive backing.
 Each concrete step closure inhabiting that nominal contributes through the
 ordinary callable slot in the backing. Lambda Solved never chooses an iterator
-representation, relates a public iterator to a canonical iterator, or walks a
+representation, relates a public iterator to a generated iterator, or walks a
 type to discover iterator descendants. Compiler-generated backing patterns may
 open the explicitly marked producer-owned backing; this is ordinary access to
 the exact nominal's runtime fields, not compatibility repair.
@@ -3404,9 +3404,9 @@ specialization mode may change compile-time work and generated shape only.
 The following properties require focused tests:
 
 - all iterator producers with the same declaration and item type use one
-  canonical self-recursive nominal;
+  exact self-recursive nominal;
 - adapter depth and recursion do not create additional iterator types;
-- every concrete step closure that can inhabit the canonical backing reaches
+- every concrete step closure that can inhabit the shared backing reaches
   its ordinary callable slot;
 - wrapper mode and ordinary mode agree on values and effects;
 - iterator loop scalarization preserves every reachable transition, including

@@ -274,9 +274,9 @@ const MaterializedNodes = struct {
 /// request traversal reaches that named node. The traversal never asks a
 /// parent whether it contains such a node and never descends into the private
 /// backing returned here.
-pub const GeneratedTypeCanonicalizer = struct {
+pub const GeneratedTypeInterner = struct {
     context: *anyopaque,
-    canonicalize: *const fn (*anyopaque, *InstGraph, NodeId) Allocator.Error!NodeId,
+    intern: *const fn (*anyopaque, *InstGraph, NodeId) Allocator.Error!NodeId,
 };
 
 const FunctionRequestSubstitution = struct {
@@ -286,21 +286,21 @@ const FunctionRequestSubstitution = struct {
     /// This closes recursive edges without merging completed sibling copies.
     active_materialized: [materialization_mode_count]collections.DenseMap(NodeId, NodeId),
     compared: std.AutoHashMap(NodePair, void),
-    generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+    generated_type_interner: ?GeneratedTypeInterner,
     /// Whether collecting newly completed producers changed a replacement
     /// after the current request's immutable span was seeded.
     changed_after_seed: bool = false,
 
     fn init(
         allocator: Allocator,
-        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        generated_type_interner: ?GeneratedTypeInterner,
     ) FunctionRequestSubstitution {
         return .{
             .replacements = collections.DenseMap(NodeId, NodeId).init(allocator),
             .materialized = std.AutoHashMap(FunctionRequestMaterialization, MaterializedNode).init(allocator),
             .active_materialized = .{collections.DenseMap(NodeId, NodeId).init(allocator)} ** materialization_mode_count,
             .compared = std.AutoHashMap(NodePair, void).init(allocator),
-            .generated_type_canonicalizer = generated_type_canonicalizer,
+            .generated_type_interner = generated_type_interner,
         };
     }
 
@@ -464,13 +464,13 @@ pub const InstGraph = struct {
     /// classes, so a backing instance keeps one identity after evidence merges
     /// or redirects its original argument nodes.
     nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
-    /// Generated iterator nominals keyed by the final canonical content identity
+    /// Generated iterator nominals keyed by the final content digest assigned
     /// by their producer. The identity and backing are complete before entry.
     generated_iterator_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedIteratorInternContext, 80),
     /// Fast producer lookup by the already-completed dense item node. Buckets
     /// distinguish declarations without re-hashing the item type graph.
     generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Permanent roots recorded by the producer so sealing can publish each
+    /// Permanent roots recorded by the producer so sealing can commit each
     /// completed nominal to the cross-specialization TypeId interner.
     generated_iterator_nodes: std.ArrayList(NodeId),
     /// Exact checked source function node from which a distinct produced
@@ -610,7 +610,7 @@ pub const InstGraph = struct {
     }
 
     /// Share an immutable substitution span with another function node that
-    /// names the same request, such as its stable result-publication handle.
+    /// names the same request, such as its stable function-result node.
     pub fn inheritRequestSubstitutions(self: *InstGraph, source_fn: NodeId, destination_fn: NodeId) void {
         if (source_fn == destination_fn) return;
         const source = self.request_substitution_spans.items[@intFromEnum(source_fn)];
@@ -622,13 +622,13 @@ pub const InstGraph = struct {
         destination.* = source;
     }
 
-    /// Publish the exact result produced by a completed function body while
+    /// Commit the exact result produced by a completed function body while
     /// retaining the stable function handle already held by callers and
     /// recursive references. The request-derived return available during
     /// recursion and the body-produced return are deterministically the same
     /// runtime representation; post-check lowering does not re-check that
-    /// fact by merging or comparing their type graphs.
-    pub fn publishFunctionResult(
+    /// guarantee by merging or comparing their type graphs.
+    pub fn completeFunctionResult(
         self: *InstGraph,
         raw_fn_node: NodeId,
         produced_ret: NodeId,
@@ -636,7 +636,7 @@ pub const InstGraph = struct {
         const fn_node = self.find(raw_fn_node);
         const function = switch (self.nodes.items[@intFromEnum(fn_node)]) {
             .func => |function| function,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("function result publication received a non-function node"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("function result completion received a non-function node"),
         };
         try self.setContent(fn_node, .{ .func = .{
             .args = function.args,
@@ -1456,7 +1456,7 @@ pub const InstGraph = struct {
                 try self.union_(private_node, public_node);
                 return;
             }
-            Common.invariant("one exact request received two different canonical generated identities");
+            Common.invariant("one exact request received two different content-addressed generated identities");
         }
         switch (private_content) {
             .named => |private_named| if (private_named.backing) |backing| {
@@ -1888,7 +1888,7 @@ pub const InstGraph = struct {
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
     ) Allocator.Error!NodeId {
-        return try self.functionRequestFromProducedArgumentsWithCanonicalizer(
+        return try self.functionRequestFromProducedArgumentsWithGeneratedInterner(
             null,
             checked_fn_node,
             current_request_fn_node,
@@ -1896,15 +1896,15 @@ pub const InstGraph = struct {
         );
     }
 
-    pub fn functionRequestFromProducedArgumentsWithCanonicalizer(
+    pub fn functionRequestFromProducedArgumentsWithGeneratedInterner(
         self: *InstGraph,
-        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        generated_type_interner: ?GeneratedTypeInterner,
         checked_fn_node: NodeId,
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
     ) Allocator.Error!NodeId {
-        return (try self.functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
-            generated_type_canonicalizer,
+        return (try self.functionRequestFromProducedArgumentsAndComponentsWithGeneratedInterner(
+            generated_type_interner,
             checked_fn_node,
             current_request_fn_node,
             produced_args,
@@ -1916,16 +1916,16 @@ pub const InstGraph = struct {
     /// false entry is a contextual or nested operand that will be lowered
     /// against the request produced by the true entries; its current request
     /// node is materialized but contributes no substitution evidence.
-    pub fn functionRequestFromAvailableProducedArgumentsWithCanonicalizer(
+    pub fn functionRequestFromAvailableProducedArgumentsWithGeneratedInterner(
         self: *InstGraph,
-        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        generated_type_interner: ?GeneratedTypeInterner,
         checked_fn_node: NodeId,
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
         produced_available: []const bool,
     ) Allocator.Error!NodeId {
-        return (try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
-            generated_type_canonicalizer,
+        return (try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithGeneratedInterner(
+            generated_type_interner,
             checked_fn_node,
             current_request_fn_node,
             produced_args,
@@ -1950,7 +1950,7 @@ pub const InstGraph = struct {
         produced_args: []const NodeId,
         checked_components: []const NodeId,
     ) Allocator.Error!MaterializedFunctionRequest {
-        return try self.functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
+        return try self.functionRequestFromProducedArgumentsAndComponentsWithGeneratedInterner(
             null,
             checked_fn_node,
             current_request_fn_node,
@@ -1959,16 +1959,16 @@ pub const InstGraph = struct {
         );
     }
 
-    pub fn functionRequestFromProducedArgumentsAndComponentsWithCanonicalizer(
+    pub fn functionRequestFromProducedArgumentsAndComponentsWithGeneratedInterner(
         self: *InstGraph,
-        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        generated_type_interner: ?GeneratedTypeInterner,
         checked_fn_node: NodeId,
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
         checked_components: []const NodeId,
     ) Allocator.Error!MaterializedFunctionRequest {
-        return try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
-            generated_type_canonicalizer,
+        return try self.functionRequestFromAvailableProducedArgumentsAndComponentsWithGeneratedInterner(
+            generated_type_interner,
             checked_fn_node,
             current_request_fn_node,
             produced_args,
@@ -1977,9 +1977,9 @@ pub const InstGraph = struct {
         );
     }
 
-    pub fn functionRequestFromAvailableProducedArgumentsAndComponentsWithCanonicalizer(
+    pub fn functionRequestFromAvailableProducedArgumentsAndComponentsWithGeneratedInterner(
         self: *InstGraph,
-        generated_type_canonicalizer: ?GeneratedTypeCanonicalizer,
+        generated_type_interner: ?GeneratedTypeInterner,
         checked_fn_node: NodeId,
         current_request_fn_node: NodeId,
         produced_args: []const NodeId,
@@ -2002,7 +2002,7 @@ pub const InstGraph = struct {
         };
         var substitution = FunctionRequestSubstitution.init(
             self.allocator,
-            generated_type_canonicalizer,
+            generated_type_interner,
         );
         defer substitution.deinit();
 
@@ -2065,9 +2065,9 @@ pub const InstGraph = struct {
         );
         // The call is a value producer. Once ordinary substitutions have
         // completed its declared return arguments, generated named
-        // occurrences in the return schema are canonical immediately. A
+        // occurrences in the return schema are content-addressed immediately. A
         // recursive caller therefore observes the same content identity the
-        // body independently produces; it never waits on an unpublished
+        // body independently produces; it never waits on an incomplete
         // placeholder or repairs the return after body lowering.
         const request_ret = (try self.materializeFunctionRequestNodeResult(
             checked_fn.ret,
@@ -2165,7 +2165,7 @@ pub const InstGraph = struct {
             // A generated nominal is atomic with respect to its private
             // backing. Its declared arguments are ordinary generic inputs, so
             // bind those inputs here. Do not propagate the generated root:
-            // another occurrence independently derives the same canonical
+            // another occurrence independently derives the same content-addressed
             // identity from those completed declared arguments.
             for (checked_content.named.args, produced_content.named.args) |checked_arg, produced_arg| {
                 try self.collectFunctionRequestSubstitutions(checked_arg, produced_arg, substitution);
@@ -2468,7 +2468,7 @@ pub const InstGraph = struct {
             static_dispatch.isIteratorOwner(checked_content.named.builtin_owner.?))
         {
             // The checked public occurrence is the complete construction
-            // request. Materialize its declared inputs, derive its canonical
+            // request. Materialize its declared inputs, derive its content-addressed
             // private nominal immediately, and treat that result as atomic.
             // An existing exact occurrence may supply the declared inputs,
             // but its private backing is never traversed or compared.
@@ -2484,10 +2484,10 @@ pub const InstGraph = struct {
                 substitution,
                 mode,
             );
-            const canonical_args = changed_args.nodes orelse current_args;
+            const exact_args = changed_args.nodes orelse current_args;
             var args_differ_from_checked = false;
-            for (checked_content.named.args, canonical_args) |checked_arg, canonical_arg| {
-                if (!self.sameClass(checked_arg, canonical_arg)) {
+            for (checked_content.named.args, exact_args) |checked_arg, exact_arg| {
+                if (!self.sameClass(checked_arg, exact_arg)) {
                     args_differ_from_checked = true;
                     break;
                 }
@@ -2498,22 +2498,22 @@ pub const InstGraph = struct {
                     .def = checked_content.named.def,
                     .kind = checked_content.named.kind,
                     .builtin_owner = checked_content.named.builtin_owner,
-                    .args = canonical_args,
+                    .args = exact_args,
                     .backing = checked_content.named.backing,
                     .declared_order = checked_content.named.declared_order,
                 } })
             else
                 checked_node;
-            const canonicalizer = substitution.generated_type_canonicalizer orelse
+            const interner = substitution.generated_type_interner orelse
                 Common.invariant("function request reached a public iterator without a generated-type producer");
-            const canonical = try canonicalizer.canonicalize(
-                canonicalizer.context,
+            const exact = try interner.intern(
+                interner.context,
                 self,
                 public_node,
             );
             const materialized = MaterializedNode{
-                .node = canonical,
-                .changed = !self.sameClass(node, canonical),
+                .node = exact,
+                .changed = !self.sameClass(node, exact),
             };
             try substitution.materialized.put(materialization_key, materialized);
             if (materialized.changed) self.countDiagnostic("function_request_nodes_materialized");
@@ -3309,7 +3309,7 @@ pub const InstGraph = struct {
                     try self.union_(pair.left, pair.right);
                     return self.find(left);
                 }
-                Common.invariant("two different canonical generated nominals reached one produced-value boundary");
+                Common.invariant("two different content-addressed generated nominals reached one produced-value boundary");
             }
             const exact = if (left_generated) left else right;
             const public = if (left_generated) right else left;
@@ -5028,7 +5028,7 @@ pub const GraphTypeFinals = struct {
         return sealed;
     }
 
-    /// Publish every completed producer-owned nominal before nested
+    /// Commit every completed producer-owned nominal before nested
     /// specialization sealing can request the same content identity.
     pub fn commitGeneratedIteratorRoots(self: *GraphTypeFinals) Allocator.Error!void {
         var seen = collections.DenseMap(NodeId, void).init(self.graph.allocator);
@@ -5246,7 +5246,7 @@ fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool
     return right == null;
 }
 
-/// Writes the canonical content identity of a generated producer input.
+/// Writes the content-addressed content identity of a generated producer input.
 /// Generated-private nominals are atomic digest leaves.
 const GeneratedIdentityWriter = struct {
     graph: *InstGraph,
@@ -6771,7 +6771,7 @@ test "function ABI isolation preserves nested row extensions" {
     try std.testing.expectEqual(@as(usize, 2), (try graph.flattenRecordRow(record_root)).fields.len);
 }
 
-test "checked type mapping preserves canonical generated iterator identity" {
+test "checked type mapping preserves content-addressed generated iterator identity" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6869,7 +6869,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
     try std.testing.expect(graph.sameClass(retained.args[0], item));
 }
 
-test "direct relation deduplicates equal canonical iterator identity" {
+test "direct relation deduplicates equal content-addressed iterator identity" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
