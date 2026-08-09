@@ -52,7 +52,7 @@ NAME NOT IN SCOPE - can_import_comprehensive.md:18:15:18:19
 NAME NOT IN SCOPE - can_import_comprehensive.md:21:16:21:26
 # PROBLEMS
 
-── ⚠ duplicate definition ────────────────────── can_import_comprehensive.md:1:1
+── ! duplicate definition ────────────────────── can_import_comprehensive.md:1:1
 
 The name `Json` is being redeclared here:
 
@@ -65,7 +65,7 @@ In this scope, `Json` was already defined here (can_import_comprehensive.md:1:1)
 import json.Json
 ^
 
-── ⚠ duplicate definition ────────────────────── can_import_comprehensive.md:3:1
+── ! duplicate definition ────────────────────── can_import_comprehensive.md:3:1
 
 The name `Str` is being redeclared here:
 

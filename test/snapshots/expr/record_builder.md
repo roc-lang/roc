@@ -97,7 +97,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ⚠ declaration has no value ──────────────────────────── record_builder.md:2:5
+── ! declaration has no value ──────────────────────────── record_builder.md:2:5
 
 This declaration has a type annotation but no implementation.
 
@@ -107,7 +107,7 @@ x: 5,
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── record_builder.md:3:5
+── ! declaration has no value ──────────────────────────── record_builder.md:3:5
 
 This declaration has a type annotation but no implementation.
 

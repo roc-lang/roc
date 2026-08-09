@@ -38,7 +38,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `o` to the annotation, or remove this constraint.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_080.md:1:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_080.md:1:1
 
 This declaration has a type annotation but no implementation.
 

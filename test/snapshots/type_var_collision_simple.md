@@ -33,7 +33,7 @@ main! = |_| {
 UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
 
-── ⚠ unused variable ───────────────────────── type_var_collision_simple.md:20:5
+── ! unused variable ───────────────────────── type_var_collision_simple.md:20:5
 
 Variable `result3` is defined here and then never used:
 

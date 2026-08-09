@@ -26,7 +26,7 @@ callMe = absent
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ declaration has no value ───── canon_revamp_forward_ref_to_anno_only.md:5:5
+── ! declaration has no value ───── canon_revamp_forward_ref_to_anno_only.md:5:5
 
 This declaration has a type annotation but no implementation.
 

@@ -92,7 +92,7 @@ process : json.Core.Utf8.Encoder -> Str
           ^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ⚠ unused variable ──────────────────────────── multi_qualified_import.md:8:12
+── ! unused variable ──────────────────────────── multi_qualified_import.md:8:12
 
 Variable `encoder` is defined here and then never used:
 

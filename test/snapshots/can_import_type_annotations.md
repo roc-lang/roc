@@ -64,7 +64,7 @@ MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 
-── ⚠ duplicate definition ─────────────────── can_import_type_annotations.md:2:1
+── ! duplicate definition ─────────────────── can_import_type_annotations.md:2:1
 
 The name `Json` is being redeclared here:
 
@@ -102,7 +102,7 @@ processRequest = |req| Http.defaultResponse
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ─────────────────────── can_import_type_annotations.md:6:19
+── ! unused variable ─────────────────────── can_import_type_annotations.md:6:19
 
 Variable `req` is defined here and then never used:
 

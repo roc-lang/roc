@@ -50,7 +50,7 @@ Nothing is named `acc` in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ────────────────────────────────────── list_patterns.md:3:6
+── ! unused variable ────────────────────────────────────── list_patterns.md:3:6
 
 Variable `first` is defined here and then never used:
 
@@ -60,7 +60,7 @@ Variable `first` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_first` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────────── list_patterns.md:3:15
+── ! unused variable ───────────────────────────────────── list_patterns.md:3:15
 
 Variable `rest` is defined here and then never used:
 

@@ -27,7 +27,7 @@ expectsPerson : Person -> Str
                 ^^^^^^
 
 
-── ⚠ unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
+── ! unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
 
 Variable `p` is defined here and then never used:
 

@@ -46,7 +46,7 @@ MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
         ^^^^^^^^^^
 
 
-── ⚠ unused variable ────────────────── nominal_external_fully_qualified.md:7:32
+── ! unused variable ────────────────── nominal_external_fully_qualified.md:7:32
 
 Variable `code` is defined here and then never used:
 

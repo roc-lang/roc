@@ -37,7 +37,7 @@ nums : List U8
        ^^^^
 
 
-── ⚠ declaration has no value ──────────── type_annotation_missing_parens.md:1:1
+── ! declaration has no value ──────────── type_annotation_missing_parens.md:1:1
 
 This declaration has a type annotation but no implementation.
 

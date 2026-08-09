@@ -50,7 +50,7 @@ TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
 
-── ⚠ builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
+── ! builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
 
 The type `Try` shadows a builtin type.
 

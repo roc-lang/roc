@@ -199,7 +199,7 @@ modu:;::::::::::::::le[%
      ^
 
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_002.md:1:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_002.md:1:1
 
 This declaration has a type annotation but no implementation.
 

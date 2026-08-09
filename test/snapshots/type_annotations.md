@@ -64,7 +64,7 @@ tag_tuple : Value((_a, _b, _c))
             ^^^^^
 
 
-── ⚠ declaration has no value ────────────────────────── type_annotations.md:1:1
+── ! declaration has no value ────────────────────────── type_annotations.md:1:1
 
 This declaration has a type annotation but no implementation.
 
@@ -74,7 +74,7 @@ foo : U64
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ────────────────────────── type_annotations.md:3:1
+── ! declaration has no value ────────────────────────── type_annotations.md:3:1
 
 This declaration has a type annotation but no implementation.
 
@@ -84,7 +84,7 @@ bar : Thing(_a, _b, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ────────────────────────── type_annotations.md:5:1
+── ! declaration has no value ────────────────────────── type_annotations.md:5:1
 
 This declaration has a type annotation but no implementation.
 
@@ -94,7 +94,7 @@ baz : (_a, _b, _c)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ────────────────────────── type_annotations.md:7:1
+── ! declaration has no value ────────────────────────── type_annotations.md:7:1
 
 This declaration has a type annotation but no implementation.
 
@@ -104,7 +104,7 @@ add_one : (U8, U16 -> U32)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ────────────────────────── type_annotations.md:9:1
+── ! declaration has no value ────────────────────────── type_annotations.md:9:1
 
 This declaration has a type annotation but no implementation.
 
@@ -114,7 +114,7 @@ main! : List(String) -> Try({}, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ───────────────────────── type_annotations.md:11:1
+── ! declaration has no value ───────────────────────── type_annotations.md:11:1
 
 This declaration has a type annotation but no implementation.
 
@@ -124,7 +124,7 @@ tag_tuple : Value((_a, _b, _c))
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ───────────────────────── type_annotations.md:13:1
+── ! declaration has no value ───────────────────────── type_annotations.md:13:1
 
 This declaration has a type annotation but no implementation.
 
@@ -135,7 +135,7 @@ closed_record_with_comma : {
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ───────────────────────── type_annotations.md:17:1
+── ! declaration has no value ───────────────────────── type_annotations.md:17:1
 
 This declaration has a type annotation but no implementation.
 

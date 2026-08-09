@@ -81,7 +81,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ⚠ duplicate definition ─────────────────────────────────── stmt_import.md:1:1
+── ! duplicate definition ─────────────────────────────────── stmt_import.md:1:1
 
 The name `Json` is being redeclared here:
 

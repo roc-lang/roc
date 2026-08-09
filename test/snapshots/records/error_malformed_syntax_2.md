@@ -44,7 +44,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ⚠ declaration has no value ────────────────── error_malformed_syntax_2.md:1:3
+── ! declaration has no value ────────────────── error_malformed_syntax_2.md:1:3
 
 This declaration has a type annotation but no implementation.
 

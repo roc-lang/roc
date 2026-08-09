@@ -14,7 +14,7 @@ EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:31:1:36
 INVALID NUMBER - fuzz_crash_103.md:2:4:2:12
 # PROBLEMS
 
-── ⚠ effectful function name ───────────────────────────── fuzz_crash_103.md:1:1
+── ! effectful function name ───────────────────────────── fuzz_crash_103.md:1:1
 
 This function performs an effect, so its name must end in `!`.
 
@@ -23,7 +23,7 @@ topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
 
 Add a trailing `!` to this function name.
 
-── ⚠ effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
+── ! effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
 
 This function performs an effect, so its name must end in `!`.
 

@@ -148,7 +148,7 @@ where []
 
 Check the syntax of your where clause.
 
-── ⚠ declaration has no value ───────────────── where_clauses_error_cases.md:2:1
+── ! declaration has no value ───────────────── where_clauses_error_cases.md:2:1
 
 This declaration has a type annotation but no implementation.
 
@@ -158,7 +158,7 @@ broken_fn1 : a -> b
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ───────────────── where_clauses_error_cases.md:6:1
+── ! declaration has no value ───────────────── where_clauses_error_cases.md:6:1
 
 This declaration has a type annotation but no implementation.
 
@@ -181,7 +181,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `c` to the annotation, or remove this constraint.
 
-── ⚠ declaration has no value ──────────────── where_clauses_error_cases.md:10:1
+── ! declaration has no value ──────────────── where_clauses_error_cases.md:10:1
 
 This declaration has a type annotation but no implementation.
 

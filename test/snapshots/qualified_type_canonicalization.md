@@ -69,7 +69,7 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 # PROBLEMS
 
-── ⚠ duplicate definition ─────────────── qualified_type_canonicalization.md:1:1
+── ! duplicate definition ─────────────── qualified_type_canonicalization.md:1:1
 
 The name `Try` is being redeclared here:
 
@@ -194,7 +194,7 @@ processColor : Color.RGB -> Str
                     ^^^^
 
 
-── ⚠ unused variable ────────────────── qualified_type_canonicalization.md:28:17
+── ! unused variable ────────────────── qualified_type_canonicalization.md:28:17
 
 Variable `color` is defined here and then never used:
 
@@ -252,7 +252,7 @@ Try.Err(err) => TypeC.default
                 ^^^^^^^^^^^^^
 
 
-── ⚠ unused variable ────────────────── qualified_type_canonicalization.md:36:17
+── ! unused variable ────────────────── qualified_type_canonicalization.md:36:17
 
 Variable `err` is defined here and then never used:
 

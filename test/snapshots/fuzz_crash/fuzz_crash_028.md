@@ -1099,7 +1099,7 @@ Nothing is named `ment` in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
+── ! unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -1120,7 +1120,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ⚠ unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
+── ! unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -1150,7 +1150,7 @@ Nothing is named `add` in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:78:21
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:78:21
 
 Variable `rest` is defined here and then never used:
 
@@ -1171,7 +1171,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ⚠ unused variable ──────────────────────────────────── fuzz_crash_028.md:62:2
+── ! unused variable ──────────────────────────────────── fuzz_crash_028.md:62:2
 
 Variable `b` is defined here and then never used:
 
@@ -1344,7 +1344,7 @@ r(number) # xpr
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:112:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:112:2
 
 Variable `tag_` is defined here and then never used:
 
@@ -1354,7 +1354,7 @@ tag_ = Ok(number)
 If you don't need this variable, prefix it with an underscore like `_tag_` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:113:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:113:2
 
 Variable `i` is defined here and then never used:
 
@@ -1364,7 +1364,7 @@ i= "H, ${world}"
 If you don't need this variable, prefix it with an underscore like `_i` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:114:1
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:114:1
 
 Variable `t` is defined here and then never used:
 
@@ -1374,7 +1374,7 @@ t = [
 If you don't need this variable, prefix it with an underscore like `_t` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:123:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:123:2
 
 Variable `rd` is defined here and then never used:
 
@@ -1384,7 +1384,7 @@ rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 If you don't need this variable, prefix it with an underscore like `_rd` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:125:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:125:2
 
 Variable `mle` is defined here and then never used:
 
@@ -1394,7 +1394,7 @@ mle = (
 If you don't need this variable, prefix it with an underscore like `_mle` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:132:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:132:2
 
 Variable `b` is defined here and then never used:
 
@@ -1404,7 +1404,7 @@ b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning.
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:133:1
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:133:1
 
 Variable `le` is defined here and then never used:
 
@@ -1440,7 +1440,7 @@ h == foo
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ─────────────────────────────────── fuzz_crash_028.md:147:2
+── ! unused variable ─────────────────────────────────── fuzz_crash_028.md:147:2
 
 Variable `f` is defined here and then never used:
 
@@ -1461,7 +1461,7 @@ app [main!] { pf: platform "c" }
 You can fix this by either defining `main!` in this mod, or by removing it
 from the list of exposed values.
 
-── ⚠ declaration has no value ─────────────────────────── fuzz_crash_028.md:28:1
+── ! declaration has no value ─────────────────────────── fuzz_crash_028.md:28:1
 
 This declaration has a type annotation but no implementation.
 
@@ -1473,7 +1473,7 @@ line : ( # Cpen
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ─────────────────────────── fuzz_crash_028.md:47:1
+── ! declaration has no value ─────────────────────────── fuzz_crash_028.md:47:1
 
 This declaration has a type annotation but no implementation.
 
@@ -1597,7 +1597,7 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
-── ⚠ declaration has no value ─────────────────────────── fuzz_crash_028.md:95:1
+── ! declaration has no value ─────────────────────────── fuzz_crash_028.md:95:1
 
 This declaration has a type annotation but no implementation.
 
@@ -1655,7 +1655,7 @@ But the function body evaluates to:
 Hint: The error types from all `?` operators and the function body must be
 compatible since any of them could be the actual return value.
 
-── ⚠ declaration has no value ────────────────────────── fuzz_crash_028.md:141:1
+── ! declaration has no value ────────────────────────── fuzz_crash_028.md:141:1
 
 This declaration has a type annotation but no implementation.
 
@@ -1665,7 +1665,7 @@ y : {}
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ────────────────────────── fuzz_crash_028.md:144:1
+── ! declaration has no value ────────────────────────── fuzz_crash_028.md:144:1
 
 This declaration has a type annotation but no implementation.
 

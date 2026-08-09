@@ -37,7 +37,7 @@ processValue : UndeclaredResult -> Str
                ^^^^^^^^^^^^^^^^
 
 
-── ⚠ unused variable ───────────────────────────── type_undeclared_usage.md:4:17
+── ! unused variable ───────────────────────────── type_undeclared_usage.md:4:17
 
 Variable `value` is defined here and then never used:
 

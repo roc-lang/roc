@@ -5567,7 +5567,7 @@ Inner := [D].{
     inner_val = outer_val
 }
 
-── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:28:5
+── ! duplicate definition ─────── associated_items_complete_all_patterns.md:28:5
 
 The name `outer_val` is being redeclared here:
 
@@ -5589,7 +5589,7 @@ d2_3 = d2_outer_val_middle.Inner.inner_val
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:33:5
+── ! duplicate definition ─────── associated_items_complete_all_patterns.md:33:5
 
 The name `outer_val` is being redeclared here:
 
@@ -5708,7 +5708,7 @@ d3_3 = d3_types_then_vals.L2.L3.val3
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ─────── associated_items_complete_all_patterns.md:76:5
+── ! duplicate definition ─────── associated_items_complete_all_patterns.md:76:5
 
 The name `val1` is being redeclared here:
 
@@ -5855,7 +5855,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:119:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:119:5
 
 The name `val1` is being redeclared here:
 
@@ -5924,7 +5924,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:138:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:138:5
 
 The name `val1` is being redeclared here:
 
@@ -5946,7 +5946,7 @@ d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:143:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:143:5
 
 The name `val1` is being redeclared here:
 
@@ -6026,7 +6026,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:172:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:172:5
 
 The name `val1` is being redeclared here:
 
@@ -6048,7 +6048,7 @@ d4_3 = d4_reverse_types.L2.L3.L4.val4
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:177:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:177:5
 
 The name `val1` is being redeclared here:
 
@@ -6201,7 +6201,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:233:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:233:5
 
 The name `val1` is being redeclared here:
 
@@ -6344,7 +6344,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:290:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:290:5
 
 The name `val1` is being redeclared here:
 
@@ -6366,7 +6366,7 @@ d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:295:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:295:5
 
 The name `val1` is being redeclared here:
 
@@ -6421,7 +6421,7 @@ d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:316:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:316:5
 
 The name `val1` is being redeclared here:
 
@@ -6587,7 +6587,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:385:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:385:5
 
 The name `val1` is being redeclared here:
 
@@ -6672,7 +6672,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ⚠ duplicate definition ────── associated_items_complete_all_patterns.md:404:5
+── ! duplicate definition ────── associated_items_complete_all_patterns.md:404:5
 
 The name `bad` is being redeclared here:
 

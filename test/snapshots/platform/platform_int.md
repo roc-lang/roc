@@ -31,7 +31,7 @@ provides { "roc_multiplyInts": multiplyInts }
 You can fix this by either defining `multiplyInts` in this mod, or by
 removing it from the list of exposed values.
 
-── ⚠ declaration has no value ────────────────────────────── platform_int.md:9:1
+── ! declaration has no value ────────────────────────────── platform_int.md:9:1
 
 This declaration has a type annotation but no implementation.
 

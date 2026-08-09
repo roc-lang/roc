@@ -87,7 +87,7 @@ o:0}0
   ^
 
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
 
 This declaration has a type annotation but no implementation.
 

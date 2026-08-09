@@ -40,7 +40,7 @@ hosted [a!, b!]
 You can fix this by either defining `b!` in this mod, or by removing it from
 the list of exposed values.
 
-── ⚠ declaration has no value ──────────────────────────────────── hosted.md:3:1
+── ! declaration has no value ──────────────────────────────────── hosted.md:3:1
 
 This declaration has a type annotation but no implementation.
 
@@ -50,7 +50,7 @@ a! : Str => Str
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────────────── hosted.md:5:1
+── ! declaration has no value ──────────────────────────────────── hosted.md:5:1
 
 This declaration has a type annotation but no implementation.
 

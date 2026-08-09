@@ -74,7 +74,7 @@ match items {
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ────────────────────────────────── list_rest_invalid.md:2:6
+── ! unused variable ────────────────────────────────── list_rest_invalid.md:2:6
 
 Variable `first` is defined here and then never used:
 
@@ -84,7 +84,7 @@ Variable `first` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_first` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────── list_rest_invalid.md:2:15
+── ! unused variable ───────────────────────────────── list_rest_invalid.md:2:15
 
 Variable `rest` is defined here and then never used:
 
@@ -94,7 +94,7 @@ Variable `rest` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_rest` to
 suppress this warning.
 
-── ⚠ unused variable ────────────────────────────────── list_rest_invalid.md:3:8
+── ! unused variable ────────────────────────────────── list_rest_invalid.md:3:8
 
 Variable `rest` is defined here and then never used:
 
@@ -104,7 +104,7 @@ Variable `rest` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_rest` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────── list_rest_invalid.md:3:14
+── ! unused variable ───────────────────────────────── list_rest_invalid.md:3:14
 
 Variable `last` is defined here and then never used:
 
@@ -114,7 +114,7 @@ Variable `last` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_last` to
 suppress this warning.
 
-── ⚠ unused variable ────────────────────────────────── list_rest_invalid.md:4:6
+── ! unused variable ────────────────────────────────── list_rest_invalid.md:4:6
 
 Variable `x` is defined here and then never used:
 
@@ -124,7 +124,7 @@ Variable `x` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_x` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────── list_rest_invalid.md:4:11
+── ! unused variable ───────────────────────────────── list_rest_invalid.md:4:11
 
 Variable `rest` is defined here and then never used:
 
@@ -134,7 +134,7 @@ Variable `rest` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_rest` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────── list_rest_invalid.md:4:17
+── ! unused variable ───────────────────────────────── list_rest_invalid.md:4:17
 
 Variable `y` is defined here and then never used:
 

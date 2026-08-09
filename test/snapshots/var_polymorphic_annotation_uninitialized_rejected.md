@@ -17,7 +17,7 @@ UNUSED VARIABLE - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 POLYMORPHIC VAR - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 # PROBLEMS
 
-── ⚠ unused variable ── var_polymorphic_annotation_uninitialized_rejected.md:4:5
+── ! unused variable ── var_polymorphic_annotation_uninitialized_rejected.md:4:5
 
 Variable `xs` is defined here and then never used:
 

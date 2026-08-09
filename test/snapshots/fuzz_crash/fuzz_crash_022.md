@@ -217,7 +217,7 @@ INVALID IF CONDITION
 The condition in this `if` expression could not be processed.
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
 
-── ⚠ unused variable ──────────────────────────────────── fuzz_crash_022.md:6:12
+── ! unused variable ──────────────────────────────────── fuzz_crash_022.md:6:12
 
 Variable `id` is defined here and then never used:
 
@@ -227,7 +227,7 @@ getUser = |id| if (id > 1!) "big" else "l"
 If you don't need this variable, prefix it with an underscore like `_id` to
 suppress this warning.
 
-── ⚠ declaration has no value ─────────────────────────── fuzz_crash_022.md:1:16
+── ! declaration has no value ─────────────────────────── fuzz_crash_022.md:1:16
 
 This declaration has a type annotation but no implementation.
 
@@ -237,7 +237,7 @@ app [main!] { |f: platform "c" }
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_022.md:5:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_022.md:5:1
 
 This declaration has a type annotation but no implementation.
 

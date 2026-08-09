@@ -24,7 +24,7 @@ match person {
 
 Is it misspelled, or is there an import missing?
 
-── ⚠ unused variable ──────────────────────── pattern_destructure_simple.md:2:13
+── ! unused variable ──────────────────────── pattern_destructure_simple.md:2:13
 
 Variable `age` is defined here and then never used:
 

@@ -84,7 +84,7 @@ MISSING METHOD - Color.md:47:26:47:32
 MISSING METHOD - Color.md:48:32:48:38
 # PROBLEMS
 
-── ⚠ unused variable ───────────────────────────────────────────── Color.md:21:5
+── ! unused variable ───────────────────────────────────────────── Color.md:21:5
 
 Variable `is_char_in_hex_range` is defined here and then never used:
 

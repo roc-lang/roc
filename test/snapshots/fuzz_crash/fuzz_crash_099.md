@@ -35,7 +35,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 Record fields must have unique names. Consider renaming one of these fields or
 removing the duplicate.
 
-── ⚠ unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
+── ! unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
 
 Variable `insert` is defined here and then never used:
 
@@ -45,7 +45,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 If you don't need this variable, prefix it with an underscore like `_insert` to
 suppress this warning.
 
-── ⚠ unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
+── ! unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
 Variable `nt` is defined here and then never used:
 
@@ -55,7 +55,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 If you don't need this variable, prefix it with an underscore like `_nt` to
 suppress this warning.
 
-── ⚠ unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
+── ! unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
 Variable `fn1` is defined here and then never used:
 

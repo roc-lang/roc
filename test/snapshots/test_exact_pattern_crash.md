@@ -37,7 +37,7 @@ UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
 TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 
-── ⚠ unused variable ────────────────────────── test_exact_pattern_crash.md:19:5
+── ! unused variable ────────────────────────── test_exact_pattern_crash.md:19:5
 
 Variable `p1` is defined here and then never used:
 

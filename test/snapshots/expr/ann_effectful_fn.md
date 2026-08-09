@@ -18,7 +18,7 @@ TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
 
-── ⚠ declaration has no value ────────────────────────── ann_effectful_fn.md:2:5
+── ! declaration has no value ────────────────────────── ann_effectful_fn.md:2:5
 
 This declaration has a type annotation but no implementation.
 

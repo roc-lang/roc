@@ -59,7 +59,7 @@ pub const RenderTarget = enum {
 
 /// In debug builds, enforce that a report's headline reads as a complete
 /// sentence (ending in a period) or introduces a code block (ending in a
-/// colon). The headline is the one-sentence summary on the box's top edge
+/// colon). The headline is the one-sentence summary on the header line
 /// (or under the title in the markdown/HTML/LSP layouts). Compiled out of
 /// release builds. Reports that have not yet been migrated to a headline
 /// (none of the elements carry text) are exempt.
@@ -139,8 +139,8 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 //
 // Lays a report out as a header line followed by the content:
 //
-// -- ❌ TYPE MISMATCH ----------------------------- path/to/file.roc:6:8
-// 
+// ── ✗ type mismatch ─────────────────────────── type_mismatch_example.roc:2:30
+//
 // <one-line summary>
 //
 // <source code>
@@ -148,9 +148,9 @@ pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, con
 //
 // <detailed explanation>
 //
-// The header line starts with an emoji icon representing the severity,
-// followed by the title in ALL-CAPS, a dash-filled separator, and the location.
-// The same layout is used for the colored terminal output and the plain 
+// The header line starts with a unicode icon representing the severity,
+// followed by the title in lowercase, a dash-filled separator, and the location.
+// The same layout is used for the colored terminal output and the plain
 // markdown/snapshot output — the only difference is the palette (ANSI vs NO_COLOR).
 
 /// The thin red rule under the offending span.
@@ -166,11 +166,11 @@ fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8
     const red = if (palette.reset.len > 0) AnsiCodes.RED else "";
     const yellow = if (palette.reset.len > 0) AnsiCodes.YELLOW else "";
     const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
-    
+
     if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = red, .width = 1 };
     return switch (severity) {
         .fatal, .runtime_error => .{ .icon = "✗", .color = red, .width = 1 },
-        .warning => .{ .icon = "⚠", .color = yellow, .width = 1 },
+        .warning => .{ .icon = "!", .color = yellow, .width = 1 },
         .info => .{ .icon = "[i]", .color = cyan, .width = 3 },
     };
 }
@@ -398,7 +398,7 @@ fn padTo(writer: *std.Io.Writer, from_col: usize, to_col: usize) error{WriteFail
 
 /// Write `s` with every ASCII letter uppercased. Titles are authored in title
 /// case (so the markdown renderer can preserve it), and shouted in ALL CAPS in
-/// the box/HTML/LSP/plain renderers. Titles are validated as ASCII, so a byte
+/// the HTML/LSP/plain renderers. Titles are validated as ASCII, so a byte
 /// uppercase is sufficient. Also used by the snapshot tool's EXPECTED sections,
 /// which shout titles the same way.
 pub fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
@@ -416,19 +416,12 @@ pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}
     }
 }
 
-/// Pad with spaces and write the right wall `│` at column `rw`.
-fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize) error{WriteFailed}!void {
-    try writer.splatByteAll(' ', (rw -| 1) -| col);
-    try writer.writeAll(palette.secondary);
-    try writer.writeAll("│");
-    try writer.writeAll(palette.reset);
-    try writer.writeByte('\n');
-}
+
 
 /// Write a `path/to/Scalar.roc:141:1` location, with the filename itself in the
 /// default foreground (the same color as the source snippet) so it stands out
-/// from the dim directories, `:line:col`, and box border around it. Leaves the
-/// writer in the secondary color, ready for whatever border follows.
+/// from the dim directories, `:line:col`, and horizontal rule around it. Leaves the
+/// writer in the secondary color, ready for whatever follows.
 fn writeLocation(
     writer: *std.Io.Writer,
     palette: ColorPalette,

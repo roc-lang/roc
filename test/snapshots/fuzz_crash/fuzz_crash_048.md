@@ -54,7 +54,7 @@ tag_tuple : Value((a, b, c))
             ^^^^^
 
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:1:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:1:1
 
 This declaration has a type annotation but no implementation.
 
@@ -64,7 +64,7 @@ foo : U64
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:2:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:2:1
 
 This declaration has a type annotation but no implementation.
 
@@ -74,7 +74,7 @@ bar : Thing(a, b, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:3:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:3:1
 
 This declaration has a type annotation but no implementation.
 
@@ -84,7 +84,7 @@ biz : (a, b, c)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:4:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:4:1
 
 This declaration has a type annotation but no implementation.
 
@@ -94,7 +94,7 @@ U8, U16 -> U32)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:6:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:6:1
 
 This declaration has a type annotation but no implementation.
 
@@ -104,7 +104,7 @@ main! : List(String) -> Try({}, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ⚠ declaration has no value ──────────────────────────── fuzz_crash_048.md:7:1
+── ! declaration has no value ──────────────────────────── fuzz_crash_048.md:7:1
 
 This declaration has a type annotation but no implementation.
 

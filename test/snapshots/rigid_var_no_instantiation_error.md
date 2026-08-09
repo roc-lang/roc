@@ -46,7 +46,7 @@ result2 = swap((Bool.true, [1, 2, 3]))
 
 `Bool` is in scope, but it has no associated `true`.
 
-── ⚠ unused variable ────────────────── rigid_var_no_instantiation_error.md:13:5
+── ! unused variable ────────────────── rigid_var_no_instantiation_error.md:13:5
 
 Variable `result1` is defined here and then never used:
 
@@ -56,7 +56,7 @@ result1 = swap((42, "hello"))
 If you don't need this variable, prefix it with an underscore like `_result1`
 to suppress this warning.
 
-── ⚠ unused variable ────────────────── rigid_var_no_instantiation_error.md:17:5
+── ! unused variable ────────────────── rigid_var_no_instantiation_error.md:17:5
 
 Variable `result2` is defined here and then never used:
 
@@ -66,7 +66,7 @@ result2 = swap((Bool.true, [1, 2, 3]))
 If you don't need this variable, prefix it with an underscore like `_result2`
 to suppress this warning.
 
-── ⚠ unused variable ────────────────── rigid_var_no_instantiation_error.md:21:5
+── ! unused variable ────────────────── rigid_var_no_instantiation_error.md:21:5
 
 Variable `result3` is defined here and then never used:
 

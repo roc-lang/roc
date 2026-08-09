@@ -14,7 +14,7 @@ DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
 
-── ⚠ duplicate definition ─────────────────────────────── can_import_json.md:1:1
+── ! duplicate definition ─────────────────────────────── can_import_json.md:1:1
 
 The name `Json` is being redeclared here:
 
