@@ -418,17 +418,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
-    const interface_replay = sourceSliceBetween(
-        lower_source,
-        "fn applyCheckedTemplateInterfaceScopeRelations(",
-        "fn lowerEntryWrapperAtCell(",
-    );
-    try expectContains(interface_replay, "activeIdentityTypeFromNode(pending.request_fn_node)");
-    try expectContains(interface_replay, "openFunctionInterfaceShape(pending.request_fn_node)");
-    try expectContains(interface_replay, "entry.request_identity.eql(");
-    try expectContains(interface_replay, "entry.representative,");
-    try expectNotContains(interface_replay, "provisionalTypeViewForNode");
-    try expectNotContains(interface_replay, "importMono(final_ty)");
+    try expectNotContains(lower_source, "InterfaceReplay");
+    try expectNotContains(lower_source, "applyCheckedTemplateInterfaceRelations");
+    try expectNotContains(lower_source, "applyCheckedTemplateInterfaceScopeRelations");
     try expectNotContains(solve_source, "pub fn provisionalTypeViewForNode");
 
     const call_argument_relation = sourceSliceBetween(
