@@ -678,28 +678,6 @@ fn applyProducedTypeToRequest(graph: *InstGraph, request_node: NodeId, produced_
     _ = try graph.applyProducedTypeToRequest(request_node, produced_node);
 }
 
-/// Relate an already-lowered operand at a call's explicit storage boundary.
-/// Compound cells select their common representation; ordinary
-/// definition-private backings use their checked declaration mapping; every
-/// other nominal value remains an exact producer-owned request.
-fn prepareProducedOperandForRequest(graph: *InstGraph, request_node: NodeId, produced_node: NodeId) Allocator.Error!void {
-    if (graph.content(request_node) != .named and graph.content(produced_node) != .named) {
-        try graph.applyCompoundStorageRepresentation(request_node, produced_node);
-        return;
-    }
-    if (graph.content(request_node) == .named and graph.content(produced_node) != .named) {
-        const named = graph.content(request_node).named;
-        if (named.kind != .alias and
-            named.backing != null and
-            named.backing.?.authority == .checked_public)
-        {
-            _ = try graph.applyCheckedTypeMapping(request_node, produced_node);
-            return;
-        }
-    }
-    try applyProducedTypeToRequest(graph, request_node, produced_node);
-}
-
 /// Apply a lowered expression value to its destination. An explicitly
 /// registered function-specialization request is a checked interface mapping;
 /// every other destination is an exact produced-value request.
@@ -24672,25 +24650,6 @@ const BodyContext = struct {
         };
     }
 
-    fn indirectCalleeStoredNode(
-        self: *BodyContext,
-        checked_func: checked.CheckedExprId,
-    ) Allocator.Error!?NodeId {
-        const maybe_ref = switch (self.view.bodies.expr(checked_func).data) {
-            .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |resolved| resolved,
-            .lookup_required => |resolved| resolved,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
-        };
-        const ref_id = maybe_ref orelse
-            Common.invariant("checked callee lookup reached Monotype without resolved value ref");
-        const local = (try self.currentLocalForResolvedValue(ref_id)) orelse return null;
-        return switch (self.localTypeCell(local)) {
-            .sealed => null,
-            .graph_node => |node| node,
-        };
-    }
-
     fn localCalleeMonoType(
         self: *BodyContext,
         checked_func: checked.CheckedExprId,
@@ -25016,23 +24975,6 @@ const BodyContext = struct {
         for (fn_graph.args, operands) |formal_node, operand| {
             try self.relateFormalToOperand(formal_node, caller, operand);
         }
-        return fn_node;
-    }
-
-    fn instantiateTargetFromPlanNode(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        plan_ctx: *BodyContext,
-        plan_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        const plan_function = plan_ctx.checkedFunctionType(plan_fn_ty);
-        if (function.args.len != plan_function.args.len) {
-            Common.invariant("checked dispatch target arity differed from its dispatch plan");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const plan_node = try plan_ctx.instNode(plan_fn_ty);
-        _ = try self.graph.applyCheckedTypeMapping(fn_node, plan_node);
         return fn_node;
     }
 
@@ -29092,28 +29034,6 @@ const BodyContext = struct {
         return runtime_boundary;
     }
 
-    fn lowerConstructorChildAtCell(
-        self: *BodyContext,
-        child: checked.CheckedExprId,
-        cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerConstructorChildAtCellWithRelation(child, cell, .exact_producer);
-    }
-
-    fn lowerConstructorChildAtCellWithRelation(
-        self: *BodyContext,
-        child: checked.CheckedExprId,
-        cell: DraftTypeCell,
-        destination_relation: ControlFlowDestinationRelation,
-    ) Allocator.Error!DraftExprId {
-        const node = try cell.toGraphNode(self.graph);
-        if (try self.nodeIsProvenUninhabited(node)) {
-            return try self.lowerExplicitUninhabitedInvocationAtTypeCell(child, cell);
-        }
-        _ = destination_relation;
-        return try self.lowerExpr(child);
-    }
-
     fn relateLookupExprAtNode(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -29353,15 +29273,6 @@ const BodyContext = struct {
         _ = try self.graph.applyProducedTypeToRequest(expected_ret_node, fn_nodes.ret);
         for (call.args, fn_nodes.args) |arg, arg_node| try self.relateCallArgumentAtNode(arg, arg_node);
         if (call.direct_target == null) try self.relateExprAtNode(call.func, fn_node);
-    }
-
-    fn prepareConstructorChildrenAtNodes(
-        self: *BodyContext,
-        checked_exprs: []const checked.CheckedExprId,
-        nodes: []const NodeId,
-    ) Allocator.Error!void {
-        try self.relateConstructorChildrenAtNodes(checked_exprs, nodes);
-        try self.ensureNestedCallablesAtNodes(checked_exprs, nodes);
     }
 
     fn relateConstructorChildrenAtNodes(
@@ -29788,82 +29699,6 @@ const BodyContext = struct {
                 .generated_interpolation_iter, .generated_numeral, .generated_quote => Common.invariant("generated dispatch operand was not completed before specialization"),
             };
             self.draft.setReservedExprSpanItem(reserved, index, wrapped);
-        }
-        return reserved.span;
-    }
-
-    fn prepareDispatchOperandsAtNodes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        nodes: []const NodeId,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!void {
-        if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
-        for (operands, nodes, 0..) |operand, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                try prepareProducedOperandForRequest(
-                    self.graph,
-                    node,
-                    try self.exprTypeCell(pre).toGraphNode(self.graph),
-                );
-                continue;
-            }
-            switch (operand) {
-                .checked_expr => |expr| try self.relateCallArgumentAtNode(expr, node),
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            }
-        }
-        for (operands, nodes, 0..) |operand, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index) != null) continue;
-            switch (operand) {
-                .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, node),
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            }
-        }
-    }
-
-    fn lowerPreparedDispatchOperandsAtNodes(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        nodes: []const NodeId,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        if (operands.len != nodes.len) Common.invariant("dispatch argument arity differs from function graph node");
-        const reserved = try self.reserveExprSpan(operands.len);
-        errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
-        for (operands, nodes, 0..) |operand, node, index| {
-            if (self.preLoweredOperandAt(pre_lowered, index)) |pre| {
-                const wrapped = try self.wrapCheckedNominalRequestAroundBackingValue(node, pre);
-                self.draft.setReservedExprSpanItem(reserved, index, wrapped);
-                try applyProducedTypeToRequest(
-                    self.graph,
-                    node,
-                    try self.exprTypeCell(wrapped).toGraphNode(self.graph),
-                );
-                continue;
-            }
-            const lowered = switch (operand) {
-                .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-                .generated_interpolation_iter => |expr| blk: {
-                    const produced_node = try self.generatedInterpolationIteratorNode(expr, node);
-                    break :blk try self.lowerGeneratedInterpolationIterAtNode(expr, produced_node);
-                },
-                .generated_numeral,
-                .generated_quote,
-                => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
-            };
-            self.draft.setReservedExprSpanItem(reserved, index, lowered);
-            try applyProducedTypeToRequest(
-                self.graph,
-                node,
-                try self.exprTypeCell(lowered).toGraphNode(self.graph),
-            );
         }
         return reserved.span;
     }

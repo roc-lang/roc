@@ -5173,17 +5173,6 @@ pub const GraphTypeFinals = struct {
     }
 };
 
-fn instIteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| if (left_owner != owner) return false;
-    if (right) |right_owner| if (right_owner != owner) return false;
-    return true;
-}
-
 fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left) |left_digest| {
         const right_digest = right orelse return false;
