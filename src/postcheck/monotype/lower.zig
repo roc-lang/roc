@@ -903,16 +903,6 @@ fn constrainDeferredTemplateArgument(
     try constrainDeferredTemplateTypeArgumentsAt(graph, checked_root, request_root, seen);
 }
 
-fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) bool {
-    return switch (graph.content(node)) {
-        .named => |named| if (named.backing) |backing|
-            backing.authority == .generated_private
-        else
-            false,
-        .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-    };
-}
-
 const HostedTryAdapterCapability = struct {
     def: Type.TypeDef,
     ok_tag: names.TagNameId,
@@ -15802,81 +15792,6 @@ const BodyContext = struct {
             Common.invariant("imported nominal declaration formal was not projected into the current checked type store");
     }
 
-    fn finalizeProcedureRequestForRecursiveStorage(
-        _: *BodyContext,
-        _: checked.CheckedExprId,
-        _: NodeId,
-        raw_request_fn_node: NodeId,
-    ) Allocator.Error!NodeId {
-        // Generated iterator types are already canonical recursive runtime
-        // interfaces. Recursion therefore uses the exact request it received;
-        // it does not replace a generated child with a second dynamic type or
-        // rebuild every compound ancestor merely because that child exists.
-        return raw_request_fn_node;
-    }
-
-    /// Publish a finalized request before lowering its first pattern or body
-    /// expression, so a recursive construction edge observes the same exact
-    /// identity and never needs a late interface merge.
-    fn publishFinalizedProcedureRequest(
-        self: *BodyContext,
-        raw_request: NodeId,
-        finalized: NodeId,
-    ) Allocator.Error!void {
-        if (raw_request == finalized) return;
-        if (self.builder.active_template_root) |*active_root| {
-            if (active_root.graph == self.graph and active_root.request_fn_node == raw_request) {
-                active_root.request_fn_node = finalized;
-            }
-        }
-        switch (self.draft.current_owner) {
-            .root => {},
-            .reserved_fn => {},
-            .draft_fn => |fn_id| {
-                self.draft.fns.items[@intFromEnum(fn_id)].source.mono_fn_ty =
-                    DraftTypeCell.fromGraphNode(finalized);
-                if (self.draft.template_spec_by_fn.get(fn_id)) |raw_spec| {
-                    self.draft.template_specs.items[raw_spec].request_fn_node = finalized;
-                    const spec = self.draft.template_specs.items[raw_spec];
-                    try registerTemplateSpecInterfaceLookups(
-                        self.draft,
-                        self.allocator,
-                        self.graph,
-                        DraftTemplateFamilyAddress.init(
-                            spec.template_ref,
-                            spec.method_scope,
-                            spec.source_fn_key,
-                        ),
-                        spec.evidence_digest,
-                        finalized,
-                        raw_spec,
-                    );
-                    return;
-                }
-                for (self.draft.nested_specs.items, 0..) |spec, raw_spec_usize| {
-                    if (spec.fn_id != fn_id) continue;
-                    const raw_spec: u32 = @intCast(raw_spec_usize);
-                    self.draft.nested_specs.items[raw_spec].request_fn_node = finalized;
-                    try registerNestedSpecInterfaceLookups(
-                        self.draft,
-                        self.allocator,
-                        self.graph,
-                        DraftNestedFamilyAddress.init(
-                            spec.nested,
-                            spec.method_scope,
-                            spec.source_fn_key,
-                        ),
-                        spec.evidence_digest,
-                        finalized,
-                        raw_spec,
-                    );
-                    return;
-                }
-                Common.invariant("finalized draft procedure request had no specialization record");
-            },
-        }
-    }
-
     fn recordProcedureExactNominalSelections(
         self: *BodyContext,
         fn_node: NodeId,
@@ -15904,22 +15819,7 @@ const BodyContext = struct {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }
         const checked_fn_node = try self.instNode(template.checked_fn_root);
-        const procedure_expr: ?checked.CheckedExprId = switch (template.body) {
-            .checked_body => |body_id| switch (self.view.bodies.expr(self.view.bodies.body(body_id).root_expr).data) {
-                .lambda => self.view.bodies.body(body_id).root_expr,
-                .closure => |closure| closure.lambda,
-                else => null,
-            },
-            .entry_wrapper, .intrinsic_wrapper => null,
-        };
-        const fn_node = if (procedure_expr) |expr|
-            try self.finalizeProcedureRequestForRecursiveStorage(
-                expr,
-                checked_fn_node,
-                raw_fn_node,
-            )
-        else
-            raw_fn_node;
+        const fn_node = raw_fn_node;
         try self.recordProcedureExactNominalSelections(fn_node);
         const fn_nodes = try self.graph.functionNodes(fn_node);
         const saved_enclosing_function = self.enclosing_function;
@@ -16450,16 +16350,7 @@ const BodyContext = struct {
         _: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
         const expr = self.view.bodies.expr(expr_id);
-        const procedure_expr: checked.CheckedExprId = switch (expr.data) {
-            .lambda => expr_id,
-            .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
-        };
-        const fn_node = try self.finalizeProcedureRequestForRecursiveStorage(
-            procedure_expr,
-            checked_body_fn_node,
-            raw_fn_node,
-        );
+        const fn_node = raw_fn_node;
         try self.recordProcedureExactNominalSelections(fn_node);
         const fn_nodes = try self.graph.functionNodes(fn_node);
         const saved_function_entry_demand_guards = self.function_entry_demand_guards;
@@ -19039,178 +18930,12 @@ const BodyContext = struct {
 
     fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
-            .named => |named| switch (named.def.iterator_representation) {
-                .minted, .forced_dynamic => if (named.builtin_owner) |owner|
-                    static_dispatch.isIteratorOwner(owner)
-                else
-                    false,
-                .none => false,
-            },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-        };
-    }
-
-    fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) bool {
-        return switch (self.graph.content(node)) {
-            .named => |named| if (named.backing) |backing|
-                backing.authority == .generated_private
+            .named => |named| named.def.generated != null and if (named.builtin_owner) |owner|
+                static_dispatch.isIteratorOwner(owner)
             else
                 false,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
-    }
-
-    const RecursiveStorageTransform = union(enum) {
-        visiting: ?NodeId,
-        done: NodeId,
-    };
-
-    /// Select the representation of one checker-declared recursive-storage
-    /// slot. This is the only traversal associated with that declaration: it
-    /// descends the slot once, handles an exact generated nominal immediately
-    /// when encountered, and rebuilds only the compound path that contains it.
-    fn recursiveStorageRepresentation(
-        self: *BodyContext,
-        raw_node: NodeId,
-        transformed: *collections.DenseMap(NodeId, RecursiveStorageTransform),
-    ) Allocator.Error!NodeId {
-        const node = self.graph.rootNode(raw_node);
-        const entry = try transformed.getOrPut(node);
-        if (entry.found_existing) return switch (entry.value_ptr.*) {
-            .done => |done| done,
-            .visiting => |reserved| if (reserved) |existing| existing else blk: {
-                const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-                entry.value_ptr.* = .{ .visiting = placeholder };
-                break :blk placeholder;
-            },
-        };
-        entry.value_ptr.* = .{ .visiting = null };
-
-        const content = self.graph.content(node);
-        const result: NodeId = if (self.isGeneratedPrivateRootNode(node)) blk: {
-            const named = content.named;
-            if (named.args.len != 1) {
-                Common.invariant("generated iterator recursive-storage slot had an unexpected argument arity");
-            }
-            break :blk try self.forcedDynamicIteratorNode(
-                node,
-                named.args[0],
-                self.graph.generatedIteratorPublicSource(node),
-            );
-        } else switch (content) {
-            .redirect => unreachable,
-            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
-            .list => |elem| blk: {
-                const next = try self.recursiveStorageRepresentation(elem, transformed);
-                break :blk if (self.graph.sameClass(elem, next)) node else try self.graph.newNode(.{ .list = next });
-            },
-            .box => |elem| blk: {
-                const next = try self.recursiveStorageRepresentation(elem, transformed);
-                break :blk if (self.graph.sameClass(elem, next)) node else try self.graph.newNode(.{ .box = next });
-            },
-            .tuple => |items| blk: {
-                var changed = false;
-                const next = try self.graph.arena().alloc(NodeId, items.len);
-                for (items, next) |item, *out| {
-                    out.* = try self.recursiveStorageRepresentation(item, transformed);
-                    changed = changed or !self.graph.sameClass(item, out.*);
-                }
-                break :blk if (changed) try self.graph.newNode(.{ .tuple = next }) else node;
-            },
-            .func => |function| blk: {
-                var changed = false;
-                const args = try self.graph.arena().alloc(NodeId, function.args.len);
-                for (function.args, args) |arg, *out| {
-                    out.* = try self.recursiveStorageRepresentation(arg, transformed);
-                    changed = changed or !self.graph.sameClass(arg, out.*);
-                }
-                const ret = try self.recursiveStorageRepresentation(function.ret, transformed);
-                changed = changed or !self.graph.sameClass(function.ret, ret);
-                break :blk if (changed) try self.graph.newNode(.{ .func = .{
-                    .args = args,
-                    .ret = ret,
-                } }) else node;
-            },
-            .tag_union => |row| blk: {
-                var changed = false;
-                const tags = try self.graph.arena().alloc(InstTag, row.tags.len);
-                for (row.tags, tags) |tag, *out_tag| {
-                    const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
-                    for (tag.payloads, payloads) |payload, *out| {
-                        out.* = try self.recursiveStorageRepresentation(payload, transformed);
-                        changed = changed or !self.graph.sameClass(payload, out.*);
-                    }
-                    out_tag.* = .{
-                        .name = tag.name,
-                        .checked_name = tag.checked_name,
-                        .payloads = payloads,
-                    };
-                }
-                const ext = try self.recursiveStorageRepresentation(row.ext, transformed);
-                changed = changed or !self.graph.sameClass(row.ext, ext);
-                break :blk if (changed) try self.graph.newNode(.{ .tag_union = .{
-                    .tags = tags,
-                    .ext = ext,
-                } }) else node;
-            },
-            .record => |row| blk: {
-                var changed = false;
-                const fields = try self.graph.arena().alloc(InstField, row.fields.len);
-                for (row.fields, fields) |field, *out| {
-                    out.* = .{
-                        .name = field.name,
-                        .ty = try self.recursiveStorageRepresentation(field.ty, transformed),
-                    };
-                    changed = changed or !self.graph.sameClass(field.ty, out.ty);
-                }
-                const ext = try self.recursiveStorageRepresentation(row.ext, transformed);
-                changed = changed or !self.graph.sameClass(row.ext, ext);
-                break :blk if (changed) try self.graph.newNode(.{ .record = .{
-                    .fields = fields,
-                    .ext = ext,
-                } }) else node;
-            },
-            .named => |source| blk: {
-                var named = source;
-                var changed = false;
-                const args = try self.graph.arena().alloc(NodeId, source.args.len);
-                for (source.args, args) |arg, *out| {
-                    out.* = try self.recursiveStorageRepresentation(arg, transformed);
-                    changed = changed or !self.graph.sameClass(arg, out.*);
-                }
-                named.args = args;
-                if (source.backing) |backing| {
-                    const backing_node = try self.recursiveStorageRepresentation(backing.node, transformed);
-                    changed = changed or !self.graph.sameClass(backing.node, backing_node);
-                    named.backing = .{
-                        .node = backing_node,
-                        .use = backing.use,
-                        .authority = backing.authority,
-                    };
-                }
-                const declared = try self.graph.arena().alloc(InstDeclaredField, source.declared_order.len);
-                for (source.declared_order, declared) |field, *out| switch (field) {
-                    .named => |name| out.* = .{ .named = name },
-                    .padding => |padding| {
-                        const next = try self.recursiveStorageRepresentation(padding, transformed);
-                        changed = changed or !self.graph.sameClass(padding, next);
-                        out.* = .{ .padding = next };
-                    },
-                };
-                named.declared_order = declared;
-                break :blk if (changed) try self.graph.newNode(.{ .named = named }) else node;
-            },
-        };
-
-        const final = switch (transformed.get(node) orelse unreachable) {
-            .done => unreachable,
-            .visiting => |reserved| if (reserved) |placeholder| blk: {
-                try self.graph.completeReservedProducedNode(placeholder, self.graph.content(result));
-                break :blk placeholder;
-            } else result,
-        };
-        try transformed.put(node, .{ .done = final });
-        return final;
     }
 
     /// Build an exact iterator procedure request entirely in the active
@@ -19221,7 +18946,6 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: ?[]const checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -19269,11 +18993,8 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
-                        .custom,
                         request_fn.ret,
                         ok_items[0],
-                        &.{ request_fn.args[0], request_fn.args[2] },
-                        if (checked_args) |args| try self.callableArgumentEvidenceDigest(args[2]) else null,
                     ),
                 );
             },
@@ -19284,11 +19005,8 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
-                        .list,
                         public_fn.ret,
                         try self.graph.listElementNode(request_fn.args[0]),
-                        &.{request_fn.args[0]},
-                        null,
                     ),
                 );
             },
@@ -19299,11 +19017,8 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
-                        .str,
                         request_fn.ret,
                         try self.generatedIteratorItemNode(public_fn.ret),
-                        &.{request_fn.args[0]},
-                        null,
                     ),
                 );
             },
@@ -19314,62 +19029,47 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
-                        .single,
                         request_fn.ret,
                         request_fn.args[0],
-                        &.{request_fn.args[0]},
-                        null,
                     ),
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_exclusive, request_fn.ret, request_fn.args[0], &.{}, null),
+                    try self.generatedIteratorNode(request_fn.ret, request_fn.args[0]),
                 );
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_inclusive, request_fn.ret, request_fn.args[0], &.{}, null),
+                    try self.generatedIteratorNode(request_fn.ret, request_fn.args[0]),
                 );
             },
             .iter_map => {
                 if (request_fn.args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
                 const transform = try self.graph.functionNodes(request_fn.args[1]);
-                return try self.generatedIteratorAdapterFunctionNode(.map, request_fn.ret, transform.ret, request_fn.args, checked_args, 1);
+                return try self.generatedIteratorAdapterFunctionNode(request_fn.ret, transform.ret, request_fn.args);
             },
             .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(
-                .keep_if,
                 request_fn.ret,
                 try self.generatedIteratorItemNode(request_fn.args[0]),
                 request_fn.args,
-                checked_args,
-                1,
             ),
             .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(
-                .drop_if,
                 request_fn.ret,
                 try self.generatedIteratorItemNode(request_fn.args[0]),
                 request_fn.args,
-                checked_args,
-                1,
             ),
             .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(
-                .take_first,
                 request_fn.ret,
                 try self.generatedIteratorItemNode(request_fn.args[0]),
                 request_fn.args,
-                checked_args,
-                null,
             ),
             .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(
-                .drop_first,
                 request_fn.ret,
                 try self.generatedIteratorItemNode(request_fn.args[0]),
                 request_fn.args,
-                checked_args,
-                null,
             ),
             .iter_concat => {
                 if (request_fn.args.len != 2) {
@@ -19385,22 +19085,16 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(
                         request_fn.args,
                         try self.generatedIteratorNode(
-                            .concat,
                             request_fn.ret,
                             try self.generatedIteratorItemNode(source),
-                            request_fn.args,
-                            null,
                         ),
                     );
                 }
             },
             .iter_append => return try self.generatedIteratorAdapterFunctionNode(
-                .append,
                 request_fn.ret,
                 try self.generatedIteratorItemNode(request_fn.args[0]),
                 request_fn.args,
-                checked_args,
-                null,
             ),
             .iter_from_step, .range_done => {},
         }
@@ -19409,24 +19103,17 @@ const BodyContext = struct {
 
     fn generatedIteratorAdapterFunctionNode(
         self: *BodyContext,
-        kind: Type.IteratorKind,
         public_ret: NodeId,
         item_node: NodeId,
         args: []const NodeId,
-        checked_args: ?[]const checked.CheckedExprId,
-        callable_index: ?usize,
     ) Allocator.Error!?NodeId {
         if (args.len != 2) {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
         if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
-        const callable_evidence = if (callable_index) |index| if (checked_args) |source_args|
-            try self.callableArgumentEvidenceDigest(source_args[index])
-        else
-            null else null;
         return try self.graphFunctionNode(
             args,
-            try self.generatedIteratorNode(kind, public_ret, item_node, args, callable_evidence),
+            try self.generatedIteratorNode(public_ret, item_node),
         );
     }
 
@@ -19481,11 +19168,8 @@ const BodyContext = struct {
 
     fn generatedIteratorNode(
         self: *BodyContext,
-        kind: Type.IteratorKind,
         public_iterator: NodeId,
         explicit_item_node: ?NodeId,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
     ) Allocator.Error!NodeId {
         var public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
@@ -19509,12 +19193,7 @@ const BodyContext = struct {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
         const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
-        const lookup = try self.graph.lookupGeneratedIteratorFromNamed(
-            public_named,
-            kind,
-            components,
-            callable_evidence,
-        );
+        const lookup = try self.graph.lookupGeneratedIteratorFromNamed(public_named);
         if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
 
         const Context = struct {
@@ -19528,9 +19207,6 @@ const BodyContext = struct {
                 args[0] = ctx.item_node;
                 var def = ctx.public_source.def;
                 def.generated = ctx.identity;
-                def.iterator_representation = .minted;
-                def.iterator_kind = .none;
-                def.iterator_depth = 1;
                 def.iterator_topology = try ctx.body.iteratorRepresentationNames();
                 return .{ .named = .{
                     .named_type = ctx.public_source.named_type,
@@ -19555,110 +19231,6 @@ const BodyContext = struct {
             .body = self,
             .public_source = public_source,
             .item_node = public_named.args[0],
-            .identity = lookup.digest,
-        }, Context.fill);
-        try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
-        return generated;
-    }
-
-    const max_minted_iterator_chain_depth: u8 = std.math.maxInt(u8) - 1;
-
-    fn generatedIteratorMintDepth(
-        self: *BodyContext,
-        kind: Type.IteratorKind,
-        components: []const NodeId,
-    ) ?u8 {
-        switch (kind) {
-            .custom,
-            .list,
-            .str,
-            .single,
-            .range_exclusive,
-            .range_inclusive,
-            => return 1,
-            .map,
-            .keep_if,
-            .drop_if,
-            .take_first,
-            .drop_first,
-            .concat,
-            .append,
-            => {},
-            .join => Common.invariant("generated iterator join is authored only by representation selection"),
-            .forced_dynamic => return null,
-            .none => Common.invariant("generated iterator mint requested without a producer kind"),
-        }
-
-        var component_depth: u8 = 0;
-        for (components) |component| {
-            const named = switch (self.graph.content(component)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
-            };
-            switch (named.def.iterator_representation) {
-                .forced_dynamic => return null,
-                .minted => {
-                    if (named.def.iterator_depth == 0) {
-                        Common.invariant("generated iterator component had no producer-assigned depth");
-                    }
-                    component_depth = @max(component_depth, named.def.iterator_depth);
-                },
-                .none => {},
-            }
-        }
-        if (component_depth == 0) {
-            Common.invariant("generated iterator adapter had no exact iterator component");
-        }
-        if (component_depth >= max_minted_iterator_chain_depth) return null;
-        return component_depth + 1;
-    }
-
-    fn forcedDynamicIteratorNode(
-        self: *BodyContext,
-        public_iterator: NodeId,
-        item_node: NodeId,
-        public_source: solve.InstIteratorPublicSource,
-    ) Allocator.Error!NodeId {
-        const lookup = try self.graph.lookupGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null);
-        if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
-        const Context = struct {
-            body: *BodyContext,
-            item_node: NodeId,
-            public_source: solve.InstIteratorPublicSource,
-            identity: names.TypeDigest,
-
-            fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
-                const args = try ctx.body.graph.arena().alloc(NodeId, 1);
-                args[0] = ctx.item_node;
-                var def = ctx.public_source.def;
-                def.generated = ctx.identity;
-                def.iterator_representation = .forced_dynamic;
-                def.iterator_kind = .forced_dynamic;
-                def.iterator_depth = 0;
-                def.iterator_topology = try ctx.body.iteratorRepresentationNames();
-                return .{ .named = .{
-                    .named_type = ctx.public_source.named_type,
-                    .def = def,
-                    .kind = ctx.public_source.kind,
-                    .builtin_owner = ctx.public_source.builtin_owner,
-                    .args = args,
-                    .backing = .{
-                        .node = try ctx.body.generatedIteratorBackingNode(
-                            ctx.public_source.backing.node,
-                            self_node,
-                            ctx.item_node,
-                        ),
-                        .use = ctx.public_source.backing.use,
-                        .authority = .generated_private,
-                    },
-                    .declared_order = ctx.public_source.declared_order,
-                } };
-            }
-        };
-        const generated = try self.graph.addRecursiveNode(Context{
-            .body = self,
-            .item_node = item_node,
-            .public_source = public_source,
             .identity = lookup.digest,
         }, Context.fill);
         try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
@@ -19770,53 +19342,6 @@ const BodyContext = struct {
             .fields = fields,
             .ext = try self.graph.newNode(.empty_record),
         } });
-    }
-
-    fn callableArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-    ) Allocator.Error!?names.TypeDigest {
-        const expr = self.view.bodies.expr(expr_id);
-        return switch (expr.data) {
-            .closure => |closure| try self.closureArgumentEvidenceDigest(expr_id, closure),
-            .lambda => |lambda| self.lambdaArgumentEvidenceDigest(expr_id, lambda.args.len),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
-        };
-    }
-
-    fn lambdaArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        arg_count: usize,
-    ) names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.generated_iterator.callable.lambda");
-        hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @intFromEnum(expr_id));
-        hashU32(&hasher, @intCast(arg_count));
-        hashU32(&hasher, 0);
-        return .{ .bytes = hasher.finalResult() };
-    }
-
-    fn closureArgumentEvidenceDigest(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        closure: anytype,
-    ) Allocator.Error!names.TypeDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.generated_iterator.callable.closure");
-        hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @intFromEnum(expr_id));
-        hashU32(&hasher, @intFromEnum(closure.lambda));
-        hashU32(&hasher, @intCast(closure.captures.len));
-        for (closure.captures) |capture| {
-            hashU32(&hasher, @intFromEnum(capture.capture_id));
-            hashU32(&hasher, capture.scope_depth);
-            const binder = checkedCaptureBinder(self.view, capture.pattern);
-            const checked_type_key = self.view.types.rootKey(checkedBinderType(self.view, binder));
-            hasher.update(&checked_type_key.bytes);
-        }
-        return .{ .bytes = hasher.finalResult() };
     }
 
     fn relateCheckedTypeToMono(
@@ -24950,7 +24475,6 @@ const BodyContext = struct {
                         procedure,
                         checked_fn_node,
                         destination_request,
-                        call.args,
                     )) |exact_request| {
                         self.graph.inheritRequestSubstitutions(destination_request, exact_request);
                         try self.graph.registerRequestCheckedSource(exact_request, checked_fn_node);
@@ -25022,7 +24546,7 @@ const BodyContext = struct {
             );
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node)) |private_fn_node| {
                     self.graph.inheritRequestSubstitutions(fn_node, private_fn_node);
                     try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                     fn_node = private_fn_node;
@@ -25778,7 +25302,7 @@ const BodyContext = struct {
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
             }
             if ((try self.currentLocalForResolvedValue(ref_id)) == null) break :local;
-            // A generated-private evidence node (e.g. a minted iterator) may
+            // A generated-private evidence node (e.g. a canonical iterator) may
             // still carry unresolved leaves whose defaults apply at final
             // sealing, so it stays a graph node instead of forcing an eager
             // resolved view.
@@ -26057,7 +25581,7 @@ const BodyContext = struct {
         );
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestCheckedSource(fn_node) orelse fn_node;
-            if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+            if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node)) |private_fn_node| {
                 self.graph.inheritRequestSubstitutions(fn_node, private_fn_node);
                 try self.graph.registerRequestCheckedSource(private_fn_node, public_fn_node);
                 fn_node = private_fn_node;
@@ -28364,9 +27888,6 @@ const BodyContext = struct {
             .type_name = try self.builder.program.names.internTypeName(store_view.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
             .generated = def.generated,
-            .iterator_representation = @enumFromInt(@intFromEnum(def.iterator_representation)),
-            .iterator_kind = @enumFromInt(@intFromEnum(def.iterator_kind)),
-            .iterator_depth = def.iterator_depth,
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
@@ -30422,25 +29943,10 @@ const BodyContext = struct {
     /// nested step closure captures the recursive rest value.
     fn generatedInterpolationIteratorNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        _: checked.CheckedExprId,
         request_node: NodeId,
     ) Allocator.Error!NodeId {
-        const named = switch (self.graph.content(request_node)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated interpolation iterator request was not a named Iter type"),
-        };
-        const backing = named.backing orelse
-            Common.invariant("generated interpolation iterator request had no backing");
-        const topology = try self.iteratorRepresentationNames();
-        const len_node = try self.graph.recordFieldNode(backing.node, topology.len_field);
-        const step_node = try self.graph.recordFieldNode(backing.node, topology.step_field);
-        return try self.generatedIteratorNode(
-            .custom,
-            request_node,
-            null,
-            &.{ len_node, step_node },
-            generatedInterpolationStepKey(self.current_fn_key, expr_id, 0),
-        );
+        return try self.generatedIteratorNode(request_node, null);
     }
 
     fn lowerGeneratedInterpolationIterAtNode(
@@ -30454,9 +29960,7 @@ const BodyContext = struct {
         };
         const iter_backing = iter_named.backing orelse
             Common.invariant("generated interpolation iterator exact type had no backing");
-        if (iter_named.def.iterator_representation == .none or
-            iter_backing.authority != .generated_private)
-        {
+        if (iter_named.def.generated == null or iter_backing.authority != .generated_private) {
             Common.invariant("generated interpolation lowering received a checked-public iterator type");
         }
         const expr = self.view.bodies.expr(expr_id);
@@ -34147,16 +33651,13 @@ const BodyContext = struct {
         lookup: MethodLookup,
         public_target_node: NodeId,
         request_node: NodeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
+        _: []const static_dispatch.StaticDispatchOperand,
     ) Allocator.Error!?NodeId {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
-        defer self.allocator.free(checked_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
             public_target_node,
             request_node,
-            checked_args,
         )) orelse return null;
         self.graph.inheritRequestSubstitutions(request_node, private_node);
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
@@ -34168,59 +33669,17 @@ const BodyContext = struct {
         lookup: MethodLookup,
         public_target_node: NodeId,
         request_node: NodeId,
-        operands: []const static_dispatch.IteratorDispatchOperand,
+        _: []const static_dispatch.IteratorDispatchOperand,
     ) Allocator.Error!?NodeId {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprIteratorDispatchOperands(operands) orelse return null;
-        defer self.allocator.free(checked_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
             public_target_node,
             request_node,
-            checked_args,
         )) orelse return null;
         self.graph.inheritRequestSubstitutions(request_node, private_node);
         try self.graph.registerRequestCheckedSource(private_node, public_target_node);
         return private_node;
-    }
-
-    fn checkedExprDispatchOperands(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!?[]checked.CheckedExprId {
-        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
-        errdefer self.allocator.free(checked_args);
-        for (operands, checked_args) |operand, *checked_arg| {
-            checked_arg.* = switch (operand) {
-                .checked_expr => |expr| expr,
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {
-                    self.allocator.free(checked_args);
-                    return null;
-                },
-            };
-        }
-        return checked_args;
-    }
-
-    fn checkedExprIteratorDispatchOperands(
-        self: *BodyContext,
-        operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error!?[]checked.CheckedExprId {
-        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
-        errdefer self.allocator.free(checked_args);
-        for (operands, checked_args) |operand, *checked_arg| {
-            checked_arg.* = switch (operand) {
-                .checked_expr => |expr| expr,
-                .loop_iterator_state => {
-                    self.allocator.free(checked_args);
-                    return null;
-                },
-            };
-        }
-        return checked_args;
     }
 
     fn methodTargetMonoTypeFromArgs(

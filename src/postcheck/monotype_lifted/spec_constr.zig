@@ -2906,7 +2906,7 @@ const Pass = struct {
         const base_type = self.program.types.get(base_ty);
         if (base_type != .named) return null;
         const base_named = base_type.named;
-        if (base_named.def.iterator_representation != .minted) return null;
+        if (base_named.def.generated == null) return null;
         const topology = base_named.def.iterator_topology orelse return null;
         const backing = base_named.backing orelse return null;
         if (backing.authority != .generated_private) return null;

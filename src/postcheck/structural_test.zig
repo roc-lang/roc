@@ -106,7 +106,8 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
     const lower_expr_inner = sourceSliceBetween(lower_source, "fn lowerExprInner", "fn lowerReturn");
 
-    try expectContains(lower_call, "const checked_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(lower_call, "const produced_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(lower_call, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
     try expectContains(lower_call, "try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);");
     try expectContains(lower_call, "request_fn_node = try self.graph.functionRequestFromProducedArguments(");
     try expectContains(lower_call, "const callee = try self.lowerExprAtExactRequest(");
@@ -441,7 +442,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const generated_iterator_producer = sourceSliceBetween(
         lower_source,
         "fn generatedIteratorNode(",
-        "const max_minted_iterator_chain_depth",
+        "fn generatedIteratorBackingNode(",
     );
     try expectContains(generated_iterator_producer, "lookupGeneratedIteratorFromNamed(");
     try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
@@ -718,10 +719,11 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     );
     try expectContains(call_source, "const checked_fn_node = try call_ctx.instNode(source_fn_ty);");
     try expectContains(call_source, "try self.preLowerDirectCallOperands(");
-    try expectContains(call_source, "const produced_args = try self.producedCallArgumentNodes(");
+    try expectContains(call_source, "var produced_args = try self.producedCallArgumentNodes(");
     try expectContains(call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(");
     try expectContains(call_source, "const lowered_args = try self.lowerCallOperandsAtNodes(");
-    try expectContains(call_source, "const checked_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(call_source, "const produced_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(call_source, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
     try expectContains(call_source, "const callee = try self.lowerExprAtExactRequest(");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(callee_fn.ret)");
     try expectNotContains(call_source, "producedCallableNode");
@@ -729,8 +731,6 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try expectNotContains(call_source, "prepareExprSpanAtNodes(call.args");
     try expectNotContains(call_source, "lowerPreparedExprSpanAtNodes(call.args");
     try expectNotContains(call_source, "indirectCalleeMonoType");
-    try expectNotContains(call_source, "instantiateCallNodeFromCallerAtNode");
-    try expectNotContains(lower_source, "instantiateCallTypeFromCallerAtType");
 
     const direct_prepare = std.mem.find(u8, call_source, "try self.preLowerDirectCallOperands(").?;
     const direct_request = std.mem.find(u8, call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(").?;
@@ -930,7 +930,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         "fn lowerDispatchWithUninhabitedArgument(",
     );
     try expectContains(closed_low_level, "try self.preLowerDispatchOperands(operands, checked_callable.args, &pre_lowered)");
-    try expectContains(closed_low_level, "const produced_args = try self.producedCallArgumentNodes(");
+    try expectContains(closed_low_level, "var produced_args = try self.producedCallArgumentNodes(");
     try expectContains(closed_low_level, "self.graph.functionRequestFromProducedArguments(");
     try expectContains(closed_low_level, "try self.lowerDispatchOperandsAtNodes(");
     try expectNotContains(closed_low_level, "prepareDispatchOperandsAtNodes");

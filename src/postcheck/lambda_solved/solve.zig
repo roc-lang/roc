@@ -114,10 +114,6 @@ const Solver = struct {
     /// mutable lambda-set state, so one shared clone serves every use, and
     /// lazy-leaf walks skip callable-free leaves without materializing them.
     contains_callable: []bool,
-    /// Per lifted Monotype: whether a forced-dynamic iterator named type is
-    /// reachable from it. The forced-dynamic scan materializes exactly these
-    /// leaves so the named nodes it must mark exist in the solved store.
-    contains_forced_dynamic: []bool,
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
     /// One memo map per lazily materialized tree, tying recursive
     /// back-references to their existing vars exactly as an eager clone's
@@ -194,7 +190,6 @@ const Solver = struct {
 
         const masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer allocator.free(masks.contains_callable);
-        errdefer allocator.free(masks.contains_forced_dynamic);
 
         return .{
             .allocator = allocator,
@@ -212,7 +207,6 @@ const Solver = struct {
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
             .unify_stack = .empty,
             .contains_callable = masks.contains_callable,
-            .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_contexts = .empty,
         };
@@ -222,7 +216,6 @@ const Solver = struct {
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.shared_clones.deinit();
-        self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
@@ -289,8 +282,6 @@ const Solver = struct {
                 .ty = ty,
             });
         }
-
-        try self.markForcedDynamicIteratorCallables();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
@@ -1159,29 +1150,6 @@ const Solver = struct {
         return context.solved_ret;
     }
 
-    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
-        self.program.types.compressAllRoots();
-        // Expanding a leaf appends fresh child vars, so the bound is re-read
-        // every iteration and an expanded var is revisited in place.
-        var index: usize = 0;
-        while (index < self.program.types.vars.items.len) : (index += 1) {
-            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
-            if (self.program.types.rootCompressed(ty) != ty) continue;
-            const content = self.program.types.get(ty);
-            const tag = std.meta.activeTag(content);
-            if (tag == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.markErasedCallablesReachedByType(ty);
-                }
-            } else if (tag == .mono) {
-                if (self.contains_forced_dynamic[@intFromEnum(content.mono.id)]) {
-                    _ = try self.expandMonoRoot(ty, content.mono);
-                    index -= 1;
-                }
-            }
-        }
-    }
-
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
         return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
@@ -1426,15 +1394,12 @@ const Solver = struct {
     }
 
     /// Materialized clone for a leaf that survived solving, matching what the
-    /// post-solve eager clone produced: shared for callable-free Monotypes,
-    /// self-marking for forced-dynamic iterator content.
+    /// post-solve eager clone produced. Callable-free Monotypes are shared.
     fn finalMonoClone(self: *Solver, id: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         cloner.share = true;
         defer cloner.deinit();
-        const lowered = try cloner.lower(id);
-        try cloner.markForcedDynamicCallables();
-        return lowered;
+        return try cloner.lower(id);
     }
 
     fn listElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -1927,13 +1892,8 @@ const Solver = struct {
                     left_named.kind != right_named.kind or
                     left_named.builtin_owner != right_named.builtin_owner)
                 {
-                    if (try self.unifyForcedDynamicIterator(a, b, left_named, right_named)) return;
                     if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
-                    if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
                     if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
-                    if (MonoType.iteratorRelation(left_named, right_named) == .public_minted) {
-                        Common.invariant("checked-public iterator reached Lambda Solved beside an exact generated iterator");
-                    }
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
                 if (left_named.backing) |left_backing| {
@@ -2300,85 +2260,6 @@ const Solver = struct {
         return true;
     }
 
-    fn unifyForcedDynamicIterator(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .forced_dynamic) return false;
-
-        const left_dynamic = left.def.iterator_representation == .forced_dynamic;
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
-        }
-
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        const other = if (left_dynamic) right else left;
-        switch (other.def.iterator_representation) {
-            .none => Common.invariant("checked-public iterator reached Lambda Solved beside a forced-dynamic iterator"),
-            .minted => try self.unifyGeneratedIteratorBackings(left, right),
-            .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
-        }
-        if (left_dynamic) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyGeneratedIteratorJoin(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .minted_join) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
-        }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-
-        if (left.backing) |left_backing| {
-            const right_backing = right.backing orelse
-                Common.invariant("generated iterator join found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("generated iterator join found different backing uses");
-            }
-            if (left_backing.authority != right_backing.authority) {
-                Common.invariant("generated iterator join found different backing authorities");
-            }
-            try self.unify(left_backing.ty, right_backing.ty);
-        } else if (right.backing != null) {
-            Common.invariant("generated iterator join found backing on only one side");
-        }
-
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyGeneratedIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
-        const left_backing = left.backing orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        const right_backing = right.backing orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        if (left_backing.use != right_backing.use) {
-            Common.invariant("generated iterator relation found different backing uses");
-        }
-        if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
-            Common.invariant("private iterator relation received a checked-public backing");
-        }
-        try self.unify(left_backing.ty, right_backing.ty);
-    }
-
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
         if (std.meta.activeTag(content) != .named or content.named.kind != .alias) return null;
         return (content.named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;
@@ -2664,21 +2545,15 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 
 const ReachabilityMasks = struct {
     contains_callable: []bool,
-    contains_forced_dynamic: []bool,
 };
 
-/// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots) and from
-/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize).
+/// Reverse-reachability over the lifted Monotype store from `func` and
+/// `erased` nodes, whose clones need fresh callable slots.
 fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
     const count = types.types.len;
     const flags = try allocator.alloc(bool, count);
     errdefer allocator.free(flags);
     @memset(flags, false);
-    const forced = try allocator.alloc(bool, count);
-    errdefer allocator.free(forced);
-    @memset(forced, false);
 
     const edge_counts = try allocator.alloc(u32, count);
     defer allocator.free(edge_counts);
@@ -2760,22 +2635,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    for (types.types, 0..) |content, index| {
-        if (std.meta.activeTag(content) == .named) {
-            if (content.named.def.iterator_representation == .forced_dynamic) {
-                forced[index] = true;
-                try work.append(allocator, @intCast(index));
-            }
-        }
-    }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (forced[parent]) continue;
-            forced[parent] = true;
-            try work.append(allocator, parent);
-        }
-    }
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced };
+    return .{ .contains_callable = flags };
 }
 
 const TypeCloner = struct {
@@ -2824,22 +2684,6 @@ const TypeCloner = struct {
         self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
         if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
-    }
-
-    /// Apply the explicit dynamic boundary only after the entire requested
-    /// Monotype clone is complete. A forced iterator can be reached while an
-    /// enclosing function or payload clone still holds reservations, so doing
-    /// this per-node would let callable identity observe an unfinished graph.
-    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
-        var entries = self.map.iterator();
-        while (entries.next()) |entry| {
-            const content = self.solver.lifted.types.get(entry.key_ptr.*);
-            if (std.meta.activeTag(content) == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
-                }
-            }
-        }
     }
 
     /// Re-materializes a nominal record's declared field order from the monotype
@@ -2963,9 +2807,6 @@ fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
         left.type_name == right.type_name and
         left.source_decl == right.source_decl and
         optionalDigestEql(left.generated, right.generated) and
-        left.iterator_representation == right.iterator_representation and
-        left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth and
         std.meta.eql(left.iterator_topology, right.iterator_topology);
 }
 

@@ -74,107 +74,14 @@ pub const TypeDef = struct {
     /// Declaring statement in the (content-identified) module: the
     /// within-module discriminator for same-named block-local declarations.
     source_decl: ?u32 = null,
-    /// Compiler-generated specialization identity for internal nominals minted
+    /// Compiler-generated specialization identity for internal nominals produced
     /// from a public source nominal. Null means this is the source nominal.
     generated: ?names.TypeDigest = null,
-    /// Representation decision produced when an internal iterator nominal is
-    /// created. Later stages consume the recorded tier and mint depth directly.
-    iterator_representation: IteratorRepresentation = .none,
-    /// Exact producer or adapter that minted this iterator representation.
-    /// Consumers use this evidence instead of reconstructing an operation from
-    /// the generated function body's shape.
-    iterator_kind: IteratorKind = .none,
-    /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
-    iterator_depth: u8 = 0,
     /// Checker-authored identities for the iterator representation.
     /// Generated iterator types retain these as the exact representation roles
     /// consumed by post-check stages.
     iterator_topology: ?IteratorTopology = null,
 };
-
-/// Explicit representation tier assigned when an iterator nominal is created.
-pub const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
-
-/// Producer-owned identity of an internal iterator representation.
-pub const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    str,
-    single,
-    range_exclusive,
-    range_inclusive,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    /// Deterministic common representation of two distinct exact iterator
-    /// identities meeting at one explicit storage or control-flow boundary.
-    join,
-    forced_dynamic,
-};
-
-/// Exceptional relation between two named iterator types. Equal identities
-/// and unrelated named types use ordinary named-type unification.
-pub const IteratorRelation = enum(u8) {
-    ordinary,
-    public_minted,
-    forced_dynamic,
-    minted_join,
-};
-
-/// Classifies the representation-tier relation shared by Monotype
-/// instantiation and Lambda Solved unification.
-pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
-    if (left.kind != right.kind) return .ordinary;
-    if (left.def.module != right.def.module or
-        left.def.type_name != right.def.type_name or
-        left.def.source_decl != right.def.source_decl)
-    {
-        return .ordinary;
-    }
-    if (!iteratorOwnerPair(left.builtin_owner, right.builtin_owner)) return .ordinary;
-
-    const left_representation = left.def.iterator_representation;
-    const right_representation = right.def.iterator_representation;
-    if ((left_representation == .forced_dynamic) != (right_representation == .forced_dynamic)) {
-        return .forced_dynamic;
-    }
-    if ((left_representation == .minted and right_representation == .none) or
-        (left_representation == .none and right_representation == .minted))
-    {
-        return .public_minted;
-    }
-    if (left_representation == .minted and
-        right_representation == .minted and
-        !optionalDigestEql(left.def.generated, right.def.generated))
-    {
-        return .minted_join;
-    }
-    return .ordinary;
-}
-
-fn iteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| {
-        if (left_owner != owner) return false;
-    }
-    if (right) |right_owner| {
-        if (right_owner != owner) return false;
-    }
-    return true;
-}
 
 /// Named checked type instance.
 pub const NamedType = struct {
@@ -982,9 +889,6 @@ pub const Store = struct {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
                 writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
                 writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
@@ -1109,9 +1013,6 @@ pub const Store = struct {
             writeBytes(hasher, name_store.typeNameText(named.def.type_name));
         }
         writeOptionalDigest(hasher, named.def.generated);
-        writeBytes(hasher, @tagName(named.def.iterator_representation));
-        writeBytes(hasher, @tagName(named.def.iterator_kind));
-        writeU32(hasher, named.def.iterator_depth);
         writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
         writeBytes(hasher, @tagName(named.kind));
         if (named.builtin_owner) |owner| {
@@ -1243,9 +1144,6 @@ pub const Store = struct {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
                 writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
                 writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
@@ -1474,9 +1372,6 @@ fn namedTypeViewEql(
         return false;
     }
     if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
     if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
@@ -1779,9 +1674,6 @@ fn namedTypeEqlAcrossStores(
         return false;
     }
     if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
     if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs.args, rhs_view, rhs.args, visited)) return false;
