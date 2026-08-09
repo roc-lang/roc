@@ -26,10 +26,24 @@ method.
 
 The value's type, which does not have a method named `times`, is:
 
-    List(_a)
+    List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
 
 Hint: The `*` operator calls a method named `times` on the value preceding it,
 passing the value after the operator as the one argument.
+
+── ✗ polymorphic value ────────────────────────────── nested_list_scoping.md:1:1
+
+This top-level value still has an unresolved polymorphic type.
+
+match nestedList {
+    [[x], [y]] => x + y
+    [[x, y]] => x - y
+    [x, [y]] => x * y
+}
+
+Its type is:
+a where [a.minus : a, a -> a, a.plus : a, a -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

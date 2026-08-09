@@ -37,7 +37,7 @@ It has the type:
 
 But the annotation says it should be:
 
-    (), (({}) -> Error), (({}) -> d) -> Error
+    (), (({}) -> c), (({}) -> d) -> c
 
 Hint: This function expects 3 arguments but got 1.
 # TOKENS

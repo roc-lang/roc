@@ -16,18 +16,17 @@ match coord {
 MISSING METHOD - tuple_patterns.md:2:21:2:29
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  (Zero, Zero) => "origin"                                                  │
- │                  ‾‾‾‾‾‾‾‾                                                  │
- └──────────────────────────────────────────────────── tuple_patterns.md:2:21 ┘
+── ✗ missing method ───────────────────────────────────── tuple_patterns.md:2:21
 
-    The value's type, which does not have a method named `from_quote`, is:
+This `from_quote` method is being called on a value whose type doesn't have
+that method.
 
-        [Zero, ..]
+(Zero, Zero) => "origin"
+                ^^^^^^^^
 
+The value's type, which does not have a method named `from_quote`, is:
+
+    [Zero, ..]
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

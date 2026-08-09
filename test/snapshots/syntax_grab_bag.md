@@ -866,7 +866,8 @@ match_time(
 
 The `match_time` function has the type:
 
-    [Blue, Green, Red, ..], _arg -> Error
+    [Blue, Green, Red, ..], _arg -> d
+      where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
 
 Are there any missing commas?
 

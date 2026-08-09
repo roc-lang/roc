@@ -21,57 +21,53 @@ MISSING METHOD - list_destructure_variations.md:6:31:6:32
 MISSING METHOD - list_destructure_variations.md:7:30:7:35
 # PROBLEMS
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  [first, second] => first + second                                         │
- │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └─────────────────────────────────────── list_destructure_variations.md:4:24 ┘
+── ✗ missing method ──────────────────────── list_destructure_variations.md:4:24
 
-    The value's type, which does not have a method named `plus`, is:
+This `plus` method is being called on a value whose type doesn't have that
+method.
 
-        [One, Two, ..]
+[first, second] => first + second
+                   ^^^^^^^^^^^^^^
 
+The value's type, which does not have a method named `plus`, is:
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  [] => 0                                                                   │
- │        ‾                                                                   │
- └─────────────────────────────────────── list_destructure_variations.md:2:11 ┘
+    [One, Two, ..]
 
-    The value's type, which does not have a method named `from_numeral`, is:
+── ✗ missing method ──────────────────────── list_destructure_variations.md:2:11
 
-        [One, Two, ..]
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
 
+[] => 0
+      ^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  [One, Two, .. as rest] => 3                                               │
- │                            ‾                                               │
- └─────────────────────────────────────── list_destructure_variations.md:6:31 ┘
+The value's type, which does not have a method named `from_numeral`, is:
 
-    The value's type, which does not have a method named `from_numeral`, is:
+    [One, Two, ..]
 
-        [One, Two, ..]
+── ✗ missing method ──────────────────────── list_destructure_variations.md:6:31
 
+This `from_numeral` method is being called on a value whose type doesn't have
+that method.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  [x, y, z, .. as more] => x + y + z                                        │
- │                           ‾‾‾‾‾                                            │
- └─────────────────────────────────────── list_destructure_variations.md:7:30 ┘
+[One, Two, .. as rest] => 3
+                          ^
 
-    The value's type, which does not have a method named `plus`, is:
+The value's type, which does not have a method named `from_numeral`, is:
 
-        [One, Two, ..]
+    [One, Two, ..]
 
+── ✗ missing method ──────────────────────── list_destructure_variations.md:7:30
+
+This `plus` method is being called on a value whose type doesn't have that
+method.
+
+[x, y, z, .. as more] => x + y + z
+                         ^^^^^
+
+The value's type, which does not have a method named `plus`, is:
+
+    [One, Two, ..]
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
