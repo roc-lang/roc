@@ -4373,11 +4373,11 @@ durable `TypeId` can change shape after a consumer has seen it.
 A graph-owned generated iterator may enter an active snapshot only when all of
 its explicit identity inputs are resolved. It is then stamped with the
 content-addressed identity determined by those producer inputs.
-The snapshot is scratch identity only: it is not published to the durable
-generated-type interner, and later relation changes invalidate the current
-snapshot cache normally. This makes the generated nominal an ordinary atomic
-named type for resolved specialization lookup without scanning or serializing
-its private backing.
+The active-snapshot cache alone owns this identity view; the durable
+generated-type interner never receives it. Later relation changes invalidate
+the current snapshot cache normally. This makes the generated nominal an
+ordinary atomic named type for resolved specialization lookup without scanning
+or serializing its private backing.
 
 Snapshot invalidation is logically immediate but may be physically coalesced.
 A relation mutation marks the complete active-snapshot cache stale; the next

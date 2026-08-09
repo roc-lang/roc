@@ -6181,8 +6181,8 @@ pub const GraphTypeFinals = struct {
     sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     generated_types_by_identity: ?*std.AutoHashMap(names.TypeDigest, Type.TypeId),
     /// Active snapshots stamp graph-owned generated roots with their current
-    /// content-addressed identity without publishing that scratch TypeId to the
-    /// durable generated-type interner.
+    /// content-addressed identity. The active-snapshot cache owns that TypeId;
+    /// the durable generated-type interner does not observe it.
     generated_identity_finalizer: ?*GeneratedIteratorIdentityFinalizer,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
