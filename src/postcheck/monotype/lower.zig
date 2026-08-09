@@ -1107,7 +1107,9 @@ fn functionRequestNode(
         // The checked source itself is also the request node when no argument
         // or result cell changed. Record that relation so lowering the callable
         // still uses checked-interface mapping at this boundary.
-        try graph.registerRequestCheckedSource(source_fn, source_fn);
+        if (graph.requestCheckedSource(source_fn) == null) {
+            try graph.registerRequestCheckedSource(source_fn, source_fn);
+        }
         return source_fn;
     }
 
@@ -3368,11 +3370,12 @@ const Builder = struct {
             root_node,
             signature_relation,
         );
+        const completed_request = lowered.request_fn_node orelse root_node;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
             defer relations_timing_scope.end();
             break :blk try body_ctx.completedFunctionNodeForLoweredBody(
-                root_node,
+                completed_request,
                 lowered.args,
                 lowered.ret,
                 body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
@@ -3848,7 +3851,7 @@ const Builder = struct {
             signature_relation,
         );
         const completed_fn_node = try body_ctx.completedFunctionNodeForLoweredBody(
-            body_fn_node,
+            lowered.request_fn_node orelse body_fn_node,
             lowered.args,
             lowered.ret,
             body_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
@@ -5542,7 +5545,7 @@ const Builder = struct {
             signature_relation,
         );
         const completed_fn_node = try nested_ctx.completedFunctionNodeForLoweredBody(
-            body_fn_node,
+            lowered.request_fn_node orelse body_fn_node,
             lowered.args,
             lowered.ret,
             nested_ctx.exprCarriesFunctionDefinitionEvidence(lowered.body),
@@ -9068,6 +9071,10 @@ const LoweredTemplateBody = struct {
     args: DraftSpan(DraftTypedLocal),
     body: DraftExprId,
     ret: DraftTypeCell,
+    /// Complete procedure request selected before any part of the body was
+    /// lowered. This differs from the incoming request only when an explicit
+    /// checked recursive-storage contract changes its representation.
+    request_fn_node: ?NodeId = null,
 };
 
 const DraftTypeCell = union(enum) {
@@ -16025,11 +16032,57 @@ const BodyContext = struct {
             Common.invariant("imported nominal declaration formal was not projected into the current checked type store");
     }
 
+    fn finalizeProcedureRequestForRecursiveStorage(
+        self: *BodyContext,
+        procedure_expr: checked.CheckedExprId,
+        checked_fn_node: NodeId,
+        raw_request_fn_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const storage_types = self.view.templates.recursiveStorageTypes(procedure_expr);
+        if (storage_types.len == 0) return raw_request_fn_node;
+
+        const checked_slots = try self.graph.arena().alloc(NodeId, storage_types.len);
+        const storage_nodes = try self.graph.arena().alloc(NodeId, storage_types.len);
+        var transformed = collections.DenseMap(NodeId, RecursiveStorageTransform).init(self.allocator);
+        defer transformed.deinit();
+        var changed = false;
+        for (storage_types, checked_slots, storage_nodes) |storage_ty, *checked_slot, *storage_node| {
+            checked_slot.* = try self.instNode(storage_ty);
+            const produced = try self.graph.producedNodeForCheckedRequestSlot(
+                checked_fn_node,
+                raw_request_fn_node,
+                checked_slot.*,
+            );
+            storage_node.* = try self.recursiveStorageRepresentation(produced, &transformed);
+            changed = changed or !self.graph.sameClass(produced, storage_node.*);
+        }
+        if (!changed) return raw_request_fn_node;
+        return try self.graph.functionRequestWithRecursiveStorage(
+            checked_fn_node,
+            raw_request_fn_node,
+            checked_slots,
+            storage_nodes,
+        );
+    }
+
+    fn recordProcedureExactNominalSelections(
+        self: *BodyContext,
+        fn_node: NodeId,
+    ) Allocator.Error!void {
+        for (self.graph.requestSubstitutions(fn_node)) |selection| {
+            if (!self.graph.nodeIsGeneratedPrivateRoot(selection.produced)) continue;
+            try self.instantiation.exact_nominal_selections.put(
+                self.graph.rootNode(selection.checked),
+                self.graph.rootNode(selection.produced),
+            );
+        }
+    }
+
     fn lowerTemplateBodyAtNode(
         self: *BodyContext,
         template_ref: names.ProcTemplate,
         template: checked.CheckedProcedureTemplate,
-        fn_node: NodeId,
+        raw_fn_node: NodeId,
         _: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
         var timing_scope = ProcedureTimingScope.begin(self.builder.timing, .body_lowering);
@@ -16038,15 +16091,25 @@ const BodyContext = struct {
         if (!names.procedureTemplateRefEql(self.owner_template, template_ref)) {
             Common.invariant("Monotype body context owner did not match lowered checked template");
         }
-        const fn_nodes = try self.graph.functionNodes(fn_node);
         const checked_fn_node = try self.instNode(template.checked_fn_root);
-        for (self.graph.requestSubstitutions(fn_node)) |selection| {
-            if (!self.graph.nodeIsGeneratedPrivateRoot(selection.produced)) continue;
-            try self.instantiation.exact_nominal_selections.put(
-                self.graph.rootNode(selection.checked),
-                self.graph.rootNode(selection.produced),
-            );
-        }
+        const procedure_expr: ?checked.CheckedExprId = switch (template.body) {
+            .checked_body => |body_id| switch (self.view.bodies.expr(self.view.bodies.body(body_id).root_expr).data) {
+                .lambda => self.view.bodies.body(body_id).root_expr,
+                .closure => |closure| closure.lambda,
+                else => null,
+            },
+            .entry_wrapper, .intrinsic_wrapper => null,
+        };
+        const fn_node = if (procedure_expr) |expr|
+            try self.finalizeProcedureRequestForRecursiveStorage(
+                expr,
+                checked_fn_node,
+                raw_fn_node,
+            )
+        else
+            raw_fn_node;
+        try self.recordProcedureExactNominalSelections(fn_node);
+        const fn_nodes = try self.graph.functionNodes(fn_node);
         const saved_enclosing_function = self.enclosing_function;
         defer self.enclosing_function = saved_enclosing_function;
         self.enclosing_function = fn_nodes;
@@ -16054,7 +16117,7 @@ const BodyContext = struct {
         defer self.function_entry_demand_guards = saved_function_entry_demand_guards;
         self.function_entry_demand_guards = fn_nodes.args;
         const ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret);
-        return switch (template.body) {
+        var lowered: LoweredTemplateBody = switch (template.body) {
             .checked_body => |body_id| blk: {
                 const body = self.view.bodies.body(body_id);
                 const root = self.view.bodies.expr(body.root_expr);
@@ -16131,10 +16194,10 @@ const BodyContext = struct {
                     },
                 };
             },
-            .entry_wrapper => |wrapper_id| return try self.lowerEntryWrapperAtCell(wrapper_id, ret_cell),
-            .intrinsic_wrapper => |wrapper_id| {
+            .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperAtCell(wrapper_id, ret_cell),
+            .intrinsic_wrapper => |wrapper_id| blk: {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
-                return switch (wrapper.intrinsic) {
+                break :blk switch (wrapper.intrinsic) {
                     .str_inspect => try self.lowerStrInspectIntrinsicAtNode(fn_nodes, ret_cell),
                     .structural_eq => Common.invariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
                     .parse_tag_union,
@@ -16148,6 +16211,8 @@ const BodyContext = struct {
                 };
             },
         };
+        lowered.request_fn_node = fn_node;
+        return lowered;
     }
 
     fn lowerEntryWrapperAtCell(
@@ -16568,11 +16633,23 @@ const BodyContext = struct {
     fn lowerNestedFunctionAtNode(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
-        fn_node: NodeId,
+        raw_fn_node: NodeId,
         checked_body_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
         _: Ast.SignatureRelation,
     ) Allocator.Error!LoweredTemplateBody {
+        const expr = self.view.bodies.expr(expr_id);
+        const procedure_expr: checked.CheckedExprId = switch (expr.data) {
+            .lambda => expr_id,
+            .closure => |closure| closure.lambda,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
+        };
+        const fn_node = try self.finalizeProcedureRequestForRecursiveStorage(
+            procedure_expr,
+            checked_body_fn_node,
+            raw_fn_node,
+        );
+        try self.recordProcedureExactNominalSelections(fn_node);
         const fn_nodes = try self.graph.functionNodes(fn_node);
         const saved_function_entry_demand_guards = self.function_entry_demand_guards;
         defer self.function_entry_demand_guards = saved_function_entry_demand_guards;
@@ -16580,9 +16657,8 @@ const BodyContext = struct {
         @memcpy(entry_guards[0..fn_nodes.args.len], fn_nodes.args);
         @memcpy(entry_guards[fn_nodes.args.len..], capture_entry_guards);
         self.function_entry_demand_guards = entry_guards;
-        const expr = self.view.bodies.expr(expr_id);
         const return_relation = try self.functionRequestReturnRelation(fn_node);
-        return switch (expr.data) {
+        var lowered = switch (expr.data) {
             .lambda => |lambda| try self.lowerNestedLambdaTemplateAtNode(expr_id, lambda, fn_node, checked_body_fn_node, return_relation),
             .closure => |closure| blk: {
                 const lambda_expr = self.view.bodies.expr(closure.lambda);
@@ -16597,6 +16673,8 @@ const BodyContext = struct {
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
         };
+        lowered.request_fn_node = fn_node;
+        return lowered;
     }
 
     fn lowerNestedLambdaTemplateAtNode(
@@ -16867,6 +16945,26 @@ const BodyContext = struct {
                 access,
                 try self.lowerExprTypeNode(expr_id),
             ),
+            .dispatch_call => |plan| return try self.lowerDispatchExprAtType(
+                expr.ty,
+                plan,
+                DraftTypeCell.fromGraphNode(try self.freshInstNode(expr.ty)),
+            ),
+            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(
+                expr.ty,
+                interpolation.plan,
+                DraftTypeCell.fromGraphNode(try self.freshInstNode(expr.ty)),
+            ),
+            .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(
+                expr.ty,
+                plan,
+                DraftTypeCell.fromGraphNode(try self.freshInstNode(expr.ty)),
+            ),
+            .method_eq => |plan| return try self.lowerDispatchExprAtType(
+                expr.ty,
+                plan,
+                DraftTypeCell.fromGraphNode(try self.freshInstNode(expr.ty)),
+            ),
             .lambda => return try self.lowerLambdaExprAtNode(
                 expr_id,
                 try self.lowerExprTypeNode(expr_id),
@@ -16876,7 +16974,7 @@ const BodyContext = struct {
                 closure,
                 try self.lowerExprTypeNode(expr_id),
             ),
-            .pending, .str_segment, .bytes_literal, .match_, .if_, .call, .block, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .str_segment, .bytes_literal, .match_, .if_, .call, .block, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
@@ -16886,23 +16984,7 @@ const BodyContext = struct {
                 block,
                 DraftTypeCell.fromGraphNode(expr_node),
             ),
-            .dispatch_call => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
-            },
-            .interpolation => |interpolation| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, DraftTypeCell.fromGraphNode(expr_node));
-            },
-            .type_dispatch_call => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
-            },
-            .method_eq => |plan| {
-                if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return restored;
-                return try self.lowerDispatchExprAtType(expr.ty, plan, DraftTypeCell.fromGraphNode(expr_node));
-            },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return restored;
@@ -17407,6 +17489,16 @@ const BodyContext = struct {
         // inhabitation must not import it back into the active graph; deferred
         // inspect generation runs after relation production is frozen.
         return self.builder.typeIsProvenUninhabited(ty);
+    }
+
+    fn typeCellIsProvenUninhabited(
+        self: *BodyContext,
+        cell: DraftTypeCell,
+    ) Allocator.Error!bool {
+        return switch (cell) {
+            .sealed => |ty| try self.typeIsProvenUninhabited(ty),
+            .graph_node => |node| try self.nodeIsProvenUninhabited(node),
+        };
     }
 
     fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
@@ -19155,6 +19247,159 @@ const BodyContext = struct {
                 false,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
+    }
+
+    const RecursiveStorageTransform = union(enum) {
+        visiting: ?NodeId,
+        done: NodeId,
+    };
+
+    /// Select the representation of one checker-declared recursive-storage
+    /// slot. This is the only traversal associated with that declaration: it
+    /// descends the slot once, handles an exact generated nominal immediately
+    /// when encountered, and rebuilds only the compound path that contains it.
+    fn recursiveStorageRepresentation(
+        self: *BodyContext,
+        raw_node: NodeId,
+        transformed: *collections.DenseMap(NodeId, RecursiveStorageTransform),
+    ) Allocator.Error!NodeId {
+        const node = self.graph.rootNode(raw_node);
+        const entry = try transformed.getOrPut(node);
+        if (entry.found_existing) return switch (entry.value_ptr.*) {
+            .done => |done| done,
+            .visiting => |reserved| if (reserved) |existing| existing else blk: {
+                const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                entry.value_ptr.* = .{ .visiting = placeholder };
+                break :blk placeholder;
+            },
+        };
+        entry.value_ptr.* = .{ .visiting = null };
+
+        const content = self.graph.content(node);
+        const result: NodeId = if (self.isGeneratedPrivateRootNode(node)) blk: {
+            const named = content.named;
+            if (named.args.len != 1) {
+                Common.invariant("generated iterator recursive-storage slot had an unexpected argument arity");
+            }
+            break :blk try self.forcedDynamicIteratorNode(
+                node,
+                named.args[0],
+                self.graph.generatedIteratorPublicSource(node),
+            );
+        } else switch (content) {
+            .redirect => unreachable,
+            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
+            .list => |elem| blk: {
+                const next = try self.recursiveStorageRepresentation(elem, transformed);
+                break :blk if (self.graph.sameClass(elem, next)) node else try self.graph.newNode(.{ .list = next });
+            },
+            .box => |elem| blk: {
+                const next = try self.recursiveStorageRepresentation(elem, transformed);
+                break :blk if (self.graph.sameClass(elem, next)) node else try self.graph.newNode(.{ .box = next });
+            },
+            .tuple => |items| blk: {
+                var changed = false;
+                const next = try self.graph.arena().alloc(NodeId, items.len);
+                for (items, next) |item, *out| {
+                    out.* = try self.recursiveStorageRepresentation(item, transformed);
+                    changed = changed or !self.graph.sameClass(item, out.*);
+                }
+                break :blk if (changed) try self.graph.newNode(.{ .tuple = next }) else node;
+            },
+            .func => |function| blk: {
+                var changed = false;
+                const args = try self.graph.arena().alloc(NodeId, function.args.len);
+                for (function.args, args) |arg, *out| {
+                    out.* = try self.recursiveStorageRepresentation(arg, transformed);
+                    changed = changed or !self.graph.sameClass(arg, out.*);
+                }
+                const ret = try self.recursiveStorageRepresentation(function.ret, transformed);
+                changed = changed or !self.graph.sameClass(function.ret, ret);
+                break :blk if (changed) try self.graph.newNode(.{ .func = .{
+                    .args = args,
+                    .ret = ret,
+                } }) else node;
+            },
+            .tag_union => |row| blk: {
+                var changed = false;
+                const tags = try self.graph.arena().alloc(InstTag, row.tags.len);
+                for (row.tags, tags) |tag, *out_tag| {
+                    const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *out| {
+                        out.* = try self.recursiveStorageRepresentation(payload, transformed);
+                        changed = changed or !self.graph.sameClass(payload, out.*);
+                    }
+                    out_tag.* = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = payloads,
+                    };
+                }
+                const ext = try self.recursiveStorageRepresentation(row.ext, transformed);
+                changed = changed or !self.graph.sameClass(row.ext, ext);
+                break :blk if (changed) try self.graph.newNode(.{ .tag_union = .{
+                    .tags = tags,
+                    .ext = ext,
+                } }) else node;
+            },
+            .record => |row| blk: {
+                var changed = false;
+                const fields = try self.graph.arena().alloc(InstField, row.fields.len);
+                for (row.fields, fields) |field, *out| {
+                    out.* = .{
+                        .name = field.name,
+                        .ty = try self.recursiveStorageRepresentation(field.ty, transformed),
+                    };
+                    changed = changed or !self.graph.sameClass(field.ty, out.ty);
+                }
+                const ext = try self.recursiveStorageRepresentation(row.ext, transformed);
+                changed = changed or !self.graph.sameClass(row.ext, ext);
+                break :blk if (changed) try self.graph.newNode(.{ .record = .{
+                    .fields = fields,
+                    .ext = ext,
+                } }) else node;
+            },
+            .named => |source| blk: {
+                var named = source;
+                var changed = false;
+                const args = try self.graph.arena().alloc(NodeId, source.args.len);
+                for (source.args, args) |arg, *out| {
+                    out.* = try self.recursiveStorageRepresentation(arg, transformed);
+                    changed = changed or !self.graph.sameClass(arg, out.*);
+                }
+                named.args = args;
+                if (source.backing) |backing| {
+                    const backing_node = try self.recursiveStorageRepresentation(backing.node, transformed);
+                    changed = changed or !self.graph.sameClass(backing.node, backing_node);
+                    named.backing = .{
+                        .node = backing_node,
+                        .use = backing.use,
+                        .authority = backing.authority,
+                    };
+                }
+                const declared = try self.graph.arena().alloc(InstDeclaredField, source.declared_order.len);
+                for (source.declared_order, declared) |field, *out| switch (field) {
+                    .named => |name| out.* = .{ .named = name },
+                    .padding => |padding| {
+                        const next = try self.recursiveStorageRepresentation(padding, transformed);
+                        changed = changed or !self.graph.sameClass(padding, next);
+                        out.* = .{ .padding = next };
+                    },
+                };
+                named.declared_order = declared;
+                break :blk if (changed) try self.graph.newNode(.{ .named = named }) else node;
+            },
+        };
+
+        const final = switch (transformed.get(node) orelse unreachable) {
+            .done => unreachable,
+            .visiting => |reserved| if (reserved) |placeholder| blk: {
+                try self.graph.completeReservedProducedNode(placeholder, self.graph.content(result));
+                break :blk placeholder;
+            } else result,
+        };
+        try transformed.put(node, .{ .done = final });
+        return final;
     }
 
     /// Build an exact iterator procedure request entirely in the active
@@ -29913,8 +30158,10 @@ const BodyContext = struct {
                     checked_expr,
                     DraftTypeCell.fromGraphNode(nodes[index]),
                 )
+            else if (!self.isNestedCallableExpr(checked_expr))
+                try self.lowerExpr(checked_expr)
             else
-                try self.lowerExpr(checked_expr);
+                continue;
             try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
         }
     }
@@ -29930,7 +30177,10 @@ const BodyContext = struct {
         }
         for (operands, checked_nodes, 0..) |operand, checked_node, index| {
             const lowered = switch (operand) {
-                .checked_expr => |expr| try self.lowerExpr(expr),
+                .checked_expr => |expr| if (self.isNestedCallableExpr(expr))
+                    continue
+                else
+                    try self.lowerExpr(expr),
                 .generated_interpolation_iter => |expr| blk: {
                     const produced_node = try self.generatedInterpolationIteratorNode(expr, checked_node);
                     break :blk try self.lowerGeneratedInterpolationIterAtNode(expr, produced_node);
@@ -29970,9 +30220,15 @@ const BodyContext = struct {
         const reserved = try self.reserveExprSpan(checked_exprs.len);
         errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (nodes, 0..) |node, index| {
-            const pre = self.preLoweredOperandAt(pre_lowered, index) orelse
-                Common.invariant("call operand was not completed before specialization");
-            const lowered = try self.wrapCheckedNominalRequestAroundBackingValue(node, pre);
+            const lowered = if (self.preLoweredOperandAt(pre_lowered, index)) |pre|
+                try self.wrapCheckedNominalRequestAroundBackingValue(node, pre)
+            else if (self.isNestedCallableExpr(checked_exprs[index]))
+                try self.lowerExprAtExactRequest(
+                    checked_exprs[index],
+                    DraftTypeCell.fromGraphNode(node),
+                )
+            else
+                Common.invariant("non-callable operand was not completed before specialization");
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
         }
         return reserved.span;
@@ -29988,9 +30244,15 @@ const BodyContext = struct {
         const reserved = try self.reserveExprSpan(operands.len);
         errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (nodes, 0..) |node, index| {
-            const pre = self.preLoweredOperandAt(pre_lowered, index) orelse
-                Common.invariant("dispatch operand was not completed before specialization");
-            const wrapped = try self.wrapCheckedNominalRequestAroundBackingValue(node, pre);
+            const wrapped = if (self.preLoweredOperandAt(pre_lowered, index)) |pre|
+                try self.wrapCheckedNominalRequestAroundBackingValue(node, pre)
+            else switch (operands[index]) {
+                .checked_expr => |expr| if (self.isNestedCallableExpr(expr))
+                    try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(node))
+                else
+                    Common.invariant("non-callable dispatch operand was not completed before specialization"),
+                .generated_interpolation_iter, .generated_numeral, .generated_quote => Common.invariant("generated dispatch operand was not completed before specialization"),
+            };
             self.draft.setReservedExprSpanItem(reserved, index, wrapped);
         }
         return reserved.span;
@@ -30950,12 +31212,28 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        return try self.lowerCallExprAtNodeWithProducerRequest(checked_expr, expected_node, null);
+    }
+
+    fn lowerCallExprAtProducerNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        return try self.lowerCallExprAtNodeWithProducerRequest(checked_expr, expected_node, expected_node);
+    }
+
+    fn lowerCallExprAtNodeWithProducerRequest(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+        producer_request: ?NodeId,
+    ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
         const call = switch (expr.data) {
             .call => |call| call,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
         };
-        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
         const lowered = if (try self.lowerInspectOnlyCall(
             expr.ty,
             call,
@@ -40623,6 +40901,10 @@ const BodyContext = struct {
                 try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
+            .call => try self.lowerCallExprAtProducerNode(
+                checked_expr,
+                try request_cell.toGraphNode(self.graph),
+            ),
             .pending,
             .numeral,
             .str_from_quote,
@@ -40634,7 +40916,6 @@ const BodyContext = struct {
             .lookup_required,
             .empty_list,
             .empty_record,
-            .call,
             .zero_argument_tag,
             .closure,
             .lambda,
@@ -43105,22 +43386,21 @@ const BodyContext = struct {
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
 
-        const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
+        const value = try self.lowerExpr(expr_id);
         if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             return .{
-                .stmt = try self.addStmt(.{ .expr = try self.lowerDivergentExprAtTypeCell(expr_id, cell) }),
+                .stmt = try self.addStmt(.{ .expr = value }),
                 .termination = .checked_control_transfer,
             };
         }
-        const node = try cell.toGraphNode(self.graph);
-        if (try self.nodeIsProvenUninhabited(node)) {
+        if (try self.typeCellIsProvenUninhabited(self.exprTypeCell(value))) {
             return .{
                 .stmt = null,
-                .termination = .{ .uninhabited = try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, cell) },
+                .termination = .{ .uninhabited = value },
             };
         }
         return .{
-            .stmt = try self.addStmt(.{ .expr = try self.lowerExprAtTypeCell(expr_id, cell) }),
+            .stmt = try self.addStmt(.{ .expr = value }),
             .termination = .none,
         };
     }
@@ -43300,12 +43580,6 @@ const BodyContext = struct {
             try self.registerLocalAssociatedProcedures(statement);
             if (!self.checkedStatementHasRuntimeEffect(statement)) continue;
             const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
-            if (!statement_diverges) {
-                if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
-                    lowered.termination = .{ .uninhabited = scrutinee };
-                    break;
-                }
-            }
             var termination: StatementTermination = if (statement_diverges)
                 .checked_control_transfer
             else
@@ -43332,35 +43606,6 @@ const BodyContext = struct {
             }
         }
         return lowered;
-    }
-
-    fn lowerUninhabitedStatementScrutinee(
-        self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
-    ) Allocator.Error!?DraftExprId {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
-        defer timing_scope.end();
-        const statement = self.view.bodies.statement(statement_id);
-        const expr_id = switch (statement.data) {
-            .decl => |decl| if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null else decl.expr,
-            .var_ => |decl| decl.expr,
-            .reassign => |decl| decl.expr,
-            .expr => |expr| expr,
-            .dbg => |expr| expr,
-            .expect => |expr| if (self.builder.inline_expects == .run) expr else return null,
-            .pending, .var_uninitialized, .crash, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
-        };
-        // An explicit checked runtime error emits a crash and has a deliberately
-        // erroneous source type. Probing its type node here would demand an
-        // instantiation checking intentionally did not produce.
-        if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
-        if (try self.graphFreeResultTypeForExpr(expr_id)) |ty| {
-            if (!try self.typeIsProvenUninhabited(ty)) return null;
-            return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, .{ .sealed = ty });
-        }
-        const node = try self.lowerExprTypeNode(expr_id);
-        if (!try self.nodeIsProvenUninhabited(node)) return null;
-        return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, DraftTypeCell.fromGraphNode(node));
     }
 
     fn statementTerminationIsNone(termination: StatementTermination) bool {
@@ -44594,12 +44839,6 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const carry_node = try carry.ty.toGraphNode(self.graph);
         if (feedback == .recursive_feedback) {
-            // A continue edge is producer-authored recursive value flow even
-            // when an earlier assignment already joined the current value to
-            // the loop parameter. Record the edge itself; representation
-            // finalization will force only slots that actually joined distinct
-            // minted iterator identities.
-            try self.graph.markRecursiveValueSlot(carry_node);
             const current_node = try self.localTypeCell(current).toGraphNode(self.graph);
             if (self.graph.content(carry_node) != .named and self.graph.content(current_node) != .named) {
                 try self.graph.applyCompoundStorageRepresentation(carry_node, current_node);
@@ -44906,6 +45145,13 @@ const BodyContext = struct {
         defer self.builder.program.current_region = saved_region;
         self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         self.builder.program.current_region = statement.source_region;
+        if (statement.data == .expr) {
+            const lowered = try self.lowerDiscardedExprStatementAtTypeCell(statement.data.expr);
+            return .{
+                .stmt = lowered.stmt,
+                .termination = lowered.termination,
+            };
+        }
         var termination: StatementTermination = .none;
         const stmt: DraftStmt = switch (statement.data) {
             .pending,
@@ -44946,7 +45192,7 @@ const BodyContext = struct {
             },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
-            .expr => |child| try self.lowerExprStatement(child),
+            .expr => unreachable,
             .expect => |child| if (self.builder.inline_expects == .omit) blk: {
                 const unit_ty = try self.unitType();
                 break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
@@ -45421,6 +45667,12 @@ const BodyContext = struct {
             }
             break :blk produced_cell;
         } else produced_cell;
+        if (try self.typeCellIsProvenUninhabited(value_cell)) {
+            return .{
+                .stmt = null,
+                .termination = .{ .uninhabited = value },
+            };
+        }
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
             try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
@@ -45726,30 +45978,6 @@ const BodyContext = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("local procedure declaration pattern was not a binder"),
         };
-    }
-
-    fn lowerExprStatement(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftStmt {
-        const merge_binders = try self.stateMergeBinders(expr_id);
-        defer self.allocator.free(merge_binders);
-        if (merge_binders.len == 0) return .{ .expr = try self.lowerExpr(expr_id) };
-
-        const state_cell = try self.stateOnlyTypeCell(merge_binders);
-        const checked_expr = self.view.bodies.expr(expr_id);
-        const state_expr = switch (checked_expr.data) {
-            .if_ => |if_| try self.addExprWithTypeCell(
-                state_cell,
-                try self.lowerIfStateOnlyAtTypeCell(if_, state_cell, merge_binders, try self.ifComptimeSite(expr_id, if_)),
-            ),
-            .match_ => |match| try self.lowerMatchExprWithOutput(match, .{ .state_only = .{
-                .state_cell = state_cell,
-                .merge_binders = merge_binders,
-            } }, try self.matchComptimeSite(expr_id, match)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerBodyThenStateOnlyAtTypeCell(expr_id, state_cell, merge_binders),
-        };
-        return .{ .let_ = .{
-            .pat = try self.stateOnlyPatternAtTypeCell(state_cell, merge_binders),
-            .value = state_expr,
-        } };
     }
 
     fn statementDeclIsLocalProc(

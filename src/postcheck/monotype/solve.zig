@@ -787,7 +787,24 @@ pub const InstGraph = struct {
             if (entry.found_existing) continue;
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
-                .unresolved => |variable| try self.setContent(node, materializeInstUnresolved(variable)),
+                .unresolved => |variable| {
+                    const completed: InstNode = if (variable.numeric_default_phase) |phase| blk: {
+                        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                            Common.invariant("checking-finalized numeric variable reached generated identity production");
+                        break :blk switch (target) {
+                            .dec => .{ .primitive = .dec },
+                            .str => .{ .primitive = .str },
+                        };
+                    } else if (variable.row_default) |row_default| switch (row_default) {
+                        .empty_record => .empty_record,
+                        .empty_tag_union => .empty_tag_union,
+                    } else switch (variable.origin) {
+                        .checked_variable => Common.invariant("generated identity producer was invoked before its checked type input was complete"),
+                        .row_extension => Common.invariant("row extension reached generated identity production without its checked default"),
+                        .placeholder => Common.invariant("generated identity producer was invoked before an explicit type input existed"),
+                    };
+                    try self.setContent(node, completed);
+                },
                 .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
@@ -1134,6 +1151,22 @@ pub const InstGraph = struct {
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
+    }
+
+    /// Complete a placeholder reserved by one explicit producer traversal.
+    /// This exists for recursive structural producers whose self-edge is
+    /// encountered before the enclosing node has been built.
+    pub fn completeReservedProducedNode(
+        self: *InstGraph,
+        reserved: NodeId,
+        produced_content: InstNode,
+    ) Allocator.Error!void {
+        const root = self.find(reserved);
+        const existing = self.nodes.items[@intFromEnum(root)];
+        if (existing != .unresolved or existing.unresolved.origin != .placeholder) {
+            Common.invariant("produced node reservation was completed more than once");
+        }
+        try self.setContent(root, produced_content);
     }
 
     /// Reserve a graph node before constructing content that recursively
@@ -2219,6 +2252,123 @@ pub const InstGraph = struct {
             );
         }
         return .{ .request = request_fn, .components = components };
+    }
+
+    /// Materialize one checker-identified slot through the exact selections
+    /// already present in a completed function request. This is used only by a
+    /// checker-declared representation boundary, before the procedure body is
+    /// lowered; it does not search the function for a generated descendant.
+    pub fn producedNodeForCheckedRequestSlot(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        checked_slot: NodeId,
+    ) Allocator.Error!NodeId {
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+        try self.seedCompleteFunctionRequestSubstitution(
+            checked_fn_node,
+            current_request_fn_node,
+            &substitution,
+        );
+        return try self.materializeFunctionRequestNode(
+            checked_slot,
+            checked_slot,
+            &substitution,
+        );
+    }
+
+    /// Finalize a procedure request from checker-declared recursive-storage
+    /// slots. Each supplied representation is authoritative for its checked
+    /// identity, so all correlated argument and result occurrences are rebuilt
+    /// in one directed traversal before body lowering begins.
+    pub fn functionRequestWithRecursiveStorage(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        checked_slots: []const NodeId,
+        storage_nodes: []const NodeId,
+    ) Allocator.Error!NodeId {
+        if (checked_slots.len != storage_nodes.len) {
+            Common.invariant("recursive-storage request received different selection lengths");
+        }
+        if (checked_slots.len == 0) return current_request_fn_node;
+
+        var substitution = FunctionRequestSubstitution.init(self.allocator);
+        defer substitution.deinit();
+        try self.seedCompleteFunctionRequestSubstitution(
+            checked_fn_node,
+            current_request_fn_node,
+            &substitution,
+        );
+        for (checked_slots, storage_nodes) |checked_slot, storage_node| {
+            const checked_root = self.find(checked_slot);
+            const storage_root = self.find(storage_node);
+            const entry = try substitution.replacements.getOrPut(checked_root);
+            if (!entry.found_existing or !self.sameClass(entry.value_ptr.*, storage_root)) {
+                entry.value_ptr.* = storage_root;
+                substitution.changed_after_seed = true;
+            }
+        }
+
+        const checked_root = try self.functionRequestRoot(checked_fn_node);
+        const current_root = try self.functionRequestRoot(current_request_fn_node);
+        const finalized = try self.materializeFunctionRequestNodeMode(
+            checked_root,
+            current_root,
+            &substitution,
+            .request,
+        );
+        _ = try self.functionNodes(finalized);
+        try self.registerRequestCheckedSource(finalized, checked_root);
+        try self.recordRequestSubstitutions(finalized, &substitution);
+        return finalized;
+    }
+
+    fn seedCompleteFunctionRequestSubstitution(
+        self: *InstGraph,
+        checked_fn_node: NodeId,
+        current_request_fn_node: NodeId,
+        substitution: *FunctionRequestSubstitution,
+    ) Allocator.Error!void {
+        const checked_root = try self.functionRequestRoot(checked_fn_node);
+        const current_root = try self.functionRequestRoot(current_request_fn_node);
+        const checked_fn = try self.functionNodes(checked_root);
+        const current_fn = try self.functionNodes(current_root);
+        if (checked_fn.args.len != current_fn.args.len) {
+            Common.invariant("function request source and current interface had different arities");
+        }
+
+        const current_source = self.requestCheckedSource(current_root);
+        const source_matches = if (current_source) |source|
+            self.sameClass(try self.functionRequestRoot(source), checked_root)
+        else
+            false;
+        const stored = self.request_substitution_spans.items[@intFromEnum(current_root)];
+        if (source_matches and stored.isInitialized()) {
+            for (self.requestSubstitutions(current_root)) |selection| {
+                try self.seedFunctionRequestReplacement(
+                    self.find(selection.checked),
+                    self.find(selection.produced),
+                    substitution,
+                );
+            }
+            return;
+        }
+
+        for (checked_fn.args, current_fn.args) |checked_arg, current_arg| {
+            try self.collectFunctionRequestSubstitutions(
+                checked_arg,
+                current_arg,
+                substitution,
+            );
+        }
+        try self.collectFunctionRequestSubstitutions(
+            checked_fn.ret,
+            current_fn.ret,
+            substitution,
+        );
+        substitution.compared.clearRetainingCapacity();
     }
 
     fn recordRequestSubstitutions(
@@ -5861,26 +6011,6 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
         .checked_variable => .{ .tag_union = Type.Span.empty() },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
         .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
-    };
-}
-
-fn materializeInstUnresolved(variable: InstVariable) InstNode {
-    if (variable.numeric_default_phase) |phase| {
-        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-            Common.invariant("checking-finalized numeric variable reached generated identity production");
-        return switch (target) {
-            .dec => .{ .primitive = .dec },
-            .str => .{ .primitive = .str },
-        };
-    }
-    if (variable.row_default) |row_default| return switch (row_default) {
-        .empty_record => .empty_record,
-        .empty_tag_union => .empty_tag_union,
-    };
-    return switch (variable.origin) {
-        .checked_variable => .empty_tag_union,
-        .row_extension => Common.invariant("row extension reached generated identity production without its checked default"),
-        .placeholder => Common.invariant("generated identity producer was invoked before an explicit type input existed"),
     };
 }
 

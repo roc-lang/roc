@@ -7564,12 +7564,36 @@ fn copyCheckedTypePayload(
 ) Allocator.Error!CheckedTypePayloadBuild {
     return switch (content) {
         .err => .err,
-        .flex => |flex| .{ .flex = .{
-            .name = try copyOptionalIdentText(allocator, module, flex.name),
-            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, store, active, flex.constraints),
-            .numeric_default_phase = numericDefaultPhaseForFlex(module, flex),
-            .row_default = null,
-        } },
+        .flex => |flex| blk: {
+            const name = try copyOptionalIdentText(allocator, module, flex.name);
+            errdefer if (name) |owned| allocator.free(owned);
+            const constraints = try copyCheckedStaticDispatchConstraints(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                flex.constraints,
+            );
+            errdefer if (constraints.len != 0) allocator.free(constraints);
+            const numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
+            break :blk .{
+                .flex = .{
+                    .name = name,
+                    .constraints = constraints,
+                    .numeric_default_phase = numeric_default_phase,
+                    // Checking is the authority that knows this flexible source
+                    // variable has no remaining constraint. Publish its final
+                    // language default explicitly so post-check producers never
+                    // have to infer one from an unresolved graph node.
+                    .row_default = if (constraints.len == 0 and numeric_default_phase == null)
+                        .empty_tag_union
+                    else
+                        null,
+                },
+            };
+        },
         .rigid => |rigid| .{ .rigid = .{
             .name = try copyIdentText(allocator, module, rigid.name),
             .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, store, active, rigid.constraints),
@@ -15317,7 +15341,271 @@ fn sealCheckedProcedureTemplateRefs(
         .scope_site_spans = scope_site_spans,
         .scope_sites = try scope_site_pool.toOwnedSlice(allocator),
     };
+    try publishRecursiveStorageTypes(
+        allocator,
+        checked_bodies,
+        static_dispatch_plans,
+        templates,
+    );
 }
+
+/// Publish the recursive-storage contract for every checked procedure. The
+/// checker has already identified the precise binders written by each
+/// reassignment. This pass only groups those explicit facts by their owning
+/// lambda and checked type identity; it does not inspect type shape or predict
+/// a runtime representation.
+fn publishRecursiveStorageTypes(
+    allocator: Allocator,
+    checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    templates: *CheckedProcedureTemplateTable,
+) Allocator.Error!void {
+    if (templates.recursive_storage_by_expr.len != 0 or
+        templates.recursive_storage_types.len != 0)
+    {
+        checkedArtifactInvariant("recursive-storage metadata was published twice", .{});
+    }
+
+    const spans = try allocator.alloc(artifact_serialize.Span, checked_bodies.exprCount());
+    errdefer allocator.free(spans);
+    @memset(spans, .{});
+    var storage_types = std.ArrayList(CheckedTypeId).empty;
+    errdefer storage_types.deinit(allocator);
+
+    var publisher = RecursiveStoragePublisher.init(
+        allocator,
+        checked_bodies,
+        static_dispatch_plans,
+    );
+    defer publisher.deinit();
+
+    for (0..checked_bodies.exprCount()) |raw_expr| {
+        const procedure_expr: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+        const expr = checked_bodies.expr(procedure_expr);
+        if (expr.data != .lambda) continue;
+
+        publisher.clear();
+        try publisher.collectExpr(expr.data.lambda.body);
+        const start: u32 = @intCast(storage_types.items.len);
+        for (publisher.binders.items) |binder| {
+            const binder_pattern = checked_bodies.patternBinder(binder).pattern;
+            const checked_ty = checked_bodies.pattern(binder_pattern).ty;
+            var duplicate = false;
+            for (storage_types.items[start..]) |existing| {
+                if (existing == checked_ty) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) try storage_types.append(allocator, checked_ty);
+        }
+        spans[raw_expr] = .{
+            .start = start,
+            .len = @intCast(storage_types.items.len - start),
+        };
+    }
+
+    templates.recursive_storage_by_expr = spans;
+    templates.recursive_storage_types = try storage_types.toOwnedSlice(allocator);
+}
+
+const RecursiveStoragePublisher = struct {
+    allocator: Allocator,
+    checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    binders: std.ArrayList(PatternBinderId),
+    visited_exprs: collections.DenseMap(CheckedExprId, void),
+    visited_statements: collections.DenseMap(CheckedStatementId, void),
+
+    fn init(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) RecursiveStoragePublisher {
+        return .{
+            .allocator = allocator,
+            .checked_bodies = checked_bodies,
+            .static_dispatch_plans = static_dispatch_plans,
+            .binders = .empty,
+            .visited_exprs = collections.DenseMap(CheckedExprId, void).init(allocator),
+            .visited_statements = collections.DenseMap(CheckedStatementId, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *RecursiveStoragePublisher) void {
+        self.visited_statements.deinit();
+        self.visited_exprs.deinit();
+        self.binders.deinit(self.allocator);
+    }
+
+    fn clear(self: *RecursiveStoragePublisher) void {
+        self.binders.clearRetainingCapacity();
+        self.visited_exprs.clearRetainingCapacity();
+        self.visited_statements.clearRetainingCapacity();
+    }
+
+    fn appendBinder(self: *RecursiveStoragePublisher, binder: PatternBinderId) Allocator.Error!void {
+        for (self.binders.items) |existing| if (existing == binder) return;
+        try self.binders.append(self.allocator, binder);
+    }
+
+    fn collectPlan(self: *RecursiveStoragePublisher, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        const raw = @intFromEnum(plan_id);
+        if (raw >= self.static_dispatch_plans.plans.len) {
+            checkedArtifactInvariant("recursive-storage publication referenced a missing dispatch plan", .{});
+        }
+        const plan = self.static_dispatch_plans.plans[raw];
+        for (plan.argsSlice(self.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try self.collectExpr(expr),
+            .generated_interpolation_iter => |expr| try self.collectInterpolation(expr),
+            .generated_numeral, .generated_quote => {},
+        };
+    }
+
+    fn collectInterpolation(self: *RecursiveStoragePublisher, expr_id: CheckedExprId) Allocator.Error!void {
+        const expr = self.checked_bodies.expr(expr_id);
+        if (expr.data != .interpolation) {
+            checkedArtifactInvariant("recursive-storage interpolation operand was not an interpolation", .{});
+        }
+        for (expr.data.interpolation.parts) |part| {
+            try self.collectExpr(part.value);
+            try self.collectExpr(part.following_segment);
+        }
+    }
+
+    fn collectExpr(self: *RecursiveStoragePublisher, expr_id: CheckedExprId) Allocator.Error!void {
+        const entry = try self.visited_exprs.getOrPut(expr_id);
+        if (entry.found_existing) return;
+        const expr = self.checked_bodies.expr(expr_id);
+        switch (expr.data) {
+            .str, .list, .tuple => |items| for (items) |item| try self.collectExpr(item),
+            .match_ => |match| {
+                try self.collectExpr(match.cond);
+                for (match.branches) |branch| {
+                    if (branch.guard) |guard| try self.collectExpr(guard);
+                    try self.collectExpr(branch.value);
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.collectExpr(branch.cond);
+                    try self.collectExpr(branch.body);
+                }
+                try self.collectExpr(if_.final_else);
+            },
+            .call => |call| {
+                try self.collectExpr(call.func);
+                for (call.args) |arg| try self.collectExpr(arg);
+            },
+            .record => |record| {
+                if (record.ext) |ext| try self.collectExpr(ext);
+                for (record.fields) |field| try self.collectExpr(field.value);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.collectStatement(statement);
+                try self.collectExpr(block.final_expr);
+            },
+            .tag => |tag| for (tag.args) |arg| try self.collectExpr(arg),
+            .nominal => |nominal| try self.collectExpr(nominal.backing_expr),
+            .binop => |binop| {
+                try self.collectExpr(binop.lhs);
+                try self.collectExpr(binop.rhs);
+            },
+            .unary_minus, .unary_not, .dbg, .expect => |child| try self.collectExpr(child),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
+            .field_access => |field| try self.collectExpr(field.receiver),
+            .structural_eq => |eq| {
+                try self.collectExpr(eq.lhs);
+                try self.collectExpr(eq.rhs);
+            },
+            .structural_hash => |hash| {
+                try self.collectExpr(hash.value);
+                try self.collectExpr(hash.hasher);
+            },
+            .tuple_access => |access| try self.collectExpr(access.tuple),
+            .return_ => |ret| try self.collectExpr(ret.expr),
+            .for_ => |for_| {
+                try self.collectExpr(for_.expr);
+                try self.collectExpr(for_.body);
+            },
+            .run_low_level => |low_level| for (low_level.args) |arg| try self.collectExpr(arg),
+            .dispatch_call, .method_eq, .type_dispatch_call => |plan| if (plan) |id| try self.collectPlan(id),
+            .interpolation => |interpolation| {
+                for (interpolation.parts) |part| {
+                    try self.collectExpr(part.value);
+                    try self.collectExpr(part.following_segment);
+                }
+                if (interpolation.plan) |id| try self.collectPlan(id);
+            },
+            .numeral => |numeral| if (numeral.plan) |id| try self.collectPlan(id),
+            .str_from_quote => |quote| if (quote.plan) |id| try self.collectPlan(id),
+            // A nested procedure owns its own recursive-storage column.
+            .lambda, .closure, .hosted_lambda => {},
+            .pending,
+            .str_segment,
+            .bytes_literal,
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .runtime_error,
+            .crash,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            => {},
+        }
+    }
+
+    fn collectStatement(
+        self: *RecursiveStoragePublisher,
+        statement_id: CheckedStatementId,
+    ) Allocator.Error!void {
+        const entry = try self.visited_statements.getOrPut(statement_id);
+        if (entry.found_existing) return;
+        const statement = self.checked_bodies.statement(statement_id);
+        switch (statement.data) {
+            .decl => |decl| try self.collectExpr(decl.expr),
+            .var_ => |var_| try self.collectExpr(var_.expr),
+            .var_uninitialized => {},
+            .reassign => |reassign| {
+                for (reassign.reassigned_binders) |binder| try self.appendBinder(binder);
+                try self.collectExpr(reassign.expr);
+            },
+            .dbg, .expr, .expect => |expr| try self.collectExpr(expr),
+            .for_ => |for_| {
+                try self.collectExpr(for_.expr);
+                try self.collectExpr(for_.body);
+            },
+            .while_ => |while_| {
+                try self.collectExpr(while_.cond);
+                try self.collectExpr(while_.body);
+            },
+            .infinite_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .return_ => |ret| try self.collectExpr(ret.expr),
+            .pending,
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => {},
+        }
+    }
+};
 
 /// Attach the producer-owned dispatch scope identity to every use of a local
 /// procedure. A generalized local procedure may own a scope even when its
@@ -17730,6 +18018,15 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
+    /// Dense, expression-indexed spans of checker-authored storage slots for
+    /// each procedure expression. A slot appears here exactly when checking
+    /// proved that values of that checked type cross a reassignment/loop
+    /// boundary owned by the procedure. Monotype consumes this before lowering
+    /// any part of the procedure body; it never rediscovers recursive storage
+    /// by inspecting produced type graphs.
+    recursive_storage_by_expr: []artifact_serialize.Span = &.{},
+    /// Flat pool backing `recursive_storage_by_expr`.
+    recursive_storage_types: []CheckedTypeId = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -17741,6 +18038,8 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
+        recursive_storage_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
+        recursive_storage_types: SerializedSlice(CheckedTypeId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -17981,6 +18280,8 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.dispatch_scopes);
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_interface_types);
+        allocator.free(self.recursive_storage_by_expr);
+        allocator.free(self.recursive_storage_types);
         self.* = .{};
     }
 
@@ -18002,6 +18303,21 @@ pub const CheckedProcedureTemplateTable = struct {
 
     pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: artifact_serialize.Span) []const CheckedTypeId {
         return self.specialization_interface_types[span.start .. span.start + span.len];
+    }
+
+    /// The exact checked identities whose values cross recursive storage in
+    /// `procedure_expr`. This is a dense lookup because checked expression ids
+    /// are dense artifact-local identities.
+    pub fn recursiveStorageTypes(
+        self: *const CheckedProcedureTemplateTable,
+        procedure_expr: CheckedExprId,
+    ) []const CheckedTypeId {
+        const raw = @intFromEnum(procedure_expr);
+        if (raw >= self.recursive_storage_by_expr.len) {
+            checkedArtifactInvariant("procedure expression had no recursive-storage column", .{});
+        }
+        const span = self.recursive_storage_by_expr[raw];
+        return self.recursive_storage_types[span.start .. span.start + span.len];
     }
 };
 
@@ -27192,7 +27508,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 206);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 208);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
