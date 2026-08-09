@@ -3064,7 +3064,7 @@ Builtin :: [].{
 		# a distinct chain component), so an adapter wrapping a range carries its
 		# state by value. `len_if_known`, when `Known`, is the exact remaining
 		# yield count: each step decrements it and the final `range_done()` is
-		# `Known(0)`, which `Iter.take_last`/`drop_last` rely on.
+		# `Known(0)`.
 		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lt : num, num -> Bool,
@@ -3575,54 +3575,6 @@ Builtin :: [].{
 									}
 								},
 					)
-				}
-
-		## Returns an iterator that yields the last `n` items of this iterator.
-		## If the source has fewer than `n` items, all of them are yielded.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [3, 4, 5]
-		##
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
-		## ```
-		take_last : Iter(item), U64 -> Iter(item)
-		take_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						iterator
-					} else {
-						Iter.drop_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
-		## Returns an iterator that yields all items except the last `n`.
-		## If the source has `n` or fewer items, the result is empty.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 2, 3]
-		##
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
-		## ```
-		drop_last : Iter(item), U64 -> Iter(item)
-		drop_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						range_done()
-					} else {
-						Iter.take_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
 				}
 
 		## Returns an iterator that yields the first item and then every `n`th item
@@ -22970,8 +22922,7 @@ range_done = || iter_from_step(
 
 # Shared state machine behind the numeric types' `range_exclusive` methods.
 # Each caller supplies `len_if_known` computed from its own representation;
-# when it is `Known`, it must be the exact yield count
-# (`Iter.take_last`/`drop_last` rely on that).
+# when it is `Known`, it must be the exact yield count.
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
