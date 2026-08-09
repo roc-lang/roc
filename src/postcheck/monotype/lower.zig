@@ -3893,9 +3893,6 @@ const Builder = struct {
             .request_kind = 0,
             .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
         } else null;
-        if (resolved_lookup_address != null) {
-        } else {
-        }
         if (resolved_lookup_address) |address| {
             if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
                 for (candidates.items) |raw_spec| {
@@ -3905,6 +3902,27 @@ const Builder = struct {
                     if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
+                    if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        // The checked source root selects the template body, but it is not part
+        // of a resolved specialization's identity. The same template is reached
+        // through different checked roots whenever the call sites differ only in
+        // which alias names the argument, and recursive calls reach it that way
+        // too. Exact structural equality of two resolved request types, together
+        // with evidence and lexical context, proves the two requests name one
+        // specialization.
+        if (selection.selected() == null) {
+            if (resolved_request_ty) |request_fn_ty| {
+                for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
+                    const raw_spec: u32 = @intCast(raw_spec_usize);
+                    if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
             }
