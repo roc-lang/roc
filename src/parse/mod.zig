@@ -216,7 +216,7 @@ test "pipe question suffix precedence distinguishes empty call" {
 test "whitespace-separated postfix after pipe applies to pipe result" {
     // Repro for https://github.com/roc-lang/roc/issues/10517
     const gpa = std.testing.allocator;
-    const source = "(a |> f().inside(), a |> f() .spaced(), a |> f()\t.tabbed(), a |> f()\n.line_broken(), a |> f() .field, a |> f()\t.0)";
+    const source = "(a |> f().inside(), a |> f() .spaced(), a |> f()\t.tabbed(), a |> f()\n.line_broken(), a |> f() .field, a |> f()\t.0, a |> f() .?optional)";
 
     var env = try CommonEnv.init(gpa, source);
     defer env.deinit(gpa);
@@ -230,7 +230,7 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
     try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
     const items = ast.store.exprSlice(root.tuple.items);
-    try std.testing.expectEqual(@as(usize, 6), items.len);
+    try std.testing.expectEqual(@as(usize, 7), items.len);
 
     const adjacent = ast.store.getExpr(items[0]);
     try std.testing.expectEqual(.arrow_call, std.meta.activeTag(adjacent));
@@ -249,6 +249,14 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     const tuple_access = ast.store.getExpr(items[5]);
     try std.testing.expectEqual(.tuple_access, std.meta.activeTag(tuple_access));
     try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(tuple_access.tuple_access.expr)));
+
+    const optional_field_access = ast.store.getExpr(items[6]);
+    try std.testing.expectEqual(.field_access, std.meta.activeTag(optional_field_access));
+    try std.testing.expectEqual(.arrow_call, std.meta.activeTag(ast.store.getExpr(optional_field_access.field_access.receiver)));
+    try std.testing.expectEqual(
+        AST.FieldAccessMode.optional,
+        ast.store.fieldAccessSegmentSlice(optional_field_access.field_access.segments)[0].mode,
+    );
 }
 
 test "grouped pipe target ending in a field access starts a new suffix path" {

@@ -3668,7 +3668,7 @@ fn runExprStatementKernel(
             // Trivia-separated postfixes apply to the completed pipe; adjacent
             // NoSpaceDot* postfixes remain part of the pipe target.
             if (open_syntax.peekExpr() == .expr_pipe_rhs and
-                (tok == .DotInt or tok == .DotLowerIdent))
+                (tok == .DotInt or tok == .DotLowerIdent or tok == .DotQuestionLowerIdent))
             {
                 last_expr = expr_finish_state.expr;
                 continue :expr_kernel .complete;
