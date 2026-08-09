@@ -3796,10 +3796,13 @@ fn canonicalizeAssociatedItems(
                     }
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
-                    const derived_method_kind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
-                        self.derivedMethodKind(name_ident)
+                    const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
+                        if (self.derivedMethodKind(name_ident)) |kind|
+                            .{ .derived = kind }
+                        else
+                            .unsupported_generated_method
                     else
-                        null;
+                        .ordinary;
                     const qualified_idx = try self.insertQualifiedIdent(parent_text, name_text);
                     const assoc_key: ?AST.DeclIndex.AssocValue = if (owner_type_path) |owner|
                         .{ .owner = owner, .item = name_ident }
@@ -3848,9 +3851,9 @@ fn canonicalizeAssociatedItems(
                     };
 
                     const def_idx = if (adopted_pattern_idx) |adopted|
-                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region)
+                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region)
                     else
-                        try self.createAnnotationDef(qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region, null);
+                        try self.createAnnotationDef(qualified_idx, type_anno_idx, annotation_expr_kind, where_clauses, region, null);
 
                     if (owner_is_module_visible) {
                         try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
@@ -4326,7 +4329,7 @@ pub fn canonicalizeFile(
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
                                 const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                                 try self.env.store.addScratchDef(def_idx);
                                 try self.recordGlobalValueDef(def_idx);
 
@@ -4342,7 +4345,7 @@ pub fn canonicalizeFile(
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
                             const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                             try self.env.store.addScratchDef(def_idx);
                             try self.recordGlobalValueDef(def_idx);
 
@@ -4362,7 +4365,7 @@ pub fn canonicalizeFile(
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
                     const parser_decl_idx = self.parse_ir.decl_index.declForStatement(@intFromEnum(stmt_id));
-                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region, parser_decl_idx);
+                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, .ordinary, where_clauses, region, parser_decl_idx);
                     try self.env.store.addScratchDef(def_idx);
                     try self.recordGlobalValueDef(def_idx);
 
@@ -4523,16 +4526,27 @@ fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind
     return null;
 }
 
+const AnnotationExprKind = union(enum) {
+    ordinary,
+    derived: CIR.DerivedMethodKind,
+    unsupported_generated_method,
+};
+
 fn addAnnotationExpr(
     self: *Self,
     ident: Ident.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     region: Region,
 ) std.mem.Allocator.Error!Expr.Idx {
-    return self.env.addExpr(if (derived_method_kind) |kind|
-        Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } }
-    else
-        Expr{ .e_anno_only = .{ .ident = ident } }, region);
+    const expr = switch (annotation_expr_kind) {
+        .ordinary => Expr{ .e_anno_only = .{ .ident = ident } },
+        .derived => |kind| Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } },
+        .unsupported_generated_method => Expr{ .e_anno_only = .{
+            .ident = ident,
+            .kind = .unsupported_generated_method,
+        } },
+    };
+    return self.env.addExpr(expr, region);
 }
 
 fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
@@ -4647,7 +4661,7 @@ fn createAnnotationDef(
     self: *Self,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
     parser_decl_idx: ?AST.DeclIndex.DeclIdx,
@@ -4688,7 +4702,7 @@ fn createAnnotationDef(
     // (canonicalizeAssociatedItems) will update all three identifiers (qualified,
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
-    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -4767,13 +4781,13 @@ fn createAnnotationDefWithPattern(
     pattern_idx: CIR.Pattern.Idx,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
-    derived_method_kind: ?CIR.DerivedMethodKind,
+    annotation_expr_kind: AnnotationExprKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
 
-    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, annotation_expr_kind, region);
 
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
@@ -8837,7 +8851,7 @@ fn createBlockAnnoOnlyStatement(
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, null, where_clauses, region, null);
+    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, .ordinary, where_clauses, region, null);
     try self.env.store.addScratchDef(def_idx);
 
     const def = self.env.store.getDef(def_idx);
