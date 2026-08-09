@@ -341,6 +341,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: LLVM erased callable ABI preserves a sub-word first argument (issue #10364)",
     },
     .{
+        .roc_file = "test/fx/packed_list_two_bodies.roc",
+        .io_spec = "0<three|1>165|1>168",
+        .description = "Regression test: a packed compile-time list constant restored in two proc bodies must not reuse the first body's GEP instruction (issue #10697)",
+    },
+    .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
