@@ -48,6 +48,14 @@ capture_renames: std.AutoHashMap(PatternMod.Pattern.Idx, []const u8),
 /// Counter for generating unique names
 rename_counter: u32,
 
+/// Record-field order used while emitting expressions.
+record_field_order: RecordFieldOrder,
+
+const RecordFieldOrder = enum {
+    source,
+    lexicographic,
+};
+
 /// Initialize a new Emitter
 pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
     return .{
@@ -59,6 +67,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
         .names_in_scope = std.StringHashMap(void).init(allocator),
         .capture_renames = std.AutoHashMap(PatternMod.Pattern.Idx, []const u8).init(allocator),
         .rename_counter = 0,
+        .record_field_order = .source,
     };
 }
 
@@ -97,6 +106,16 @@ pub fn reset(self: *Self) void {
 
 /// Emit an expression as Roc source code
 pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) EmitError!void {
+    try self.emitFromFrame(.{ .expr = expr_idx });
+}
+
+/// Emit an expression with record fields ordered lexicographically at every
+/// nesting level. This is used when source-equivalent record literals need one
+/// deterministic textual identity rather than source-preserving output.
+pub fn emitExprWithLexicographicRecords(self: *Self, expr_idx: Expr.Idx) EmitError!void {
+    const previous_order = self.record_field_order;
+    self.record_field_order = .lexicographic;
+    defer self.record_field_order = previous_order;
     try self.emitFromFrame(.{ .expr = expr_idx });
 }
 
@@ -170,6 +189,42 @@ fn pushPatternList(
         i -= 1;
         try frames.append(allocator, .{ .pattern = patterns[i] });
         if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+fn recordFieldIdxLessThan(module_env: *const ModuleEnv, lhs_idx: CIR.RecordField.Idx, rhs_idx: CIR.RecordField.Idx) bool {
+    const lhs = module_env.store.getRecordField(lhs_idx);
+    const rhs = module_env.store.getRecordField(rhs_idx);
+    return module_env.getIdentStoreConst().idxTextLessThan(lhs.name, rhs.name);
+}
+
+fn pushRecordFields(
+    self: *Self,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    fields: []const CIR.RecordField.Idx,
+) EmitError!void {
+    var mb_sorted_fields: ?[]CIR.RecordField.Idx = null;
+    defer if (mb_sorted_fields) |sorted_fields| allocator.free(sorted_fields);
+
+    const ordered_fields: []const CIR.RecordField.Idx = switch (self.record_field_order) {
+        .source => fields,
+        .lexicographic => ordered: {
+            const sorted_fields = try allocator.dupe(CIR.RecordField.Idx, fields);
+            mb_sorted_fields = sorted_fields;
+            std.mem.sort(CIR.RecordField.Idx, sorted_fields, self.module_env, recordFieldIdxLessThan);
+            break :ordered sorted_fields;
+        },
+    };
+
+    var i = ordered_fields.len;
+    while (i > 0) {
+        i -= 1;
+        const field = self.module_env.store.getRecordField(ordered_fields[i]);
+        try frames.append(allocator, .{ .expr = field.value });
+        try frames.append(allocator, .{ .write = ": " });
+        try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+        if (i > 0) try frames.append(allocator, .{ .write = ", " });
     }
 }
 
@@ -552,21 +607,13 @@ fn emitExprFrame(
         .e_record => |record| {
             try self.write("{ ");
             try frames.append(allocator, .{ .write = " }" });
+            const fields = self.module_env.store.sliceRecordFields(record.fields);
             if (record.ext) |ext_idx| {
                 try frames.append(allocator, .{ .expr = ext_idx });
                 try frames.append(allocator, .{ .write = ".." });
-                if (self.module_env.store.sliceRecordFields(record.fields).len > 0) try frames.append(allocator, .{ .write = ", " });
+                if (fields.len > 0) try frames.append(allocator, .{ .write = ", " });
             }
-            const fields = self.module_env.store.sliceRecordFields(record.fields);
-            var i = fields.len;
-            while (i > 0) {
-                i -= 1;
-                const field = self.module_env.store.getRecordField(fields[i]);
-                try frames.append(allocator, .{ .expr = field.value });
-                try frames.append(allocator, .{ .write = ": " });
-                try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
-                if (i > 0) try frames.append(allocator, .{ .write = ", " });
-            }
+            try self.pushRecordFields(frames, allocator, fields);
         },
         .e_empty_record => try self.write("{}"),
         .e_block => |block| {

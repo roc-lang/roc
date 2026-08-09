@@ -35,6 +35,15 @@ fn addLocalLookup(module_env: *ModuleEnv, name: []const u8) Allocator.Error!CIR.
     }, base.Region.zero());
 }
 
+fn addIntExpr(module_env: *ModuleEnv, value: i128) Allocator.Error!CIR.Expr.Idx {
+    return module_env.store.addExpr(.{
+        .e_num = .{
+            .value = .{ .bytes = @bitCast(value), .kind = .i128 },
+            .kind = .i64,
+        },
+    }, base.Region.zero());
+}
+
 const TestFieldAccessSegment = struct {
     name: []const u8,
     mode: CIR.Expr.FieldAccessMode,
@@ -135,6 +144,45 @@ test "emit empty record" {
 
     try emitter.emitExpr(expr_idx);
     try testing.expectEqualStrings("{}", emitter.getOutput());
+}
+
+test "emit expression with lexicographic records sorts every nesting level" {
+    const module_env = try createTestEnv(test_allocator, "{ z: 0, inner: { b: 2, a: 1 } }");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const zero = try addIntExpr(module_env, 0);
+    const one = try addIntExpr(module_env, 1);
+    const two = try addIntExpr(module_env, 2);
+    const a = try module_env.insertIdent(base.Ident.for_text("a"));
+    const b = try module_env.insertIdent(base.Ident.for_text("b"));
+    const inner = try module_env.insertIdent(base.Ident.for_text("inner"));
+    const z = try module_env.insertIdent(base.Ident.for_text("z"));
+
+    const inner_start = module_env.store.scratch.?.record_fields.top();
+    const b_field = try module_env.addRecordField(.{ .name = b, .value = two }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", b_field);
+    const a_field = try module_env.addRecordField(.{ .name = a, .value = one }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", a_field);
+    const inner_fields = try module_env.store.recordFieldSpanFrom(inner_start);
+    const inner_record = try module_env.addExpr(.{ .e_record = .{ .fields = inner_fields, .ext = null } }, base.Region.zero());
+
+    const outer_start = module_env.store.scratch.?.record_fields.top();
+    const z_field = try module_env.addRecordField(.{ .name = z, .value = zero }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", z_field);
+    const inner_field = try module_env.addRecordField(.{ .name = inner, .value = inner_record }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", inner_field);
+    const outer_fields = try module_env.store.recordFieldSpanFrom(outer_start);
+    const outer_record = try module_env.addExpr(.{ .e_record = .{ .fields = outer_fields, .ext = null } }, base.Region.zero());
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    try emitter.emitExpr(outer_record);
+    try testing.expectEqualStrings("{ z: 0, inner: { b: 2, a: 1 } }", emitter.getOutput());
+
+    emitter.reset();
+    try emitter.emitExprWithLexicographicRecords(outer_record);
+    try testing.expectEqualStrings("{ inner: { a: 1, b: 2 }, z: 0 }", emitter.getOutput());
 }
 
 test "emit optional field access path" {

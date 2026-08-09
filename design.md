@@ -3561,8 +3561,9 @@ complete):
   fall-through refutability natively.
 - `.?` access: the CheckedModule output is complete—
   `CheckedFieldAccessSegment.mode` records required/optional per segment
-  (`serialized_layout_version` 35), and the body copier's former
-  required-only invariant is gone. Monotype field-access segment instantiation
+  (introduced in `serialized_layout_version` 57; the current version is
+  defined beside `CheckedModuleArtifact.Serialized`), and the body copier's
+  former required-only invariant is gone. Monotype field-access segment instantiation
   consumes that mode as field-kind evidence: a required segment commits an undetermined
   kind to required and relates its runtime slot to its source value; an
   optional segment commits optional and relates the explicit tagged slot and

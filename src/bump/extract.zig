@@ -468,7 +468,7 @@ const Extractor = struct {
 
         var emitter = can.RocEmitter.init(self.gpa, module_env);
         defer emitter.deinit();
-        emitter.emitExpr(@enumFromInt(default.expr_node)) catch |err| switch (err) {
+        emitter.emitExprWithLexicographicRecords(@enumFromInt(default.expr_node)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoSpaceLeft => return self.fail(.unpublished_public_type, "default literal could not be rendered canonically"),
         };
