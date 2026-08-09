@@ -869,7 +869,8 @@ pub const Payload = extern union {
     /// expr_anno_only: annotation-only expression
     pub const ExprAnnoOnly = extern struct {
         ident: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        kind: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_derived_method: compiler-derived associated method marker

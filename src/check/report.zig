@@ -81,6 +81,7 @@ const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
@@ -991,6 +992,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
+            },
+            .unsupported_generated_method => |data| {
+                return self.buildUnsupportedGeneratedMethodReport(data);
             },
             .associated_item_not_found => |data| {
                 return self.buildAssociatedItemNotFoundReport(data);
@@ -4217,6 +4221,40 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildUnsupportedGeneratedMethodReport(self: *Self, data: UnsupportedGeneratedMethod) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unsupported Generated Method", "", .warning);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The compiler cannot generate the associated method"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Using"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("as the entire annotation requests a compiler-generated implementation. The compiler currently supports this for"),
+            D.bytes("is_eq").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("to_hash").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("parser_for").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("encoder_for").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("map").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("and"),
+            D.bytes("map!").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
         }, self, &report);
         return report;
     }

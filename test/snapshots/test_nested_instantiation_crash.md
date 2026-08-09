@@ -189,13 +189,7 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 311)
-				(e-lookup-local
-					(p-assign (ident "get_value")))
-				(e-call (constraint-fn-var 308)
-					(e-lookup-local
-						(p-assign (ident "make_record")))
-					(e-runtime-error (tag "erroneous_value_use")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

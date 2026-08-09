@@ -77,6 +77,7 @@ pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
 pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;

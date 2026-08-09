@@ -49,6 +49,7 @@ pub const Problem = union(enum) {
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
+    unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
     host_boundary_open_row: HostBoundaryOpenRow,
@@ -140,6 +141,12 @@ pub const HostBoundaryOptionalField = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A bare underscore requested compiler generation for an unsupported associated method.
+pub const UnsupportedGeneratedMethod = struct {
+    method_name: Ident.Idx,
     region: base.Region,
 };
 

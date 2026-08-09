@@ -171,6 +171,31 @@ const BuiltinListAbi = struct {
 /// the statement's statically-proven-unique argument mask: `.InPlace` when bit
 /// 0 says argument 0's runtime uniqueness check is redundant, `.Immutable`
 /// (checked) otherwise.
+/// Destination width in bits for a Dec-to-integer truncating conversion, or
+/// null when the op is not one of those conversions.
+fn decToIntTruncBits(op: lir.LowLevel) ?u8 {
+    const DecToIntTrunc = enum {
+        dec_to_i8_trunc,
+        dec_to_u8_trunc,
+        dec_to_i16_trunc,
+        dec_to_u16_trunc,
+        dec_to_i32_trunc,
+        dec_to_u32_trunc,
+        dec_to_i64_trunc,
+        dec_to_u64_trunc,
+        dec_to_i128_trunc,
+        dec_to_u128_trunc,
+    };
+    const conversion = std.meta.stringToEnum(DecToIntTrunc, @tagName(op)) orelse return null;
+    return switch (conversion) {
+        .dec_to_i8_trunc, .dec_to_u8_trunc => 8,
+        .dec_to_i16_trunc, .dec_to_u16_trunc => 16,
+        .dec_to_i32_trunc, .dec_to_u32_trunc => 32,
+        .dec_to_i64_trunc, .dec_to_u64_trunc => 64,
+        .dec_to_i128_trunc, .dec_to_u128_trunc => 128,
+    };
+}
+
 fn updateModeImmForArg0(unique_args: u64) i64 {
     return @intFromEnum(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
@@ -3160,88 +3185,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 // ── Dec to integer truncating conversions ──
-                // Divide the Dec i128 by one_point_zero (10^18), truncate to target size.
+                // A Dec's payload is its value scaled by 10^18, so recovering the
+                // whole part divides the payload by that scale before wrapping it
+                // into the destination width. The divide stays at the full i128
+                // width because a Dec's whole part reaches ~1.7e20, so narrowing
+                // the quotient to i64 first would trap on values that must wrap.
                 .dec_to_i8_trunc,
                 .dec_to_i16_trunc,
                 .dec_to_i32_trunc,
                 .dec_to_i64_trunc,
+                .dec_to_i128_trunc,
                 .dec_to_u8_trunc,
                 .dec_to_u16_trunc,
                 .dec_to_u32_trunc,
                 .dec_to_u64_trunc,
+                .dec_to_u128_trunc,
                 => {
                     if (args.len < 1) unreachable;
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
+                    const scale = try self.decScaleParts();
 
-                    // Call roc_builtins_dec_to_i64_trunc(low, high) -> i64
-                    const result_reg = try self.allocTempGeneral();
-
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    const ret_reg: GeneralReg = ret_reg_0;
-                    try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg);
+                    const result_low = try self.allocTempGeneral();
+                    const result_high = try self.allocTempGeneral();
+                    try self.callI128DivRem(parts, scale, result_low, result_high, false, false);
                     self.codegen.freeGeneral(parts.low);
                     self.codegen.freeGeneral(parts.high);
+                    self.codegen.freeGeneral(scale.low);
+                    self.codegen.freeGeneral(scale.high);
 
-                    // Mask to target width
-                    const dst_bits: u8 = if (ll.op == .dec_to_i8_trunc or ll.op == .dec_to_u8_trunc)
-                        8
-                    else if (ll.op == .dec_to_i16_trunc or ll.op == .dec_to_u16_trunc)
-                        16
-                    else if (ll.op == .dec_to_i32_trunc or ll.op == .dec_to_u32_trunc)
-                        32
-                    else if (ll.op == .dec_to_i64_trunc or ll.op == .dec_to_u64_trunc)
-                        64
-                    else
-                        unreachable;
+                    const dst_bits: u8 = decToIntTruncBits(ll.op) orelse unreachable;
+
+                    if (dst_bits == 128) {
+                        const stack_offset = self.codegen.allocStackSlot(16);
+                        try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                        try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+                        self.codegen.freeGeneral(result_low);
+                        self.codegen.freeGeneral(result_high);
+                        return .{ .stack_i128 = stack_offset };
+                    }
+
+                    self.codegen.freeGeneral(result_high);
                     if (dst_bits < 64) {
                         const shift_amount: u8 = 64 - dst_bits;
-                        try self.emitShlImm(.w64, result_reg, result_reg, shift_amount);
-                        try self.emitLsrImm(.w64, result_reg, result_reg, shift_amount);
+                        try self.emitShlImm(.w64, result_low, result_low, shift_amount);
+                        try self.emitLsrImm(.w64, result_low, result_low, shift_amount);
                     }
-                    return .{ .general_reg = result_reg };
-                },
-
-                // ── Dec to i128 truncating ──
-                .dec_to_i128_trunc => {
-                    if (args.len < 1) unreachable;
-                    const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    self.codegen.freeGeneral(parts.low);
-                    self.codegen.freeGeneral(parts.high);
-
-                    // Sign-extend result from i64 to i128
-                    const stack_offset = self.codegen.allocStackSlot(16);
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.emitAsrImm(.w64, ret_reg_0, ret_reg_0, 63);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_0);
-                    return .{ .stack_i128 = stack_offset };
-                },
-
-                // ── Dec to u128 truncating ──
-                .dec_to_u128_trunc => {
-                    if (args.len < 1) unreachable;
-                    const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addRegArg(parts.low);
-                    try builder.addRegArg(parts.high);
-                    try self.callBuiltin(&builder, .dec_to_i64_trunc);
-                    self.codegen.freeGeneral(parts.low);
-                    self.codegen.freeGeneral(parts.high);
-
-                    const stack_offset = self.codegen.allocStackSlot(16);
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.codegen.emitLoadImm(ret_reg_0, 0);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_0);
-                    return .{ .stack_i128 = stack_offset };
+                    return .{ .general_reg = result_low };
                 },
 
                 // ── Dec to float conversions ──
@@ -11595,6 +11585,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             low: GeneralReg,
             high: GeneralReg,
         };
+
+        /// Materialize the Dec scale (10^18) as i128 register parts. The scale
+        /// fits in the low half, so the high half is zero.
+        fn decScaleParts(self: *Self) Allocator.Error!I128Parts {
+            const low_reg = try self.allocTempGeneral();
+            const high_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(low_reg, @intCast(builtins.dec.RocDec.one_point_zero_i128));
+            try self.codegen.emitLoadImm(high_reg, 0);
+            return .{ .low = low_reg, .high = high_reg };
+        }
 
         fn getI128Parts(self: *Self, loc: ValueLocation, signedness: std.builtin.Signedness) Allocator.Error!I128Parts {
             const low_reg = try self.allocTempGeneral();

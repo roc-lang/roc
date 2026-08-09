@@ -50,6 +50,12 @@ pub const DerivedMethodKind = enum(u8) {
     map_effectful,
 };
 
+/// Why an annotation-only expression has no Roc implementation.
+pub const AnnotationOnlyKind = enum(u8) {
+    ordinary,
+    unsupported_generated_method,
+};
+
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
     /// An number literal with a specific value.
@@ -550,6 +556,7 @@ pub const Expr = union(enum) {
     e_anno_only: struct {
         /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
         ident: Ident.Idx,
+        kind: AnnotationOnlyKind = .ordinary,
     },
 
     /// An explicit request for a compiler-derived associated method.
@@ -1612,9 +1619,12 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_anno_only => {
+            .e_anno_only => |anno_only| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
+                if (anno_only.kind != .ordinary) {
+                    try tree.pushStringPair("kind", @tagName(anno_only.kind));
+                }
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
