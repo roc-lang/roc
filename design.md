@@ -2622,6 +2622,13 @@ post-check lowering validates again. No post-check stage can report a type
 mismatch. An inconsistency in checked producer data or Monotype construction is
 a compiler invariant violation.
 
+This design is also a cold-build performance contract. Replacing a containment
+query with a more general graph relation is not an implementation of exact
+value flow. On representative iterator-heavy programs, the complete post-check
+pipeline must perform no more work and take no longer than the preceding
+pipeline before this design may land. Phase timings and operation counters are
+acceptance criteria; checked-program correctness alone is insufficient.
+
 Every value-producing Monotype operation returns the exact Monotype of the
 runtime value it produced. A representation producer constructs that type from
 its explicit checked operation identity, exact input Monotypes, callable
@@ -2871,130 +2878,67 @@ selection is reserved for real storage and control-flow joins. A checked narrow
 closed row may therefore map into a wider exact contextual row at such a
 boundary, but unrelated labels are never invented by ordinary equality.
 
-This producer-first order applies to ordinary direct calls as well as static
-dispatch. Preparing checked relations is not completion: a record, tuple, tag,
-list, call, field read, tuple-item read, or tag-payload read can still replace
-its checked destination with a distinct exact output cell while it lowers.
-Casting a branch or procedure result into an independent producer cell first
-instantiates a fresh checked copy from the destination's already-selected
-specialization substitutions only when checked output records that the
-expression can produce an exact graph. The copy isolates the eventual exact
-root; it must not independently default numeric, row, or other checked
-variables and only compare them with the destination after lowering. An
-expression recorded as producing only its ordinary checked result consumes the
-specialization's shared checked mapping directly; allocating an isolated graph
-for it is unnecessary work. The same explicit `produces_exact_graph` column
-selects isolated
-not-yet-produced call results, control-flow values, match scrutinees, and
-reassignment values.
-An isolated occurrence copies only substitutions that are already selected: an
-unresolved source variable remains an independent unresolved variable.
-Consequently, later exact production at one occurrence cannot flow backward
-into another occurrence merely because their checked types shared a variable
-before lowering.
+This producer-first order is literal for every value. Lowering one checked
+expression produces exactly one pair: the emitted IR value and the
+authoritative `NodeId` of that runtime value. There is no contextual lowering
+route that first writes a checker-public destination and later reconciles it
+with what the expression produced. A contextual consumer lowers the expression
+once, reads that returned `NodeId`, and only then performs the explicit storage
+or control-flow selection required by the consumer.
+
+Compound construction does not apply one complete type graph to another. It
+lowers each runtime child once, constructs the parent directly from those exact
+child `NodeId`s and the checker-authored constructor identity, and returns that
+new parent as the exact value. A field, tuple-item, tag-payload, list-item, or
+nominal-backing read selects the child directly from the already
+completed receiver. No parent asks whether a child or descendant is generated,
+and no ordinary node participates in generated-representation work merely
+because such a descendant is possible.
+
+Checked output has no transitive `produces_exact_graph` or
+`exact_graph_from_evidence` classification. Those booleans are forbidden: they
+turn a local producer edge into a property propagated across unrelated parents
+and cause lowering to allocate and traverse graphs for values that never use
+the edge. The checked syntax, resolved call target, dispatch evidence, and
+pattern field, item, payload, rest, and backing selections already name every
+direct value source. Monotype consumes those explicit sources when it lowers
+the corresponding operation; it does not
+run a second whole-module value-flow analysis to predict whether an exact value
+might eventually occur.
+
+One function specialization owns an immutable checked interface and a flat
+dense substitution span from checked occurrence `NodeId` to exact argument or
+evidence `NodeId`. A call constructs that span directly from its completed
+operands. The specialization key reads the checked interface through the span,
+and the body reads the same span when instantiating its arguments. Neither step
+copies the function type, walks matching checked and produced trees, or
+materializes changed paths. The body stores the exact `NodeId` it actually
+returns; the call expression uses that node directly. A recursive
+specialization reserves one result cell before lowering and redirects that cell
+to the stored exact identity when the body completes.
+
+An empty substitution span is the exact proof that a body may reuse an
+independent specialization. Reuse is decided from that explicit span and the
+resolved evidence vector, never from a transitive prediction about the body.
+Consequently a body is caller-owned only when the concrete call interface has
+actual substitutions that require it; a parameter or local whose type could
+theoretically carry a generated nominal causes no work by itself.
 Once a body's generated identities are final and its relations are frozen, it
 commits those identities to the durable Monotype interner before lowering any
 deferred nested specialization. Nested lowering can therefore reuse the
 already-authoritative type; it cannot win an ordering race after the outer
 graph is no longer able to bind relations.
-Function-request materialization memoizes by both source/target node pair and
-the explicit purpose of the copy: call request, produced value, produced
-callable, body ABI, or reassigned storage. These purposes share unchanged
-structure but cannot reuse one another's constructor decision. In particular,
-body ABI copies keep function constructor roots independent, and reassigned
-storage copies only the paths leading to selected stored cells.
-Materialization separately reports whether a returned node records a real
-replacement or copied function, rather than treating every different node as a
-change. While one recursive named type is being materialized, an active dense
-table maps its produced node to the reserved result node. A recursive edge may
-use that reserved node to close a copied cycle, but the edge alone does not mark
-the surrounding path as changed. If the traversal finds no replacement or
-function copy, it retains the original named root and discards the provisional
-path; consequently body ABI isolation never clones an ordinary recursive type.
-The active entry is removed when that one named traversal finishes, so two
-independent argument occurrences remain independent. This is part of the
-direct materialization traversal, not a preliminary structure query.
-For a shared exact tag or record row, materialization walks the same explicit
-row chunk and extension on both sides. It does not flatten that shared root and
-then compare the flattened terminal extension with the other side's previously
-read intermediate extension. Distinct row roots may correlate fields or tags by
-their flattened labels, but flattening one shared root cannot manufacture a
-different checked/produced pair.
-Callee specialization starts only after those argument expressions have
-completed, and reuses the already-lowered operands in the emitted call. An
-`exact_graph` procedure signature also
-drives its body through graph-cell lowering even when the outer checked return
-cell initially equals the request; otherwise a compound return would be sealed
-before its exact children were known.
+There is no function-request materialization traversal. Request copies by
+purpose, recursive provisional named copies, and checked/produced pair maps are
+forbidden. Storage reassignment records direct destination-to-value selections;
+body ABI isolation records direct function-slot substitutions. Both are flat
+spans consumed at the operation that owns them.
 
-Checked procedure data records exact result flow explicitly. The
-`produces_exact_graph` column means that evaluating the procedure can return a
-representation created by its body or return a caller-supplied exact argument,
-including through ordinary record, tuple, tag, list, box, local-binding,
-branch, and return structure. The `exact_graph_from_evidence` column means that
-this can become true only when the specialization's checked dispatch evidence
-selects such a procedure. These columns follow the returned value's checked data
-flow and procedure-call edges. They do not inspect checked type structure and
-do not ask whether any type contains a generated nominal. Checked body output
-collects direct result flow and dense procedure dependencies in one pass, then
-propagates the two columns with a reverse-call work queue. It must not repeatedly
-rescan procedure bodies until a fixed point is reached.
-After that fixed point, checked output records `produces_exact_graph` inline on every
-checked expression for its ordinary result (separate from any non-local return
-nested inside it). Monotype consumes that dense expression column in O(1) when
-deciding whether a use needs an isolated checked occurrence. It does not infer
-the answer from type shape or perform a generated-private containment query.
-Checked output also records `produces_exact_graph` on every pattern.
-Lambda parameters and iterator-item patterns are explicit exact sources;
-declarations, reassignments, and match patterns retain the exact source
-expression and its record-field, tuple-item, list-item, list-rest, tag-payload,
-or nominal-backing steps. Consecutive list-rest and list-item steps compose
-their source offsets, so selecting one item from a rest value visits only that
-original item; selecting the whole rest visits only the remaining items. A
-record-rest step explicitly records the field labels consumed by its surrounding
-destructure. Selecting from that rest therefore follows the original field only
-when it was retained, and selecting the whole rest visits only retained logical
-fields. Explicit fields in a record extension hide same-named fields from the
-extended record for this purpose; a hidden exact field is not part of the
-produced value and cannot make that value an exact producer.
-Pattern lowering therefore
-isolates only the occurrences whose producer edge can carry an exact graph,
-without scanning the value's Monotype. Once a binder has been assigned a local
-cell at that boundary, the cell is its exact type authority. Reads, captures,
-and copied lexical scopes consume that cell directly; they do not repeatedly
-instantiate and relate the binder's or lookup expression's checked type.
-An expression query that crosses an active recursion edge may cache a positive
-answer, but it must leave a negative answer unresolved: another member of the
-recursive component may still establish exact result flow before the work queue
-reaches its fixed point.
-
-The direct-flow pass retains exact record fields, tuple items,
-tag payloads, nominal backings, list items, and pattern binders. Selecting one
-ordinary sibling from a compound value does not make the procedure an exact
-producer merely because a different sibling can carry an exact representation.
-Match alternatives remap their projected binder cells onto the checked branch
-representative, and every binder nested inside a lambda argument pattern is a
-parameter source. Every binder nested inside a `for` pattern is likewise an
-explicit exact input source, because the iterator step supplies its item cell;
-an early return from the loop body therefore preserves that item's exact type.
-The pass initializes its dense expression state once for the module; it does
-not clear a module-sized column per template. Multiple calls from one template
-to the same callee add one propagation edge.
-Local procedures carry the same two result-flow columns. Their lexical evidence
-chain selects `exact_graph` only when an evidence-dependent local body actually
-receives evidence for an exact-producing target; unrelated local
-specializations remain independent. A local procedure selected as a method is
-itself explicit dispatch evidence, so its two result-flow columns participate in
-that same evidence-chain decision rather than being treated as graph-free.
-
-A procedure with exact result flow finishes its body in the requesting
-Monotype graph before that graph is sealed. This is required because the body,
-not the checked public function type, says which exact argument, constructor
-child, branch result, or called procedure supplies the runtime result. A
-procedure without exact result flow remains an independent specialization whose
-body can be deferred, deduplicated, and lowered once outside the caller. A
-procedure is never made caller-owned merely because one of its parameter or
-local types could contain a generated nominal.
+Callee specialization starts only after argument expressions have completed
+and reuses those exact operands in the emitted call. The specialization does
+not need an `exact_graph` mode: every body stores its exact result, while
+the substitution span determines whether the body can reuse a previously
+completed specialization.
 
 Every explicit `return` and the ordinary fall-through value contribute to one
 stable exact result-selection cell owned by the active function
@@ -4205,31 +4149,23 @@ produced, explicit evidence from checked data unifies those nodes:
   and binder positions; Monotype does not relate a second checked pattern root
   to the whole runtime value before projecting those positions.
 
-Direct calls in the interface program are dependency edges to the callee's
-interface program, not requests to lower that callee's body. Replay first
-applies all relations owned by the current scope, then traverses those explicit
-dependencies. This ordering makes the caller's complete requested interface
-available before any dependency identity is chosen. Transitive replay reaches
-a fixed point across arbitrary wrapper depth and recursive call graphs without
-making source syntax or body-lowering order part of type meaning.
+Direct calls in the interface program are dependencies on a concrete callee
+specialization. The caller first lowers each operand once and constructs the
+callee's flat checked-occurrence-to-exact-node substitution span. A completed
+callee stores its result node; an active recursive callee exposes its one
+reserved result cell. The caller never relates its own result tree to the
+callee's function tree.
 
-Repeated dependency requests are memoized by the complete procedure family
-(template, method scope, and checked source-function key), exact evidence
-topology, and the request identity captured after the caller-owned relations
-have been applied. A fully resolved request uses an immutable active `TypeId`
-snapshot and the ordinary cached specialization digest and structural equality
-of that snapshot. A still-unresolved request uses an immutable
-alpha-normalized graph-native shape. Digests select an expected O(1) bucket
-only; exact type equality or exact open-shape bytes are the corresponding
-collision authorities. The first request computes the transitive relation
-closure. Equivalent requests retain independent graph cells while relations
-are still being produced, then relate directly to the live representative's
-final interface after the whole closure is known. An active exact memo entry is
-a recursive edge and joins the active representative. Requests with different
-concrete interfaces, checked source identities, method scopes, or evidence can
-never share an entry. Work is therefore proportional to relation sites plus
-unique exact requests, rather than to the number of duplicate call paths
-through the same interface problem.
+Repeated dependencies are memoized by the complete procedure family (template,
+method scope, and checked source-function key), exact evidence topology,
+immutable substitution span, and its alpha-normalized graph-native identity.
+Digests select an expected O(1) bucket only; exact substitution and identity
+bytes are the collision authorities. An active memo entry is one recursive call
+to the same specialization and returns its reserved result cell. Requests with
+different concrete substitutions, checked source identities, method scopes, or
+evidence can never share an entry. Work is therefore proportional to unique
+explicit substitutions and unique specializations, not to the size of matching
+checked and produced type trees.
 
 The alpha-normalized open-shape stream writes a graph-owned generated iterator as
 the same content-addressed nominal identity that representation finalization
@@ -4376,39 +4312,25 @@ instantiation model makes the intended data flow explicit, so the first
 constraint and every later constraint meet in the same graph node before the
 final Monotype body is emitted.
 
-During active Monotype specialization, unresolved checked variables and row
-extensions remain instantiation graph nodes. They are not represented by
-durable Monotype `TypeId`s.
+During active Monotype specialization, every checked variable, row extension,
+and exact value remains an instantiation graph `NodeId`. Relation production
+never materializes a provisional `TypeId`, including for a fully resolved node.
+There is therefore no active-snapshot cache, no transitive snapshot-dependency
+query, and no global snapshot invalidation. The graph freezes once; final
+sealing then assigns durable `TypeId`s exactly once.
 
-Type-shaped inspection that can escape relation production or become durable
-specialization identity is allowed only for a fully resolved graph node. It
-materializes an immutable active snapshot: later graph relations invalidate the
-snapshot cache and a subsequent inspection allocates a fresh snapshot rather
-than refilling an observed `TypeId`. The draft retains the graph node, not the
-snapshot id, and final sealing allocates fresh durable ids. Consequently no
-durable `TypeId` can change shape after a consumer has seen it.
+Anything that needs specialization identity before freezing consumes a
+graph-native identity view. That view reads the authoritative nodes through the
+call's explicit substitution span and writes an alpha-normalized stream without
+allocating Monotype nodes. Resolved and unresolved inputs use this same route.
+A generated nominal contributes its content address as one atomic item and its
+private backing is not traversed. The view is owned by the specialization
+request that needs it; it is not cached as a mutable graph-wide snapshot.
 
-A graph-owned generated iterator may enter an active snapshot only when all of
-its explicit identity inputs are resolved. It is then stamped with the
-content-addressed identity determined by those producer inputs.
-The active-snapshot cache alone owns this identity view; the durable
-generated-type interner never receives it. Later relation changes invalidate
-the current snapshot cache normally. This makes the generated nominal an
-ordinary atomic named type for resolved specialization lookup without scanning
-or serializing its private backing.
-
-Snapshot invalidation is logically immediate but may be physically coalesced.
-A relation mutation marks the complete active-snapshot cache stale; the next
-inspection clears it once before performing any lookup. Multiple mutations with
-no intervening inspection therefore do not repeatedly clear the same cache, and
-no inspection may consume an entry produced before the most recent mutation.
-
-Interface replay never materializes a provisional type for an unresolved
-request. Its graph-native shape preserves unresolved-variable aliasing,
-defaults, recursion, and exact generated-producer evidence directly. A resolved
-request uses the immutable active snapshot described above. Memo hits relate
-duplicate request nodes to the representative node after replay finishes; they
-do not serialize and re-import the representative interface.
+Interface reuse compares the immutable checked interface, flat substitution
+span, evidence identity, and graph-native identity bytes. A memo hit reuses the
+completed specialization and its stored exact result `NodeId`; it does not
+relate duplicate request trees or serialize and re-import an interface.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
