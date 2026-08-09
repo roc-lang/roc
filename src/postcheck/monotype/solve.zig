@@ -1649,33 +1649,17 @@ pub const InstGraph = struct {
                 // node as authority without recursively relating a stale
                 // request backing that may still contain public cells.
                 try self.union_(private_node, public_node);
-            } else {
-                // A destination request can itself carry an earlier exact
-                // identity. The current producer remains authoritative: bind
-                // only the public checked arguments and keep the two private
-                // roots distinct. Choosing a common runtime representation is
-                // reserved for an explicit control-flow or recursion join.
-                if (public_content.named.args.len != private_content.named.args.len) {
-                    Common.invariant("generated-private request and producer had different public argument arities");
-                }
-                for (public_content.named.args, private_content.named.args) |public_arg, private_arg| {
-                    try self.relateOpaqueChild(public_arg, private_arg, pending);
-                }
             }
+            // Different exact identities remain distinct. Their producers
+            // already consumed all checked inputs; a control-flow join is the
+            // only operation allowed to choose a third representation.
             return;
         }
         switch (private_content) {
             .named => |private_named| if (private_named.backing) |backing| {
                 if (backing.authority == .generated_private) {
-                    // A structural request names the representation expected
-                    // below an explicit constructor layer. Generated nominals
-                    // obey the same rule as every other nominal: relate that
-                    // request directly to the produced backing. Only a public
-                    // nominal interface needs the generated/public argument
-                    // relation below.
                     if (public_content != .named and public_content != .unresolved) {
-                        try self.relateOpaqueChild(public_node, backing.node, pending);
-                        return;
+                        Common.invariant("structural request reached an atomic generated-private nominal without an explicit backing operation");
                     }
                     switch (public_content) {
                         .unresolved => |public_var| {
@@ -1961,6 +1945,8 @@ pub const InstGraph = struct {
         private_named: InstNamed,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        _ = self;
+        _ = pending;
         if (public_content != .named) Common.invariant("opaque public interface relation received a non-named public node");
         const public_named = public_content.named;
         const iterator_relation = Type.iteratorRelation(public_named, private_named);
@@ -1978,14 +1964,13 @@ pub const InstGraph = struct {
             if (public_backing.authority != .checked_public or private_backing.authority != .generated_private) {
                 Common.invariant("iterator interface relation received incorrect backing authority");
             }
-            if (public_named.args.len == 0 or private_named.args.len == 0) {
+            if (public_named.args.len != private_named.args.len or public_named.args.len == 0) {
                 Common.invariant("iterator interface relation received no public item argument");
             }
-            try self.relateOpaqueChild(public_named.args[0], private_named.args[0], pending);
             return;
         }
         if (public_named.kind != .@"opaque" or private_named.kind != .@"opaque" or
-            !std.meta.eql(public_named.def, private_named.def))
+            !sameTypeDef(public_named.def, private_named.def))
         {
             Common.invariant("opaque public interface relation received different opaque definitions");
         }
@@ -1998,9 +1983,6 @@ pub const InstGraph = struct {
         }
         if (public_named.args.len != private_named.args.len) {
             Common.invariant("opaque public interface relation received different type-argument arities");
-        }
-        for (public_named.args, private_named.args) |public_arg, private_arg| {
-            try self.relateOpaqueChild(public_arg, private_arg, pending);
         }
     }
 
@@ -4126,6 +4108,17 @@ pub const InstGraph = struct {
             .named => |left_named| {
                 if (right_content == .named) {
                     const right_named = right_content.named;
+                    const left_generated = isGeneratedPrivateRootContent(left_content);
+                    const right_generated = isGeneratedPrivateRootContent(right_content);
+                    if (left_generated or right_generated) {
+                        if (left_generated and right_generated and
+                            self.sameExactGeneratedPrivateIdentity(left_named, right_named))
+                        {
+                            try self.union_(left, right);
+                            return;
+                        }
+                        Common.invariant("generated-private nominal reached ordinary unification instead of an explicit producer mapping or control-flow join");
+                    }
                     if (left_named.kind == .alias) {
                         try self.unifyThroughBacking(left, left_content, right, pending);
                         return;
@@ -7089,8 +7082,7 @@ test "opaque interface relation preserves distinct public and generated-private 
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_args = try graph.arena().alloc(NodeId, 1);
     public_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private_args = try graph.arena().alloc(NodeId, 1);
-    private_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_args = try graph.arena().dupe(NodeId, public_args);
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.{ .record = .{
         .fields = try graph.arena().alloc(InstField, 0),
@@ -7106,7 +7098,11 @@ test "opaque interface relation preserves distinct public and generated-private 
     } });
     const private = try graph.newNode(.{ .named = .{
         .named_type = named_type,
-        .def = def,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0xAE} ** 32 },
+        },
         .kind = .@"opaque",
         .builtin_owner = .fields,
         .args = private_args,
@@ -7540,7 +7536,7 @@ test "checked type mapping preserves forced-dynamic iterator identity" {
     const type_name = try name_store.internTypeName("Iter");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(4) };
     const public_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_item = public_item;
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
     const public = try graph.newNode(.{ .named = .{
@@ -7556,6 +7552,7 @@ test "checked type mapping preserves forced-dynamic iterator identity" {
         .def = .{
             .module = module_identity,
             .type_name = type_name,
+            .generated = .{ .bytes = [_]u8{0xFD} ** 32 },
             .iterator_representation = .forced_dynamic,
             .iterator_kind = .forced_dynamic,
         },
@@ -7719,7 +7716,7 @@ test "opaque interface relation deduplicates only identical generated-private it
     _ = try graph.applyProducedTypeToRequest(left_iter, distinct_iter);
 
     try std.testing.expect(!graph.sameClass(left_iter, distinct_iter));
-    try std.testing.expect(graph.sameClass(item, distinct_item));
+    try std.testing.expect(!graph.sameClass(item, distinct_item));
 }
 
 test "opaque interface relation preserves nested generated-private backing" {
