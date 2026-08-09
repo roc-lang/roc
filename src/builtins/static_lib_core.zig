@@ -17,8 +17,9 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Disables stack-trace capture; see `shim_io.std_options_no_stack_tracing`.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+/// Keeps std off the symbols a roc program's link cannot resolve; see
+/// `shim_io.std_options_static_archive`.
+pub const std_options = shim_io.std_options_static_archive;
 
 const builtin_registry = @import("builtin_registry.zig");
 
