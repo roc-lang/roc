@@ -473,10 +473,12 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
         "fn lowerEntryWrapperAtCell(",
-        "fn instantiateTemplateDispatchRelations(",
+        "fn lowerStrInspectIntrinsicAtNode(",
     );
     try expectContains(entry_wrapper, "applyProducedTypeToRequest(declared_ret_node, body_ret_node)");
     try expectContains(entry_wrapper, ".ret = body_ret_cell");
+    try expectNotContains(lower_source, "instantiateTemplateDispatchRelations");
+    try expectNotContains(lower_source, "replayStoredEvidenceRelations");
 }
 
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
@@ -1360,17 +1362,18 @@ test "Monotype generated-private call requests retain separate request nodes" {
     );
     const iterator = sourceSliceBetween(
         lower_source,
-        "fn instantiateIteratorPlanCallNodeFromCaller",
-        "fn iteratorOperandNode",
+        "fn lowerIteratorDispatch(",
+        "fn lowerGeneratedIteratorDispatch(",
     );
 
     try expectContains(full_request, "checkedMonoRequestNode");
     try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
-    try expectContains(iterator, "checkedMonoRequestNode");
-    try expectContains(iterator, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
-    try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");
+    try expectContains(iterator, "produced_node.* = try self.exprTypeCell(produced_expr.*).toGraphNode(self.graph)");
+    try expectContains(iterator, "const initial_request = try functionRequestNode(");
+    try expectContains(iterator, "functionRequestFromProducedArguments(");
+    try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
 }
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
