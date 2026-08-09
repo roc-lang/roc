@@ -16077,15 +16077,10 @@ const BodyContext = struct {
             Common.invariant("function request source arity differed from its specialization");
         }
 
-        const produced_args = try self.graph.arena().alloc(NodeId, fn_nodes.args.len);
-        for (fn_nodes.args, produced_args) |arg, *produced| {
-            produced.* = try self.canonicalIteratorOccurrence(arg);
-        }
-
         const lowered = try self.lowerLambdaArgsAndBodyAtCell(
             lambda_id,
             lambda.args,
-            produced_args,
+            fn_nodes.args,
             source_fn.args,
             lambda.body,
             DraftTypeCell.fromGraphNode(fn_nodes.ret),
