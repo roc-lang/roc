@@ -106,7 +106,10 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn lookupExprMonoType");
     const lower_expr_inner = sourceSliceBetween(lower_source, "fn lowerExprInner", "fn lowerReturn");
 
-    try expectContains(lower_call, "const callee = try self.lowerExpr(call.func);");
+    try expectContains(lower_call, "const checked_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(lower_call, "try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);");
+    try expectContains(lower_call, "request_fn_node = try self.graph.functionRequestFromProducedArguments(");
+    try expectContains(lower_call, "const callee = try self.lowerExprAtExactRequest(");
     try expectContains(lower_call, "const callee_node = try self.exprTypeCell(callee).toGraphNode(self.graph);");
     try expectContains(lower_call, "const callee_fn = try self.graph.functionNodes(callee_node);");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
@@ -718,7 +721,8 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try expectContains(call_source, "const produced_args = try self.producedCallArgumentNodes(");
     try expectContains(call_source, "fn_node = try self.graph.functionRequestFromProducedArguments(");
     try expectContains(call_source, "const lowered_args = try self.lowerCallOperandsAtNodes(");
-    try expectContains(call_source, "const callee = try self.lowerExpr(call.func);");
+    try expectContains(call_source, "const checked_callee_node = try self.lowerExprTypeNode(call.func);");
+    try expectContains(call_source, "const callee = try self.lowerExprAtExactRequest(");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(callee_fn.ret)");
     try expectNotContains(call_source, "producedCallableNode");
     try expectNotContains(call_source, "lowerExprAtTypeCell(\n            call.func");
@@ -1282,7 +1286,8 @@ test "Monotype returns share the active specialization result selection" {
     );
     try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .selection = &return_selection }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
-    try expectContains(lower_return, "self.lowerExprAtTypeCell(ret.expr, target.selection.declared)");
+    try expectContains(lower_return, "self.lowerExprAtExactRequest(ret.expr, target.selection.declared)");
+    try expectContains(lower_return, ".checked_mapping, .exact_producer => try self.lowerExpr(ret.expr)");
     try expectContains(lower_return, "self.includeControlFlowResult(target.selection, value)");
     try expectContains(lower_return, ".target = target.selection.selected");
     try expectNotContains(lower_source, "returnTargetTypeCell");

@@ -16448,12 +16448,8 @@ const BodyContext = struct {
         try self.constrainCheckedExprInterfaceToCell(checked_body, body_ret_cell);
         var body = if (materialized_args.items.len == 0)
             switch (ret_destination_relation) {
-                .checked_mapping => try self.lowerProducedValueAtIndependentCheckedCell(checked_body, body_ret_cell),
-                .exact_request, .exact_producer => try self.lowerExprAtControlFlowDestination(
-                    checked_body,
-                    body_ret_cell,
-                    ret_destination_relation,
-                ),
+                .exact_request => try self.lowerExprAtExactRequest(checked_body, body_ret_cell),
+                .checked_mapping, .exact_producer => try self.lowerExpr(checked_body),
             }
         else
             try self.lowerBindingContinuation(.{ .materialized_args = .{
@@ -16867,7 +16863,20 @@ const BodyContext = struct {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 return try self.lowerFieldAccessExprAtNode(expr_id, field, expr_node);
             },
-            .pending, .str_segment, .bytes_literal, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .tuple_access => |access| return try self.lowerTupleAccessExprAtNode(
+                access,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .lambda => return try self.lowerLambdaExprAtNode(
+                expr_id,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .closure => |closure| return try self.lowerClosureAtNode(
+                expr_id,
+                closure,
+                try self.lowerExprTypeNode(expr_id),
+            ),
+            .pending, .str_segment, .bytes_literal, .match_, .if_, .call, .block, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
@@ -16911,7 +16920,10 @@ const BodyContext = struct {
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
-        const value = try self.lowerExprAtTypeCell(ret.expr, target.selection.declared);
+        const value = switch (target.selection.destination_relation) {
+            .exact_request => try self.lowerExprAtExactRequest(ret.expr, target.selection.declared),
+            .checked_mapping, .exact_producer => try self.lowerExpr(ret.expr),
+        };
         target.selection.target_required = true;
         try self.includeControlFlowResult(target.selection, value);
         return .{
@@ -19379,9 +19391,7 @@ const BodyContext = struct {
             components,
             callable_evidence,
         );
-        if (lookup.existing) |existing| {
-            return existing;
-        }
+        if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
 
         const Context = struct {
             body: *BodyContext,
@@ -19490,9 +19500,7 @@ const BodyContext = struct {
         public_source: solve.InstIteratorPublicSource,
     ) Allocator.Error!NodeId {
         const lookup = try self.graph.lookupGeneratedIterator(public_iterator, .forced_dynamic, &.{}, null);
-        if (lookup.existing) |existing| {
-            return existing;
-        }
+        if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
         const Context = struct {
             body: *BodyContext,
             item_node: NodeId,
@@ -19535,6 +19543,20 @@ const BodyContext = struct {
         }, Context.fill);
         try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
         return generated;
+    }
+
+    /// Reuse an equal completed generated nominal before constructing its
+    /// backing. The graph-local interner covers producers in this body; the
+    /// durable interner covers producers sealed by an earlier body.
+    fn existingGeneratedIteratorNode(
+        self: *BodyContext,
+        lookup: solve.GeneratedIteratorLookup,
+    ) Allocator.Error!?NodeId {
+        if (lookup.existing) |existing| return existing;
+        const sealed = self.builder.generated_types_by_identity.get(lookup.digest) orelse return null;
+        const imported = try self.graph.importMono(sealed);
+        try self.graph.registerGeneratedIteratorAtDigest(imported, lookup.digest);
+        return imported;
     }
 
     fn generatedIteratorBackingNode(
@@ -24825,7 +24847,7 @@ const BodyContext = struct {
             defer pre_lowered.deinit(self.allocator);
             try self.preLowerDirectCallOperands(
                 call.args,
-                operand_fn_nodes.args,
+                if (operand_fn_node == checked_fn_node) null else operand_fn_nodes.args,
                 &pre_lowered,
             );
             const produced_args = try self.producedCallArgumentNodes(
@@ -24910,16 +24932,36 @@ const BodyContext = struct {
             };
         }
 
-        const callee = try self.lowerExpr(call.func);
+        const checked_callee_node = try self.lowerExprTypeNode(call.func);
+        const checked_callee = try self.graph.functionNodes(checked_callee_node);
+        var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
+        defer pre_lowered.deinit(self.allocator);
+        try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);
+        const produced_args = try self.producedCallArgumentNodes(
+            checked_callee.args,
+            pre_lowered.items,
+        );
+        const request_ret = expected_ret_node orelse try self.freshInstNode(checked_ret_ty);
+        var request_fn_node = try functionRequestNode(
+            self.graph,
+            checked_callee_node,
+            produced_args,
+            request_ret,
+        );
+        request_fn_node = try self.graph.functionRequestFromProducedArguments(
+            checked_callee_node,
+            request_fn_node,
+            produced_args,
+        );
+        const callee = try self.lowerExprAtExactRequest(
+            call.func,
+            DraftTypeCell.fromGraphNode(request_fn_node),
+        );
         const callee_node = try self.exprTypeCell(callee).toGraphNode(self.graph);
         const callee_fn = try self.graph.functionNodes(callee_node);
         if (callee_fn.args.len != call.args.len) {
             Common.invariant("produced indirect callee changed argument arity");
         }
-
-        var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
-        defer pre_lowered.deinit(self.allocator);
-        try self.preLowerDirectCallOperands(call.args, callee_fn.args, &pre_lowered);
         const args = try self.lowerCallOperandsAtNodes(
             call.args,
             callee_fn.args,
@@ -29425,10 +29467,8 @@ const BodyContext = struct {
         if (try self.nodeIsProvenUninhabited(node)) {
             return try self.lowerExplicitUninhabitedInvocationAtTypeCell(child, cell);
         }
-        return switch (destination_relation) {
-            .exact_request => try self.lowerExprAtControlFlowDestination(child, cell, .exact_request),
-            .checked_mapping, .exact_producer => try self.lowerExprAtTypeCell(child, cell),
-        };
+        _ = destination_relation;
+        return try self.lowerExpr(child);
     }
 
     fn relateLookupExprAtNode(
@@ -29861,17 +29901,20 @@ const BodyContext = struct {
     fn preLowerDirectCallOperands(
         self: *BodyContext,
         checked_exprs: []const checked.CheckedExprId,
-        nodes: []const NodeId,
+        explicit_request_nodes: ?[]const NodeId,
         pre_lowered: *std.ArrayList(PreLoweredOperand),
     ) Allocator.Error!void {
-        if (checked_exprs.len != nodes.len) {
-            Common.invariant("direct-call argument arity differed from function graph node");
-        }
+        if (explicit_request_nodes) |nodes| if (checked_exprs.len != nodes.len) {
+            Common.invariant("direct-call argument arity differed from explicit producer request");
+        };
         for (checked_exprs, 0..) |checked_expr, index| {
-            const lowered = try self.lowerExprAtTypeCell(
-                checked_expr,
-                DraftTypeCell.fromGraphNode(nodes[index]),
-            );
+            const lowered = if (explicit_request_nodes) |nodes|
+                try self.lowerExprAtTypeCell(
+                    checked_expr,
+                    DraftTypeCell.fromGraphNode(nodes[index]),
+                )
+            else
+                try self.lowerExpr(checked_expr);
             try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
         }
     }
@@ -31553,15 +31596,33 @@ const BodyContext = struct {
         self: *BodyContext,
         tag: anytype,
         tag_node: NodeId,
-        _: ControlFlowDestinationRelation,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const name = try self.builder.tagName(self.view, tag.name);
+        const request_row = try self.graph.tagConstructionRow(tag_node);
+        var request_payloads: ?[]const NodeId = null;
+        for (request_row.tags) |request_tag| {
+            if (self.builder.program.names.tagLabelTextEql(request_tag.name, name)) {
+                request_payloads = request_tag.payloads;
+                break;
+            }
+        }
+        const payload_nodes = request_payloads orelse
+            Common.invariant("tag constructor was absent from its exact row");
+        if (payload_nodes.len != tag.args.len) {
+            Common.invariant("tag constructor payload count differed from its exact row");
+        }
         const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
         defer self.allocator.free(lowered);
         for (tag.args, 0..) |arg, index| {
-            lowered[index] = try self.lowerExpr(arg);
+            lowered[index] = switch (destination_relation) {
+                .exact_request => try self.lowerExprAtExactRequest(
+                    arg,
+                    DraftTypeCell.fromGraphNode(payload_nodes[index]),
+                ),
+                .checked_mapping, .exact_producer => try self.lowerExpr(arg),
+            };
         }
-        const request_row = try self.graph.tagConstructionRow(tag_node);
         const produced_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
         var changed = false;
         var found = false;
@@ -31613,11 +31674,20 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         nominal: anytype,
         expected_node: NodeId,
-        _: ControlFlowDestinationRelation,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const checked_node = try self.lowerExprTypeNode(checked_expr);
         const nominal_node = try self.explicitNominalConstructorNode(checked_node, expected_node);
-        const backing = try self.lowerExpr(nominal.backing_expr);
+        const named = self.graph.content(self.constructorRepresentationNode(nominal_node)).named;
+        const backing_node = (named.backing orelse
+            Common.invariant("nominal constructor had no exact backing request")).node;
+        const backing = switch (destination_relation) {
+            .exact_request => try self.lowerExprAtExactRequest(
+                nominal.backing_expr,
+                DraftTypeCell.fromGraphNode(backing_node),
+            ),
+            .checked_mapping, .exact_producer => try self.lowerExpr(nominal.backing_expr),
+        };
         const produced_backing = try self.exprTypeCell(backing).toGraphNode(self.graph);
         const produced_node = try self.producedConstructorNode(nominal_node, produced_backing);
         return try self.addExprWithTypeCell(
@@ -31638,14 +31708,20 @@ const BodyContext = struct {
         self: *BodyContext,
         items: []const checked.CheckedExprId,
         tuple_node: NodeId,
-        _: ControlFlowDestinationRelation,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
         if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.lowerExpr(item);
+            lowered[index] = switch (destination_relation) {
+                .exact_request => try self.lowerExprAtExactRequest(
+                    item,
+                    DraftTypeCell.fromGraphNode(item_nodes[index]),
+                ),
+                .checked_mapping, .exact_producer => try self.lowerExpr(item),
+            };
         }
         const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
         var changed = false;
@@ -31672,13 +31748,19 @@ const BodyContext = struct {
         self: *BodyContext,
         items: []const checked.CheckedExprId,
         list_node: NodeId,
-        _: ControlFlowDestinationRelation,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const element_node = try self.graph.listElementNode(list_node);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.lowerExpr(item);
+            lowered[index] = switch (destination_relation) {
+                .exact_request => try self.lowerExprAtExactRequest(
+                    item,
+                    DraftTypeCell.fromGraphNode(element_node),
+                ),
+                .checked_mapping, .exact_producer => try self.lowerExpr(item),
+            };
         }
         var produced_element = element_node;
         if (lowered.len > 0) {
@@ -31714,20 +31796,36 @@ const BodyContext = struct {
         self: *BodyContext,
         record: anytype,
         record_node: NodeId,
-        _: ControlFlowDestinationRelation,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         var children = std.ArrayList(PreLoweredChild).empty;
         defer children.deinit(self.allocator);
         if (record.ext) |ext| {
             try children.append(self.allocator, .{
                 .checked_expr = ext,
-                .expr = try self.lowerExpr(ext),
+                .expr = switch (destination_relation) {
+                    .exact_request => try self.lowerExprAtExactRequest(
+                        ext,
+                        DraftTypeCell.fromGraphNode(record_node),
+                    ),
+                    .checked_mapping, .exact_producer => try self.lowerExpr(ext),
+                },
             });
         }
         for (record.fields) |field| {
+            const field_node = try self.graph.recordConstructionFieldNode(
+                record_node,
+                try self.builder.recordFieldName(self.view, field.label),
+            );
             try children.append(self.allocator, .{
                 .checked_expr = field.value,
-                .expr = try self.lowerExpr(field.value),
+                .expr = switch (destination_relation) {
+                    .exact_request => try self.lowerExprAtExactRequest(
+                        field.value,
+                        DraftTypeCell.fromGraphNode(field_node),
+                    ),
+                    .checked_mapping, .exact_producer => try self.lowerExpr(field.value),
+                },
             });
         }
         return try self.lowerRecordExprAtNode(record, record_node, children.items);
@@ -40467,87 +40565,62 @@ const BodyContext = struct {
             return try self.lowerExplicitUninhabitedInvocationAtTypeCell(body, result_cell);
         }
         return switch (destination_relation) {
-            .checked_mapping, .exact_producer => try self.lowerProducedValueAtIndependentCheckedCell(body, result_cell),
-            .exact_request => try self.lowerExprAtControlFlowDestination(body, result_cell, .exact_request),
+            .exact_request => try self.lowerExprAtExactRequest(body, result_cell),
+            .checked_mapping, .exact_producer => try self.lowerExpr(body),
         };
     }
 
-    /// Lower one producer at an independent checked occurrence. Ordinary
-    /// values retain their checker-proved construction layers. A
-    /// representation-sensitive producer encountered inside the expression
-    /// may still return its own exact cell; no generic blank root is allocated
-    /// in anticipation of that possibility.
-    fn lowerProducedValueAtIndependentCheckedCell(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        request_cell: DraftTypeCell,
-    ) Allocator.Error!DraftExprId {
-        const checked_node = try self.checkedExprOccurrenceNode(body);
-        // The fresh checked copy isolates the producer's eventual exact root,
-        // but it must first consume the current specialization's substitutions.
-        // Otherwise an unconstrained numeric or row variable can default
-        // independently (for example, U8 inside a U16 specialization).
-        _ = try self.graph.applyCheckedTypeMapping(
-            checked_node,
-            try request_cell.toGraphNode(self.graph),
-        );
-        return try self.lowerExprAtTypeCell(
-            body,
-            DraftTypeCell.fromGraphNode(checked_node),
-        );
-    }
-
-    fn lowerExprAtControlFlowDestination(
+    /// Lower into an exact producer-authored ABI cell. This is ordinary
+    /// directional value flow, not a generated-private query: compound forms
+    /// pass their already-known child cells directly, and leaves consume the
+    /// exact request once.
+    fn lowerExprAtExactRequest(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
-        result_cell: DraftTypeCell,
-        destination_relation: ControlFlowDestinationRelation,
+        request_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        if (destination_relation != .exact_request) {
-            return try self.lowerExprAtTypeCell(checked_expr, result_cell);
-        }
         return switch (self.view.bodies.expr(checked_expr).data) {
             .match_ => |match| try self.lowerMatchExprAtTypeCellWithRelation(
                 checked_expr,
                 match,
-                result_cell,
+                request_cell,
                 .exact_request,
             ),
             .if_ => |if_| try self.lowerIfExprAtTypeCellWithRelation(
                 checked_expr,
                 if_,
-                result_cell,
+                request_cell,
                 .exact_request,
             ),
             .block => |block| try self.lowerBlockAtTypeCellWithRelation(
                 block,
-                result_cell,
+                request_cell,
                 .exact_request,
             ),
             .tag => |tag| try self.lowerTagConstructorAtNodeWithRelation(
                 tag,
-                try result_cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
             .nominal => |nominal| try self.lowerNominalConstructorAtNodeWithRelation(
                 checked_expr,
                 nominal,
-                try result_cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
             .tuple => |items| try self.lowerTupleConstructorAtNodeWithRelation(
                 items,
-                try result_cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
             .list => |items| try self.lowerListConstructorAtNodeWithRelation(
                 items,
-                try result_cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
             .record => |record| try self.lowerRecordConstructorAtNodeWithRelation(
                 record,
-                try result_cell.toGraphNode(self.graph),
+                try request_cell.toGraphNode(self.graph),
                 .exact_request,
             ),
             .pending,
@@ -40588,7 +40661,7 @@ const BodyContext = struct {
             .for_,
             .hosted_lambda,
             .run_low_level,
-            => try self.lowerExprAtTypeCell(checked_expr, result_cell),
+            => try self.lowerExprAtTypeCell(checked_expr, request_cell),
         };
     }
 
@@ -43178,22 +43251,15 @@ const BodyContext = struct {
                 try self.lowerExprAtTypeCell(block.final_expr, result_cell)
             else if (try self.nodeIsProvenUninhabited(result_node))
                 try self.lowerExplicitUninhabitedInvocationAtTypeCell(block.final_expr, result_cell)
-            else
-                try self.lowerExprAtControlFlowDestination(
-                    block.final_expr,
-                    result_cell,
-                    destination_relation,
-                ),
+            else switch (destination_relation) {
+                .exact_request => try self.lowerExprAtExactRequest(block.final_expr, result_cell),
+                .checked_mapping, .exact_producer => try self.lowerExpr(block.final_expr),
+            },
         };
         // A block is representation-transparent: its final expression's exact
         // produced type is the block's exact produced type.
         const value_cell = switch (stmts.termination) {
-            .none => blk: {
-                const produced_cell = self.exprTypeCell(final_expr);
-                const produced_node = try produced_cell.toGraphNode(self.graph);
-                _ = try self.graph.applyProducedTypeToRequest(result_node, produced_node);
-                break :blk produced_cell;
-            },
+            .none => self.exprTypeCell(final_expr),
             .checked_control_transfer, .uninhabited => result_cell,
         };
         return try self.addExprWithTypeCell(value_cell, .{ .block = .{

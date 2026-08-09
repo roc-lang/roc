@@ -4839,6 +4839,25 @@ pub const InstGraph = struct {
             self.countDiagnostic("mono_import_hits");
             return self.find(existing);
         }
+        const imported_generated_identity = switch (self.types.get(ty)) {
+            .named => |named| if (named.backing) |backing|
+                if (backing.authority == .generated_private)
+                    named.def.generated orelse
+                        Common.invariant("imported generated-private nominal lacked its producer identity")
+                else
+                    null
+            else
+                null,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .erased, .zst => null,
+        };
+        if (imported_generated_identity) |identity| {
+            if (self.generated_iterator_intern.get(identity)) |existing| {
+                const node = self.find(existing);
+                try self.linked_type_nodes.put(ty, node);
+                self.countDiagnostic("mono_import_hits");
+                return node;
+            }
+        }
         self.countDiagnostic("mono_import_misses");
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
@@ -4848,6 +4867,13 @@ pub const InstGraph = struct {
         // every digest taken from it.
         try self.linked_type_nodes.put(ty, node);
         try self.imported_monos.put(node, ty);
+        if (imported_generated_identity) |identity| {
+            const entry = try self.generated_iterator_intern.getOrPut(identity);
+            if (entry.found_existing) {
+                Common.invariant("generated-private import interning changed during one import");
+            }
+            entry.value_ptr.* = node;
+        }
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
