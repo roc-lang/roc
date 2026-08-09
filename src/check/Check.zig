@@ -3566,11 +3566,12 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{ .context = ctx });
 }
 
-/// Check one relation owned by a call without letting a rejected relation
-/// poison the callee or argument type graphs. Those graphs can be shared with
-/// otherwise valid producer expressions; the call expression is the sole
-/// executable boundary that becomes erroneous.
-fn unifyCallRelation(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+/// Check one relation owned by a single expression without letting a rejected
+/// relation poison the operand type graphs. Those graphs can be shared with
+/// otherwise valid producer expressions - a callee, an argument, or the record
+/// a field access reads from - so the owning expression is the sole executable
+/// boundary that becomes erroneous.
+fn unifyOwnedRelation(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
         .on_mismatch = .write_no_report,
@@ -14071,7 +14072,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                             const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
                                             const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
 
-                                            const unify_result = try self.unifyCallRelation(arg_1, arg_2, env, .{
+                                            const unify_result = try self.unifyOwnedRelation(arg_1, arg_2, env, .{
                                                 .fn_args_bound_var = .{
                                                     .fn_name = func_name,
                                                     .first_arg_var = arg_1,
@@ -14096,7 +14097,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // called arguments, unifying each one
                                 for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
                                     const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
-                                    const unify_result = try self.unifyCallRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
+                                    const unify_result = try self.unifyOwnedRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
                                         .fn_name = func_name,
                                         .call_expr = expr_idx,
                                         .arg_index = @intCast(arg_index),
@@ -14137,7 +14138,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                                 const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                                const arity_result = try self.unifyCallRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
+                                const arity_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
                                     .fn_name = func_name,
                                     .expected_args = @intCast(func_args_len),
                                     .actual_args = @intCast(call_arg_expr_idxs.len),
@@ -14169,7 +14170,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                            const call_result = try self.unifyCallRelation(func_var, call_func_var, env, .none);
+                            const call_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .none);
                             if (call_result.isProblem()) {
                                 try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                             }
@@ -14276,11 +14277,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .record = .{ .fields = record_field_range, .ext = record_ext_var },
             } }, env, expr_region);
 
-            _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
+            const access_result = try self.unifyOwnedRelation(record_being_accessed, receiver_var, env, .{ .record_access = .{
                 .field_name = field_access.field_name,
                 .field_region = field_access.field_name_region,
             } });
-            _ = try self.unify(expr_var, record_field_var, env);
+            if (access_result.isProblem()) {
+                // The record keeps whatever type it was independently solved to;
+                // only this access is unrunnable, so only it becomes erroneous
+                // and lowers to a crash.
+                try self.markErroneous(expr_var);
+                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            } else {
+                _ = try self.unify(expr_var, record_field_var, env);
+            }
         },
         .e_interpolation => |interpolation| {
             self.checking_call_arg = true;
@@ -16159,7 +16168,7 @@ fn enforceRecordBuilderMap2Return(
     const mapper_var = self.types.getVarAt(func.args, 2);
     const mapper_func = self.functionTypeFromVar(mapper_var) orelse return .ok;
 
-    return try self.unifyCallRelation(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
+    return try self.unifyOwnedRelation(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
         .fn_name = func_name,
         .call_expr = call_expr,
         .arg_index = 2,

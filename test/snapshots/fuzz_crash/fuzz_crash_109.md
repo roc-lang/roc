@@ -14,7 +14,7 @@ EXPOSED BUT NOT DEFINED - fuzz_crash_109.md:1:11:1:16
 # PROBLEMS
 
 ┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `a` was not found in this Roc project. ──────┐
+│ MOD NOT FOUND ├─ The mod `E` was not found in this Roc project. ──────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  package[e,E.a.*]{}                                                        │
@@ -36,14 +36,14 @@ EXPOSED BUT NOT DEFINED - fuzz_crash_109.md:1:11:1:16
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `.a` is exposed, ────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `E.a` is exposed, ───┐
 └┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  package[e,E.a.*]{}                                                        │
  │            ‾‾‾‾‾                                                           │
  └──────────────────────────────────────────────────── fuzz_crash_109.md:1:11 ┘
 
-    You can fix this by either defining `.a` in this mod, or by removing it
+    You can fix this by either defining `E.a` in this mod, or by removing it
     from the list of exposed values.
 
 # TOKENS
@@ -69,7 +69,7 @@ package [e, E.a.*] {}
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (mod "a")
+	(s-import (mod "E")
 		(exposes)))
 ~~~
 # TYPES

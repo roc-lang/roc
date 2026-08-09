@@ -84,6 +84,7 @@ pub const LirLoweringOptions = struct {
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
     prove_ranges: bool = false,
+    allow_user_errors: bool = false,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
@@ -264,10 +265,14 @@ fn lowerAppPathToLir(
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
+    if (!opts.allow_user_errors) {
+        try std.testing.expect(!coord.hasUserErrors());
+    }
 
     try coord.finalizeExecutableArtifacts();
-    try std.testing.expect(!coord.hasUserErrors());
+    if (!opts.allow_user_errors) {
+        try std.testing.expect(!coord.hasUserErrors());
+    }
 
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);

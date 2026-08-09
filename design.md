@@ -1353,6 +1353,16 @@ Checker sites that own a reported error use `markErroneous` to poison the owning
 solved class directly. No successful ordinary unification propagates an
 existing `.err` into a type that already carries information.
 
+A relation an expression merely consults is not a relation it may destroy. A
+call checks its callee and its arguments, and a field access checks the record
+it reads from, against a shape the consuming expression demands; each operand is
+an independently solved producer that other expressions also read. Those sites
+unify through `unifyOwnedRelation`, which suppresses mismatch poisoning, records
+the diagnostic itself, and marks only the consuming expression erroneous. The
+producer keeps the type it was solved to, so a rejected relation neither
+cascades into unrelated uses of that producer nor leaves an `.err` on a binding
+whose value post-check lowering must still instantiate.
+
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that relies on one variable to carry a relation
 between several others has to supply that relation itself once the carrier is
@@ -3657,6 +3667,12 @@ alignment required by every view. Each view offset must also satisfy its own
 item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
+
+LLVM codegen interns one refcounted backing global per blob for the whole
+module, but the pointer to the blob's data offset is a WipFunction
+instruction: every proc body that restores a view must emit its own GEP from
+the interned global. Caching the offset pointer itself would leak the first
+body's instruction into every later function sharing that backing.
 
 The direct LIR const plan also records the root's exact Monotype return type.
 Finalization clones that type into the durable `ConstStore` type store and saves

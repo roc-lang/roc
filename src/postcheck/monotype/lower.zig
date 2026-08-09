@@ -18315,6 +18315,9 @@ const BodyContext = struct {
         child: checked.CheckedExprId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        if (self.view.bodies.expr(child).data == .runtime_error) {
+            return try self.lowerExprWithType(child, str_ty);
+        }
         const value_node = try self.lowerExprTypeNode(child);
         const value = try self.lowerExprAtTypeCell(child, DraftTypeCell.fromGraphNode(value_node));
         return if (try self.graph.typeIsResolved(value_node))
@@ -33681,7 +33684,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
     ) DispatchRuntimePlan {
-        if (self.dispatchCrashReason(plan)) |reason| return .{ .crash = reason };
+        if (self.dispatchCrashReason(plan.resolution)) |reason| return .{ .crash = reason };
         return .{ .callable = .{
             .plan = plan,
             .operands = plan.argsSlice(self.view.static_dispatch_plans),
@@ -33713,8 +33716,8 @@ const BodyContext = struct {
     /// dispatcher is a value no edge can supply (unreachable), or checking
     /// rejected the requirement (a reported missing method). Monotype emits an
     /// ordinary Roc runtime crash instead of a dispatch call for both cases.
-    fn dispatchCrashReason(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?DispatchCrashReason {
-        return switch (plan.resolution) {
+    fn dispatchCrashReason(self: *BodyContext, resolution: static_dispatch.CheckedCallResolution) ?DispatchCrashReason {
+        return switch (resolution) {
             .@"unreachable" => .unreachable_value,
             .checked_error => .checked_error,
             .evidence_dependent => |constraint_ref| if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
@@ -43958,6 +43961,11 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
         const plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
+
+        if (self.dispatchCrashReason(plan.iter.resolution) orelse self.dispatchCrashReason(plan.next.resolution)) |reason| {
+            const message = dispatchCrashMessage(reason);
+            return .{ .crash = try self.addStringLiteral(message) };
+        }
 
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
         const iterator_cell = self.exprTypeCell(initial_iterator);

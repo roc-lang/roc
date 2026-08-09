@@ -2855,11 +2855,15 @@ test "pow covers integer negative and fractional exponents" {
 test "toIntWrap wraps instead of trapping when the whole part exceeds the destination" {
     // A Dec's whole part reaches ~1.7e20, well past i64/u64 range, so every
     // destination width has to wrap rather than trap.
-    const big = RocDec{ .num = 20000000000000000000000000000000000000 }; // 2e19 as a Dec
+    // Expectations are written as literals rather than derived with the same
+    // @truncate/@bitCast the implementation uses, so a regression in that half
+    // of toIntWrap cannot move the test along with it.
+    // 2e19 as a Dec; 2e19 - 2^64 = 1553255926290448384.
+    const big = RocDec{ .num = 20000000000000000000000000000000000000 };
     try std.testing.expectEqual(@as(i128, 20000000000000000000), toIntWrap(i128, big));
     try std.testing.expectEqual(@as(u128, 20000000000000000000), toIntWrap(u128, big));
-    try std.testing.expectEqual(@as(u64, @truncate(@as(u128, 20000000000000000000))), toIntWrap(u64, big));
-    try std.testing.expectEqual(@as(i64, @bitCast(@as(u64, @truncate(@as(u128, 20000000000000000000))))), toIntWrap(i64, big));
+    try std.testing.expectEqual(@as(u64, 1553255926290448384), toIntWrap(u64, big));
+    try std.testing.expectEqual(@as(i64, 1553255926290448384), toIntWrap(i64, big));
 
     // Negative values wrap the same way.
     const big_neg = RocDec{ .num = -20000000000000000000000000000000000000 };
