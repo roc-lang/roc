@@ -6184,28 +6184,27 @@ const Cloner = struct {
         value_expr: Ast.ExprId,
         selection: LoopExitSelection,
     ) Common.LowerError!Ast.ExprId {
-        const value_data = self.pass.program.getExpr(value_expr).data;
-        if (value_data != .tuple) Common.invariant("selected loop exit did not carry compiler-generated tuple state");
-        const tuple = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(value_data.tuple));
-        defer self.pass.allocator.free(tuple);
-        if (tuple.len != selection.source_arity) {
+        var bindings: BindingChain = .{};
+        const exit_value = try self.cloneExprValueDemandingShapeInto(value_expr, &bindings);
+        const tuple = tupleFromValue(exit_value) orelse Common.invariant("selected loop exit did not carry compiler-generated tuple state");
+        if (tuple.items.len != selection.source_arity) {
             Common.invariant("selected loop exit tuple arity differed from its source ABI");
         }
 
-        return switch (selection.transfer) {
+        const projected = switch (selection.transfer) {
             .break_value => blk: {
                 if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
-                const projected = try self.addExpr(.{
+                const projected_expr = try self.addExpr(.{
                     .ty = break_ty,
-                    .data = .{ .break_ = try self.cloneExpr(tuple[selection.kept_indices[0]]) },
+                    .data = .{ .break_ = try self.materialize(tuple.items[selection.kept_indices[0]]) },
                 });
-                try self.selected_loop_exit_tys.put(projected, selection.result_ty);
-                break :blk projected;
+                try self.selected_loop_exit_tys.put(projected_expr, selection.result_ty);
+                break :blk projected_expr;
             },
             .jump => |jump_transfer| blk: {
                 const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
                 defer self.pass.allocator.free(args);
-                for (selection.kept_indices, args) |index, *out| out.* = try self.cloneExpr(tuple[index]);
+                for (selection.kept_indices, args) |index, *out| out.* = try self.materialize(tuple.items[index]);
                 const jump = try self.addExpr(.{
                     .ty = break_ty,
                     .data = .{ .jump = .{
@@ -6217,6 +6216,8 @@ const Cloner = struct {
                 break :blk jump;
             },
         };
+
+        return try self.wrapBindings(bindings, projected);
     }
 
     fn inlineLoopExitAtSite(

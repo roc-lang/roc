@@ -171,6 +171,10 @@ const BuiltinListAbi = struct {
 /// the statement's statically-proven-unique argument mask: `.InPlace` when bit
 /// 0 says argument 0's runtime uniqueness check is redundant, `.Immutable`
 /// (checked) otherwise.
+fn updateModeImmForArg0(unique_args: u64) i64 {
+    return @intFromEnum(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+}
+
 /// Destination width in bits for a Dec-to-integer truncating conversion, or
 /// null when the op is not one of those conversions.
 fn decToIntTruncBits(op: lir.LowLevel) ?u8 {
@@ -194,10 +198,6 @@ fn decToIntTruncBits(op: lir.LowLevel) ?u8 {
         .dec_to_i64_trunc, .dec_to_u64_trunc => 64,
         .dec_to_i128_trunc, .dec_to_u128_trunc => 128,
     };
-}
-
-fn updateModeImmForArg0(unique_args: u64) i64 {
-    return @intFromEnum(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
 fn updateModeImmForArg1(unique_args: u64) i64 {
