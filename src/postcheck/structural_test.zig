@@ -387,6 +387,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(solve_source, "unifyIteratorOwnerStampedPublic");
     try expectNotContains(solve_source, "class_member_next");
     try expectNotContains(solve_source, "OpenFunctionInterfaceShape");
+    try expectNotContains(solve_source, "typeCanSealFromExplicitEvidence");
+    try expectNotContains(solve_source, ".checked_variable => .empty_tag_union");
 
     try expectNotContains(solve_source, "finalizeGeneratedIteratorRepresentations");
     try expectNotContains(solve_source, "finalizeGeneratedIteratorIdentities");

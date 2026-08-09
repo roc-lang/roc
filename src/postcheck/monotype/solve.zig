@@ -804,7 +804,7 @@ pub const InstGraph = struct {
                     if (variable.numeric_default_phase != null) return false;
                     if (variable.row_default) |row_default| return row_default == .empty_tag_union;
                     return switch (variable.origin) {
-                        .checked_variable => true,
+                        .checked_variable => Common.invariant("checked variable reached final demand validation without an explicit default"),
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
                         .placeholder => Common.invariant("instantiation placeholder reached final demand validation"),
                     };
@@ -927,7 +927,7 @@ pub const InstGraph = struct {
                 if (variable.numeric_default_phase != null) break :blk false;
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
                 break :blk switch (variable.origin) {
-                    .checked_variable => true,
+                    .checked_variable => Common.invariant("checked variable reached final inhabitance validation without an explicit default"),
                     .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
                     .placeholder => Common.invariant("instantiation placeholder reached final inhabitance validation"),
                 };
@@ -1234,60 +1234,6 @@ pub const InstGraph = struct {
             .dec => .{ .primitive = .dec },
             .str => .{ .primitive = .str },
         });
-    }
-
-    /// Whether evidence finalization has explicit producer provenance for every
-    /// node in this live type. Numeric and row defaults are direct closure
-    /// evidence. A plain checked variable is provisionally sealable as the
-    /// language's truly-unconstrained empty union only when the caller proves,
-    /// by comparing after all dependent lowering, that no later relation
-    /// refined it. Row extensions and compiler placeholders require their own
-    /// explicit data and can never use that rule.
-    pub fn typeCanSealFromExplicitEvidence(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved => |variable| {
-                    const numeric_default = if (variable.numeric_default_phase) |phase|
-                        checked.literal_defaulting.defaultTargetForPhase(phase) != null
-                    else
-                        false;
-                    if (!numeric_default and variable.row_default == null and variable.origin != .checked_variable) return false;
-                },
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    try pending.appendSlice(self.allocator, named.args);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
-                    for (named.declared_order) |declared| switch (declared) {
-                        .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
-                    };
-                },
-            }
-        }
-        return true;
     }
 
     fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind) Allocator.Error!bool {
@@ -5296,7 +5242,7 @@ const GeneratedIdentityWriter = struct {
                 .empty_record => .empty_record,
                 .empty_tag_union => .empty_tag_union,
             } else switch (content.unresolved.origin) {
-                .checked_variable => .empty_tag_union,
+                .checked_variable => Common.invariant("generated identity input contained a checked variable without an explicit default"),
                 .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
                 .placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
             };
@@ -5481,7 +5427,7 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
         .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
     };
     return switch (variable.origin) {
-        .checked_variable => .{ .tag_union = Type.Span.empty() },
+        .checked_variable => Common.invariant("checked variable reached Monotype materialization without an explicit default"),
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
         .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };
@@ -5644,7 +5590,7 @@ test "completed monotype program view does not expose instantiation graph nodes"
     comptime assertNoNodeId(Ast.ProgramView, "Ast.ProgramView");
 }
 
-test "resolved graph type detection does not default open cells" {
+test "resolved graph type detection does not default explicit open cells" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5659,17 +5605,10 @@ test "resolved graph type detection does not default open cells" {
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const open_list = try graph.newNode(.{ .list = unresolved });
     try std.testing.expect(!try graph.typeIsResolved(open_list));
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
-
-    const unmarked = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(unmarked));
-    const placeholder = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try std.testing.expect(!try graph.typeCanSealFromExplicitEvidence(placeholder));
 
     const str = try graph.newNode(.{ .primitive = .str });
     try graph.unify(unresolved, str);
     try std.testing.expect(try graph.typeIsResolved(open_list));
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
 }
 
 test "open draft function interfaces use related graph classes directly" {

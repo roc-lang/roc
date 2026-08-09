@@ -4119,6 +4119,10 @@ The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every
 checked interface relation and specialization demand for that body has been
 applied.
+Checking records `empty_tag_union` explicitly on every truly unconstrained checked
+variable. A checked-variable origin alone never authorizes post-check to derive
+`empty_tag_union`; a missing numeric or row default at sealing or while forming a
+generated identity is a compiler invariant.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
@@ -4629,8 +4633,8 @@ post-check stage consumes them. The draft is sealed only after:
 2. deferred procedure-template requests created by this graph have been drained
    or reserved with stable closed request types;
 3. nested function bodies that share this graph have finished lowering;
-4. every unresolved graph node can be closed from checked data, or can be
-   proven to be a truly unconstrained empty tag union.
+4. every unresolved graph node can be closed from explicit numeric or row
+   default data produced by checking.
 
 Sealing performs the only transition from graph nodes to final Monotype
 `TypeId`s. It walks every draft type cell, materializes each graph node
