@@ -198,11 +198,9 @@ pub const GraphDiagnostics = struct {
     function_request_pairs_visited: u64 = 0,
     function_request_replacements: u64 = 0,
     function_request_nodes_materialized: u64 = 0,
-    generated_representation_roots_finalized: u64 = 0,
-    generated_identity_roots_finalized: u64 = 0,
-    generated_identity_roots_coalesced: u64 = 0,
-    generated_identity_nodes_hashed: u64 = 0,
-    generated_identity_cache_hits: u64 = 0,
+    generated_identity_input_nodes_hashed: u64 = 0,
+    generated_identity_intern_hits: u64 = 0,
+    generated_identity_intern_misses: u64 = 0,
     generated_type_store_hits: u64 = 0,
     generated_type_store_misses: u64 = 0,
     open_function_shape_requests: u64 = 0,
@@ -683,10 +681,12 @@ pub const InstGraph = struct {
             Common.invariant("generated iterator lookup received no public item argument");
         }
         const digest = try self.generatedIteratorInternDigest(public_named, kind, components, callable_evidence);
-        return .{
-            .existing = if (self.generated_iterator_intern.get(digest)) |node| self.find(node) else null,
-            .digest = digest,
-        };
+        if (self.generated_iterator_intern.get(digest)) |node| {
+            self.countDiagnostic("generated_identity_intern_hits");
+            return .{ .existing = self.find(node), .digest = digest };
+        }
+        self.countDiagnostic("generated_identity_intern_misses");
+        return .{ .existing = null, .digest = digest };
     }
 
     pub fn registerGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
@@ -5518,7 +5518,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
                 self.writeU8(if (try self.hasRecursiveValueSlot(node)) 1 else 0);
                 self.writeU8(if (try self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
             } else {
-                self.graph.countDiagnostic("generated_identity_nodes_hashed");
+                self.graph.countDiagnostic("generated_identity_input_nodes_hashed");
             }
             self.writeBytes("generated-private-nominal");
             self.writeBytes(&digest.bytes);
