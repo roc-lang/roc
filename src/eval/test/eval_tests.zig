@@ -298,6 +298,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"amy/anon\"" },
     },
     .{
+        .name = "optional record field: generic accessor specializes its payload type",
+        .source_kind = .module,
+        .source =
+        \\pick : { x ?: a } -> Try(a, [MissingField])
+        \\pick = |r| r.?x
+        \\
+        \\present : { x ?: U8 }
+        \\present = { x: 7 }
+        \\
+        \\missing : { x ?: U8 }
+        \\missing = {}
+        \\
+        \\main = (pick(present) ?? 0) + (pick(missing) ?? 20)
+        ,
+        .expected = .{ .inspect_str = "27" },
+    },
+    .{
         .name = "optional record field: record keeps its slots through a generic identity function",
         .source_kind = .module,
         .source =

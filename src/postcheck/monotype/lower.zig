@@ -31552,15 +31552,15 @@ const BodyContext = struct {
         if (fieldAccessAnySegmentOptional(field.segments)) {
             // A `.?` chain compiles to runtime slot tests producing the
             // chain's checked `Try` (design.md "Field Kinds (All-Dynamic
-            // Optional Fields)"). Graph nodes are not resolved during
-            // expression lowering, so the chain's Monotypes derive from
-            // checked data; the graph learns the chain's shape through
-            // `fieldAccessTypeNode`'s constraints.
+            // Optional Fields)"). Both the receiver and result stay attached
+            // to the specialization graph until their active Monotypes are
+            // needed by the runtime chain lowering.
             const checked_ty = self.view.bodies.expr(expr_id).ty;
+            const receiver_node = try self.lowerExprTypeNode(field.receiver);
             const observable = try self.fieldAccessTypeNode(checked_ty, field, null);
             try relateRequestComponent(self.graph, expected_node, observable);
-            const receiver_ty = try self.builder.lowerType(self.view, self.view.bodies.expr(field.receiver).ty);
-            return try self.lowerOptionalFieldAccessChain(field, receiver_ty, try self.builder.lowerType(self.view, checked_ty));
+            const result_node = if (try self.graph.containsGeneratedPrivate(observable)) observable else expected_node;
+            return try self.lowerOptionalFieldAccessChainAtNode(field, receiver_node, result_node);
         }
         const receiver_node = try self.lowerExprTypeNode(field.receiver);
         const start: u32 = @intCast(self.draft.field_access_segments.items.len);
@@ -32075,7 +32075,7 @@ const BodyContext = struct {
     }
 
     /// The structural backing node behind a (possibly named) Try node.
-    fn optionalDestructBackingNode(self: *BodyContext, node: NodeId) NodeId {
+    fn optionalTryBackingNode(self: *BodyContext, node: NodeId) NodeId {
         if (self.graph.content(node) == .named) {
             const backing = self.graph.namedNodes(node).backing orelse
                 Common.invariant("optional destructure Try node had no runtime backing");
@@ -32118,7 +32118,7 @@ const BodyContext = struct {
             .name = missing_name,
             .payloads = .empty(),
         } });
-        const err_node = try self.graph.tagPayloadNode(self.optionalDestructBackingNode(try_node), err_name, 0);
+        const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(try_node), err_name, 0);
         const err_body = try self.addConstructorExprAtNode(try_node, .{ .tag = .{
             .name = err_name,
             .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
@@ -32184,7 +32184,7 @@ const BodyContext = struct {
             .nominal => |nominal| return try self.lowerOptionalDestructChildAtSlotNode(
                 nominal.backing_pattern,
                 slot_node,
-                self.optionalDestructBackingNode(result_node),
+                self.optionalTryBackingNode(result_node),
             ),
             .applied_tag => |tag| blk: {
                 const tag_name = try self.builder.tagName(self.view, tag.name);
@@ -32204,7 +32204,7 @@ const BodyContext = struct {
                 }
                 if (tag_name == err_name) {
                     const err_node = try self.graph.tagPayloadNode(
-                        self.optionalDestructBackingNode(result_node),
+                        self.optionalTryBackingNode(result_node),
                         err_name,
                         0,
                     );
@@ -32480,6 +32480,112 @@ const BodyContext = struct {
     /// payload continues the chain (required segments after an optional one
     /// ride this Ok path as plain field reads), and the final value wraps in
     /// `Ok` exactly once.
+    fn lowerOptionalFieldAccessChainAtNode(
+        self: *BodyContext,
+        access: anytype,
+        receiver_node: NodeId,
+        out_try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const receiver_cell = DraftTypeCell.fromGraphNode(receiver_node);
+        const receiver = try self.lowerExprAtTypeCell(access.receiver, receiver_cell);
+        return try self.optionalChainRestAtNode(
+            access.segments,
+            0,
+            receiver,
+            receiver_node,
+            out_try_node,
+        );
+    }
+
+    fn optionalChainRestAtNode(
+        self: *BodyContext,
+        segments: []const checked.CheckedFieldAccessSegment,
+        index: usize,
+        current: DraftExprId,
+        current_node: NodeId,
+        out_try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (index == segments.len) {
+            const ok_name = try self.builder.program.names.internTagLabel("Ok");
+            return try self.addConstructorExprAtNode(out_try_node, .{ .tag = .{
+                .name = ok_name,
+                .payloads = try self.addExprSpan(&.{current}),
+            } });
+        }
+
+        const segment = segments[index];
+        const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+        switch (segment.mode) {
+            .required => {
+                const field_node = switch (segment.backing_access) {
+                    .inspectable => try self.graph.requiredRecordFieldNode(current_node, field_name),
+                    .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(current_node, field_name),
+                };
+                const field_expr = try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(field_node),
+                    .{ .field_access = .{
+                        .receiver = current,
+                        .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field_name }}),
+                    } },
+                );
+                return try self.optionalChainRestAtNode(
+                    segments,
+                    index + 1,
+                    field_expr,
+                    field_node,
+                    out_try_node,
+                );
+            },
+            .optional => {
+                const field = switch (segment.backing_access) {
+                    .inspectable => try self.graph.optionalRecordFieldNodes(current_node, field_name),
+                    .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(current_node, field_name),
+                };
+                const slot_cell = DraftTypeCell.fromGraphNode(field.slot);
+                const payload_cell = DraftTypeCell.fromGraphNode(field.value);
+                const slot_expr = try self.addExprWithTypeCell(slot_cell, .{ .field_access = .{
+                    .receiver = current,
+                    .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field_name }}),
+                } });
+
+                const present_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+                const missing_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+                const payload_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), payload_cell, null);
+                const present_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+                    .name = present_name,
+                    .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(payload_cell, .{ .bind = payload_local })}),
+                } });
+                const present_body = try self.optionalChainRestAtNode(
+                    segments,
+                    index + 1,
+                    try self.addExprWithTypeCell(payload_cell, .{ .local = payload_local }),
+                    field.value,
+                    out_try_node,
+                );
+
+                const missing_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+                    .name = missing_name,
+                    .payloads = .empty(),
+                } });
+                const err_name = try self.builder.program.names.internTagLabel("Err");
+                const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(out_try_node), err_name, 0);
+                const missing_body = try self.addConstructorExprAtNode(out_try_node, .{ .tag = .{
+                    .name = err_name,
+                    .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
+                } });
+
+                const branches = [_]DraftBranch{
+                    .{ .pat = present_pat, .body = present_body },
+                    .{ .pat = missing_pat, .body = missing_body },
+                };
+                return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(out_try_node), .{ .match_ = .{
+                    .scrutinee = slot_expr,
+                    .branches = try self.addBranchSpan(&branches),
+                } });
+            },
+        }
+    }
+
     fn lowerOptionalFieldAccessChain(
         self: *BodyContext,
         access: anytype,
