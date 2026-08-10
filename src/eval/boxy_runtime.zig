@@ -37,6 +37,8 @@ pub const Error = error{
     DivisionByZero,
     Crash,
     ExpectErr,
+    UnsupportedHostedFunction,
+    InvalidHostedFunctionSignature,
 };
 
 /// Comptime-gated tracing for the boxy runtime's RC plan execution.

@@ -85,8 +85,10 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
 } else real_interpreter;
 pub const Interpreter = interpreter.Interpreter;
 pub const LirInterpreter = real_interpreter.Interpreter;
-/// Production-faithful RocOps recorder used by eval tests.
-pub const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+/// RocOps host used by compiler-owned inspected evaluation.
+pub const RuntimeHost = @import("runtime_host.zig");
+/// Compatibility name retained for evaluator tests.
+pub const RuntimeHostEnv = RuntimeHost;
 /// Bytebox runner for wasm modules.
 pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub const EvalError = error{WasmExecFailed};
@@ -107,8 +109,10 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
         return error.WasmExecFailed;
     }
 } else @import("wasm_runner.zig");
-/// Shared eval test helpers routed through checked artifacts.
-pub const test_helpers = @import("test_helpers.zig");
+/// Checked-module compilation and inspected evaluation support.
+pub const Inspected = @import("inspected.zig");
+/// Compatibility name retained for evaluator tests.
+pub const test_helpers = Inspected;
 /// Descriptor-guided boxy value operations shared by the interpreter and
 /// machine-code backends.
 pub const boxy_runtime = @import("boxy_runtime.zig");
@@ -132,8 +136,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("stack.zig"));
-    std.testing.refAllDecls(@import("test_helpers.zig"));
+    std.testing.refAllDecls(@import("inspected.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
-    std.testing.refAllDecls(@import("test/RuntimeHostEnv.zig"));
+    std.testing.refAllDecls(@import("runtime_host.zig"));
     std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

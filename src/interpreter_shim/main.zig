@@ -131,6 +131,7 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         // expect_err statements only occur in top-level expect test roots,
         // never in platform entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     ops.crash(message);
 }

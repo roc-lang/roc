@@ -736,6 +736,7 @@ fn tidyBannedCoreCtxCreation(file: SourceFile, errors: *Errors) void {
         "src/build/builtin_compiler/main.zig",
         "src/snapshot_tool/main.zig",
         "src/playground_wasm/main.zig",
+        "src/repl_wasm/main.zig",
         "src/compile/compile_build.zig",
         "src/compile/coordinator.zig",
         "src/echo_platform/echo_native.zig",

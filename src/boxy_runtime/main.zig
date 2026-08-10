@@ -42,7 +42,7 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Avoids unresolved static-archive dependencies; see
+/// This object is linked into the programs roc produces, so it uses
 /// `shim_io.std_options_static_archive`.
 pub const std_options = shim_io.std_options_static_archive;
 

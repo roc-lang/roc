@@ -335,6 +335,10 @@ checking_immediate_callee: bool = false,
 /// the immediate callee of the current call expression. Recursive references
 /// reached under this depth are delayed dependencies, not strict value cycles.
 delayed_dependency_depth: u32 = 0,
+/// True while checking the direct body of an explicitly requested executable
+/// root. Its zero-argument callable is invoked by the compilation consumer, so
+/// body-local dispatch receivers cannot be left for a later caller to pin.
+checking_executable_root: bool = false,
 /// True when checking the right-hand side of an immutable binding (a top-level
 /// def or a block-local `s_decl`). Used to generalize a binding whose RHS is a
 /// bare reference to an already-generalized scheme (e.g. `shorthand = Foo.bar`).
@@ -467,6 +471,10 @@ instantiation_dispatchers_checked: usize = 0,
 /// instantiation created the unsatisfiable obligation—without scanning the
 /// module to rediscover it.
 instantiation_source_expr: ?CIR.Expr.Idx = null,
+/// Whether `instantiation_source_expr` is the direct callee of the call being
+/// checked. An executable root forces only an invoked constrained scheme, not
+/// a generalized function value passed to another call as data.
+instantiation_is_immediate_callee: bool = false,
 /// While discharging a static-dispatch constraint, the site that constraint
 /// originated at. Scheme instantiations that copy constrained vars are then
 /// recorded against that node's `dispatch_target` evidence slot (see
@@ -734,6 +742,11 @@ const AmbiguityCandidate = struct {
     /// `.creation` candidates.
     instantiation_expr: ?CIR.Expr.Idx,
     source: Source,
+    /// The receiver was created in direct code of an explicitly requested
+    /// executable root. A future caller cannot supply type evidence there;
+    /// nested closure bodies remain false because their invocation is still
+    /// outside the checked body.
+    requires_current_resolution: bool,
     /// Set once the candidate has been judged (either verdict or acquittal) so
     /// later events and the end-of-check residual pass skip it.
     judged: bool = false,
@@ -7208,6 +7221,9 @@ fn recordAmbiguityCandidate(
         .var_ = receiver_var,
         .instantiation_expr = instantiation_expr,
         .source = source,
+        .requires_current_resolution = self.checking_executable_root and
+            self.delayed_dependency_depth == 0 and
+            (source == .creation or self.instantiation_is_immediate_callee),
     });
 }
 
@@ -7384,7 +7400,8 @@ fn judgeAmbiguityCandidate(
     // Result-only receivers do not qualify here: they must escape through the
     // enclosing scheme interface (covered by the sets below), which distinguishes
     // a generic wrapper from a discarded Json.parse result.
-    if (selection.only_where_clause_contracts and
+    if (!candidate.requires_current_resolution and
+        selection.only_where_clause_contracts and
         resolved_rank == .generalized and
         candidate.source == .instantiation and
         try self.instantiationArgumentsCanPin(candidate.instantiation_expr, resolved_var))
@@ -7392,7 +7409,8 @@ fn judgeAmbiguityCandidate(
         return;
     }
 
-    const active_pinnable = if (selection.is_instantiated_where_clause and selection.where_dispatch_use != null)
+    const active_pinnable = if (candidate.requires_current_resolution or
+        (selection.is_instantiated_where_clause and selection.where_dispatch_use != null))
         &self.external_pinnable
     else
         &self.pinnable_vars;
@@ -9383,6 +9401,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     const def = self.cir.store.getDef(def_idx);
 
+    const saved_checking_executable_root = self.checking_executable_root;
+    self.checking_executable_root = self.isExecutableRootDef(def_idx);
+    defer self.checking_executable_root = saved_checking_executable_root;
+
     if (self.topLevelPattern(def.pattern)) |processing_def| {
         if (processing_def.status == .processed) {
             // If we've already processed this def, return immediately
@@ -9472,6 +9494,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         expectation.withHoistPosition(.eligible)
     else
         expectation.forComptimeRoot();
+    const saved_checking_immediate_callee = self.checking_immediate_callee;
+    if (self.checking_executable_root) self.checking_immediate_callee = true;
+    defer self.checking_immediate_callee = saved_checking_immediate_callee;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
     const def_does_fx = try self.checkExpr(def.expr, env, def_expectation);
@@ -9522,6 +9547,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         .def_name = def_name,
         .status = .processed,
     });
+}
+
+fn isExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    for (self.executable_root_defs.items) |root_def_idx| {
+        if (root_def_idx == def_idx) return true;
+    }
+    return false;
 }
 
 // dependency-ordered driver //
@@ -12958,15 +12990,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Consume the checking_call_arg flag: it applies only to this immediate
     // checkExpr call and must not propagate to recursive calls (e.g. nested call
-    // arguments). The one exception is `e_closure`, which is only the capture
-    // wrapper around its inner `e_lambda`: the lambda is the actual argument
-    // value, so the closure re-asserts this flag before delegating to it (see the
-    // `.e_closure` case) to keep an argument lambda from being generalized.
+    // arguments). Value-producing wrappers explicitly forward it only to the
+    // child that supplies their result (see `checkExprInCallPosition`), keeping
+    // an immediately called lambda from generalizing through a closure, block,
+    // conditional, or match.
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
     const is_immediate_callee = self.checking_immediate_callee;
     self.checking_immediate_callee = false;
+
+    const prev_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
+    self.instantiation_is_immediate_callee = is_immediate_callee;
+    defer self.instantiation_is_immediate_callee = prev_instantiation_is_immediate_callee;
 
     // Consume the binding-RHS flag: it applies only to this immediate checkExpr
     // call and must not propagate into subexpressions.
@@ -13685,9 +13721,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the final expression
             const final_expr_does_fx = if (stmt_result.blocks_later_hoists)
-                try self.checkExpr(block.final_expr, env, nested_expected.suppressHoistSelection())
+                try self.checkExprInCallPosition(
+                    block.final_expr,
+                    env,
+                    nested_expected.suppressHoistSelection(),
+                    is_call_arg,
+                    is_immediate_callee,
+                )
             else
-                try self.checkExpr(block.final_expr, env, nested_expected);
+                try self.checkExprInCallPosition(
+                    block.final_expr,
+                    env,
+                    nested_expected,
+                    is_call_arg,
+                    is_immediate_callee,
+                );
             does_fx = final_expr_does_fx or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
@@ -13922,18 +13970,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // lambda must NOT be generalized, or its body's static-dispatch chain
             // would be quantified before the caller pins the parameter types,
             // leaving the original (un-instantiated) dispatch nodes unresolved.
-            const saved_checking_call_arg = self.checking_call_arg;
-            const saved_checking_immediate_callee = self.checking_immediate_callee;
-            self.checking_call_arg = is_call_arg;
-            self.checking_immediate_callee = is_immediate_callee;
-            defer self.checking_call_arg = saved_checking_call_arg;
-            defer self.checking_immediate_callee = saved_checking_immediate_callee;
             // A group member's RHS suppression applies to the lambda the
             // closure wraps, exactly like the call-arg status above.
             if (suppress_group_member_generalize) {
                 self.suppress_generalize_expr = closure.lambda_idx;
             }
-            does_fx = try self.checkExpr(closure.lambda_idx, env, nested_expected) or does_fx;
+            does_fx = try self.checkExprInCallPosition(
+                closure.lambda_idx,
+                env,
+                nested_expected,
+                is_call_arg,
+                is_immediate_callee,
+            ) or does_fx;
             // The closure is the executable function-value expression. If its
             // delegated lambda check failed as a whole, poison the closure so
             // the lambda remains a valid structural child until the closure is
@@ -13964,6 +14012,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const func_var = blk_instantiate: {
                         const resolved = self.types.resolveVar(call_func_expr_var);
                         if (resolved.desc.rank == Rank.generalized) {
+                            const saved_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
+                            self.instantiation_is_immediate_callee = true;
+                            defer self.instantiation_is_immediate_callee = saved_instantiation_is_immediate_callee;
                             break :blk_instantiate try self.instantiateVar(
                                 call_func_expr_var,
                                 env,
@@ -14250,10 +14301,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_if => |if_expr| {
-            does_fx = try self.checkIfElseExpr(expr_idx, expr_region, env, if_expr, nested_expected) or does_fx;
+            does_fx = try self.checkIfElseExpr(
+                expr_idx,
+                expr_region,
+                env,
+                if_expr,
+                nested_expected,
+                is_call_arg,
+                is_immediate_callee,
+            ) or does_fx;
         },
         .e_match => |match| {
-            does_fx = try self.checkMatchExpr(expr_idx, env, match, nested_expected) or does_fx;
+            does_fx = try self.checkMatchExpr(
+                expr_idx,
+                env,
+                match,
+                nested_expected,
+                is_call_arg,
+                is_immediate_callee,
+            ) or does_fx;
         },
         .e_binop => |binop| {
             does_fx = try self.checkBinopExpr(expr_idx, expr_region, env, binop, nested_expected) or does_fx;
@@ -14765,6 +14831,26 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     try hoist_frame.finish(does_fx);
     return does_fx;
+}
+
+/// Forward explicit call-position facts through a wrapper to the expression that
+/// supplies that wrapper's value. No condition, guard, or block statement is a
+/// direct callee; only a selected result can be invoked by the enclosing call.
+fn checkExprInCallPosition(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    env: *Env,
+    expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
+) std.mem.Allocator.Error!bool {
+    const saved_checking_call_arg = self.checking_call_arg;
+    const saved_checking_immediate_callee = self.checking_immediate_callee;
+    self.checking_call_arg = is_call_arg;
+    self.checking_immediate_callee = is_immediate_callee;
+    defer self.checking_call_arg = saved_checking_call_arg;
+    defer self.checking_immediate_callee = saved_checking_immediate_callee;
+    return self.checkExpr(expr_idx, env, expected);
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -16422,6 +16508,8 @@ fn checkIfElseExpr(
     env: *Env,
     if_: @FieldType(CIR.Expr, @tagName(.e_if)),
     expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
 ) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -16452,7 +16540,13 @@ fn checkIfElseExpr(
     }
 
     // Then we check the 1st branch's body
-    does_fx = try self.checkExpr(first_branch.body, env, expected.forBranchBody()) or does_fx;
+    does_fx = try self.checkExprInCallPosition(
+        first_branch.body,
+        env,
+        expected.forBranchBody(),
+        is_call_arg,
+        is_immediate_callee,
+    ) or does_fx;
 
     if (expected_branch_ret) |expected_ret| {
         const branch_ctx = problem.Context{ .if_branch = .{
@@ -16485,7 +16579,13 @@ fn checkIfElseExpr(
         }
 
         // Check the branch body
-        does_fx = try self.checkExpr(branch.body, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprInCallPosition(
+            branch.body,
+            env,
+            expected.forBranchBody(),
+            is_call_arg,
+            is_immediate_callee,
+        ) or does_fx;
 
         // Check against expected return type BEFORE pairwise unification
         if (expected_branch_ret) |expected_ret| {
@@ -16521,7 +16621,13 @@ fn checkIfElseExpr(
                         try self.warnIfComptimeConditionalExpr(remaining_branch.cond, .if_condition, expected);
                     }
 
-                    does_fx = try self.checkExpr(remaining_branch.body, env, expected.forBranchBody()) or does_fx;
+                    does_fx = try self.checkExprInCallPosition(
+                        remaining_branch.body,
+                        env,
+                        expected.forBranchBody(),
+                        is_call_arg,
+                        is_immediate_callee,
+                    ) or does_fx;
                     try self.markErroneous(ModuleEnv.varFrom(remaining_branch.body));
                 }
 
@@ -16534,7 +16640,13 @@ fn checkIfElseExpr(
     }
 
     // Check the final else
-    does_fx = try self.checkExpr(if_.final_else, env, expected.forBranchBody()) or does_fx;
+    does_fx = try self.checkExprInCallPosition(
+        if_.final_else,
+        env,
+        expected.forBranchBody(),
+        is_call_arg,
+        is_immediate_callee,
+    ) or does_fx;
 
     // Check final else against expected return type before pairwise unification
     if (expected_branch_ret) |expected_ret| {
@@ -16582,6 +16694,8 @@ fn checkMatchExpr(
     env: *Env,
     match: CIR.Expr.Match,
     expected: Expected,
+    is_call_arg: bool,
+    is_immediate_callee: bool,
 ) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -16714,7 +16828,13 @@ fn checkMatchExpr(
         }
 
         // Check the first branch's value, then use that at the branch_var
-        does_fx = try self.checkExpr(first_branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprInCallPosition(
+            first_branch.value,
+            env,
+            expected.forBranchBody(),
+            is_call_arg,
+            is_immediate_callee,
+        ) or does_fx;
         val_var = ModuleEnv.varFrom(first_branch.value);
 
         // Check first branch body against expected return type
@@ -16773,7 +16893,13 @@ fn checkMatchExpr(
         }
 
         // Then, check the body
-        does_fx = try self.checkExpr(branch.value, env, expected.forBranchBody()) or does_fx;
+        does_fx = try self.checkExprInCallPosition(
+            branch.value,
+            env,
+            expected.forBranchBody(),
+            is_call_arg,
+            is_immediate_callee,
+        ) or does_fx;
 
         // Check branch body against expected return type BEFORE pairwise unification.
         // Pairwise unification poisons ALL connected vars via union-find on failure,
@@ -16823,7 +16949,13 @@ fn checkMatchExpr(
                     try self.recordHoistMatchBranchContextualBindings(other_branch_ptrn_idxs, match_hoist_owner);
 
                     // Then check the other branch's exprs
-                    does_fx = try self.checkExpr(other_branch.value, env, expected.forBranchBody()) or does_fx;
+                    does_fx = try self.checkExprInCallPosition(
+                        other_branch.value,
+                        env,
+                        expected.forBranchBody(),
+                        is_call_arg,
+                        is_immediate_callee,
+                    ) or does_fx;
                     try self.markErroneous(ModuleEnv.varFrom(other_branch.value));
                 }
 

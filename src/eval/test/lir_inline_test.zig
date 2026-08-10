@@ -610,8 +610,10 @@ fn runLoweredWithHostEvents(
         error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
         error.RuntimeError,
+        error.UnsupportedHostedFunction,
         => return err,
     };
     switch (result) {
@@ -635,7 +637,7 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) Te
     for (expected, run.events) |expected_event, actual_event| {
         switch (actual_event) {
             .dbg => |msg| try std.testing.expectEqualStrings(expected_event, msg),
-            .expect_failed, .crashed => return error.TestUnexpectedResult,
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
         }
     }
 }
@@ -3504,15 +3506,15 @@ fn expectOptimizedHostEvents(
         switch (expected_event) {
             .dbg => |expected_msg| switch (actual_event) {
                 .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                .expect_failed, .crashed => return error.TestUnexpectedResult,
+                .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .expect_failed => switch (actual_event) {
                 .expect_failed => {},
-                .dbg, .crashed => return error.TestUnexpectedResult,
+                .dbg, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .crashed => |expected_msg| switch (actual_event) {
                 .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                .dbg, .expect_failed => return error.TestUnexpectedResult,
+                .dbg, .expect_failed, .effect => return error.TestUnexpectedResult,
             },
         }
     }
@@ -6077,6 +6079,14 @@ fn expectRecordedRunsEqual(
             std.meta.activeTag(expected_event),
             std.meta.activeTag(actual_event),
         );
+        switch (expected_event) {
+            .effect => |expected_effect| switch (actual_event) {
+                .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
+                // The activeTag equality above already proved both are effects.
+                .dbg, .expect_failed, .crashed => unreachable,
+            },
+            .dbg, .expect_failed, .crashed => {},
+        }
         try std.testing.expectEqualStrings(expected_event.bytes(), actual_event.bytes());
     }
 }
@@ -8198,6 +8208,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
         error.InvalidLirImage,
         error.InvalidUtf8,
         error.IsDir,
@@ -8257,6 +8268,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,

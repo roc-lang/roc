@@ -657,6 +657,18 @@ const CheckTypeCheckerPatternsStep = struct {
         // because platform and app modules have separate ident stores—the same alias
         // name has different Ident.Idx values across modules, so we must compare via text.
         .{ .file = "cir_to_lir.zig", .start = 110, .end = 115 },
+        // inspected.zig resolves a type module's import statement from the caller's
+        // module name, which arrives as text from outside this module's ident store.
+        .{ .file = "inspected.zig", .start = 226, .end = 232 },
+        // inspected.zig trims the trailing newline off a rendered report. This is
+        // presentation text on its way out, not a type-checker comparison.
+        .{ .file = "inspected.zig", .start = 2147, .end = 2147 },
+        // inspected.zig converts a NUL-terminated dylib path from the linker into a
+        // slice. Path bytes, not identifiers.
+        .{ .file = "inspected.zig", .start = 2936, .end = 2940 },
+        // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
+        // matched by name at the host boundary and has no Ident.Idx.
+        .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -2733,6 +2745,9 @@ pub fn build(b: *std.Build) void {
     const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
     const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
+    const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
+    const run_test_repl_wasm_step = b.step("run-test-repl-wasm", "Run the dedicated REPL WebAssembly protocol tests");
+    const build_web_step = b.step("build-web", "Build the playground, REPL, and echo web artifacts");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
@@ -2748,8 +2763,8 @@ pub fn build(b: *std.Build) void {
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
     const run_fmt_zig_step = b.step("run-fmt-zig", "Format all zig code");
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
-    const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
-    const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
+    const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
+    const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -4148,6 +4163,73 @@ pub fn build(b: *std.Build) void {
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     build_playground_step.dependOn(&playground_install.step);
 
+    const repl_wasm_target = b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    });
+    const repl_wasm = b.addExecutable(.{
+        .name = "repl",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/repl_wasm/main.zig"),
+            .target = repl_wasm_target,
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    configureBackend(repl_wasm, repl_wasm_target);
+    repl_wasm.entry = .disabled;
+    repl_wasm.rdynamic = true;
+    repl_wasm.link_function_sections = true;
+    repl_wasm.import_memory = false;
+    roc_modules.addAll(repl_wasm);
+    repl_wasm.root_module.addImport("ReplSession.zig", b.createModule(.{
+        .root_source_file = b.path("src/cli/ReplSession.zig"),
+        .target = repl_wasm_target,
+        .optimize = .ReleaseSmall,
+        .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
+            .{ .name = "can", .module = roc_modules.can },
+            .{ .name = "compile", .module = roc_modules.compile },
+            .{ .name = "ctx", .module = roc_modules.ctx },
+            .{ .name = "eval", .module = roc_modules.eval },
+            .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "parse", .module = roc_modules.parse },
+            .{ .name = "reporting", .module = roc_modules.reporting },
+        },
+    }));
+    repl_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    repl_wasm.step.dependOn(&write_compiled_builtins.step);
+    add_tracy(b, roc_modules.build_options, repl_wasm, repl_wasm_target, false, null);
+
+    const repl_wasm_install = b.addInstallFile(repl_wasm.getEmittedBin(), "lib/repl/repl.wasm");
+    build_repl_wasm_step.dependOn(&repl_wasm_install.step);
+    inline for (.{ "index.html", "app.js", "cells.js", "worker.js" }) |filename| {
+        const install_file = b.addInstallFile(b.path("src/repl_wasm/www/" ++ filename), "lib/repl/" ++ filename);
+        build_repl_wasm_step.dependOn(&install_file.step);
+        build_web_step.dependOn(&install_file.step);
+    }
+    const repl_protocol_types = b.addInstallFile(b.path("src/repl_wasm/protocol.d.ts"), "lib/repl/protocol.d.ts");
+    build_repl_wasm_step.dependOn(&repl_protocol_types.step);
+    build_web_step.dependOn(&repl_protocol_types.step);
+
+    const repl_wasm_test = b.addExecutable(.{
+        .name = "repl_wasm_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/repl-wasm-test/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    configureBackend(repl_wasm_test, target);
+    repl_wasm_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    repl_wasm_test.root_module.addImport("build_options", roc_modules.build_options);
+    const run_repl_wasm_test = b.addRunArtifact(repl_wasm_test);
+    run_repl_wasm_test.addFileArg(repl_wasm.getEmittedBin());
+    run_repl_wasm_test.step.dependOn(&repl_wasm.step);
+    run_test_repl_wasm_step.dependOn(&run_repl_wasm_test.step);
+    const run_repl_cells_test = b.addSystemCommand(&.{ "node", "--test" });
+    run_repl_cells_test.addFileArg(b.path("test/repl-wasm-test/cells.test.mjs"));
+    run_test_repl_wasm_step.dependOn(&run_repl_cells_test.step);
+
     // Build echo.wasm—echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
     {
@@ -4181,10 +4263,7 @@ pub fn build(b: *std.Build) void {
         }));
         echo_wasm.step.dependOn(&write_compiled_builtins.step);
 
-        const echo_wasm_install = b.addInstallArtifact(echo_wasm, .{
-            .dest_dir = .{ .override = .lib },
-        });
-        build_playground_step.dependOn(&echo_wasm_install.step);
+        const echo_wasm_install = b.addInstallFile(echo_wasm.getEmittedBin(), "lib/echo/echo.wasm");
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
@@ -4205,13 +4284,12 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
         echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
         const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
-        const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo.wasm.zst");
+        const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo/echo.wasm.zst");
         echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
-            const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
-            build_playground_step.dependOn(&install_file.step);
+            const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/echo/" ++ filename);
             echo_wasm_step.dependOn(&install_file.step);
         }
 
@@ -4254,7 +4332,7 @@ pub fn build(b: *std.Build) void {
         run_echo_step.dependOn(&run_echo_cmd.step);
 
         // test-echo-wasm: bytebox-driven integration test that loads
-        // zig-out/lib/echo.wasm, supplies in-process js_echo + js_stderr,
+        // zig-out/lib/echo/echo.wasm, supplies in-process js_echo + js_stderr,
         // and asserts the tutorial example produces the expected output.
         const echo_wasm_test_exe = b.addExecutable(.{
             .name = "echo_wasm_test",
@@ -4274,6 +4352,10 @@ pub fn build(b: *std.Build) void {
         run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
     }
+
+    build_web_step.dependOn(&playground_install.step);
+    build_web_step.dependOn(&repl_wasm_install.step);
+    build_web_step.dependOn(echo_wasm_step);
 
     {
         const glue_release_exe = b.addExecutable(.{
@@ -5725,7 +5807,7 @@ pub fn build(b: *std.Build) void {
 
     run_test_zig_step.dependOn(&tests_summary.step);
 
-    b.default_step.dependOn(build_playground_step);
+    b.default_step.dependOn(build_web_step);
     {
         const install = playground_test_install;
         b.default_step.dependOn(&install.step);
@@ -5953,7 +6035,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
-    build_ci_step.dependOn(build_playground_step);
+    build_ci_step.dependOn(build_web_step);
     build_ci_step.dependOn(build_test_playground_runner_step);
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
