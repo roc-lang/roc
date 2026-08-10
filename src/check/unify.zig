@@ -635,16 +635,8 @@ const Unifier = struct {
         }
     }
 
-    /// Unify when `a` is a resolved field kind.
-    ///
-    /// A shared required/defaulted field merges to required: the field is
-    /// already supplied, so its construction-only default must not taint the
-    /// value. Width absorption preserves the identity for an omitted field,
-    /// and the explicit required-access relation preserves a declaration while
-    /// merely demanding its inline slot. Two defaulted kinds merge exactly when
-    /// their default identities are equal, while `optional` unifies only with
-    /// itself because it has a different runtime layout (design.md "Defaulted
-    /// Fields").
+    /// Strip a construction-only default from an already supplied value; see
+    /// design.md "Defaulted Fields".
     fn flexibleFieldPresenceMerge(self: *const Self, presence: types_mod.FieldPresence) types_mod.FieldPresence {
         if (self.field_presence_relation != .committed_value) return presence;
         return switch (presence) {
@@ -2100,13 +2092,7 @@ const Unifier = struct {
         }
     }
 
-    /// Unify a record row with the empty record.
-    ///
-    /// Width absorption is permitted only for a relation explicitly marked as
-    /// fresh construction (design.md "Field Kinds (All-Dynamic Optional
-    /// Fields)"). Exact relations reject a non-empty row before mutation, so
-    /// committed values, nominal backings, calls, and host-boundary types keep
-    /// one fixed field set and layout.
+    /// Absorb an optional/defaulted row only for a fresh construction relation.
     fn unifyRowWithEmptyRecord(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -2634,9 +2620,7 @@ const Unifier = struct {
         }
     }
 
-    /// Merge shared field wrappers while scheduling their value and kind pairs:
-    /// required/required stays required, required/unknown pins the unknown kind
-    /// required, and unknown/unknown keeps the wrapper whose kind pair is joined.
+    /// Merge shared fields while scheduling their value and kind axes.
     fn unifySharedFieldPresence(self: *Self, vars: *const ResolvedVarDescs, a_presence: RecordFieldPresence, b_presence: RecordFieldPresence, did_field_error_flag: u32) Error!RecordFieldPresence {
         const mismatch_handler: MismatchHandling = .{ .set_flag = did_field_error_flag };
         switch (a_presence.decode()) {
@@ -2659,11 +2643,7 @@ const Unifier = struct {
                         }
                         const a_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_pres_var, b_unknown.presence, mismatch_handler);
-                        // Keep the wrapper: the kind lives in the presence var
-                        // (the pair above pins it to `present`, or mismatches
-                        // against an `optional` kind), and the merged row keeps
-                        // referencing it so every consumer reads the kind from
-                        // one place (design.md "Field Kinds").
+                        // Keep the presence variable as the merged kind source.
                         return .unknown(b_unknown.presence, a_var);
                     },
                 }

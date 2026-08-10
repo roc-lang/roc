@@ -4701,29 +4701,15 @@ const Builder = struct {
         };
     }
 
-    /// The slot info of an optional field's tagged slot, or null for an
-    /// inline (required/defaulted) slot. A completed Monotype `Type.Field`
-    /// carries no runtime kind axis: record-type lowering consumed the checked row's kind, once,
-    /// into exactly the closed two-variant union
-    /// `[#Missing, #Present(payload)]`. Because those labels live in the
-    /// compiler-reserved `#` namespace (see `optional_slot_missing_tag`),
-    /// matching on them here is EXACT—no user-written type can produce
-    /// this union, so recognizing it recovers precisely the kind that
-    /// `optionalSlotType` encoded (design.md "Field Kinds (All-Dynamic
-    /// Optional Fields)", "Inspect rendering reads the reserved slot
-    /// labels"). Inspect expansion runs over the memoized monotype with no
-    /// checked row in hand and consumes the slot through this; consumers
-    /// that still have the checked row (`.?` chains, record construction)
-    /// learn the kind from checked data and go straight to
-    /// `optionalSlotInfo`.
+    /// Recognize the compiler-reserved optional-slot encoding when only a
+    /// completed Monotype is available (design.md "Field Kinds").
     fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
         const tags = switch (self.program.types.get(slot_ty)) {
             .tag_union => |span_| self.program.types.tagSpan(span_),
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
         };
         if (tags.len != 2) return null;
-        // Variants normalize to sorted label order: #Missing is variant 0,
-        // Present is variant 1 (`optionalSlotType`).
+        // Tag normalization gives #Missing index 0 and #Present index 1.
         const missing_tag = GuardedList.at(tags, 0);
         const present_tag = GuardedList.at(tags, 1);
         if (!std.mem.eql(u8, self.program.names.tagLabelText(missing_tag.name), optional_slot_missing_tag)) return null;
@@ -4758,11 +4744,7 @@ const Builder = struct {
         return .{ .record = try self.program.types.addRecordFields(&self.program.names, lowered) };
     }
 
-    /// The Monotype default identity of one checked record field, present
-    /// exactly for `??` fields: the declaring module's identity interned into
-    /// the program name store plus the default expression's node index in
-    /// that module. Carried on `Type.Field` so rows disagreeing about
-    /// defaults are distinct monotypes (see `Type.FieldDefault`).
+    /// Translate a checked `??` identity into the Monotype name store.
     fn monoFieldDefault(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!?Type.FieldDefault {
         const default = field.kind.defaultIdentity() orelse return null;
         const origin_module = default.origin() orelse Common.invariant("defaulted checked field carried no default origin module");
@@ -9021,22 +9003,12 @@ const Builder = struct {
         err_tag: Type.Tag,
     };
 
-    /// Tag labels of an optional field's tagged slot (design.md "Field Kinds
-    /// (All-Dynamic Optional Fields)"): the slot type is the closed
-    /// structural union `[#Missing, #Present(value)]`. The `#` prefix is a
-    /// COMPILER-RESERVED namespace—`#` starts a comment in Roc source, so
-    /// no user-written tag can ever spell these labels (same convention as
-    /// `#interp_0` idents)—which makes `optionalFieldSlot`'s label match
-    /// an exact, lossless read-back of this encoding. Sorted variant order matches the
-    /// unprefixed names (`#Missing` < `#Present`), so the ABI discriminant
-    /// contract (variant 0 = missing, variant 1 = payload) is unchanged.
+    /// Reserved labels for the optional-slot encoding; see design.md "Field
+    /// Kinds". Sorting fixes Missing at index 0 and Present at index 1.
     const optional_slot_missing_tag = "#Missing";
     const optional_slot_present_tag = "#Present";
 
-    /// What `Str.inspect` renders in the value position of an optional
-    /// record field whose slot is missing (same non-value marker family as
-    /// `<opaque>` and `<function>`). A present slot renders as the plain
-    /// payload value; the #Missing/#Present slot encoding never leaks.
+    /// `Str.inspect`'s non-value marker for a missing optional field.
     const optional_field_missing_render = "<missing>";
 
     const OptionalSlotInfo = struct {
@@ -13009,30 +12981,19 @@ const BodyContext = struct {
         },
     };
 
-    /// One user binder inside a destructured OPTIONAL field's translated
-    /// (slot-space) match pattern, queued during `lowerPatternAtNode` and
-    /// applied by the enclosing match branch as a `let` prelude around the
-    /// branch body (and guard): the flat slot-space pattern binds the raw
-    /// tagged slot, and the user binder's `Try(payload, [MissingField])`
-    /// value is computed from it after the pattern matches (design.md
-    /// "Field Kinds (All-Dynamic Optional Fields)"). Mirrors
-    /// `pattern_literal_guards`' collect/drain discipline.
+    /// A user binder deferred while an optional destructure is translated
+    /// from checked Try space into runtime slot space.
     const OptionalDestructBind = struct {
         /// The user binder's local (registered at the Try / error node).
         binder_local: DraftLocalId,
         value: union(enum) {
-            /// The binder is the slot local's tagged value materialized as
-            /// Try—a one-segment `.?` chain result
-            /// (`optionalDestructTryExprAtNode`).
+            /// Materialize the bound slot as a one-segment `.?` result.
             slot_to_try: struct {
                 slot_local: DraftLocalId,
                 slot_node: NodeId,
                 try_node: NodeId,
             },
-            /// The binder is the constant `MissingField` error value: an
-            /// `Err(binder)` sub-pattern translated to the slot's `Missing`
-            /// tag has no runtime payload to read, but the error a `.?`
-            /// access would produce is a pure constant.
+            /// Bind the constant error represented by the payload-less Missing slot.
             missing_err: struct {
                 err_node: NodeId,
             },
@@ -31898,9 +31859,7 @@ const BodyContext = struct {
         return true;
     }
 
-    /// Materialize one archived field default (by identity) at `field_ty`:
-    /// prefer the declaring module's finalized constant, falling back to
-    /// its pure expression while this module's roots are being finalized.
+    /// Materialize a checked field-default identity at `field_ty`.
     fn defaultedFieldValueFromDefault(
         self: *BodyContext,
         default: checked.CheckedFieldDefault,
@@ -31910,10 +31869,7 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.view.names.moduleIdentityBytes(origin_module), default.expr_node, field_ty);
     }
 
-    /// Materialize the default a record monotype carries on one of its
-    /// fields (`Type.FieldDefault`): the declaring module's identity lives
-    /// in the program name store, so parser derivations running in another
-    /// module's view (builtin formats) restore the same archived constant.
+    /// Materialize a Monotype field-default identity at `field_ty`.
     fn defaultedFieldValueFromMonoDefault(
         self: *BodyContext,
         default: Type.FieldDefault,
@@ -31922,7 +31878,7 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
     }
 
-    /// View-independent core of the two entry points above.
+    /// Restore a default from its declaring module, including during local root finalization.
     fn defaultedFieldValueAt(
         self: *BodyContext,
         origin_hash: *const [32]u8,
@@ -31936,12 +31892,7 @@ const BodyContext = struct {
                 Common.invariant("defaulted field's declaring module was not present in the lowering input");
         const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
             Common.invariant("defaulted field's default expression was not archived");
-        // Prefer the archived constant: compile-time finalization evaluated
-        // the pure default once (its `field_default` root) in the DECLARING
-        // module. A pending payload only occurs while this module's own
-        // roots are still being finalized, where inlining the pure
-        // expression is equivalent; an imported checked module is always
-        // finalized, so a foreign default always restores.
+        // Local roots may still be pending; imported roots must be finalized.
         if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
             switch (root.payload) {
                 .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
@@ -31954,11 +31905,7 @@ const BodyContext = struct {
         return try self.lowerExprAtType(default_expr, field_ty);
     }
 
-    /// The `??` default identity carried on `field_name` of the record
-    /// monotype `record_ty` (design.md "Defaulted Fields"). Explicit
-    /// upstream data: the row itself distinguishes defaulted fields, so a
-    /// required row of the same shape is a different monotype and never
-    /// reaches this def's derivation.
+    /// The explicit `??` identity carried by a field in `record_ty`.
     fn parserFieldDefaultFor(
         self: *BodyContext,
         record_ty: Type.TypeId,
@@ -31976,10 +31923,7 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Find `field_name`'s declared kind on the checked row behind
-    /// `checked_ty`, walking aliases, nominal backing, and the extension
-    /// chain. The kind is view-portable: its tag is POD and a defaulted
-    /// kind's identity carries its declaring module.
+    /// Find a field kind through checked aliases, nominal backing, and row tails.
     fn checkedFieldKind(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -31991,10 +31935,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Read the concrete kind already selected by an immutable Monotype field.
-    /// Construction on this path has no live graph cell and therefore consumes
-    /// the target field's explicit specialization metadata rather than the
-    /// generalized checked scheme or the runtime slot's structural shape.
+    /// Read the concrete kind selected on an immutable Monotype field.
     fn monotypeFieldKindTag(_: *BodyContext, field: Type.Field) checked.CheckedFieldKind.Tag {
         if (field.kind_state != .resolved) {
             Common.invariant("provisional field kind reached sealed record construction");
@@ -32014,15 +31955,7 @@ const BodyContext = struct {
             Common.invariant("sealed defaulted field carried no Monotype default identity");
     }
 
-    /// The declared kind of one record-destructure field, read from the
-    /// destructure pattern's own checked row (design.md "Field Kinds"): the
-    /// checker's destructure judgment (`judgeRecordDestructBinds`) directed
-    /// the binder's type by this kind, so lowering consumes the same
-    /// explicit kind through the shared cross-view walk
-    /// (`checkedRecordFieldByName`). The field is always concretely on the
-    /// row—the destructure's probe put it there. A scheme interior is the
-    /// required-equivalent tail of a generic row; only absence is an
-    /// upstream failure.
+    /// Read the kind selected by the checker for a destructured field.
     fn recordDestructFieldKind(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
@@ -32033,15 +31966,7 @@ const BodyContext = struct {
             Common.invariant("record destructure field was missing from its checked row");
     }
 
-    /// Whether any destructured field's kind is `optional`. Such a pattern
-    /// cannot be a flat Monotype record pattern binding its children
-    /// directly: the runtime slot holds the tagged `[Missing, Present(v)]`
-    /// union while the checked binder holds the nominal
-    /// `Try(v, [MissingField])`. Statement and parameter positions route it
-    /// through the materialized-pattern machinery
-    /// (`lowerRecordRestPatternBindingThen`), and match branches translate
-    /// the sub-pattern into slot space
-    /// (`lowerOptionalDestructChildAtSlotNode`).
+    /// Whether a destructure needs checked-Try to runtime-slot translation.
     fn recordDestructsHaveOptionalField(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
@@ -32128,20 +32053,8 @@ const BodyContext = struct {
         } });
     }
 
-    /// Translate a destructured OPTIONAL field's checked sub-pattern (typed
-    /// `Try(payload, [MissingField])`) into a flat SLOT-space pattern for a
-    /// match branch: `Ok(p)` becomes the slot's `Present(p)` (the payload
-    /// types are identical), `Err(p)` becomes `Missing` (with `p`'s binders
-    /// queued as constant `MissingField` preludes), and a plain binder
-    /// becomes a compiler-local slot bind whose Try value is computed as a
-    /// branch-body prelude (`OptionalDestructBind`). Refutability is
-    /// preserved natively—`Present`/`Missing` mirror `Ok`/`Err`—which is
-    /// what lets the branch fall through to the next one without any
-    /// post-pattern test.
-    ///
-    /// `result_node` is the node the sub-pattern's binders were
-    /// pre-registered at: the Try node at the top level, its structural
-    /// backing under an explicit nominal wrapper.
+    /// Translate an optional destructure from checked Try space into flat
+    /// Present/Missing slot space, queueing binder preludes as needed.
     fn lowerOptionalDestructChildAtSlotNode(
         self: *BodyContext,
         child: checked.CheckedPatternId,
@@ -32354,14 +32267,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Find `field_name`'s checked record field on the row behind
-    /// `checked_ty`, walking aliases, nominal backing, and the extension
-    /// chain. The walk crosses views exactly like `recordDestructFieldKind`:
-    /// field kinds are annotation-determined and argument-independent, so
-    /// reading a nominal declaration's backing row (without argument
-    /// substitution) yields the exact field, and `Builder.recordFieldName`
-    /// interns every view's labels into one program-global namespace, so
-    /// names compare across views.
+    /// Find a checked field through aliases, nominal backing, and row tails.
     fn checkedRecordFieldByName(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -32462,16 +32368,8 @@ const BodyContext = struct {
         });
     }
 
-    /// Lower a field-access chain containing at least one `.?` segment
-    /// (design.md "Field Kinds (All-Dynamic Optional Fields)"). The Try
-    /// wrapper is per-CHAIN: the whole chain yields ONE flat
-    /// `Try(τ_final, [MissingField])`—the checked expression's own type,
-    /// `out_try_ty` once lowered—never nested `Try`s. Each `.?` segment
-    /// compiles to a runtime test (a match) on the field's tagged slot: the
-    /// first Missing slot short-circuits to `Err(MissingField)`, a Present
-    /// payload continues the chain (required segments after an optional one
-    /// ride this Ok path as plain field reads), and the final value wraps in
-    /// `Ok` exactly once.
+    /// Lower a mixed access chain to one flat Try, short-circuiting on the
+    /// first Missing slot (design.md "Field Kinds").
     fn lowerOptionalFieldAccessChainAtNode(
         self: *BodyContext,
         access: anytype,
@@ -32667,10 +32565,7 @@ const BodyContext = struct {
                 fields[index] = .{
                     .name = name,
                     .value = value: {
-                        // A SUPPLIED OPTIONAL field wraps its value in the slot's
-                        // `#Present` tag (design.md "Field Kinds"); the checked
-                        // field expression's type is the VALUE type, never the
-                        // slot union the update writes.
+                        // Supplied optional values enter the slot through #Present.
                         if (field_kind == .optional) {
                             const slot = try self.builder.optionalSlotInfo(slot_ty);
                             const payload = if (self.preLoweredChildAt(pre_lowered, field.value)) |pre| pre_blk: {

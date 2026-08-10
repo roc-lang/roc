@@ -2666,18 +2666,8 @@ pub const CheckedTypeVariable = struct {
     row_default: ?RowDefault = null,
 };
 
-/// Public `CheckedFieldDefault` declaration.
-///
-/// The artifact-stable identity of a DEFAULTED field's default value
-/// (design.md "Defaulted Fields"): construction may omit the field, and at
-/// runtime it is an ordinary required field. `origin_module` is `.none` for
-/// "no default" (a plain required field); `expr_node` is the CIR node index
-/// of the default expression in the declaring module (raw `u32` by this
-/// file's convention for source-CIR node indices, matching `source_decl` /
-/// `CheckedDefaultExpr.expr_node`, and only meaningful when a default is
-/// present). Lowering resolves the identity through the declaring module's
-/// canonical IR to evaluate the default at construction sites (archiving the
-/// evaluated constant in `ConstStore` is that work's natural home).
+/// Artifact-stable identity of a `??` default in its declaring module; see
+/// design.md "Defaulted Fields".
 pub const CheckedFieldDefault = extern struct {
     origin_module: OptionalModuleIdentityId = .none,
     expr_node: u32 = 0,
@@ -2710,18 +2700,8 @@ pub const CheckedRecordOmittedDefault = extern struct {
     default: CheckedFieldDefault,
 };
 
-/// Public `CheckedFieldKind` declaration.
-///
-/// The published field-kind axis (design.md "Field Kinds (All-Dynamic
-/// Optional Fields)" and "Defaulted Fields"): `required` and `defaulted`
-/// fields are plain inline slots—`defaulted` additionally carries the
-/// default identity in `default`—while `optional` is the tagged slot,
-/// lowered by every layout/monotype consumer as the closed two-variant
-/// union `[#Missing, #Present(value)]`. `err` explicitly preserves a poisoned
-/// presence axis in analysis artifacts without discarding the independent field
-/// value type. The encoding is canonical:
-/// `default` carries an identity exactly when `tag == .defaulted`, so one
-/// kind has one bit pattern and structural comparisons stay byte compares.
+/// Published field-kind axis. `required` and `defaulted` use inline slots;
+/// `optional` uses the tagged slot defined in design.md "Field Kinds".
 pub const CheckedFieldKind = extern struct {
     tag: Tag = .required,
     default: CheckedFieldDefault = .none,
@@ -2758,13 +2738,7 @@ pub const CheckedFieldKind = extern struct {
     }
 };
 
-/// Public `CheckedRecordField` declaration.
-///
-/// This phase boundary publishes every field kind (design.md "Field Kinds
-/// (All-Dynamic Optional Fields)"): `required` and `defaulted` inline slots
-/// and `optional` tagged slots. Consumers that demand a concrete slot for an
-/// `optional` field (monotype lowering, layout resolution) lower it as the
-/// closed two-variant union `[#Missing, #Present(value)]`.
+/// Record field with its checker-selected kind published explicitly.
 pub const CheckedRecordField = struct {
     name: canonical.RecordFieldLabelId,
     ty: CheckedTypeId,
@@ -7134,17 +7108,8 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
         self: *SubstitutedCheckedTypeKeyBuilder,
         kind: CheckedFieldKind,
     ) Allocator.Error!void {
-        // Byte-for-byte the solver key's `writeFieldPresenceForKey` encoding
-        // (canonical_type_keys.zig), so solver-written and checked-written
-        // canonical keys for one type agree. A plain required field keeps
-        // the single `false` byte the old `.required` wrote, so existing
-        // checked keys are unchanged. A DEFAULTED field keys its default
-        // identity: two rows defaulting a field differently are different
-        // types (design.md "Defaulted Fields"), and the identity is written
-        // in canonical form (the declaring module's content hash), matching
-        // what was published. An OPTIONAL field keys the same
-        // "presence_optional_field" tag the solver writes, and an ERROR kind
-        // keys the solver's same "err" tag before the field value type.
+        // Keep this byte-for-byte aligned with canonical_type_keys.zig's
+        // `writeFieldPresenceForKey`.
         switch (kind.tag) {
             .required => self.writeBool(false),
             .optional => self.writeTag("presence_optional_field"),
@@ -8046,14 +8011,7 @@ fn copyCheckedRecordFields(
     const out = try allocator.alloc(CheckedRecordField, field_names.len);
     errdefer allocator.free(out);
     for (field_names, field_presences, 0..) |field_name, field_presence, i| {
-        // A field publishes both axes: its value type and its solved kind
-        // (design.md "Field Kinds (All-Dynamic Optional Fields)"). A kind var
-        // solved `required` publishes the plain inline slot; a `defaulted`
-        // kind is a required inline slot at runtime and publishes with its
-        // default identity translated to the artifact's canonical form
-        // (design.md "Defaulted Fields"); an `optional` kind publishes the
-        // tagged slot (its LOWERING remains the deliberate boundary, carried
-        // by the monotype/layout consumers). `absent` is no longer produced.
+        // Publish the independent value and kind axes; see design.md "Field Kinds".
         var kind: CheckedFieldKind = .required;
         const ty: CheckedTypeId = switch (field_presence.decode()) {
             .required => |type_var| try appendCheckedTypeRoot(allocator, module, names, imports, store, active, type_var),
@@ -10876,13 +10834,8 @@ pub const CheckedBodyStore = struct {
     string_bytes: std.ArrayList(u8) = .empty,
     /// `CheckedStringLiteralId`-indexed ranges into `string_bytes`.
     string_ranges: std.ArrayList(canonical.NameInterner.Range) = .empty,
-    /// Locally-declared field defaults (design.md "Defaulted Fields"):
-    /// `DefaultId.expr_node` (a CIR node in THIS module) → the published
-    /// checked expression, so construction sites can materialize omitted
-    /// defaulted fields after `source_node_map` is discarded. SERIALIZED—
-    /// unlike the source-node map—because cross-module construction sites
-    /// resolve a foreign default in its declaring module's (possibly cached)
-    /// artifact. Sorted by `expr_node` (built from a deduplicating scan).
+    /// Serialized local default expressions, sorted by source node for
+    /// cross-module construction lookup.
     default_exprs: std.ArrayList(CheckedDefaultExpr) = .empty,
     /// Checker-selected defaults attached to their exact omission sites.
     record_omitted_defaults: std.ArrayList(CheckedRecordOmittedDefault) = .empty,
@@ -13620,17 +13573,8 @@ const CheckedBodyPayloadCopier = struct {
         return out;
     }
 
-    /// Copy a field-access path's segments into the read-form payload slice.
-    /// The result is a per-result heap allocation, not a view into a reused
-    /// copier buffer: `CheckedExprData.field_access.segments` is the public
-    /// read-form type (a slice—see the pool-reconstruction path), so the loose
-    /// build form cannot carry a range the way stored/pooled sub-arrays do. Every
-    /// field-access expr's slice is retained side-by-side in the build `exprs`
-    /// array until the batch `commitExprs` copies each into
-    /// `field_access_segment_pool` (`deinitCheckedExprData` then frees it), so a
-    /// shared scratch buffer would alias across those coexisting results. Per-call
-    /// allocation is therefore inherent, matching the sibling `copyRecordFields` /
-    /// `copyIfBranches` / `copyMatchBranches` copiers.
+    /// Copy a path into its retained read-form slice. These slices coexist until
+    /// `commitExprs`, so they cannot share one scratch buffer.
     fn copyFieldAccessSegments(
         self: *@This(),
         receiver: CIR.Expr.Idx,
