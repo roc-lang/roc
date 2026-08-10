@@ -1093,7 +1093,7 @@ generate_host_abi_types_rust =
 	\\/// reference to the callee. The caller must not use or decref that ownership
 	\\/// unit after the call. The callee consumes it exactly once, whether or not the
 	\\/// result can reuse the allocation.
-	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8);
+	\\pub type RocErasedCallableFn = extern "C" fn(*mut RocHost, *mut u8, *const u8, *mut u8, *mut u8, *mut *const c_void);
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.
 	\\pub type RocErasedCallableOnDrop = extern "C" fn(*mut u8, *mut RocHost);

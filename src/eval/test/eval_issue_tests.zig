@@ -111,8 +111,107 @@ const issue9658ScannerSource =
     \\main = scan("kkv,kv;")
 ;
 
+// https://github.com/roc-lang/roc/issues/10703
+// A `var` initialized as a bare alias of another in-scope variable
+// (`var $line_start = cluster_start`) must not hijack the initializer's
+// binder: SpecConstr's loop-state specialization used to install the
+// loop-carried slot value under `cluster_start`'s binder, so every read of
+// `cluster_start` inside the loop tracked `$line_start` instead. Correct runs
+// sum 1 + line_start per line (40 + 780 = 820 for count 40); the corrupted
+// lowering zeroed the `start - prefix_start` term and returned 40.
+const issue10703LineLayoutSource =
+    \\{
+    \\    list_at = |items, index| match List.get(items, index) {
+    \\        Err(OutOfBounds) => crash "validated index escaped"
+    \\        Ok(value) => value
+    \\    }
+    \\
+    \\    range_end = |range| range.start + range.length
+    \\
+    \\    append_line = |total, clusters, prefix_start, start, end| {
+    \\        first = list_at(clusters, start)
+    \\        last = list_at(clusters, end - 1)
+    \\        scalar_count = range_end(last.scalars) - first.scalars.start
+    \\        total + scalar_count + (start - prefix_start)
+    \\    }
+    \\
+    \\    build_range = |clusters, boundaries, cluster_start, cluster_end| {
+    \\        var $line_start = cluster_start
+    \\        var $candidate = cluster_start + 1
+    \\        var $total = 0.U64
+    \\        while $line_start < cluster_end {
+    \\            boundary = list_at(boundaries, $candidate)
+    \\            if boundary == 1 {
+    \\                $total = append_line($total, clusters, cluster_start, $line_start, $candidate)
+    \\                $line_start = $candidate
+    \\                $candidate = $line_start + 1
+    \\            } else {
+    \\                $candidate = $candidate + 1
+    \\            }
+    \\        }
+    \\        $total
+    \\    }
+    \\
+    \\    make_clusters = |count| {
+    \\        var $clusters = []
+    \\        var $index = 0.U64
+    \\        while $index < count {
+    \\            $clusters = $clusters.append({ scalars: { length: 1.U64, start: $index } })
+    \\            $index = $index + 1
+    \\        }
+    \\        $clusters
+    \\    }
+    \\
+    \\    make_boundaries = |count| {
+    \\        var $boundaries = []
+    \\        var $index = 0.U64
+    \\        while $index <= count {
+    \\            $boundaries = $boundaries.append(1.U64)
+    \\            $index = $index + 1
+    \\        }
+    \\        $boundaries
+    \\    }
+    \\
+    \\    Str.inspect(build_range(make_clusters(40), make_boundaries(40), 0.U64, 40))
+    \\}
+;
+
+// The dual-alias variant of issue 10703: two loop variables initialized from
+// the same in-scope variable (`base`). Both slots used to claim `base`'s
+// binder and one arbitrarily won, so reads of `base` inside the loop tracked
+// that slot's carried value. Correct runs add base (3) on each of the 6
+// iterations and then the final `$mark` (8): 26; the corrupted lowering
+// tracked `$i` and returned 3+4+5+6+7+8 plus 8 = 41.
+const issue10703DualAliasSource =
+    \\{
+    \\    walk = |base, limit| {
+    \\        var $i = base
+    \\        var $mark = base
+    \\        var $total = 0.U64
+    \\        while $i < limit {
+    \\            $total = $total + base
+    \\            $mark = $i
+    \\            $i = $i + 1
+    \\        }
+    \\        $total + $mark
+    \\    }
+    \\
+    \\    Str.inspect(walk(3.U64, 9))
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
+        .source = issue10703LineLayoutSource,
+        .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
+    },
+    .{
+        .name = "issue 10703: two loop vars seeded from one variable keep its reads intact",
+        .source = issue10703DualAliasSource,
+        .expected = .{ .allocations_at_most = .{ .output = "26", .max_allocations = 4, .optimized = true } },
+    },
     .{
         .name = "issue 9658: scanner loop with merging mutable Str alias groups certifies and evaluates",
         .source_kind = .module,

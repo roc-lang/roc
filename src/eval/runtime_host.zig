@@ -1,4 +1,4 @@
-//! Production-faithful RocOps recorder for eval test harnesses.
+//! RocOps host used by compiler-owned inspected evaluation.
 //!
 //! This env records exactly what a real host can observe through `host_abi`:
 //! callback kind, raw UTF-8 payload bytes, event order, and crash termination.
@@ -35,17 +35,33 @@ pub const Termination = enum {
     crashed,
 };
 
+/// An owned one-way effect emitted by a run: its name and payload bytes.
+pub const EffectEvent = struct {
+    name: []u8,
+    payload: []u8,
+};
+
+/// Borrowed view of an `EffectEvent`, valid only while the run owns it.
+pub const EffectEventView = struct {
+    name: []const u8,
+    payload: []const u8,
+};
+
 /// Public union `HostEvent`.
 pub const HostEvent = union(enum) {
     dbg: []u8,
     expect_failed: []u8,
     crashed: []u8,
+    effect: EffectEvent,
 
+    /// Return the ordinary message or an effect's payload. Callers comparing
+    /// effect events must compare `EffectEvent.name` separately.
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
             .dbg => |msg| msg,
             .expect_failed => |msg| msg,
             .crashed => |msg| msg,
+            .effect => |effect| effect.payload,
         };
     }
 
@@ -54,6 +70,10 @@ pub const HostEvent = union(enum) {
             .dbg => |msg| allocator.free(msg),
             .expect_failed => |msg| allocator.free(msg),
             .crashed => |msg| allocator.free(msg),
+            .effect => |effect| {
+                allocator.free(effect.name);
+                allocator.free(effect.payload);
+            },
         }
     }
 };
@@ -63,6 +83,7 @@ pub const HostEventView = union(enum) {
     dbg: []const u8,
     expect_failed: []const u8,
     crashed: []const u8,
+    effect: EffectEventView,
 };
 
 /// Callback used to publish root-local host events as soon as they are recorded.
@@ -79,14 +100,27 @@ pub const RecordedRun = struct {
 
     pub fn dupe(self: RecordedRun, allocator: std.mem.Allocator) Allocator.Error!RecordedRun {
         var out = try allocator.alloc(HostEvent, self.events.len);
-        errdefer allocator.free(out);
+        var initialized: usize = 0;
+        errdefer {
+            for (out[0..initialized]) |*event| event.deinit(allocator);
+            allocator.free(out);
+        }
 
         for (self.events, 0..) |event, i| {
             out[i] = switch (event) {
                 .dbg => |msg| .{ .dbg = try allocator.dupe(u8, msg) },
                 .expect_failed => |msg| .{ .expect_failed = try allocator.dupe(u8, msg) },
                 .crashed => |msg| .{ .crashed = try allocator.dupe(u8, msg) },
+                .effect => |effect| effect: {
+                    const name = try allocator.dupe(u8, effect.name);
+                    errdefer allocator.free(name);
+                    break :effect .{ .effect = .{
+                        .name = name,
+                        .payload = try allocator.dupe(u8, effect.payload),
+                    } };
+                },
             };
+            initialized += 1;
         }
 
         return .{
@@ -200,7 +234,7 @@ pub fn crashState(self: *const RuntimeHostEnv) CrashState {
         const idx = self.events.items.len - 1 - i;
         switch (self.events.items[idx]) {
             .crashed => |msg| return .{ .crashed = msg },
-            .dbg, .expect_failed => {},
+            .dbg, .expect_failed, .effect => {},
         }
     }
     return .did_not_crash;
@@ -216,7 +250,7 @@ pub fn takeCrashMessage(self: *RuntimeHostEnv) ?[]u8 {
                 _ = self.events.orderedRemove(idx);
                 return msg;
             },
-            .dbg, .expect_failed => {},
+            .dbg, .expect_failed, .effect => {},
         }
     }
     return null;
@@ -281,6 +315,29 @@ fn appendEvent(
     };
     if (self.event_callback) |callback| {
         callback.notify(callback.context, @unionInit(HostEventView, @tagName(tag), bytes));
+    }
+}
+
+/// Record a caller-defined one-way effect in the same ordered stream as the
+/// built-in runtime observations. Both strings are copied before this returns.
+pub fn recordEffect(
+    self: *RuntimeHostEnv,
+    name: []const u8,
+    payload: []const u8,
+) Allocator.Error!void {
+    const owned_name = try self.allocator.dupe(u8, name);
+    errdefer self.allocator.free(owned_name);
+    const owned_payload = try self.allocator.dupe(u8, payload);
+    errdefer self.allocator.free(owned_payload);
+    try self.events.append(self.allocator, .{ .effect = .{
+        .name = owned_name,
+        .payload = owned_payload,
+    } });
+    if (self.event_callback) |callback| {
+        callback.notify(callback.context, .{ .effect = .{
+            .name = name,
+            .payload = payload,
+        } });
     }
 }
 
@@ -436,5 +493,26 @@ test "RuntimeHostEnv records crash payload and termination without a jump buffer
     switch (env.crashState()) {
         .did_not_crash => return error.TestUnexpectedResult,
         .crashed => |msg| try std.testing.expectEqualStrings(crash_msg, msg),
+    }
+}
+
+test "RuntimeHostEnv records and snapshots structured effects in order" {
+    var env = RuntimeHostEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    const ops = env.get_ops();
+    const dbg_msg = "before";
+    ops.roc_dbg(ops, dbg_msg.ptr, dbg_msg.len);
+    try env.recordEffect("toast", "hello");
+
+    var recorded = try env.snapshot(std.testing.allocator);
+    defer recorded.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 2), recorded.events.len);
+    switch (recorded.events[1]) {
+        .effect => |effect| {
+            try std.testing.expectEqualStrings("toast", effect.name);
+            try std.testing.expectEqualStrings("hello", effect.payload);
+        },
+        .dbg, .expect_failed, .crashed => return error.TestUnexpectedResult,
     }
 }

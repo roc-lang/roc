@@ -123,7 +123,8 @@ pub const Constants = struct {
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
     /// 50: Interned literal entries record maximum runtime backing alignment.
-    pub const CACHE_VERSION = 50;
+    /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    pub const CACHE_VERSION = 51;
 };
 
 /// Configuration for the Roc cache system.

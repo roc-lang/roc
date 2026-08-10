@@ -57,14 +57,18 @@ fn expectHostAbiCallablesUseErasedRepresentation(
 
         var found_release = false;
         for (store.getCFStmts()) |stmt| {
-            if (stmt == .decref and stmt.decref.rc.layout_idx == arg_layout) {
-                const release = stmt.decref;
-                try std.testing.expectEqual(
-                    @as(std.meta.Tag(layout.RcHelperPlan), .erased_callable_decref),
-                    std.meta.activeTag(layouts.rcHelperPlan(release.rc)),
-                );
-                try std.testing.expectEqual(lir.LIR.RcAtomicity.atomic, release.atomicity);
-                found_release = true;
+            if (stmt != .decref) continue;
+            const release = stmt.decref;
+            switch (release.rc) {
+                .concrete => |helper| if (helper.layout_idx == arg_layout) {
+                    try std.testing.expectEqual(
+                        @as(std.meta.Tag(layout.RcHelperPlan), .erased_callable_decref),
+                        std.meta.activeTag(layouts.rcHelperPlan(helper)),
+                    );
+                    try std.testing.expectEqual(lir.LIR.RcAtomicity.atomic, release.atomicity);
+                    found_release = true;
+                },
+                .boxy => {},
             }
         }
         try std.testing.expect(found_release);

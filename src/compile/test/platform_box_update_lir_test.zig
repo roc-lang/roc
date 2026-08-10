@@ -37,6 +37,17 @@ fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) ha
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -76,6 +87,10 @@ fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) ha
                     for (0..arms.len) |arm_index| {
                         try work.append(std.testing.allocator, GuardedList.at(arms, arm_index).on_match);
                     }
+                    try work.append(std.testing.allocator, stmt.on_miss);
+                },
+                .boxy_tag_match => |stmt| {
+                    try work.append(std.testing.allocator, stmt.on_match);
                     try work.append(std.testing.allocator, stmt.on_miss);
                 },
                 .join => |stmt| {

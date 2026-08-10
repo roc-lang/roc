@@ -222,7 +222,12 @@ pub const ExecutableMemory = struct {
             return error.EmptyCode;
         }
 
-        const xdata_size = try WindowsUnwindState.xdataSize(functions);
+        // Unwind entries may not overlap, so an enclosing function is cut into
+        // the fragments it owns before its unwind data is sized or registered.
+        const unwind_functions = try coff.splitNestedFunctions(std.heap.smp_allocator, functions);
+        defer std.heap.smp_allocator.free(unwind_functions);
+
+        const xdata_size = try WindowsUnwindState.xdataSize(unwind_functions);
         const xdata_offset = std.mem.alignForward(usize, code.len, 4);
         const used_size = if (xdata_size == 0) code.len else xdata_offset + xdata_size;
 
@@ -238,7 +243,7 @@ pub const ExecutableMemory = struct {
         @memcpy(memory[0..code.len], code);
         @memset(memory[code.len..], 0);
 
-        var windows_unwind = try WindowsUnwindState.init(memory, code.len, xdata_offset, functions);
+        var windows_unwind = try WindowsUnwindState.init(memory, code.len, xdata_offset, unwind_functions);
         errdefer windows_unwind.deinit();
 
         // Make the memory executable (and read-only)

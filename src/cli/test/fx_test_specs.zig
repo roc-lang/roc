@@ -121,6 +121,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Every runtime Dec-to-integer width recovers the whole part, truncates toward zero, and wraps past the destination range",
     },
     .{
+        .roc_file = "test/fx/runtime_i128_div_rem_mod.roc",
+        .io_spec = "0<3|1>unsigned: 42857142857142857142 6 6|1>signed: 42857142857142857142 6 6|1>negative: -42857142857142857142 -6 1",
+        .description = "Runtime 128-bit division, remainder and modulo agree across backends and keep the operands' full width",
+    },
+    .{
         .roc_file = "test/fx/runtime_zst_list_ownership.roc",
         .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
         .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",
