@@ -6048,7 +6048,7 @@ const Builder = struct {
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             const owned_body_node = try nested_ctx.lowerExprTypeNode(expr_id);
-            try nested_ctx.graph.unify(root_node, owned_body_node);
+            try relateRequestComponent(nested_ctx.graph, root_node, owned_body_node);
             try nested_ctx.instantiateTemplateDispatchRelations(
                 nested_ctx.view.templates.get(nested_ctx.owner_template.template),
                 scope,
@@ -17078,7 +17078,7 @@ const BodyContext = struct {
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
             return witness;
         }
-        try self.graph.unify(checked_root, produced_root);
+        try relateRequestComponent(self.graph, checked_root, produced_root);
         return checked_node;
     }
 
@@ -30726,7 +30726,7 @@ const BodyContext = struct {
             .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                 const lowered_node = try self.lowerExprTypeNode(checked_expr);
-                try self.graph.unify(expected_node, lowered_node);
+                try relateRequestComponent(self.graph, expected_node, lowered_node);
             },
         }
     }

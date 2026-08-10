@@ -139,9 +139,14 @@ my @categories = (
             # One more went when the evidence target root stopped testing only
             # the request side: its root is never a generated private
             # representation, measured across the suite, so the shared relater's
-            # test of both sides answers identically.
+            # test of both sides answers identically. Three more joins moved to
+            # `relateRequestComponent` on the same evidence: a nested owned
+            # body against its root, a produced value against its checked
+            # position, and an expected node against a lowered expression type
+            # each measured non-private on both sides every time, which is the
+            # case the shared relater answers with that same join.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 15, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 12, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
