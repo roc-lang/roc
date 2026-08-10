@@ -1502,6 +1502,50 @@ test "unify - zero-field unbound row and empty record canonicalize without a fre
 // the first record as `a` and the second as `b`, so the pair below reads
 // left-to-right as `a_presence ~ b_presence`.
 
+test "unify - field presence - required and defaulted merge to required in both orders" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const default_id = types_mod.DefaultId{
+        .origin_module = env.module_env.selfModuleIdentity(),
+        .expr_node = 1,
+    };
+
+    for (0..2) |order| {
+        const required = try env.module_env.types.freshFromContent(.{ .field_presence = .required });
+        const defaulted = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = default_id } });
+        const result = if (order == 0)
+            try env.unify(required, defaulted)
+        else
+            try env.unify(defaulted, required);
+
+        try std.testing.expectEqual(Result.ok, result);
+        try std.testing.expectEqual(
+            Content{ .field_presence = .required },
+            env.module_env.types.resolveVar(required).desc.content,
+        );
+    }
+}
+
+test "unify - field presence - different default identities still mismatch" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const module_identity = env.module_env.selfModuleIdentity();
+    const first = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 1,
+    } } });
+    const second = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 2,
+    } } });
+
+    try std.testing.expectEqual(Result.mismatch, try env.unifyWriteNoReport(first, second));
+}
+
 test "unify - shared field presence - present ~ present" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

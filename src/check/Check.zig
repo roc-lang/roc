@@ -3579,14 +3579,65 @@ fn unifyEnv(self: *Self) unifier.Env {
     };
 }
 
+fn sourceRecordConstructionForVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
+    const raw = @intFromEnum(var_);
+    if (raw < self.cir.store.nodes.len()) {
+        const node = self.cir.store.nodes.get(@enumFromInt(raw));
+        if (node.tag == .expr_record or node.tag == .expr_empty_record) {
+            return @enumFromInt(raw);
+        }
+    }
+    return null;
+}
+
+fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) std.mem.Allocator.Error!void {
+    for (self.unify_scratch.absorbed_record_defaults.items.items) |absorbed| {
+        var mb_expr = self.sourceRecordConstructionForVar(absorbed.record_var);
+        if (mb_expr == null) {
+            if (construction_var) |owner| mb_expr = self.sourceRecordConstructionForVar(owner);
+        }
+        if (mb_expr == null) mb_expr = self.sourceRecordConstructionForVar(b);
+        if (mb_expr == null) mb_expr = self.sourceRecordConstructionForVar(a);
+        const expr = mb_expr orelse
+            std.debug.panic("type checker invariant violated: defaulted-field width absorption lost its source record construction", .{});
+
+        var already_recorded = false;
+        for (self.cir.record_omitted_defaults.items.items) |existing| {
+            if (existing.expr == expr and existing.field_name == absorbed.name and
+                existing.origin_module == absorbed.default.origin_module and
+                existing.default_expr_node == absorbed.default.expr_node)
+            {
+                already_recorded = true;
+                break;
+            }
+        }
+        if (already_recorded) continue;
+
+        _ = try self.cir.record_omitted_defaults.append(self.cir.gpa, .{
+            .expr = expr,
+            .field_name = absorbed.name,
+            .origin_module = absorbed.default.origin_module,
+            .default_expr_node = absorbed.default.expr_node,
+        });
+    }
+}
+
 /// The single core: run unification, then assign ranks/regions to fresh vars,
 /// copy out deferred constraints, and assert array sync.
 fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const construction_var = opts.record_construction_var orelse if (self.instantiation_source_expr) |source|
+        if (self.exprIsFreshRecordConstruction(source)) ModuleEnv.varFrom(source) else null
+    else
+        null;
     const unify_env = self.unifyEnv();
     const result = try unifier.unify(&unify_env, a, b, opts);
+
+    if (result.isOk()) {
+        try self.recordAbsorbedDefaults(construction_var, a, b);
+    }
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -3650,6 +3701,10 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{
         .context = ctx,
         .row_width_relation = row_width_relation,
+        .field_presence_relation = switch (ctx) {
+            .record_access => |access| if (access.mode == .required) .required_access else .ordinary,
+            else => if (row_width_relation == .exact) .committed_value else .ordinary,
+        },
     });
 }
 
@@ -3674,6 +3729,8 @@ fn unifyCallRelation(
         .context = ctx,
         .on_mismatch = .write_no_report,
         .row_width_relation = row_width_relation,
+        .field_presence_relation = if (row_width_relation == .exact) .committed_value else .ordinary,
+        .record_construction_var = if (row_width_relation == .construction) actual else null,
     });
     if (result.isOk()) return .ok;
 
@@ -3703,6 +3760,7 @@ fn unifyNominalConstructorBacking(
         .context = .{ .nominal_constructor = ctx },
         .root_relation = .nominal_constructor_backing,
         .row_width_relation = row_width_relation,
+        .field_presence_relation = if (row_width_relation == .exact) .committed_value else .ordinary,
     });
 }
 
@@ -19328,6 +19386,7 @@ const Probe = struct {
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
     rejected_static_dispatches_len: usize,
+    record_omitted_defaults_len: usize,
     dispatch_target_instantiations_len: usize,
     imported_method_schemes_len: usize,
 
@@ -19349,6 +19408,7 @@ const Probe = struct {
         // The durable records drop here; the rejection markers they mirror live
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
+        self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
         while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
             const removed = self.check.dispatch_target_instantiations.pop().?;
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
@@ -19379,6 +19439,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
+    const record_omitted_defaults_len = self.cir.record_omitted_defaults.items.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const imported_method_schemes_len = self.imported_method_schemes.items.len;
     return .{
@@ -19391,6 +19452,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
+        .record_omitted_defaults_len = record_omitted_defaults_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .imported_method_schemes_len = imported_method_schemes_len,
         .savepoint = try self.types.createSavepoint(),

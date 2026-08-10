@@ -43,6 +43,28 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
+        .name = "defaulted record field: supplied literal does not adopt a default identity",
+        .source_kind = .module,
+        .source =
+        \\A : { x : U64 ?? 3 }
+        \\B : { x : U64 ?? 4 }
+        \\
+        \\fa : A -> U64
+        \\fa = |r| r.x
+        \\
+        \\fb : B -> U64
+        \\fb = |r| r.x
+        \\
+        \\main = {
+        \\    lit = { x: 7 }
+        \\    annotated : { x : U64 }
+        \\    annotated = { x: 7 }
+        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "28" },
+    },
+    .{
         .name = "defaulted record field: alias-carried default materializes",
         .source_kind = .module,
         .source =
@@ -3646,6 +3668,25 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "defaulted record field: imported alias default survives required access",
+        .source_kind = .module,
+        .source =
+        \\import ConfigMod
+        \\
+        \\main = ConfigMod.get_count!({ name: "Roc" })
+        ,
+        .imports = &.{.{
+            .name = "ConfigMod",
+            .source =
+            \\Cfg : { count : U8 ?? 10, name : Str }
+            \\
+            \\get_count! : Cfg -> U8
+            \\get_count! = |cfg| cfg.count
+            ,
+        }},
+        .expected = .{ .inspect_str = "10" },
     },
     .{
         .name = "inspect: lambda list param calling List.append",

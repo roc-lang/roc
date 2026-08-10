@@ -1978,7 +1978,7 @@ top-level and hoisted groups.
 
 A top-level definition with a destructuring pattern is the exception to the
 ordinary-root representation: it has no single source name under which the whole
-right-hand side can be published. After the pattern checks successfully, the
+right-hand side can be stored. After the pattern checks successfully, the
 checker selects one pattern-extraction root for each binder, carrying the shared
 right-hand side and complete scrutinee pattern. Those roots are emitted in
 dependency-first order and later lookups resolve through the selected binder,
@@ -3674,14 +3674,25 @@ field-kind axis (see Field Kinds above):
   optional field would materialize the missing tag). Undetermined kinds
   still never absorb.
 
-Kind unification is the join in the lattice `flex ⊑ present ⊑ defaulted`,
-with `optional` incomparable:
+Kind unification treats `optional` as layout-incompatible with the two inline
+kinds and treats a default identity as construction-only information:
 
-- `present ~ defaulted → defaulted`. Forced by access: `.a` demands
-  `present` and must succeed on a defaulted field, and the merge must KEEP
-  the default (stripping it would make later construction sites
-  order-dependent). Corollary: a `{ a : U8 ?? 10 }` record flows freely
-  where `{ a : U8 }` is expected—same layout, strictly more information.
+- In an ordinary value relation, `required ~ defaulted → required`. A shared
+  field is already supplied, so there is no omission site at which that default
+  could be selected. Keeping the identity would taint an ordinary
+  `{ a: value }` with whichever defaulted type it encountered first, making a
+  later use against an otherwise layout-identical defaulted type fail. A direct
+  required `.field` access uses an explicit access-demand relation instead: it
+  accepts either inline kind while preserving an existing defaulted
+  declaration. The default identity otherwise survives exactly on the
+  unmatched field admitted by width absorption, where construction actually
+  omitted the field and lowering must materialize the default. The checker
+  records that omission decision as `(record expression, field name,
+  default identity)` in the checked body; postcheck consumes this explicit
+  construction plan instead of trying to recover it from a row that later
+  value unification may normalize to `required`.
+  A `{ a : U8 ?? 10 }` value still flows freely where `{ a : U8 }` is
+  expected—the merged use is required and has the same inline layout.
 - `defaulted(d1) ~ defaulted(d2)` unifies exactly when `d1 = d2`. Two
   annotations defaulting one field differently have no coherent merged
   default; the conflict is a type mismatch.
@@ -3859,9 +3870,9 @@ Only the PER-FIELD demand becomes kind-directed:
   bullet in Field Kinds): a single-field record with a kind-FLEXIBLE
   presence—`.unknown` over a fresh presence var, recorded for the
   finalize kind-defaulting sweep—unified into the base, so the base's
-  kind decides (`present ~ defaulted → defaulted` keeps defaulted-field
-  updates working, and an optional base field checks the value at the
-  payload type).
+  kind decides (`required ~ defaulted → required` accepts a supplied update
+  without attaching a construction default, and an optional base field
+  checks the value at the payload type).
 - An UNSET field mirrors the `.?`-access probe EXACTLY (the optional arm of
   `e_field_access` checking): unify the base with an OPEN single-field
   record `{ x: unknown(π, τ) }`—fresh presence var π, fresh value var

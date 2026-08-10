@@ -2700,6 +2700,16 @@ pub const CheckedFieldDefault = extern struct {
     }
 };
 
+/// Exact checker-selected default for a field omitted at one record
+/// construction site. This remains separate from the record's final checked
+/// type because ordinary value unification may normalize that shared field to
+/// `required` after the construction decision has already been made.
+pub const CheckedRecordOmittedDefault = extern struct {
+    expr: CheckedExprId,
+    field_name: canonical.RecordFieldLabelId,
+    default: CheckedFieldDefault,
+};
+
 /// Public `CheckedFieldKind` declaration.
 ///
 /// The published field-kind axis (design.md "Field Kinds (All-Dynamic
@@ -10159,6 +10169,7 @@ pub const CheckedBodyStoreView = struct {
     string_bytes: []const u8 = &.{},
     string_ranges: []const canonical.NameInterner.Range = &.{},
     default_exprs: []const CheckedBodyStore.CheckedDefaultExpr = &.{},
+    record_omitted_defaults: []const CheckedRecordOmittedDefault = &.{},
 
     /// Resolve a locally-declared field default's `DefaultId.expr_node` to
     /// its published checked expression (design.md "Defaulted Fields").
@@ -10873,6 +10884,8 @@ pub const CheckedBodyStore = struct {
     /// resolve a foreign default in its declaring module's (possibly cached)
     /// artifact. Sorted by `expr_node` (built from a deduplicating scan).
     default_exprs: std.ArrayList(CheckedDefaultExpr) = .empty,
+    /// Checker-selected defaults attached to their exact omission sites.
+    record_omitted_defaults: std.ArrayList(CheckedRecordOmittedDefault) = .empty,
     source_node_map: CheckedSourceNodeMap = .{},
     /// Synthesized `from_numeral` conversion expressions for literal patterns,
     /// keyed by the pattern's source node. Pattern nodes already occupy their
@@ -11165,10 +11178,10 @@ pub const CheckedBodyStore = struct {
         // field whose identity originates in THIS module resolves its CIR
         // expr node to the checked expression published by the source-node
         // walk above (design.md "Defaulted Fields").
+        const self_origin = try names.internModuleIdentity(
+            module.moduleEnvConst().moduleIdentityHash(module.moduleEnvConst().selfModuleIdentity()),
+        );
         {
-            const self_origin = try names.internModuleIdentity(
-                module.moduleEnvConst().moduleIdentityHash(module.moduleEnvConst().selfModuleIdentity()),
-            );
             for (checked_types.store.recordFieldPool()) |field| {
                 const default = field.kind.defaultIdentity() orelse continue;
                 const default_origin = default.origin() orelse
@@ -11183,12 +11196,35 @@ pub const CheckedBodyStore = struct {
                     .checked_expr = checked_expr,
                 });
             }
-            std.mem.sort(CheckedDefaultExpr, store.default_exprs.items, {}, struct {
-                fn lessThan(_: void, a: CheckedDefaultExpr, b: CheckedDefaultExpr) bool {
-                    return a.expr_node < b.expr_node;
-                }
-            }.lessThan);
         }
+
+        for (module.moduleEnvConst().record_omitted_defaults.items.items) |omitted| {
+            const checked_expr = source_node_map.exprAtRawNode(@intFromEnum(omitted.expr)) orelse
+                checkedArtifactInvariant("omitted-default record expression was not published as a source node", .{});
+            const field_name = try names.internRecordFieldIdent(module.identStoreConst(), omitted.field_name);
+            const origin_module = try names.internModuleIdentity(
+                module.moduleEnvConst().moduleIdentityHash(omitted.origin_module),
+            );
+            try store.record_omitted_defaults.append(allocator, .{
+                .expr = checked_expr,
+                .field_name = field_name,
+                .default = CheckedFieldDefault.fromParts(origin_module, omitted.default_expr_node),
+            });
+            if (origin_module == self_origin and !seen_defaults.contains(omitted.default_expr_node)) {
+                try seen_defaults.put(omitted.default_expr_node, {});
+                const default_expr = source_node_map.exprAtRawNode(omitted.default_expr_node) orelse
+                    checkedArtifactInvariant("omitted field default expression was not published as a source node", .{});
+                try store.default_exprs.append(allocator, .{
+                    .expr_node = omitted.default_expr_node,
+                    .checked_expr = default_expr,
+                });
+            }
+        }
+        std.mem.sort(CheckedDefaultExpr, store.default_exprs.items, {}, struct {
+            fn lessThan(_: void, a: CheckedDefaultExpr, b: CheckedDefaultExpr) bool {
+                return a.expr_node < b.expr_node;
+            }
+        }.lessThan);
         seen_defaults.deinit();
 
         store.source_node_map = source_node_map;
@@ -11220,6 +11256,7 @@ pub const CheckedBodyStore = struct {
             .string_bytes = self.string_bytes.items,
             .string_ranges = self.string_ranges.items,
             .default_exprs = self.default_exprs.items,
+            .record_omitted_defaults = self.record_omitted_defaults.items,
         };
     }
 
@@ -11914,6 +11951,7 @@ pub const CheckedBodyStore = struct {
             self.record_expr_field_pool.deinit(allocator);
             self.field_access_segment_pool.deinit(allocator);
             self.default_exprs.deinit(allocator);
+            self.record_omitted_defaults.deinit(allocator);
             self.if_branch_pool.deinit(allocator);
             self.match_branch_pool.deinit(allocator);
             self.match_branch_pattern_pool.deinit(allocator);
@@ -11958,11 +11996,12 @@ pub const CheckedBodyStore = struct {
         string_bytes: SerializedSlice(u8) = .{},
         string_ranges: SerializedSlice(canonical.NameInterner.Range) = .{},
         default_exprs: SerializedSlice(CheckedDefaultExpr) = .{},
+        record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
         comptime {
-            // 23 SerializedSlice fields → 23 base-pointer fixups, independent of
+            // 24 SerializedSlice fields → 24 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 23);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 24);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -27991,10 +28030,10 @@ pub const CheckedModuleArtifact = struct {
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
-            // independent of stored data size. (+2 for the body store's
-            // `field_access_segment_pool` and `default_exprs`—design.md
+            // independent of stored data size. (+3 for the body store's field
+            // access, declared-default, and omission-default tables—design.md
             // "Defaulted Fields"—over the upstream count.)
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 208);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 209);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -28162,7 +28201,8 @@ pub const CheckedModuleArtifact = struct {
     // Version 60 preserves generalized field-kind variable identities and
     // optional source-value types in stored const evidence.
     // Version 61 gives every compile-time request its exact checked-root ID.
-    const serialized_layout_version: u32 = 61;
+    // Version 62 publishes exact record-construction omission defaults.
+    const serialized_layout_version: u32 = 62;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34151,8 +34191,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE2, 0xAA, 0x31, 0x26, 0x74, 0xA5, 0x9E, 0x9C, 0x96, 0xB1, 0x30, 0x08, 0xA3, 0x16, 0xEF, 0x8A,
-        0x2C, 0x94, 0xF1, 0x8B, 0x8E, 0xED, 0x56, 0x8B, 0xB7, 0x17, 0x7C, 0x69, 0x7A, 0x33, 0x9E, 0x35,
+        0xD3, 0x97, 0x73, 0x3A, 0x07, 0x36, 0x9E, 0xFD, 0xFC, 0x78, 0xB0, 0x2B, 0x6B, 0x8C, 0x0C, 0xD9,
+        0x1F, 0x5E, 0x0E, 0xD7, 0xCA, 0xFF, 0x97, 0x3E, 0x99, 0x0D, 0x1A, 0xE1, 0x58, 0x4C, 0x03, 0x48,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

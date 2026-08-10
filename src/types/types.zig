@@ -494,10 +494,12 @@ const NominalSource = packed struct(u32) {
 /// `.field`. `optional` is an optional field: may be missing AT RUNTIME,
 /// tagged slot, read with `.?field`. `defaulted` is a required field whose
 /// CONSTRUCTION may be omitted (the slot is materialized from the default):
-/// inline slot, read with `.field`. Kind unification is the join in the
-/// lattice `flex ⊑ present ⊑ defaulted`, with `optional` incomparable:
-/// `present ~ optional` and `optional ~ defaulted` are mismatches (one value
-/// has one layout), `present ~ defaulted` merges to `defaulted`, and two
+/// inline slot, read with `.field`. In an ordinary value relation,
+/// `required ~ defaulted` merges to `required`: a shared field is already
+/// supplied, so the default identity is irrelevant to that value. The
+/// checker's explicit required-access relation preserves a defaulted
+/// declaration while accepting its inline slot. `required ~ optional` and
+/// `optional ~ defaulted` are mismatches (one value has one layout), and two
 /// defaulted kinds unify exactly when their default identities are equal.
 ///
 pub const FieldPresence = union(enum) {

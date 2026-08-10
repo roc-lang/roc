@@ -18140,7 +18140,7 @@ const BodyContext = struct {
                     });
                     child_index += 1;
                 }
-                return try self.lowerRecordExprAtNode(record, expr_node, children.items);
+                return try self.lowerRecordExprAtNode(expr_id, record, expr_node, children.items);
             },
             .empty_list, .empty_record => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -18151,7 +18151,7 @@ const BodyContext = struct {
                 // lower it through the record path so the demanded row's
                 // DEFAULTED fields materialize their defaults into the
                 // inline slots (design.md "Defaulted Fields").
-                return try self.lowerRecordExprAtNode(.{
+                return try self.lowerRecordExprAtNode(expr_id, .{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
                 }, expr_node, &.{});
@@ -31399,11 +31399,13 @@ const BodyContext = struct {
                     // lower it through the record path so the demanded row's
                     // DEFAULTED fields materialize their defaults into the
                     // inline slots (design.md "Defaulted Fields").
-                    .empty_record => break :blk try self.lowerRecordConstructorAtNode(.{
-                        .fields = @as([]const checked.CheckedRecordExprField, &.{}),
-                        .ext = @as(?checked.CheckedExprId, null),
-                    }, expected_node),
-                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, expected_node),
+                    .empty_record => {
+                        break :blk try self.lowerRecordConstructorAtNode(checked_expr, .{
+                            .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                            .ext = @as(?checked.CheckedExprId, null),
+                        }, expected_node);
+                    },
+                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
                     .dispatch_call => |plan| {
                         try self.selectExprRepresentationAtNode(checked_expr, expected_node);
@@ -32810,6 +32812,7 @@ const BodyContext = struct {
 
     fn lowerRecordExprAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         record: anytype,
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
@@ -32884,8 +32887,8 @@ const BodyContext = struct {
 
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
-            const field_kind = try self.graph.recordConstructionFieldKind(record_node, field.name);
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, field.name);
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 // A SUPPLIED OPTIONAL field's child was lowered at the slot's
@@ -32944,6 +32947,13 @@ const BodyContext = struct {
                 break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
             } else omitted: {
                 produced_fields[index] = field;
+                if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
+                    const value_node = field.value_ty orelse field.ty;
+                    const value_ty = try self.resolvedTypeViewForNode(value_node);
+                    break :omitted (try self.defaultedFieldValueFromDefault(default, value_ty)) orelse
+                        Common.invariant("checker-selected omitted default had no archived default value");
+                }
+                const field_kind = try self.graph.recordOmittedFieldKind(record_node, field.name);
                 break :omitted switch (field_kind) {
                     .defaulted => |default| blk: {
                         const value_node = field.value_ty orelse field.ty;
@@ -33079,6 +33089,7 @@ const BodyContext = struct {
 
     fn lowerRecordConstructorAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         record: anytype,
         record_node: NodeId,
     ) Allocator.Error!DraftExprId {
@@ -33117,7 +33128,22 @@ const BodyContext = struct {
             });
             child_index += 1;
         }
-        return try self.lowerRecordExprAtNode(record, record_node, children.items);
+        return try self.lowerRecordExprAtNode(checked_expr, record, record_node, children.items);
+    }
+
+    fn omittedRecordFieldDefault(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        field_name: names.RecordFieldNameId,
+    ) ?checked.CheckedFieldDefault {
+        const wanted = self.builder.program.names.recordFieldLabelText(field_name);
+        for (self.view.bodies.record_omitted_defaults) |entry| {
+            if (entry.expr != checked_expr) continue;
+            if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
+                return entry.default;
+            }
+        }
+        return null;
     }
 
     fn recordUpdateFieldValue(

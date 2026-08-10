@@ -1098,11 +1098,36 @@ test "check type - record - default - defaulted flows where required expected" {
         \\use_it : U8
         \\use_it = needs_count(my_record)
     ;
-    // present ~ defaulted merges to defaulted: same inline layout, strictly
-    // more information, so the call typechecks (design.md "Defaulted
-    // Fields" lattice).
+    // required ~ defaulted merges to required: both use the same inline
+    // layout, and this already-constructed value has no omission site that
+    // needs to retain the default identity.
     try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
         \\U8
+    );
+}
+
+test "check type - record - default - supplied literal does not adopt a default identity" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A : { x : U64 ?? 3 }
+        \\B : { x : U64 ?? 4 }
+        \\
+        \\fa : A -> U64
+        \\fa = |r| r.x
+        \\
+        \\fb : B -> U64
+        \\fb = |r| r.x
+        \\
+        \\result = {
+        \\    lit = { x: 7 }
+        \\    annotated : { x : U64 }
+        \\    annotated = { x: 7 }
+        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } },
+        \\U64
     );
 }
 

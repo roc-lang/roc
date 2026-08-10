@@ -770,6 +770,19 @@ pub const NumericSuffixTarget = extern struct {
     }
 };
 
+/// Checker-produced construction evidence for one field omitted by a record
+/// literal through defaulted-field width absorption. The field's default is
+/// construction-site data; it must survive even when later value unification
+/// normalizes the shared runtime row to `required`.
+pub const RecordOmittedDefault = extern struct {
+    expr: CIR.Expr.Idx,
+    field_name: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
+    default_expr_node: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -897,6 +910,8 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
+/// Exact default identities selected at record-literal omission sites.
+record_omitted_defaults: RecordOmittedDefault.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1016,6 +1031,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
+    self.record_omitted_defaults.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1111,6 +1127,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
+        .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -1138,6 +1155,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1237,6 +1255,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -3604,6 +3623,7 @@ pub const Serialized = extern struct {
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
+    record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3713,6 +3733,7 @@ pub const Serialized = extern struct {
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
+        try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3777,6 +3798,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
         return env;
@@ -3841,6 +3863,7 @@ pub const Serialized = extern struct {
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
     }
 
@@ -3907,6 +3930,7 @@ pub const Serialized = extern struct {
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;

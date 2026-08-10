@@ -85,6 +85,18 @@ const TwoTagsSafeList = TwoTags.SafeList;
 const Problem = problem_mod.Problem;
 const Context = problem_mod.Context;
 
+/// Exact checker evidence produced when a fresh record construction omits a
+/// defaulted field through width absorption. `record_var` is the original
+/// source-backed variable for the empty record operand, before union-find
+/// resolution can redirect it away from its expression node.
+pub const AbsorbedRecordDefault = struct {
+    record_var: Var,
+    name: Ident.Idx,
+    default: types_mod.DefaultId,
+
+    pub const SafeList = MkSafeList(@This());
+};
+
 const NominalDirection = enum {
     a_is_nominal,
     b_is_nominal,
@@ -150,6 +162,16 @@ pub const RowWidthRelation = enum {
     exact,
 };
 
+/// How field-kind pairs should be interpreted. A committed value cannot adopt
+/// a construction-only default through a still-flex kind. A direct required
+/// field access is only a demand that the slot is inline and always present,
+/// so it preserves an existing defaulted declaration.
+pub const FieldPresenceRelation = enum {
+    ordinary,
+    committed_value,
+    required_access,
+};
+
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
@@ -170,6 +192,12 @@ pub const Options = struct {
     on_mismatch: MismatchBehavior = .poison_to_err,
     root_relation: RootRelation = .ordinary,
     row_width_relation: RowWidthRelation = .construction,
+    field_presence_relation: FieldPresenceRelation = .ordinary,
+    /// Source-backed record construction whose omission decisions this
+    /// relation owns. The checker publishes successful default absorptions
+    /// against this exact expression when the empty row operand is an
+    /// internal extension variable rather than the expression's own var.
+    record_construction_var: ?Var = null,
 };
 
 /// Unify two type variables.
@@ -192,6 +220,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.unify_scratch,
         env.occurs_scratch,
         opts.row_width_relation,
+        opts.field_presence_relation,
     );
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -252,8 +281,10 @@ const Unifier = struct {
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     row_width_relation: RowWidthRelation,
+    field_presence_relation: FieldPresenceRelation,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
+    unresolved_a: ?Var,
     unresolved_b: ?Var,
 
     /// Init unifier
@@ -264,6 +295,7 @@ const Unifier = struct {
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
+        field_presence_relation: FieldPresenceRelation,
     ) Unifier {
         return .{
             .ident_store = ident_store,
@@ -272,6 +304,8 @@ const Unifier = struct {
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
             .row_width_relation = row_width_relation,
+            .field_presence_relation = field_presence_relation,
+            .unresolved_a = null,
             .unresolved_b = null,
         };
     }
@@ -462,6 +496,7 @@ const Unifier = struct {
             .guarded_pair => |pair| try self.processGuardedPair(pair.a, pair.b),
             .guard_handler => |handler| {
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
             },
             .unify_vars => |vars| try self.unifyVars(&vars),
@@ -519,11 +554,14 @@ const Unifier = struct {
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
 
+                const saved_unresolved_a = self.unresolved_a;
                 const saved_unresolved_b = self.unresolved_b;
+                self.unresolved_a = a_var;
                 self.unresolved_b = b_var;
 
                 _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .guard_handler = .{
                     .visited_vars_len = visited_vars_len,
+                    .saved_unresolved_a = saved_unresolved_a,
                     .saved_unresolved_b = saved_unresolved_b,
                 } });
                 _ = try self.scratch.unify_work_stack.append(self.scratch.gpa, .{ .unify_vars = vars });
@@ -537,6 +575,7 @@ const Unifier = struct {
             if (frame_tag == .guard_handler) {
                 const handler = frame.guard_handler;
                 self.scratch.visited_vars.items.items.len = handler.visited_vars_len;
+                self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
             } else if (frame_tag == .mismatch_handler) {
                 const handler = frame.mismatch_handler;
@@ -598,14 +637,22 @@ const Unifier = struct {
 
     /// Unify when `a` is a resolved field kind.
     ///
-    /// Kind unification is the join in the lattice `flex ⊑ present ⊑
-    /// defaulted`, with `optional` incomparable (design.md "Field Kinds
-    /// (All-Dynamic Optional Fields)" and "Defaulted Fields"): `present ~
-    /// defaulted` merges to `defaulted` (access demands `present` and must
-    /// succeed on a defaulted field, keeping the default), two defaulted
-    /// kinds merge exactly when their default identities are equal, and
-    /// `optional` unifies only with itself—every other pairing is a
-    /// mismatch because one value has one layout.
+    /// A shared required/defaulted field merges to required: the field is
+    /// already supplied, so its construction-only default must not taint the
+    /// value. Width absorption preserves the identity for an omitted field,
+    /// and the explicit required-access relation preserves a declaration while
+    /// merely demanding its inline slot. Two defaulted kinds merge exactly when
+    /// their default identities are equal, while `optional` unifies only with
+    /// itself because it has a different runtime layout (design.md "Defaulted
+    /// Fields").
+    fn flexibleFieldPresenceMerge(self: *const Self, presence: types_mod.FieldPresence) types_mod.FieldPresence {
+        if (self.field_presence_relation != .committed_value) return presence;
+        return switch (presence) {
+            .defaulted => .required,
+            .required, .optional => presence,
+        };
+    }
+
     fn unifyFieldPresence(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -614,8 +661,7 @@ const Unifier = struct {
     ) Error!void {
         switch (b_content) {
             .flex => |b_flex| {
-                // If b is flex, then a wins
-                try self.merge(vars, .{ .field_presence = a_field_presence });
+                try self.merge(vars, .{ .field_presence = self.flexibleFieldPresenceMerge(a_field_presence) });
                 // b should never have any static dispatch constraints, but if
                 // it somehow does, ensure we record them (preserve soundness)
                 std.debug.assert(b_flex.constraints.len() == 0);
@@ -625,7 +671,7 @@ const Unifier = struct {
                 const merged: types_mod.FieldPresence = switch (a_field_presence) {
                     .required => switch (b_field_presence) {
                         .required => .required,
-                        .defaulted => |b_id| .{ .defaulted = b_id },
+                        .defaulted => .required,
                         .optional => return error.TypeMismatch,
                     },
                     .optional => switch (b_field_presence) {
@@ -633,7 +679,7 @@ const Unifier = struct {
                         .required, .defaulted => return error.TypeMismatch,
                     },
                     .defaulted => |a_id| switch (b_field_presence) {
-                        .required => .{ .defaulted = a_id },
+                        .required => .required,
                         .defaulted => |b_id| if (a_id.eql(b_id))
                             types_mod.FieldPresence{ .defaulted = a_id }
                         else
@@ -691,8 +737,7 @@ const Unifier = struct {
                 try self.merge(vars, b_content);
             },
             .field_presence => |b_field_presence| {
-                // If a is flex, then b wins
-                try self.merge(vars, .{ .field_presence = b_field_presence });
+                try self.merge(vars, .{ .field_presence = self.flexibleFieldPresenceMerge(b_field_presence) });
                 // a should never have any static dispatch constraints, but if
                 // it somehow does, ensure we record them (preserve soundness)
                 std.debug.assert(a_flex.constraints.len() == 0);
@@ -1010,7 +1055,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, a_record.fields, a_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_record.fields, a_record.ext);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1050,7 +1095,7 @@ const Unifier = struct {
             .record_unbound => |a_fields| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        try self.unifyRowWithEmptyRecord(vars, a_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_b.?, a_fields, null);
                     },
                     .record => |b_record| {
                         try self.unifyTwoRecords(
@@ -1098,10 +1143,10 @@ const Unifier = struct {
                     },
 
                     .record => |b_record| {
-                        try self.unifyRowWithEmptyRecord(vars, b_record.fields, b_record.ext);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_record.fields, b_record.ext);
                     },
                     .record_unbound => |b_fields| {
-                        try self.unifyRowWithEmptyRecord(vars, b_fields, null);
+                        try self.unifyRowWithEmptyRecord(vars, self.unresolved_a.?, b_fields, null);
                     },
                     .nominal_type => |b_type| {
                         // Try to unify empty record (a) with nominal record (b)
@@ -1932,7 +1977,10 @@ const Unifier = struct {
         }
     }
 
-    fn validateAbsorbableRecordFields(self: *Self, fields: RecordFieldSafeMultiList.Range) Error!void {
+    fn validateAbsorbableRecordFields(
+        self: *Self,
+        fields: RecordFieldSafeMultiList.Range,
+    ) Error!void {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
             switch (field.presence) {
@@ -1944,6 +1992,71 @@ const Unifier = struct {
                     },
                     .flex, .rigid, .alias, .structure, .err => return error.TypeMismatch,
                 },
+            }
+        }
+    }
+
+    fn recordAbsorbedRecordFields(
+        self: *Self,
+        record_var: Var,
+        fields: RecordFieldSafeMultiList.Range,
+    ) std.mem.Allocator.Error!void {
+        var iter = self.types_store.iterRecordFields(fields);
+        while (iter.next()) |field| {
+            const unknown = switch (field.presence) {
+                .required => unreachable,
+                .unknown => |unknown| unknown,
+            };
+            const presence = switch (self.types_store.resolveVar(unknown.presence).desc.content) {
+                .field_presence => |presence| presence,
+                .flex, .rigid, .alias, .structure, .err => unreachable,
+            };
+            switch (presence) {
+                .optional => {},
+                .defaulted => |default| {
+                    _ = try self.scratch.absorbed_record_defaults.append(self.scratch.gpa, .{
+                        .record_var = record_var,
+                        .name = field.name,
+                        .default = default,
+                    });
+                },
+                .required => unreachable,
+            }
+        }
+    }
+
+    fn recordAbsorbedRecordDefaults(
+        self: *Self,
+        record_var: Var,
+        fields: RecordFieldSafeMultiList.Range,
+        mb_ext: ?Var,
+    ) std.mem.Allocator.Error!void {
+        try self.recordAbsorbedRecordFields(record_var, fields);
+        var ext = mb_ext orelse return;
+        var guard = types_mod.debug.IterationGuard.init("recordAbsorbedRecordDefaults");
+
+        while (true) {
+            guard.tick();
+            switch (self.types_store.resolveVar(ext).desc.content) {
+                .flex => return,
+                .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| {
+                        try self.recordAbsorbedRecordFields(record_var, record.fields);
+                        ext = record.ext;
+                    },
+                    .record_unbound => |tail_fields| return self.recordAbsorbedRecordFields(record_var, tail_fields),
+                    .empty_record => return,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => unreachable,
+                },
+                .rigid, .field_presence, .err => unreachable,
             }
         }
     }
@@ -1997,6 +2110,7 @@ const Unifier = struct {
     fn unifyRowWithEmptyRecord(
         self: *Self,
         vars: *const ResolvedVarDescs,
+        record_var: Var,
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
     ) Error!void {
@@ -2007,6 +2121,7 @@ const Unifier = struct {
         if (self.row_width_relation == .exact) return error.TypeMismatch;
 
         try self.validateAbsorbableRecordRow(fields, mb_ext);
+        try self.recordAbsorbedRecordDefaults(record_var, fields, mb_ext);
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (mb_ext) |ext| {
@@ -2532,8 +2647,17 @@ const Unifier = struct {
                         return b_presence;
                     },
                     .unknown => |b_unknown| {
-                        const a_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_var, b_unknown.var_, mismatch_handler);
+                        if (self.field_presence_relation == .required_access) {
+                            switch (self.types_store.resolveVar(b_unknown.presence).desc.content) {
+                                .field_presence => |presence| switch (presence) {
+                                    .defaulted => return b_presence,
+                                    .required, .optional => {},
+                                },
+                                .flex, .rigid, .alias, .structure, .err => {},
+                            }
+                        }
+                        const a_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_pres_var, b_unknown.presence, mismatch_handler);
                         // Keep the wrapper: the kind lives in the presence var
                         // (the pair above pins it to `present`, or mismatches
@@ -2547,8 +2671,17 @@ const Unifier = struct {
             .unknown => |a_unknown| {
                 switch (b_presence) {
                     .required => |b_var| {
-                        const b_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_unknown.var_, b_var, mismatch_handler);
+                        if (self.field_presence_relation == .required_access) {
+                            switch (self.types_store.resolveVar(a_unknown.presence).desc.content) {
+                                .field_presence => |presence| switch (presence) {
+                                    .defaulted => return a_presence,
+                                    .required, .optional => {},
+                                },
+                                .flex, .rigid, .alias, .structure, .err => {},
+                            }
+                        }
+                        const b_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_unknown.presence, b_pres_var, mismatch_handler);
                         // Keep the wrapper (see the mirrored branch above).
                         return .{ .unknown = .{ .presence = a_unknown.presence, .var_ = b_var } };
@@ -3309,6 +3442,7 @@ const WorkFrame = union(enum) {
     },
     guard_handler: struct {
         visited_vars_len: u32,
+        saved_unresolved_a: ?Var,
         saved_unresolved_b: ?Var,
     },
     unify_vars: ResolvedVarDescs,
@@ -3337,7 +3471,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3351,7 +3485,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
@@ -3415,6 +3549,9 @@ pub const Scratch = struct {
     only_in_a_fields: RecordFieldSafeList,
     only_in_b_fields: RecordFieldSafeList,
     in_both_fields: TwoRecordFieldsSafeList,
+    /// Successful width-absorption facts consumed by the checker before the
+    /// next unification call resets this scratch store.
+    absorbed_record_defaults: AbsorbedRecordDefault.SafeList,
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
@@ -3474,6 +3611,7 @@ pub const Scratch = struct {
             .only_in_a_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = try RecordFieldSafeList.initCapacity(gpa, 32),
             .in_both_fields = try TwoRecordFieldsSafeList.initCapacity(gpa, 32),
+            .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
@@ -3500,6 +3638,7 @@ pub const Scratch = struct {
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
         self.in_both_fields.deinit(self.gpa);
+        self.absorbed_record_defaults.deinit(self.gpa);
         self.gathered_tags.deinit(self.gpa);
         self.only_in_a_tags.deinit(self.gpa);
         self.only_in_b_tags.deinit(self.gpa);
@@ -3524,6 +3663,7 @@ pub const Scratch = struct {
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();
         self.in_both_fields.items.clearRetainingCapacity();
+        self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();

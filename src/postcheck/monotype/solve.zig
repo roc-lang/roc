@@ -2881,6 +2881,38 @@ pub const InstGraph = struct {
         Common.invariant("instantiation record constructor requested an absent field kind");
     }
 
+    /// Return the already-selected kind for a field omitted by a record
+    /// constructor. Unlike `recordConstructionFieldKind`, omission is not
+    /// evidence that an undetermined field is required: the checker or the
+    /// specialization relation must already have selected optional/defaulted.
+    pub fn recordOmittedFieldKind(
+        self: *InstGraph,
+        raw_record: NodeId,
+        name: names.RecordFieldNameId,
+    ) Allocator.Error!ResolvedFieldKind {
+        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
+        if (self.content(structural) != .record) {
+            Common.invariant("instantiation record constructor had a non-record receiver type");
+        }
+        const row = try self.flattenRecordRow(structural);
+        const wanted = self.fieldLabelText(name);
+        for (row.fields) |field| {
+            if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
+            if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
+            return switch (field.kind) {
+                .sealed => if (field.default) |default|
+                    .{ .defaulted = default }
+                else if (field.value_ty != null)
+                    .optional
+                else
+                    .required,
+                .undetermined => Common.invariant("omitted record constructor field kind remained undetermined"),
+                .required, .optional, .defaulted => unreachable,
+            };
+        }
+        Common.invariant("instantiation record constructor requested an absent omitted-field kind");
+    }
+
     fn recordFieldNodeWithAccess(
         self: *InstGraph,
         raw_record: NodeId,
@@ -2918,7 +2950,21 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
     ) Allocator.Error!NodeId {
         const field = try self.recordFieldWithAccess(raw_record, name, access, noun);
-        _ = self.unifyFieldKinds(field.kind, field.default, .required, null);
+        switch (field.kind) {
+            .sealed => {
+                if (field.value_ty != null) {
+                    Common.invariant("required access reached a sealed optional record field");
+                }
+            },
+            .required, .defaulted => {},
+            .optional => Common.invariant("required access reached an optional record field"),
+            .undetermined => |id| if (self.resolvedFieldKind(field.kind)) |resolved| switch (resolved) {
+                .required, .defaulted => {},
+                .optional => Common.invariant("required access resolved an optional record field kind"),
+            } else {
+                self.constrainUndeterminedFieldKind(id, .required);
+            },
+        }
         const value = field.value_ty orelse field.ty;
         try self.unify(field.ty, value);
         return self.find(field.ty);
