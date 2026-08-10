@@ -58,8 +58,7 @@ pub const RepresentationPolicy = @import("representation_policy.zig");
 pub const RepresentationClosure = @import("representation_closure.zig");
 /// Debug-only, state-isolated shadow of directed scheme instantiation
 /// (reunify.md Slice 5). Not wired into production output; off by default.
-pub const ReunifyShadow = struct {
-};
+pub const ReunifyShadow = struct {};
 /// Decision-tree match compiler shared by both LIR lowerers.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");

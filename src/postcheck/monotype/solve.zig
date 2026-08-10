@@ -16,10 +16,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
-const census = @import("census.zig");
 const policy = @import("../representation_policy.zig");
-const spec_rehearsal = @import("spec_rehearsal.zig");
-
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
 const checked = check.CheckedModule;
@@ -470,7 +467,6 @@ pub const InstGraph = struct {
     /// Slice 7 flip-prep). The per-specialization rehearsal owns the storage and
     /// attaches it while this graph lowers; null on every other path, and read by
     /// nothing inside this module.
-
     /// Allocation-free scratch for exact generated-private containment walks.
     /// Node ids are dense, so an epoch array replaces a fresh hash set on every
     /// query while preserving cycle detection exactly.
@@ -4105,7 +4101,6 @@ pub const GraphTypeFinals = struct {
     /// children through the same entry point, so only a depth-zero call is a
     /// read a caller asked for; the rest is the graph materializing itself
     /// (reunify.md 13.2 step 2a).
-
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
         return initUnchecked(graph, .committed);

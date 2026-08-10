@@ -64,14 +64,6 @@ const max_occurrences_per_position: usize = 4;
 /// opaque leaf. Representation-bearing spines are shallow.
 const max_slot_depth: u32 = 64;
 
-/// The maximum number of mismatching positions described in the census dump.
-const max_mismatch_details: usize = 24;
-
-/// The maximum number of distinct unresolved specializations named in the census
-/// dump. The population is a handful of definitions repeated many times, so this
-/// bounds the list without hiding a kind.
-const max_unresolved_details: usize = 512;
-
 /// One checked type's address: the content identity of the module whose store
 /// holds it, plus its id within that store.
 pub const CheckedAddress = struct {
@@ -728,10 +720,6 @@ pub const ModuleLookup = struct {
     fn cursor(self: ModuleLookup, module_bytes: [32]u8) ?direct_translate.ModuleCursor {
         return self.cursor_for_module(self.context, module_bytes);
     }
-
-    fn instantiated(self: ModuleLookup, address: CheckedAddress) bool {
-        return self.position_is_instantiated(self.context, address);
-    }
 };
 
 /// The inputs one specialization's rehearsal starts from.
@@ -1082,21 +1070,6 @@ const DifferencePath = struct {
 /// bounds the search on a deep acyclic spine.
 const max_recursion_probe_depth: u32 = 32;
 
-/// Walk two types in parallel and report where they first stop agreeing. Both
-/// stores digest into the same name store, so child digests are comparable
-/// across them.
-fn firstDifference(
-    left_store: *const Type.Store,
-    left: Type.TypeId,
-    right_store: *const Type.Store,
-    right: Type.TypeId,
-    name_store: *const names.NameStore,
-    depth: u32,
-) Difference {
-    var path: DifferencePath = .{};
-    return firstDifferenceOnPath(left_store, left, right_store, right, name_store, depth, &path);
-}
-
 /// `firstDifference`, recording the child indices it descended so the position
 /// can be followed back through the checked type the emission came from.
 fn firstDifferenceOnPath(
@@ -1321,10 +1294,6 @@ const GeneratedOutcome = struct {
     /// Binder-carrying edges whose declared receiver was absent, unresolvable,
     /// or not the nominal shape the rule names.
     receiver_unusable: u64 = 0,
-
-    fn isEmpty(self: GeneratedOutcome) bool {
-        return std.meta.eql(self, GeneratedOutcome{});
-    }
 };
 
 /// One distinct unresolved specialization, dumped with the census counters so
@@ -1741,8 +1710,7 @@ pub const Rehearsal = struct {
                     .defining_module_differs => {},
                     .edge_unusable => {},
                 };
-            } else {
-            }
+            } else {}
             return null;
         };
         const mint = frame.ret_mint orelse return start_root;
@@ -1817,63 +1785,6 @@ pub const Rehearsal = struct {
             .checked => |edge| .{ .module_bytes = edge.module_bytes, .use_expr = edge.use_expr },
             .none, .generated => null,
         };
-    }
-
-    /// Debug/probe-only: for a position that diverged, whether the checked data
-    /// names its unbound variable's owning definition AT THE REQUEST EDGE the
-    /// position entered through. The read's own use expression never carries
-    /// that site; the edge's might, and that is the difference between building
-    /// a level for the definition and having nothing to build it from.
-    /// Debug/probe-only: whether `needle` is reachable from `root` in a checked
-    /// type, with an explicit visited set so a recursive type terminates
-    /// (reunify.md 15.10).
-    fn checkedReaches(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        root: checked.CheckedTypeId,
-        needle: checked.CheckedTypeId,
-    ) bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(checked.CheckedTypeId).empty;
-        defer stack.deinit(self.allocator);
-        stack.append(self.allocator, root) catch return false;
-        while (stack.pop()) |current| {
-            if (current == needle) return true;
-            const seen = visited.getOrPut(current) catch return false;
-            if (seen.found_existing) continue;
-            switch (cursor.view.payload(current)) {
-                .alias => |alias| {
-                    for (alias.args) |arg| stack.append(self.allocator, arg) catch return false;
-                    stack.append(self.allocator, alias.backing) catch return false;
-                },
-                .record => |record| {
-                    for (record.fields) |field| stack.append(self.allocator, field.ty) catch return false;
-                    stack.append(self.allocator, record.ext) catch return false;
-                },
-                .record_unbound => |fields| for (fields) |field| {
-                    stack.append(self.allocator, field.ty) catch return false;
-                },
-                .tuple => |items| for (items) |item| {
-                    stack.append(self.allocator, item) catch return false;
-                },
-                .nominal => |nominal| {
-                    for (nominal.args) |arg| stack.append(self.allocator, arg) catch return false;
-                },
-                .function => |function| {
-                    for (function.args) |arg| stack.append(self.allocator, arg) catch return false;
-                    stack.append(self.allocator, function.ret) catch return false;
-                },
-                .tag_union => |union_type| {
-                    for (union_type.tags) |tag| {
-                        for (tag.argsSlice(cursor.view)) |arg| stack.append(self.allocator, arg) catch return false;
-                    }
-                    stack.append(self.allocator, union_type.ext) catch return false;
-                },
-                else => {},
-            }
-        }
-        return false;
     }
 
     pub fn openRequestEdge(
@@ -2691,9 +2602,7 @@ pub const Rehearsal = struct {
             const site = self.siteQuietly(caller, named.use_expr, scheme.owner_node) orelse {
                 // Only a callee whose scheme actually generalizes something can
                 // strand a binder; one with none needs no binding at all.
-                if (scheme.gv_len == 0) {
-                } else {
-                }
+                if (scheme.gv_len == 0) {} else {}
                 classifyAbsentCalleeSite(caller, named.use_expr, scheme.owner_node);
                 break :resolved_by_site;
             };
@@ -2840,9 +2749,7 @@ pub const Rehearsal = struct {
             return null;
         };
         if (argument_count != binders.len) {
-            if (argument_count == 0) {
-            } else {
-            }
+            if (argument_count == 0) {} else {}
             return null;
         }
 
@@ -3083,11 +2990,7 @@ pub const Rehearsal = struct {
             if (site_use == use_expr) use_has_sites = true;
             if (site.scheme_owner_node == scheme_owner_node) owner_has_sites = true;
         }
-        if (use_has_sites and owner_has_sites) {
-        } else if (use_has_sites) {
-        } else if (owner_has_sites) {
-        } else {
-        }
+        if (use_has_sites and owner_has_sites) {} else if (use_has_sites) {} else if (owner_has_sites) {} else {}
     }
 
     /// Bind the innermost open request's edge to the function id that request
@@ -3405,149 +3308,6 @@ pub const Rehearsal = struct {
             @enumFromInt(address.type_id),
             frame.environment(),
         ) == null;
-    }
-
-    /// Debug/probe-only: for a free variable that no nominal declaration
-    /// declares, is it a binder of some scheme this specialization enters?
-    /// Directed translation pushes a binding frame for a scheme's ordered
-    /// binders at each instantiation site, so a position under that frame is
-    /// supplied by the walk and never read standalone (reunify.md 13.2 2a).
-    fn noteWhetherASchemeFrameBindsIt(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        free: checked.CheckedTypeId,
-        address: CheckedAddress,
-        graph: *solve.InstGraph,
-    ) void {
-        var binding: ?checked.CheckedTypeScheme = null;
-        var with_binders: usize = 0;
-        for (cursor.view.schemes) |scheme| {
-            if (scheme.gv_len != 0) with_binders += 1;
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder == free) {
-                    binding = scheme;
-                    break;
-                }
-            }
-            if (binding != null) break;
-        }
-        if (binding == null) {
-            for (cursor.view.importedSchemes()) |imported| {
-                for (imported.binders(cursor.view)) |binder| {
-                    if (binder != free) continue;
-                    const root = imported.localRoot();
-                    const here: checked.CheckedTypeId = @enumFromInt(address.type_id);
-                    if (root == here or self.checkedReaches(cursor, root, here)) {
-                        return;
-                    }
-                }
-            }
-        }
-        const scheme = binding orelse {
-            if (with_binders == 0) {
-            } else {
-            }
-            return;
-        };
-        // Does a position this specialization reads reach that scheme's root?
-        // Framing-independent form: does the root of the scheme that GENERALIZES
-        // this variable reach the position? If it does, the position lies inside
-        // what that scheme's frame binds, so entering that scheme at any
-        // instantiation site supplies it.
-        const position: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        if (scheme.root == position or self.checkedReaches(cursor, scheme.root, position)) {
-            return;
-        }
-        if (self.frameSchemeRoot(cursor, address.module_bytes)) |frame_root| {
-            if (frame_root == scheme.root or self.checkedReaches(cursor, frame_root, scheme.root)) {
-                return;
-            }
-        }
-        const trace = graph.trace orelse return;
-        var it = trace.contexted.iterator();
-        while (it.next()) |entry| {
-            const other = entry.value_ptr.*;
-            if (other.address.type_id == address.type_id) continue;
-            if (!std.mem.eql(u8, &other.address.module_bytes, &address.module_bytes)) continue;
-            const from: checked.CheckedTypeId = @enumFromInt(other.address.type_id);
-            if (from == scheme.root or self.checkedReaches(cursor, from, scheme.root)) {
-                return;
-            }
-        }
-    }
-
-    /// Debug/probe-only: the checked root of the scheme the innermost frame is
-    /// bound under, when that frame's module is the one asked about. This is the
-    /// root directed translation enters for this specialization (reunify.md 9.2),
-    /// so it is what a position must be reachable from to be supplied by the walk.
-    fn frameSchemeRoot(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        module_bytes: [32]u8,
-    ) ?checked.CheckedTypeId {
-        if (self.frames.items.len == 0) return null;
-        const frame = &self.frames.items[self.frames.items.len - 1];
-        if (!std.mem.eql(u8, &frame.scheme.module_bytes, &module_bytes)) return null;
-        if (frame.scheme.scheme >= cursor.view.schemes.len) return null;
-        return cursor.view.schemes[frame.scheme.scheme].root;
-    }
-
-    /// Debug/probe-only: does a walk from `root` reach a nominal instance of
-    /// `declaration` that carries an argument in `formal_index`? That is the
-    /// point where directed translation binds the declaration's formals to the
-    /// instance's args (`direct_translate.Walk.nominalBacking`).
-    fn reachesInstanceOfDeclaration(
-        self: *Rehearsal,
-        cursor: direct_translate.ModuleCursor,
-        root: checked.CheckedTypeId,
-        declaration: checked.CheckedNominalDeclarationId,
-        formal_index: usize,
-    ) bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(checked.CheckedTypeId).empty;
-        defer stack.deinit(self.allocator);
-        stack.append(self.allocator, root) catch return false;
-        while (stack.pop()) |current| {
-            const seen = visited.getOrPut(current) catch return false;
-            if (seen.found_existing) continue;
-            switch (cursor.view.payload(current)) {
-                .alias => |alias| {
-                    for (alias.args) |arg| stack.append(self.allocator, arg) catch return false;
-                    stack.append(self.allocator, alias.backing) catch return false;
-                },
-                .record => |record| {
-                    for (record.fields) |field| stack.append(self.allocator, field.ty) catch return false;
-                    stack.append(self.allocator, record.ext) catch return false;
-                },
-                .record_unbound => |fields| for (fields) |field| {
-                    stack.append(self.allocator, field.ty) catch return false;
-                },
-                .tuple => |items| for (items) |item| {
-                    stack.append(self.allocator, item) catch return false;
-                },
-                .nominal => |nominal| {
-                    if (nominal.args.len > formal_index) {
-                        if (cursor.view.nominalDeclarationForPayload(nominal)) |found| {
-                            if (@intFromEnum(found.id) == @intFromEnum(declaration)) return true;
-                        }
-                    }
-                    for (nominal.args) |arg| stack.append(self.allocator, arg) catch return false;
-                },
-                .function => |function| {
-                    for (function.args) |arg| stack.append(self.allocator, arg) catch return false;
-                    stack.append(self.allocator, function.ret) catch return false;
-                },
-                .tag_union => |union_type| {
-                    for (union_type.tags) |tag| {
-                        for (tag.argsSlice(cursor.view)) |arg| stack.append(self.allocator, arg) catch return false;
-                    }
-                    stack.append(self.allocator, union_type.ext) catch return false;
-                },
-                else => {},
-            }
-        }
-        return false;
     }
 
     /// Finish one specialization: pop the environment.
@@ -3902,9 +3662,7 @@ pub const Rehearsal = struct {
             self.fail();
             return .edge_unusable;
         };
-        if (captured.parent_levels == 0) {
-        } else {
-        }
+        if (captured.parent_levels == 0) {} else {}
 
         frame.env_module_bytes = defining_bytes;
         frame.scheme = scheme_ident;
@@ -3913,8 +3671,7 @@ pub const Rehearsal = struct {
         frame.env_ready = true;
         frame.scheme_root_checked = @intFromEnum(scheme.root);
         noteEnvironmentScheme(scheme);
-        if (binders.len == 0) {
-        }
+        if (binders.len == 0) {}
 
         // The mint the requesting edge's covering rule states for this
         // specialization: declared for the frame's whole lifetime, so every
@@ -4867,7 +4624,6 @@ pub const Rehearsal = struct {
         return false;
     }
 
-
     /// Name the population that genuinely still needs a binding: a
     /// specialization whose requesting edge supplied none and whose own template
     /// scheme carries binders, so the empty binding would be wrong. It is split
@@ -5009,9 +4765,7 @@ pub const Rehearsal = struct {
             .required_type => {},
             .synthetic => {},
         }
-        if (scheme.captured_len == 0) {
-        } else {
-        }
+        if (scheme.captured_len == 0) {} else {}
     }
 
     /// Whether a checked scheme root reaches any checked variable payload —
@@ -5276,469 +5030,6 @@ pub const Rehearsal = struct {
         if (!frame.env_ready) return null;
         if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) return null;
         return frame;
-    }
-
-    /// One resolved operand: the type the directed side computes for it, the
-    /// store that type lives in, and both digests — the stored form, and the
-    /// unfolded form that says two recursive types are one type under a
-    /// different rooting (reunify.md section 8.3).
-    const ResolvedOperand = struct {
-        store: *const Type.Store,
-        ty: Type.TypeId,
-        stored: names.TypeDigest,
-        unfolded: names.TypeDigest,
-        /// What kind of operand this was, so a finding says whether it names a
-        /// directed answer or a type the graph produced.
-        origin: OperandOrigin,
-        /// The checked position and environment the type came from, for an
-        /// operand the site named as a checked type. An imported immutable type
-        /// has none: nothing in the checked stores stands behind it here.
-        source: ?CheckedSource,
-    };
-
-    /// The checked position one operand was translated from, kept so a residual
-    /// materialization can be traced back to the variable that produced it.
-    const CheckedSource = struct {
-        view: checked.CheckedTypeStoreView,
-        module_bytes: [32]u8,
-        checked_ty: checked.CheckedTypeId,
-        env: ?*const direct_translate.BindingEnvironment,
-        /// The scheme owner the translation read residual dispositions under.
-        owner_node: u32,
-    };
-
-    /// Whether every position this site's two sides differ at is one the
-    /// graph-built side leaves open.
-    ///
-    /// A site names an operand as a graph-sealed Monotype when the constraint
-    /// imports that Monotype into the graph, and the graph's own Monotype
-    /// import reads an empty tag union there as a slot no value reached — it
-    /// becomes an
-    /// unresolved node again rather than a closed row, so the content the other
-    /// side holds is what the slot receives. A difference at such a position is
-    /// therefore the graph's own open node being filled, not information the
-    /// constraint carries into the emitted program: the other side already holds
-    /// it, and the flip deletes the node together with the constraint. Only a
-    /// graph-sealed side may be open this way; an empty tag union on a checked
-    /// position is that position's own directed answer, and a difference there
-    /// stays informative.
-    fn openGraphPositionsCover(
-        self: *Rehearsal,
-        left: ResolvedOperand,
-        right: ResolvedOperand,
-    ) bool {
-        const left_open = left.origin == .graph_sealed;
-        const right_open = right.origin == .graph_sealed;
-        if (!left_open and !right_open) return false;
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var covered = false;
-        if (!walkOpenGraphPositions(.{
-            .name_store = self.program_names,
-            .left_store = left.store,
-            .right_store = right.store,
-            .left_open = left_open,
-            .right_open = right_open,
-        }, left.ty, right.ty, &visited, &covered, 0)) {
-            return false;
-        }
-        return covered;
-    }
-
-    /// Whether this site's two sides are one logical type whose difference is
-    /// entirely the representation content reunify.md section 10.3's rules move,
-    /// and the shared representation policy covers the pair that moved. The
-    /// policy is the same one section 10's closure engine applies, so a pair it
-    /// covers is a decision that engine reproduces; a pair it does not stays a
-    /// difference the site really carries.
-    fn representationDecisionCovers(
-        self: *Rehearsal,
-        left: ResolvedOperand,
-        right: ResolvedOperand,
-    ) bool {
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var covered = false;
-        if (!walkRepresentationOnly(left.store, left.ty, right.store, right.ty, &visited, &covered, 0)) {
-            return false;
-        }
-        return covered;
-    }
-
-    /// Name what an informative site's two sides disagree about, and keep one
-    /// worked example per site so the classification is readable against a
-    /// concrete pair rather than only as a count.
-    fn classifyInformativeSite(
-        self: *Rehearsal,
-        site: census.UnifySite,
-        left: ResolvedOperand,
-        right: ResolvedOperand,
-    ) void {
-        var path: DifferencePath = .{};
-        const difference = firstDifferenceOnPath(left.store, left.ty, right.store, right.ty, self.program_names, 0, &path);
-        const information: census.UnifySiteInformation = information: {
-            if (self.carriesRepresentation(left.store, left.ty) or
-                self.carriesRepresentation(right.store, right.ty))
-            {
-                break :information .representation;
-            }
-            if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
-                break :information self.residualClass(left);
-            }
-            if (difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead()) {
-                break :information self.residualClass(right);
-            }
-            if (difference.left.tag != difference.right.tag) break :information .head_tag;
-            if (difference.left.entries != difference.right.entries) break :information .row_width;
-            if (difference.named_field != .not_named and difference.named_field != .equal) {
-                break :information .named_identity;
-            }
-            break :information .unclassified;
-        };
-        if (information == .scheme_binder_unbound) {
-            // Attribute the unbound binder: an unready callee level makes
-            // `innermostCallee` decline, so the callee's own positions
-            // translate under the requesting frame instead, which names none
-            // of its binders. Anything counted without one came from a path
-            // that opened no callee binding at all.
-            if (self.hasUnreadyCallee()) {
-            } else if (self.callees.items.len == 0) {
-            } else {
-            }
-        }
-        census.bumpUnifySiteInformation(site, information);
-        const residual = traceResidual(difference, path, left, right);
-        census.bumpUnifySiteResidual(site, residual.origin, residual.state);
-        // Two sides that are logically equal but stored under different rootings
-        // were already accepted as redundant, so a difference reaching here is a
-        // content difference and the detail is worth keeping.
-        const slot = &self.unify_details[@intFromEnum(site)];
-        if (slot.* != null) return;
-        slot.* = .{
-            .information = information,
-            .left = HeadShape.of(left.store, left.ty),
-            .right = HeadShape.of(right.store, right.ty),
-            .difference = difference,
-            .residual = residual,
-        };
-    }
-
-    /// Name the side of an informative execution that carries the empty tag
-    /// union at the difference, and say what stands behind that side: a checked
-    /// position whose variable nothing names a value for, or a type the graph
-    /// sealed with one of its own nodes still unresolved.
-    ///
-    /// The position is followed by the difference walk's own child path, so the
-    /// finding names the checked variable the empty tag union came FROM rather
-    /// than some other variable the operand's root happens to reach.
-    fn traceResidual(
-        difference: Difference,
-        path: DifferencePath,
-        left: ResolvedOperand,
-        right: ResolvedOperand,
-    ) ResidualTrace {
-        const left_residual = difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead();
-        const right_residual = difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead();
-        if (!left_residual and !right_residual) return ResidualTrace.empty;
-        const operand = if (left_residual) left else right;
-        var trace = ResidualTrace.empty;
-        trace.side = if (left_residual) .left else .right;
-        trace.origin = operand.origin;
-        const source = operand.source orelse return trace;
-        trace.module_prefix = source.module_bytes[0..8].*;
-        trace.checked_ty = @intFromEnum(source.checked_ty);
-        trace.state = .position_not_followed;
-        if (!path.complete) return trace;
-        const position = checkedPositionAtPath(source.view, source.checked_ty, path) orelse return trace;
-        trace.position = @intFromEnum(position);
-        switch (source.view.payload(position)) {
-            .flex, .rigid => {},
-            else => {
-                trace.state = .checked_content;
-                return trace;
-            },
-        }
-        trace.state = residualState(source, position);
-        trace.defaults = variableDefaults(source.view, position);
-        return trace;
-    }
-
-    /// The checked defaults one residual variable carries. A variable with no
-    /// disposition, no numeric default phase and no row default has nothing at
-    /// all naming its value, which is a different finding from one whose value
-    /// is named and merely read under the wrong scope.
-    fn variableDefaults(
-        view: checked.CheckedTypeStoreView,
-        free: checked.CheckedTypeId,
-    ) VariableDefaults {
-        return switch (view.payload(free)) {
-            .flex => |v| .{
-                .numeric_phase = v.numeric_default_phase != null,
-                .row = v.row_default != null,
-                .constraints = @intCast(v.constraints.len),
-            },
-            .rigid => |v| .{
-                .rigid = true,
-                .numeric_phase = v.numeric_default_phase != null,
-                .row = v.row_default != null,
-                .constraints = @intCast(v.constraints.len),
-            },
-            else => .{},
-        };
-    }
-
-    /// Follow one difference path from a checked root to the checked position
-    /// the emission's differing head came from.
-    ///
-    /// Aliases are transparent, and a function's arguments-then-result and a
-    /// nominal's arguments carry the same child order in both the checked
-    /// payload and the emission. A row does not: the emission flattens
-    /// extension chains, so a step into a record, a tag union, or a nominal's
-    /// backing names no checked child here and the walk stops instead of
-    /// naming the wrong one.
-    fn checkedPositionAtPath(
-        view: checked.CheckedTypeStoreView,
-        root: checked.CheckedTypeId,
-        path: DifferencePath,
-    ) ?checked.CheckedTypeId {
-        var current = transparentCheckedPosition(view, root);
-        var index: u32 = 0;
-        while (index < path.len) : (index += 1) {
-            const step = path.steps[index];
-            const next = switch (view.payload(current)) {
-                .function => |fn_ty| blk: {
-                    if (step < fn_ty.args.len) break :blk fn_ty.args[step];
-                    if (step == fn_ty.args.len) break :blk fn_ty.ret;
-                    return null;
-                },
-                .nominal => |nominal_ty| blk: {
-                    if (step < nominal_ty.args.len) break :blk nominal_ty.args[step];
-                    return null;
-                },
-                .tuple => |items| blk: {
-                    if (step < items.len) break :blk items[step];
-                    return null;
-                },
-                else => return null,
-            };
-            current = transparentCheckedPosition(view, next);
-        }
-        return current;
-    }
-
-    /// One checked position with its aliases walked through, bounded so a
-    /// cyclic alias chain cannot spin.
-    fn transparentCheckedPosition(
-        view: checked.CheckedTypeStoreView,
-        start: checked.CheckedTypeId,
-    ) checked.CheckedTypeId {
-        var current = start;
-        var steps: u32 = 0;
-        while (steps < max_difference_depth) : (steps += 1) {
-            switch (view.payload(current)) {
-                .alias => |alias_ty| current = alias_ty.backing,
-                else => return current,
-            }
-        }
-        return current;
-    }
-
-    /// What names the value of one unbound checked variable: a scheme's binder
-    /// list, a residual disposition under one of the scopes the translation
-    /// reads, or nothing at all.
-    fn residualState(
-        source: CheckedSource,
-        free: checked.CheckedTypeId,
-    ) ResidualState {
-        for (source.view.schemes) |scheme| {
-            for (scheme.generalizedVars(source.view)) |binder| {
-                if (binder == free) return .scheme_binder;
-            }
-        }
-        var module_wide = false;
-        var other_owner = false;
-        for (source.view.residualDispositions()) |disposition| {
-            if (disposition.type_id != @intFromEnum(free)) continue;
-            if (disposition.scheme_owner_node == source.owner_node) {
-                return switch (disposition.kind) {
-                    .contextual => .disposed_contextual,
-                    .uninhabited => .disposed_uninhabited,
-                };
-            }
-            if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
-                module_wide = true;
-            } else {
-                other_owner = true;
-            }
-        }
-        if (module_wide) return .disposed_module_body;
-        if (other_owner) return .disposed_other_owner;
-        return .undisposed;
-    }
-
-    /// Which residual class one operand's empty-tag-union materialization falls
-    /// in: `scheme_binder_unbound` when the first checked variable that operand
-    /// reaches and this environment does not bind is a generalized binder of a
-    /// checked scheme — the value reunify.md section 9's directed instantiation
-    /// takes from the checker's recorded substitution — and `unbound_residual`
-    /// when no recorded substitution names a value for it.
-    fn residualClass(self: *Rehearsal, operand: ResolvedOperand) census.UnifySiteInformation {
-        const source = operand.source orelse return .unbound_residual;
-        const free = self.firstFreeVariable(source.view, source.checked_ty, source.env) orelse
-            return .unbound_residual;
-        // How many schemes in this view generalize the same variable. The walk
-        // below reports the first, so more than one would make the owner it
-        // names iteration order rather than a property of the variable.
-        var owners: usize = 0;
-        for (source.view.schemes) |scheme| {
-            for (scheme.generalizedVars(source.view)) |binder| {
-                if (binder == free) {
-                    owners += 1;
-                    break;
-                }
-            }
-        }
-        if (owners > 1) {
-        } else if (owners == 1) {
-        }
-        for (source.view.schemes) |scheme| {
-            for (scheme.generalizedVars(source.view)) |binder| {
-                if (binder != free) continue;
-                // Which scheme owns the unnamed binder. The one this operand
-                // was translated under is a binding that stated its own binders
-                // and still left this position open; any other scheme is a
-                // binder the operand reaches from outside the bound scheme,
-                // which a call-site binding never states (reunify.md 7.3).
-                if (scheme.owner_node == source.owner_node) {
-                } else if (self.frameForModule(source.module_bytes)) |frame| {
-                    // Whether the unnamed binder is generalized by the scheme
-                    // the REQUESTING frame specializes. A callee-attributed
-                    // operand reaching one is a caller-side position described
-                    // as the callee's, not a binding the callee lacks.
-                    if (scheme.owner_node == frame.owner_node) {
-                    } else {
-                        // Whether the definition owning this binder is itself
-                        // specializing somewhere in the active frame stack.
-                        // `frameForModule` consults only the innermost frame,
-                        // so a value an outer frame already holds is invisible
-                        // to the position that needs it.
-                        var found_outer = false;
-                        for (self.frames.items) |*outer| {
-                            if (!outer.env_ready) continue;
-                            if (!std.mem.eql(u8, &outer.env_module_bytes, &source.module_bytes)) continue;
-                            if (outer.owner_node != scheme.owner_node) continue;
-                            found_outer = true;
-                            break;
-                        }
-                        if (found_outer) {
-                        } else {
-                        }
-                        // Whether the checked data names this definition's
-                        // instantiation anywhere in the module the position
-                        // lives in. If it does, the value exists and only the
-                        // key that selects it is missing from the operand; if
-                        // it does not, no recorded edge states it at all.
-                        if (self.lookup.cursor(source.module_bytes)) |cursor| {
-                            var named = false;
-                            for (cursor.view.instantiationSites()) |site| {
-                                if (site.scheme_owner_node == scheme.owner_node) {
-                                    named = true;
-                                    break;
-                                }
-                            }
-                            if (named) {
-                                // Whether some use expression carries a site for
-                                // BOTH this definition and the scheme the
-                                // operand translates under. Where it does, one
-                                // key selects both levels, and a binding built
-                                // per site at that use states this binder
-                                // without any new checked data.
-                                var co_located = false;
-                                for (cursor.view.instantiationSites()) |third| {
-                                    if (third.scheme_owner_node != scheme.owner_node) continue;
-                                    const third_use = third.useExpr() orelse continue;
-                                    for (cursor.view.instantiationSites()) |own| {
-                                        if (own.scheme_owner_node != source.owner_node) continue;
-                                        const own_use = own.useExpr() orelse continue;
-                                        if (own_use == third_use) {
-                                            co_located = true;
-                                            break;
-                                        }
-                                    }
-                                    if (co_located) break;
-                                }
-                                if (co_located) {
-                                } else {
-                                }
-                            } else {
-                            }
-                        }
-                        // What kind of definition that third scheme is, which
-                        // says whether the position names a top-level value, an
-                        // inner generalization boundary, a platform requirement,
-                        // or a template scheme with no source owner.
-                        switch (scheme.owner_kind) {
-                            .top_level_def => {},
-                            .nested_def => {},
-                            .required_type => {},
-                            .synthetic => {},
-                        }
-                    }
-                } else {
-                }
-                return .scheme_binder_unbound;
-            }
-        }
-        return .unbound_residual;
-    }
-
-    /// The directed side's answer for one operand, or null with the reason it
-    /// has none. A checked operand translates under the innermost active
-    /// environment when that environment's module is the operand's, and as a
-    /// ground type otherwise — exactly the rule `comparePosition` uses.
-    fn resolveOperand(
-        self: *Rehearsal,
-        operand: UnifyOperand,
-        blocker: *census.UnifySiteBlocker,
-    ) ?ResolvedOperand {
-        switch (operand) {
-            .undescribed => {
-                blocker.* = .operand_undescribed;
-                return null;
-            },
-            .sealed => |ty| return .{
-                .store = self.types,
-                .ty = ty,
-                .stored = self.types.typeDigest(self.program_names, ty),
-                .unfolded = self.types.unfoldedDigest(self.program_names, ty),
-                .origin = .graph_sealed,
-                .source = null,
-            },
-            .checked => |address| return self.resolveCheckedOperand(address, false, blocker),
-            .callee_checked => |address| return self.resolveCheckedOperand(address, true, blocker),
-            .field_of => |field| {
-                const receiver = self.resolveCheckedOperand(field.receiver, false, blocker) orelse return null;
-                const emitted = switch (fieldOfEmitted(receiver.store, receiver.ty, field.label)) {
-                    .field => |ty| ty,
-                    .receiver_not_a_record => {
-                        blocker.* = .field_receiver_not_a_record;
-                        return null;
-                    },
-                    .label_absent => {
-                        blocker.* = .field_label_absent;
-                        return null;
-                    },
-                };
-                return .{
-                    .store = receiver.store,
-                    .ty = emitted,
-                    .stored = receiver.store.typeDigest(self.program_names, emitted),
-                    .unfolded = receiver.store.unfoldedDigest(self.program_names, emitted),
-                    .origin = .field_of_checked,
-                    .source = null,
-                };
-            },
-        }
     }
 
     /// The Monotype at one checked position of the specialization being lowered
@@ -6161,87 +5452,6 @@ pub const Rehearsal = struct {
         };
     }
 
-    /// Translate one checked position. `under_callee` reads it under the
-    /// innermost open callee binding when one resolved for its module, which is
-    /// the binding reunify.md section 9.1 instantiates the callee scheme at;
-    /// otherwise, and for every requesting-body position, it reads under the
-    /// innermost active specialization environment exactly as `comparePosition`
-    /// does.
-    fn resolveCheckedOperand(
-        self: *Rehearsal,
-        address: CheckedAddress,
-        under_callee: bool,
-        blocker: *census.UnifySiteBlocker,
-    ) ?ResolvedOperand {
-        const cursor = self.lookup.cursor(address.module_bytes) orelse {
-            blocker.* = .operand_module_absent;
-            return null;
-        };
-        var env: ?*const direct_translate.BindingEnvironment = null;
-        var owner_node = checked.checked_residual_disposition_module_body_owner;
-        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
-        if (callee) |level| {
-            env = level.chain.innermost();
-            owner_node = level.owner_node;
-        } else if (self.frameForModule(address.module_bytes)) |frame| {
-            env = frame.environment();
-            owner_node = frame.owner_node;
-        }
-        const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
-        var reason: direct_translate.SkipReason = undefined;
-        const emitted = self.translator.translateUnderEnvironment(
-            cursor,
-            env,
-            owner_node,
-            checked_ty,
-            &reason,
-        ) catch |err| switch (err) {
-            error.Skip => {
-                blocker.* = switch (reason) {
-                    .binder_not_found => .no_environment,
-                    .recursive_cycle => .operand_recursive,
-                    .open_row => .operand_open_row,
-                    .engine_input_needed => .operand_engine_input_needed,
-                    .pending_or_err => .operand_pending_or_err,
-                    .numeric_default_unresolved => .operand_numeric_default,
-                    .malformed_builtin_arity => .operand_malformed_arity,
-                    .missing_backing => .operand_missing_backing,
-                    .undisposed_residual => .operand_undisposed_residual,
-                };
-                return null;
-            },
-            else => {
-                self.fail();
-                blocker.* = .operand_untranslatable;
-                return null;
-            },
-        };
-        return .{
-            .store = self.types,
-            .ty = emitted,
-            .stored = self.types.typeDigest(self.program_names, emitted),
-            .unfolded = self.types.unfoldedDigest(self.program_names, emitted),
-            .origin = .checked_position,
-            .source = .{
-                .view = cursor.view,
-                .module_bytes = address.module_bytes,
-                .checked_ty = checked_ty,
-                .env = env,
-                .owner_node = owner_node,
-            },
-        };
-    }
-
-    /// The innermost resolved callee binding whose binders name ids in
-    /// `module_bytes`, or null when the innermost binding named none.
-    /// Whether the innermost open callee binding failed to resolve, which is
-    /// what makes `innermostCallee` decline and sends a callee's own checked
-    /// positions through the requesting frame's environment instead.
-    fn hasUnreadyCallee(self: *const Rehearsal) bool {
-        if (self.callees.items.len == 0) return false;
-        return !self.callees.items[self.callees.items.len - 1].ready;
-    }
-
     fn innermostCallee(self: *Rehearsal, module_bytes: [32]u8) ?*const CalleeLevel {
         if (self.callees.items.len == 0) return null;
         const level = &self.callees.items[self.callees.items.len - 1];
@@ -6272,9 +5482,7 @@ pub const Rehearsal = struct {
             return error.SiteAmbiguous;
         }
         const site_index = index.by_edge.get(key) orelse {
-            if (index.used_exprs.contains(@intFromEnum(use_expr))) {
-            } else {
-            }
+            if (index.used_exprs.contains(@intFromEnum(use_expr))) {} else {}
             return error.NoSite;
         };
         return caller.view.instantiationSites()[site_index];
@@ -6329,214 +5537,6 @@ pub const Rehearsal = struct {
     fn takeClaim(self: *Rehearsal, reserved_fn_id: u32) ?ClaimedRequest {
         const found = self.edges_by_fn.fetchRemove(reserved_fn_id) orelse return null;
         return found.value;
-    }
-
-    /// Emit one checked position under this specialization's environment and
-    /// compare it against every distinct id the graph sealed there.
-    fn comparePosition(
-        self: *Rehearsal,
-        frame: *const Frame,
-        address: CheckedAddress,
-        occurrences: Occurrences,
-    ) void {
-        var index: usize = 0;
-        while (index < occurrences.overflow) : (index += 1) {
-        }
-        if (occurrences.len == 0) return;
-
-        const cursor = self.lookup.cursor(address.module_bytes) orelse {
-            return;
-        };
-        const in_env = std.mem.eql(u8, &address.module_bytes, &frame.env_module_bytes);
-        const env_ptr: ?*const direct_translate.BindingEnvironment = if (in_env) frame.environment() else null;
-        const owner_node = if (in_env) frame.owner_node else checked.checked_residual_disposition_module_body_owner;
-
-        var reason: direct_translate.SkipReason = undefined;
-        const emitted = self.translator.translateUnderEnvironment(
-            cursor,
-            env_ptr,
-            owner_node,
-            @enumFromInt(address.type_id),
-            &reason,
-        ) catch |err| switch (err) {
-            error.Skip => {
-                switch (reason) {
-                    .engine_input_needed => {},
-                    .open_row => {},
-                    .recursive_cycle => {},
-                    .pending_or_err => {},
-                    .numeric_default_unresolved => {},
-                    .malformed_builtin_arity => {},
-                    .binder_not_found => {},
-                    .missing_backing => {},
-                    .undisposed_residual => {},
-                }
-                return;
-            },
-            else => return self.fail(),
-        };
-
-        _ = self.slotForEmitted(emitted, 0);
-
-        const emitted_digest = self.types.typeDigest(self.program_names, emitted);
-        var matched = false;
-        for (occurrences.ids[0..occurrences.len]) |sealed| {
-            const sealed_digest = self.types.typeDigest(self.program_names, sealed);
-            if (std.mem.eql(u8, &emitted_digest.bytes, &sealed_digest.bytes)) {
-                matched = true;
-                continue;
-            }
-            // A stored digest encodes a recursive back reference by the position
-            // on the visiting stack the walk entered the cycle at, so one rooted
-            // graph reached through two entry paths digests two ways (reunify.md
-            // section 8.3). The graph roots such a knot wherever unification
-            // happened to join two nodes, which differs between call sites of one
-            // nominal; the directed emission roots it at the nominal every time.
-            // Equal unfoldings say the two are the same type under a different
-            // rooting, which is a deliberate difference in the emitted stored
-            // form and not a content difference.
-            const emitted_unfolded = self.types.unfoldedDigest(self.program_names, emitted);
-            const sealed_unfolded = self.types.unfoldedDigest(self.program_names, sealed);
-            if (std.mem.eql(u8, &emitted_unfolded.bytes, &sealed_unfolded.bytes)) {
-                matched = true;
-                continue;
-            }
-            if (matched) {
-                continue;
-            }
-            self.recordMismatch(frame, address, emitted, sealed, emitted_digest, sealed_digest);
-        }
-    }
-
-    fn recordMismatch(
-        self: *Rehearsal,
-        frame: *const Frame,
-        address: CheckedAddress,
-        emitted: Type.TypeId,
-        sealed: Type.TypeId,
-        emitted_digest: names.TypeDigest,
-        sealed_digest: names.TypeDigest,
-    ) void {
-        const representation = self.sealedCarriesRepresentation(sealed) or self.emittedCarriesRepresentation(emitted);
-        const difference = firstDifference(self.types, emitted, self.types, sealed, self.program_names, 0);
-        // A difference outside the residual-materialization class is a finding of
-        // its own, so its detail is always dumped: the bounded budget exists to
-        // stop the residual class from filling the file, not to hide the rest.
-        var beyond_residual_class = true;
-        if (representation) {
-        } else {
-            if (!difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
-                // Both sides carry content, so the comparison cannot say which
-                // is wrong. Checking is the authority on logical types, so ask
-                // whether the SEALED type still agrees with the head checking
-                // recorded at this position (reunify.md 15.1b).
-            }
-            if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
-                beyond_residual_class = false;
-                if (frame.binders.len == 0) {
-                } else {
-                }
-                switch (frame.residual_origin) {
-                    .absent => {},
-                    .unresolved_request_context => {},
-                    .scheme_binder => {},
-                    .disposed_here => {},
-                    .disposed_elsewhere => {},
-                    .undisposed => {},
-                    .closed_empty_row => {},
-                }
-                self.classifyUnboundPosition(frame, address);
-            } else if (difference.left.tag != difference.right.tag) {
-            } else if (difference.left.entries != difference.right.entries) {
-            } else if (difference.named_field != .not_named and difference.named_field != .equal) {
-            } else if (difference.depth >= max_difference_depth and
-                difference.left_recursive and difference.right_recursive)
-            {
-            } else {
-            }
-        }
-        if (!beyond_residual_class and self.details.items.len >= max_mismatch_details) return;
-        var prefix: [8]u8 = undefined;
-        @memcpy(&prefix, address.module_bytes[0..8]);
-        self.details.append(self.allocator, .{
-            .module_prefix = prefix,
-            .type_id = address.type_id,
-            .representation = representation,
-            .binder_count = @intCast(frame.binders.len),
-            .rehearsal_digest = emitted_digest,
-            .graph_digest = sealed_digest,
-            .rehearsal_head = HeadShape.of(self.types, emitted),
-            .graph_head = HeadShape.of(self.types, sealed),
-            .difference = difference,
-        }) catch self.fail();
-    }
-
-    /// Name the reason one mismatching position emitted a residual
-    /// materialization: find the first checked variable it reaches that this
-    /// environment does not bind, and report whether that variable is another
-    /// checked scheme's binder, carries a residual disposition (and under
-    /// which body context), carries none, or is absent entirely.
-    fn classifyUnboundPosition(self: *Rehearsal, frame: *const Frame, address: CheckedAddress) void {
-        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
-        const in_env = std.mem.eql(u8, &address.module_bytes, &frame.env_module_bytes);
-        const free = self.firstFreeVariable(
-            cursor.view,
-            @enumFromInt(address.type_id),
-            if (in_env) frame.environment() else null,
-        ) orelse {
-            return;
-        };
-        for (cursor.view.schemes) |scheme| {
-            for (scheme.generalizedVars(cursor.view)) |binder| {
-                if (binder != free) continue;
-                // Whether that scheme is on this frame's lexical chain says which
-                // half is missing: a chain level that does not name the binder
-                // means the level's own binding is short, while a scheme that is
-                // nowhere on the chain means no checked relation links the two
-                // (reunify.md section 7.1's captured set covers a scheme's root).
-                var on_chain = false;
-                var level = frame.environment();
-                while (level) |env| : (level = env.parent) {
-                    if (env.scheme.scheme != @intFromEnum(scheme.id)) continue;
-                    if (!std.mem.eql(u8, &env.scheme.module_bytes, &address.module_bytes)) continue;
-                    on_chain = true;
-                }
-                if (on_chain) {
-                } else {
-                    // Which direction the two schemes sit in: a scheme whose own
-                    // captured pairs name this frame's scheme is nested INSIDE the
-                    // specialized body, so its binders are bound by its own use
-                    // sites through its own binder list (reunify.md section 7.3),
-                    // not by any captured pair this frame could carry. The rest
-                    // name no checked relation to this frame at all.
-                    var inner_of_frame = false;
-                    for (scheme.capturedBinders(cursor.view)) |captured| {
-                        const outer_id = captured.outerScheme() orelse continue;
-                        if (@intFromEnum(outer_id) != frame.scheme.scheme) continue;
-                        if (!std.mem.eql(u8, &frame.scheme.module_bytes, &address.module_bytes)) continue;
-                        inner_of_frame = true;
-                    }
-                    if (inner_of_frame) {
-                    } else {
-                    }
-                }
-                return;
-            }
-        }
-        for (cursor.view.residualDispositions()) |disposition| {
-            if (disposition.type_id != @intFromEnum(free)) continue;
-            if (disposition.scheme_owner_node == frame.owner_node) {
-                switch (disposition.kind) {
-                    .contextual => {},
-                    .uninhabited => {},
-                }
-                return;
-            }
-            if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
-                return;
-            }
-            return;
-        }
     }
 
     /// Which scheme's generalization names this variable, if any.
@@ -6642,70 +5642,6 @@ pub const Rehearsal = struct {
         return null;
     }
 
-    fn sealedCarriesRepresentation(self: *Rehearsal, root: Type.TypeId) bool {
-        return self.carriesRepresentation(self.types, root);
-    }
-
-    fn emittedCarriesRepresentation(self: *Rehearsal, root: Type.TypeId) bool {
-        return self.carriesRepresentation(self.types, root);
-    }
-
-    /// Whether a type carries iterator or generated representation content
-    /// anywhere, which classifies a difference on it as a representation gap
-    /// rather than a directed-emission bug.
-    fn carriesRepresentation(self: *Rehearsal, store: *const Type.Store, root: Type.TypeId) bool {
-        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(Type.TypeId).empty;
-        defer stack.deinit(self.allocator);
-        stack.append(self.allocator, root) catch return false;
-        while (stack.pop()) |ty| {
-            const gop = visited.getOrPut(ty) catch return false;
-            if (gop.found_existing) continue;
-            switch (store.get(ty)) {
-                .primitive, .zst, .erased => {},
-                .list, .box => |elem| stack.append(self.allocator, elem) catch return false,
-                .tuple => |span| {
-                    const items = store.span(span);
-                    for (0..GuardedList.borrowLen(items)) |i| {
-                        stack.append(self.allocator, GuardedList.at(items, i)) catch return false;
-                    }
-                },
-                .record => |span| {
-                    const fields = store.fieldSpan(span);
-                    for (0..GuardedList.borrowLen(fields)) |i| {
-                        stack.append(self.allocator, GuardedList.at(fields, i).ty) catch return false;
-                    }
-                },
-                .tag_union => |span| {
-                    const tags = store.tagSpan(span);
-                    for (0..GuardedList.borrowLen(tags)) |i| {
-                        const payloads = store.span(GuardedList.at(tags, i).payloads);
-                        for (0..GuardedList.borrowLen(payloads)) |j| {
-                            stack.append(self.allocator, GuardedList.at(payloads, j)) catch return false;
-                        }
-                    }
-                },
-                .func => |fn_ty| {
-                    const args = store.span(fn_ty.args);
-                    for (0..GuardedList.borrowLen(args)) |i| {
-                        stack.append(self.allocator, GuardedList.at(args, i)) catch return false;
-                    }
-                    stack.append(self.allocator, fn_ty.ret) catch return false;
-                },
-                .named => |named| {
-                    if (named.def.iterator_representation != .none or named.def.generated != null) return true;
-                    const args = store.span(named.args);
-                    for (0..GuardedList.borrowLen(args)) |i| {
-                        stack.append(self.allocator, GuardedList.at(args, i)) catch return false;
-                    }
-                    if (named.backing) |backing| stack.append(self.allocator, backing.ty) catch return false;
-                },
-            }
-        }
-        return false;
-    }
-
     /// Build the representation slot for one emitted occurrence (reunify.md
     /// section 10.2). The slot is created fresh at every position the walk
     /// reaches: a stored type id names a type, not an occurrence (reunify.md
@@ -6788,49 +5724,6 @@ pub const Rehearsal = struct {
         }
     }
 
-    /// Relate the two sides of this specialization's representation interface
-    /// (reunify.md sections 10.3, 11.1): the request context's emission of the
-    /// requesting edge and the callee's scheme root emitted under the binding are
-    /// two independently emitted occurrences of one type, so the edge between
-    /// them is an explicit relation, not shared storage. The engine refuses the
-    /// pair when their logical identities differ, which is recorded rather than
-    /// assumed away.
-    fn relateInterface(self: *Rehearsal, frame: *const Frame) void {
-        const requested = frame.request_root orelse return;
-        const declared = frame.interface_root orelse return;
-        const request_slot = self.slotForEmitted(requested, 0) orelse return;
-        const declared_slot = self.slotForEmitted(declared, 0) orelse return;
-        if (self.engine.related(request_slot, declared_slot)) {
-            return;
-        }
-        self.engine.relate(request_slot, declared_slot, .component_equality) catch |err| switch (err) {
-            error.LogicallyUnequal => {
-                return;
-            },
-            else => return self.fail(),
-        };
-        self.recordClassFinal(request_slot);
-        self.recordClassFinal(declared_slot);
-    }
-
-    /// Seal this specialization's slots (reunify.md section 10.6): every slot's
-    /// logical identity must survive, and the sealed descriptor must still be the
-    /// one emitted at that position — otherwise the emitted type would have to be
-    /// re-materialized from the sealed slot, which the counter records.
-    fn sealSlots(self: *Rehearsal) void {
-        for (self.slots.items) |slot| {
-            const representative = self.engine.find(slot);
-            const emitted_descriptor = self.slot_descriptors.get(@intFromEnum(slot)) orelse continue;
-            switch (self.engine.shapeOf(representative)) {
-                .iterator => |sealed| {
-                    if (!descriptorsAgree(emitted_descriptor, sealed.descriptor)) {
-                    }
-                },
-                else => {},
-            }
-        }
-    }
-
     fn standInBacking(self: *Rehearsal) ?closure.RepresentationSlotId {
         return self.engine.createSlot(.stand_in, self.freshProducer(), .{ .leaf = 0 }) catch null;
     }
@@ -6853,7 +5746,6 @@ pub const Rehearsal = struct {
         }
         return @enumFromInt(gop.value_ptr.*);
     }
-
 };
 
 /// How many positional arguments an emitted receiver carries, or null when the
@@ -7141,44 +6033,6 @@ fn representationPolicyCovers(
         left_named.builtin_owner == right_named.builtin_owner;
 }
 
-/// The type at one record field of an emitted receiver, following named
-/// backings the way a field read reaches the row through them. Null when the
-/// emission carries no record with that label.
-fn fieldOfEmitted(store: *const Type.Store, receiver: Type.TypeId, label: names.RecordFieldNameId) FieldOfEmitted {
-    var current = receiver;
-    var steps: usize = 0;
-    while (steps < max_slot_depth) : (steps += 1) {
-        switch (store.get(current)) {
-            .named => |named| current = (named.backing orelse return .receiver_not_a_record).ty,
-            .record => |fields| {
-                const entries = store.fieldSpan(fields);
-                for (0..GuardedList.borrowLen(entries)) |index| {
-                    const field = GuardedList.at(entries, index);
-                    if (field.name == label) return .{ .field = field.ty };
-                }
-                return .label_absent;
-            },
-            else => return .receiver_not_a_record,
-        }
-    }
-    return .receiver_not_a_record;
-}
-
-/// What reading one label off an emitted receiver produced: the field's type,
-/// or exactly which of the two ways the read had no answer. The split names
-/// which operand a `field_of` site could not translate and why, so an
-/// unmeasurable execution is never left as an unexplained blocker.
-const FieldOfEmitted = union(enum) {
-    field: Type.TypeId,
-    /// The receiver's translation is not a record, and unwrapping named
-    /// backings did not reach one — most often because the receiver's checked
-    /// position reaches a variable no binding names, so it translates to the
-    /// empty tag union.
-    receiver_not_a_record,
-    /// The receiver's translation IS a record, and carries no such label.
-    label_absent,
-};
-
 /// The emitted receiver's argument at `index`, or null when the emission carries
 /// no such position.
 fn receiverArgumentAt(store: *const Type.Store, receiver: Type.TypeId, index: usize) ?Type.TypeId {
@@ -7222,14 +6076,6 @@ fn functionArgumentAt(store: *const Type.Store, root: Type.TypeId, index: u32) ?
     };
 }
 
-/// The declared rule a skip names, or `none` for a skip that names no rule.
-fn skipRuleName(skip: Rehearsal.EdgeSkip) []const u8 {
-    return switch (skip) {
-        .generated_request => |rule| if (rule) |named| @tagName(named) else "none",
-        else => "none",
-    };
-}
-
 /// Whether two edges recording one instantiated root describe the same
 /// instantiation: same owning scheme (and defining module) and the same
 /// positional actuals. Two such edges name one binding, so either may be read.
@@ -7257,16 +6103,6 @@ fn descriptorOf(named: Type.NamedContent) policy.NamedDescriptor {
         .def = named.def,
         .builtin_owner = named.builtin_owner,
     };
-}
-
-/// Whether a sealed slot still carries the representation the emission put
-/// there, across every field the flip must preserve.
-fn descriptorsAgree(emitted: policy.NamedDescriptor, sealed: policy.NamedDescriptor) bool {
-    return emitted.def.iterator_representation == sealed.def.iterator_representation and
-        emitted.def.iterator_kind == sealed.def.iterator_kind and
-        emitted.def.iterator_depth == sealed.def.iterator_depth and
-        emitted.builtin_owner == sealed.builtin_owner and
-        emitted.kind == sealed.kind;
 }
 
 const testing = std.testing;

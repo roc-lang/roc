@@ -308,7 +308,6 @@ pub const Store = struct {
     /// Empty on a field-wise clone.
     dedup_excluded: std.AutoHashMap(TypeId, void),
 
-
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .allocator = allocator,
@@ -486,8 +485,7 @@ pub const Store = struct {
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         if (census.enabled) {
             switch (content) {
-                .named => |named| if (named.kind == .alias and named.builtin_owner != null) {
-                },
+                .named => |named| if (named.kind == .alias and named.builtin_owner != null) {},
                 else => {},
             }
         }
@@ -1591,18 +1589,6 @@ pub const Store = struct {
 
     fn assertMutable(self: *const Store) void {
         if (self.frozen) Common.invariant("frozen Monotype type store cannot be mutated");
-    }
-
-    fn isConstructed(self: *const Store, ty: TypeId) bool {
-        const index = @intFromEnum(ty);
-        return index < self.constructing.len() and !self.constructing.unsafeRawItemsForView()[index];
-    }
-
-    fn requireConstructed(self: *const Store, ty: TypeId) void {
-        const index = @intFromEnum(ty);
-        if (index >= self.constructing.len() or self.constructing.unsafeRawItemsForView()[index]) {
-            Common.invariant("Monotype digest requested for an unfinished type slot");
-        }
     }
 
     fn typeRefInBounds(self: *const Store, ty: TypeId) bool {

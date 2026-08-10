@@ -4889,17 +4889,6 @@ const Builder = struct {
         Common.invariant("procedure template referenced a checked module that is not in the lowering input");
     }
 
-    fn dumpOneModuleName(self: *Builder, raw_path: [*:0]const u8, view: ModuleView) void {
-        const module_hex = std.fmt.bytesToHex(view.key.bytes[0..8].*, .lower);
-        const line = std.fmt.allocPrint(
-            self.allocator,
-            "module_name module={s} name={s}\n",
-            .{ &module_hex, view.module_env.module_name },
-        ) catch return;
-        defer self.allocator.free(line);
-        census.appendToFile(raw_path, line);
-    }
-
     fn moduleForDigestOrNull(self: *Builder, module_bytes: [32]u8) ?ModuleView {
         if (moduleBytesEqual(module_bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
         for (self.modules.imports) |imported| {
@@ -5136,55 +5125,10 @@ const Builder = struct {
         }
     }
 
-    fn monoTypeCarriesRepresentation(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
-        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(Type.TypeId).empty;
-        defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, root);
-        const store = &self.program.types;
-        while (stack.pop()) |ty| {
-            const gop = try visited.getOrPut(ty);
-            if (gop.found_existing) continue;
-            switch (store.get(ty)) {
-                .primitive, .zst, .erased => {},
-                .list, .box => |elem| try stack.append(self.allocator, elem),
-                .tuple => |span| {
-                    const items = store.span(span);
-                    for (0..GuardedList.borrowLen(items)) |i| try stack.append(self.allocator, GuardedList.at(items, i));
-                },
-                .record => |span| {
-                    const field_span = store.fieldSpan(span);
-                    for (0..GuardedList.borrowLen(field_span)) |i| try stack.append(self.allocator, GuardedList.at(field_span, i).ty);
-                },
-                .tag_union => |span| {
-                    const tag_span = store.tagSpan(span);
-                    for (0..GuardedList.borrowLen(tag_span)) |i| {
-                        const payloads = store.span(GuardedList.at(tag_span, i).payloads);
-                        for (0..GuardedList.borrowLen(payloads)) |j| try stack.append(self.allocator, GuardedList.at(payloads, j));
-                    }
-                },
-                .func => |fn_ty| {
-                    const arg_span = store.span(fn_ty.args);
-                    for (0..GuardedList.borrowLen(arg_span)) |i| try stack.append(self.allocator, GuardedList.at(arg_span, i));
-                    try stack.append(self.allocator, fn_ty.ret);
-                },
-                .named => |named| {
-                    if (named.def.iterator_representation != .none or named.def.generated != null) return true;
-                    const arg_span = store.span(named.args);
-                    for (0..GuardedList.borrowLen(arg_span)) |i| try stack.append(self.allocator, GuardedList.at(arg_span, i));
-                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
-                },
-            }
-        }
-        return false;
-    }
-
     /// One probe population entry: a graph-produced sealed Monotype id and the
     /// concrete checked source whose ground directed translation should reproduce
     /// it. Keyed by sealed id in the population map, so the widened population is
     /// deduplicated by sealed id (reunify.md section 9, Slice 7 Stage A).
-
     const NominalDeclLookup = struct {
         view: ModuleView,
         declaration: checked.CheckedNominalDeclaration,
@@ -15769,57 +15713,6 @@ const BodyContext = struct {
         }
     }
 
-    /// Describe a checked position of THIS instantiation context as one side of a
-    /// constraint-replay measurement (reunify.md sections 9, 13 Slice 7). A
-    /// context lowering a CALLEE's own checked positions describes them as such,
-    /// so they read under the binding the checker recorded for the edge rather
-    /// than under the requesting body's (reunify.md section 9.1).
-    fn checkedUnifyOperand(self: *BodyContext, checked_ty: checked.CheckedTypeId) spec_rehearsal.UnifyOperand {
-        const address: spec_rehearsal.CheckedAddress = .{
-            .module_bytes = self.view.key.bytes,
-            .type_id = @intFromEnum(checked_ty),
-        };
-        if (self.callee_context) return .{ .callee_checked = address };
-        return .{ .checked = address };
-    }
-
-    /// Describe one record-field read as one side of a constraint-replay
-    /// measurement: the receiver's checked position and the interned label the
-    /// directed side reads off its translation.
-    fn fieldUnifyOperand(
-        self: *BodyContext,
-        receiver: checked.CheckedExprId,
-        label: names.RecordFieldNameId,
-    ) spec_rehearsal.UnifyOperand {
-        return .{ .field_of = .{
-            .receiver = .{
-                .module_bytes = self.view.key.bytes,
-                .type_id = @intFromEnum(self.view.bodies.expr(receiver).ty),
-            },
-            .label = label,
-        } };
-    }
-
-    /// Describe one graph node as a side of a constraint-replay measurement. A
-    /// node the graph imported an immutable type at stands for exactly that
-    /// type; any other node is one the graph built, which the directed pipeline
-    /// has no expression for at this call.
-    fn nodeUnifyOperand(self: *BodyContext, node: NodeId) spec_rehearsal.UnifyOperand {
-        if (comptime !census.enabled) return .undescribed;
-        if (self.graph.importedMonoAtNode(node)) |ty| return .{ .sealed = ty };
-        return .undescribed;
-    }
-
-    /// Describe one draft type cell as a side of a constraint-replay
-    /// measurement. A sealed cell is the immutable type the relation imports; a
-    /// live graph node is read the same way a node operand is.
-    fn cellUnifyOperand(self: *BodyContext, cell: DraftTypeCell) spec_rehearsal.UnifyOperand {
-        return switch (cell) {
-            .sealed => |ty| .{ .sealed = ty },
-            .graph_node => |node| self.nodeUnifyOperand(node),
-        };
-    }
-
     /// Constrain a checked type to a Monotype: instantiate the checked type
     /// into the graph and relate it to the (linked or imported) Monotype node.
     /// The relation routes a Monotype carrying generated-private
@@ -16565,7 +16458,8 @@ const BodyContext = struct {
                     .break_,
                     .return_,
                     .for_,
-                    .run_low_level, => direct: {
+                    .run_low_level,
+                    => direct: {
                         if (self.builder.rehearsal) |rehearsal| {
                             rehearsal.declareFrameRetMintAtBodyRoot(self.view.key.bytes, root.ty);
                             rehearsal.noteBodyTail(self.view.key.bytes, body.root_expr);
@@ -26981,21 +26875,6 @@ const BodyContext = struct {
         return fn_node;
     }
 
-    /// Debug/probe-only: whether one graph function node still carries the
-    /// argument count the checked function type at that position recorded
-    /// (reunify.md 15.1b). Reads the node's content without sealing it.
-    fn noteGraphArityAgainstChecked(self: *BodyContext, node: NodeId, checked_arity: usize) void {
-        if (comptime !census.enabled) return;
-        switch (self.graph.content(node)) {
-            .func => |derived| {
-                if (derived.args.len == checked_arity) {
-                } else {
-                }
-            },
-            else => {},
-        }
-    }
-
     fn instantiateTargetFromPlanNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -32815,7 +32694,7 @@ const BodyContext = struct {
         switch (resolution) {
             .target => |initial_lookup| {
                 if (direct_parametric_low_level == null and !direct_graph_call) {
-                const target_node = target: {
+                    const target_node = target: {
                         // Debug/probe-only: bind the selected callee scheme from the
                         // plan's own edge while its signature is instantiated
                         // (reunify.md sections 7.2, 9.1, 9.6).
@@ -34042,7 +33921,6 @@ const BodyContext = struct {
             if (hint.source) |source| source.evidence else null,
         );
     }
-
 
     fn dispatchResultTypeNode(
         self: *BodyContext,

@@ -4891,7 +4891,7 @@ Every bound mapping reads its receiver as the receiver EMITTED under the
 requesting body's binding, not as the receiver's checked payload: a
 `where`-constrained dispatcher names only the constrained variable, whose value
 lives in that binding, while a receiver that is already a named checked type
-reaches the same argument list either way. `List` and `Box` emit their element
+reaches the same argument list either way. `List` and `Box` emit their item
 as the structural shape rather than a named node, so their single argument is
 read from that shape. A rule whose generating site dispatches below the type it
 names carries a declared path of at most a handful of steps alongside that
@@ -4932,7 +4932,7 @@ The rules whose generating sites hold a checked receiver:
   position — the dispatch plan's checked dispatcher type, or, for the
   structural-equality intrinsic wrapper, that wrapper's own checked function
   type — and appends one declared step per layer, naming a record field by its
-  interned label, a tuple element and a tag payload by position, and a named
+  interned label, a tuple item and a tag payload by position, and a named
   type's backing. The path applies to the emission of the entry type, so a
   position no checked id stands for is named exactly rather than searched for:
   a checked nominal names no instantiated backing type of its own, and a
@@ -4958,7 +4958,7 @@ site does not hold:
 - `set_literal_helper`, `dict_literal_helper` — `Set.from_list`/`Set.to_list`
   and `Dict.with_capacity`/`Dict.insert`/`Dict.to_list` behind a literal. The
   helper receiver types are Monotypes the literal lowering builds from the
-  element type it lowered.
+  item type it lowered.
 - `json_parse_helper`, `json_encode_helper`, `json_record_field_name`,
   `json_invalid_value` — the encoding format's helpers. Here the receiver would
   not supply the binder even if it were checked: the receiver is the encoding

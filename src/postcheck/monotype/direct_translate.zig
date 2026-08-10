@@ -39,7 +39,6 @@ const check = @import("check");
 const collections = @import("collections");
 
 const MonoType = @import("type.zig");
-const census = @import("census.zig");
 const closure = @import("../representation_closure.zig");
 const policy = @import("../representation_policy.zig");
 
@@ -479,26 +478,6 @@ const Emission = struct {
             self.next_token +%= 1;
         }
         return @enumFromInt(gop.value_ptr.*);
-    }
-
-    /// Open a representation slot at one position and leave it joinable: the
-    /// slot is created with the declared shape, no input is consumed and
-    /// nothing seals, so a mint arriving later in the component can still
-    /// move it. The provisional walk returns exactly this slot for a
-    /// position whose runtime encoding the checked data does not dictate
-    /// (reunify.md 9.1, 10.2).
-    fn openJoinableSlot(
-        self: *Emission,
-        store: *const MonoType.Store,
-        name_store: *const names.NameStore,
-        declared: policy.NamedDescriptor,
-        args: []const TypeId,
-        backing: ?TypeId,
-    ) Allocator.Error!?closure.RepresentationSlotId {
-        const identity = identityDigest(store, name_store, declared, args);
-        const token = try self.tokenForDigest(identity);
-        const shape = try self.shapeAt(store, name_store, declared, token, args, backing);
-        return try self.engine.createSlot(token, self.freshProducer(), shape);
     }
 
     /// Open a representation slot at one position, run the declared relation to

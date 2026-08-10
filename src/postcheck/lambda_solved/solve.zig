@@ -2529,9 +2529,9 @@ const Solver = struct {
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
         if (std.meta.activeTag(content) != .named or content.named.kind != .alias) return null;
-        if (census.enabled and content.named.builtin_owner != null) {
-        }
-        return (content.named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;    }
+        if (census.enabled and content.named.builtin_owner != null) {}
+        return (content.named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;
+    }
 
     /// Debug-only seam assertion for reunify.md section 12.6. Both operands of
     /// a structural unification descend from the same ground lifted monotypes,
@@ -3230,14 +3230,6 @@ fn deinitTestSolver(solver: *Solver) void {
 }
 
 fn testSym(n: u32) Common.Symbol {
-    return @enumFromInt(n);
-}
-
-fn testFieldName(n: u32) names.RecordFieldNameId {
-    return @enumFromInt(n);
-}
-
-fn testLocal(n: u32) Lifted.LocalId {
     return @enumFromInt(n);
 }
 

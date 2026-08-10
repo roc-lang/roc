@@ -28,19 +28,7 @@ const builtin = @import("builtin");
 const check = @import("check");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
-const census = @import("census.zig");
-const fsid = @import("final_spec_id.zig");
-
 const names = check.CheckedNames;
-
-
-/// The collision witness the FinalSpecId census keeps per FinalSpecId: the
-/// erased solved logical skeleton the first record sealed. A later record with
-/// the same FinalSpecId is the same specialization and must reduce to a
-/// structurally equal solved skeleton — exact id equality within one computer.
-const FinalWitness = struct {
-    solved_logical: ?fsid.LogicalId,
-};
 
 /// Deterministic counters used by specialization-shape tests.
 pub const Counters = struct {
@@ -259,7 +247,6 @@ pub const SpecBuilder = struct {
     /// erasure store persists across records so solved skeletons compare by id.
     /// FinalSpecId -> the first record's collision witness, so a later record
     /// with the same FinalSpecId is classified equivalent or divergent.
-
     pub fn init(
         allocator: std.mem.Allocator,
         name_store: *const names.NameStore,
