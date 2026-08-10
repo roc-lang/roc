@@ -32955,18 +32955,16 @@ const BodyContext = struct {
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
         else
             try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node)) blk: {
-            // A generated return is the producer's own representation, and
-            // directed emission states it from the consumer's declared input
-            // (reunify.md 13.2e). Sealing it here needed the section 8
-            // identity cutover first: before dedup, one occurrence's sealed id
-            // did not name the same type another occurrence sealed, so
-            // downstream evidence keyed on the graph node lost its subject.
-            if (self.generatedDispatchReturnFinal(checked_ret_ty, plan)) |final| {
-                break :blk DraftTypeCell.fromSealed(final);
-            }
-            break :blk DraftTypeCell.fromGraphNode(plan_ret_node);
-        } else expected_ret_cell;
+        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+            // A generated return carries the producer's own representation,
+            // and the iterator machinery downstream asks the graph what that
+            // representation is: whether a public adapter can be replaced by
+            // the generated one is a question about this node's content. A
+            // sealed cell states the same type but answers no such question,
+            // so the pipeline stops fusing and the adapter stays reachable.
+            DraftTypeCell.fromGraphNode(plan_ret_node)
+        else
+            expected_ret_cell;
         const call_expr = try self.addExprWithTypeCell(
             call_ret_cell,
             call_data,

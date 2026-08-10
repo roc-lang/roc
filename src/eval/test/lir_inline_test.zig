@@ -1905,8 +1905,12 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 86,
+        // A ground callable's request is born final from directed
+        // instantiation's own answer, so the nominal backing behind it is
+        // never instantiated into the graph and there is nothing for the
+        // backing cache to reuse.
+        .nominal_backing_reuses = 0,
+        .nominal_backing_instantiations = 19,
     });
 }
 
@@ -2048,8 +2052,10 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
-        .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 149,
+        // See the same-type counterpart above: born-final requests never
+        // instantiate the backing, so no reuse can be recorded.
+        .nominal_backing_reuses = 0,
+        .nominal_backing_instantiations = 71,
     });
 }
 
