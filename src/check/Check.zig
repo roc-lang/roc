@@ -3743,11 +3743,11 @@ fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool
     return expr == .e_record or expr == .e_empty_record;
 }
 
-/// Check one relation owned by a call without letting a rejected relation
-/// poison the callee or argument type graphs. Those graphs can be shared with
-/// otherwise valid producer expressions; the call expression is the sole
-/// executable boundary that becomes erroneous.
-fn unifyCallRelation(
+/// Check one relation owned by a single expression without letting a rejected
+/// relation poison its operand type graphs. Those graphs can be shared with
+/// otherwise valid producer expressions, so only the owning expression becomes
+/// erroneous.
+fn unifyOwnedRelation(
     self: *Self,
     expected: Var,
     actual: Var,
@@ -3759,7 +3759,10 @@ fn unifyCallRelation(
         .context = ctx,
         .on_mismatch = .write_no_report,
         .row_width_relation = row_width_relation,
-        .field_presence_relation = if (row_width_relation == .exact) .committed_value else .ordinary,
+        .field_presence_relation = switch (ctx) {
+            .record_access => |access| if (access.mode == .required) .required_access else .ordinary,
+            else => if (row_width_relation == .exact) .committed_value else .ordinary,
+        },
         .record_construction_var = if (row_width_relation == .construction) actual else null,
     });
     if (result.isOk()) return .ok;
@@ -14641,7 +14644,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                                             const row_width_relation: unifier.RowWidthRelation = if (self.exprIsFreshRecordConstruction(call_arg_expr_idxs[i]) or
                                                 self.exprIsFreshRecordConstruction(call_arg_expr_idxs[j])) .construction else .exact;
-                                            const unify_result = try self.unifyCallRelation(arg_1, arg_2, env, .{
+                                            const unify_result = try self.unifyOwnedRelation(arg_1, arg_2, env, .{
                                                 .fn_args_bound_var = .{
                                                     .fn_name = func_name,
                                                     .first_arg_var = arg_1,
@@ -14666,7 +14669,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // called arguments, unifying each one
                                 for (call_arg_expr_idxs, 0..) |call_expr_idx, arg_index| {
                                     const expected_arg_var = self.types.getVarAt(func_args_range, @intCast(arg_index));
-                                    const unify_result = try self.unifyCallRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
+                                    const unify_result = try self.unifyOwnedRelation(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
                                         .fn_name = func_name,
                                         .call_expr = expr_idx,
                                         .arg_index = @intCast(arg_index),
@@ -14707,7 +14710,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                                 const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                                const arity_result = try self.unifyCallRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
+                                const arity_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .{ .fn_call_arity = .{
                                     .fn_name = func_name,
                                     .expected_args = @intCast(func_args_len),
                                     .actual_args = @intCast(call_arg_expr_idxs.len),
@@ -14739,7 +14742,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                            const call_result = try self.unifyCallRelation(func_var, call_func_var, env, .none, .exact);
+                            const call_result = try self.unifyOwnedRelation(func_var, call_func_var, env, .none, .exact);
                             if (call_result.isProblem()) {
                                 try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                             }
@@ -14849,6 +14852,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // first missing optional slot yields `Err(MissingField)`.
             var saw_optional = false;
 
+            var access_failed = false;
+
             // Then iterate over the access segments, resolving & unifying
             for (0..field_access.segments.len) |i| {
                 // Get the field access segment
@@ -14901,15 +14906,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .record = .{ .fields = record_field_range, .ext = record_ext_var },
                 } }, env, expr_region);
 
-                // Unify the record being accessed with the acc receiver var
-                _ = try self.unifyInContext(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
+                // A rejected access belongs to this expression. Preserve the
+                // independently-solved receiver graph and make only the access
+                // erroneous so post-check lowering emits its runtime crash.
+                const access_result = try self.unifyOwnedRelation(record_being_accessed, acc_receiver_var, env, .{ .record_access = .{
                     .field_name = access.name,
                     .field_region = access_region,
                     .mode = switch (access.mode) {
                         .required => .required,
                         .optional => .optional,
                     },
-                } });
+                } }, .construction);
+                if (access_result.isProblem()) {
+                    try self.markErroneous(expr_var);
+                    try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                    access_failed = true;
+                    break;
+                }
 
                 // For the next iteration, we set the field we just accessed to
                 // be the new receiver. This lets us chain access, like: a.b.c
@@ -14918,15 +14931,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // The chain's type: the final field's value type, wrapped in one
             // `Try(τ, [MissingField])` when any segment was optional.
-            if (saw_optional) {
-                const missing_err_var = try self.makeFieldMissingTag(env, expr_region);
-                try self.unifyWith(
-                    expr_var,
-                    try self.mkTryContent(acc_receiver_var, missing_err_var),
-                    env,
-                );
-            } else {
-                _ = try self.unify(expr_var, acc_receiver_var, env);
+            if (!access_failed) {
+                if (saw_optional) {
+                    const missing_err_var = try self.makeFieldMissingTag(env, expr_region);
+                    try self.unifyWith(
+                        expr_var,
+                        try self.mkTryContent(acc_receiver_var, missing_err_var),
+                        env,
+                    );
+                } else {
+                    _ = try self.unify(expr_var, acc_receiver_var, env);
+                }
             }
         },
         .e_interpolation => |interpolation| {
@@ -16821,7 +16836,7 @@ fn enforceRecordBuilderMap2Return(
     const mapper_var = self.types.getVarAt(func.args, 2);
     const mapper_func = self.functionTypeFromVar(mapper_var) orelse return .ok;
 
-    return try self.unifyCallRelation(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
+    return try self.unifyOwnedRelation(return_payload_var, mapper_func.ret, env, .{ .fn_call_arg = .{
         .fn_name = func_name,
         .call_expr = call_expr,
         .arg_index = 2,
