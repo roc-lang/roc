@@ -341,7 +341,7 @@ pub const CliCtx = struct {
             .runtime_error => if (self.exit_code == 0) {
                 self.exit_code = 1;
             },
-            .warning, .info => {},
+            .warning => {},
         }
     }
 

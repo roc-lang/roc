@@ -2887,7 +2887,7 @@ pub const BuildEnv = struct {
         for (drained) |mod| {
             for (mod.reports) |*report| {
                 switch (report.severity) {
-                    .info => {},
+
                     .runtime_error, .fatal => total_error_count += 1,
                     .warning => total_warning_count += 1,
                 }

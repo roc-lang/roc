@@ -2028,7 +2028,7 @@ fn moduleDiagnosticsHaveErrors(
         var report = try module_env.diagnosticToReport(diagnostic, allocator, "repl");
         defer report.deinit();
         switch (report.severity) {
-            .info, .warning => {},
+            .warning => {},
             .runtime_error, .fatal => return true,
         }
     }
@@ -2049,7 +2049,7 @@ fn moduleDiagnosticsHaveErrors(
         var report = try report_builder.build(problem);
         defer report.deinit();
         switch (report.severity) {
-            .info, .warning => {},
+            .warning => {},
             .runtime_error, .fatal => return true,
         }
     }
