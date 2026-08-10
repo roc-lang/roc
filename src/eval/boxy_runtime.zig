@@ -1098,8 +1098,8 @@ pub const BoxyRuntime = struct {
             .static => {},
         }
 
-        var copied = std.AutoHashMap(usize, u32).init(self.scratch);
-        defer copied.deinit();
+        var copied = std.AutoHashMapUnmanaged(usize, u32){};
+        defer copied.deinit(self.scratch);
         const runtime_ref = try self.copyBoxyDescRefToRuntime(hooks, desc_ref, &copied, captures.len == 0);
         return try hooks.resolveDescRef(runtime_ref);
     }
@@ -1235,8 +1235,8 @@ pub const BoxyRuntime = struct {
             return specialized;
         }
 
-        var merged = std.AutoHashMap(AdapterDescMergeKey, u32).init(self.scratch);
-        defer merged.deinit();
+        var merged = std.AutoHashMapUnmanaged(AdapterDescMergeKey, u32){};
+        defer merged.deinit(self.scratch);
         var changed = false;
         const id = try self.mergeAdapterTargetDesc(hooks, source, target, &merged, &changed);
         const specialized = if (changed) self.runtime_boxy_type_descs.items[id] else target;
@@ -1250,8 +1250,8 @@ pub const BoxyRuntime = struct {
         source: *const LirProgram.BoxyTypeDesc,
         target: *const LirProgram.BoxyTypeDesc,
     ) Error!bool {
-        var visited = std.AutoHashMap(AdapterDescMergeKey, void).init(self.scratch);
-        defer visited.deinit();
+        var visited = std.AutoHashMapUnmanaged(AdapterDescMergeKey, void){};
+        defer visited.deinit(self.scratch);
         return try self.descriptorsUseSameStorageConventionInner(hooks, source, target, &visited);
     }
 
@@ -1268,7 +1268,7 @@ pub const BoxyRuntime = struct {
         hooks: anytype,
         source: *const LirProgram.BoxyTypeDesc,
         target: *const LirProgram.BoxyTypeDesc,
-        visited: *std.AutoHashMap(AdapterDescMergeKey, void),
+        visited: *std.AutoHashMapUnmanaged(AdapterDescMergeKey, void),
     ) Error!bool {
         if (source == target) return true;
         if (source.payload_layout != target.payload_layout or
@@ -1279,7 +1279,7 @@ pub const BoxyRuntime = struct {
         }
 
         const key = AdapterDescMergeKey{ .source = @intFromPtr(source), .target = @intFromPtr(target) };
-        const entry = try visited.getOrPut(key);
+        const entry = try visited.getOrPut(self.scratch, key);
         if (entry.found_existing) return true;
 
         const source_names = self.requireBoxyFieldNames(source.field_names);
@@ -1347,7 +1347,7 @@ pub const BoxyRuntime = struct {
         hooks: anytype,
         source: *const LirProgram.BoxyTypeDesc,
         target: *const LirProgram.BoxyTypeDesc,
-        merged: *std.AutoHashMap(AdapterDescMergeKey, u32),
+        merged: *std.AutoHashMapUnmanaged(AdapterDescMergeKey, u32),
         changed: *bool,
     ) Error!u32 {
         const key = AdapterDescMergeKey{ .source = @intFromPtr(source), .target = @intFromPtr(target) };
@@ -1355,7 +1355,7 @@ pub const BoxyRuntime = struct {
         const result = try self.descriptor_arena.create(LirProgram.BoxyTypeDesc);
         result.* = target.*;
         const id = try self.appendRuntimeBoxyTypeDesc(result);
-        try merged.put(key, id);
+        try merged.put(self.scratch, key, id);
 
         const target_layout = self.layout_store.getLayout(target.payload_layout);
         const source_layout = self.layout_store.getLayout(source.payload_layout);
@@ -1560,7 +1560,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         desc_ref: LIR.BoxyDescRef,
-        copied: *std.AutoHashMap(usize, u32),
+        copied: *std.AutoHashMapUnmanaged(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxyDescRef {
         if (desc_ref == .runtime) return desc_ref;
@@ -1581,7 +1581,7 @@ pub const BoxyRuntime = struct {
             .debug_checked_type = source.debug_checked_type,
         };
         const runtime_id = try self.appendRuntimeBoxyTypeDesc(target);
-        try copied.put(source_key, runtime_id);
+        try copied.put(self.scratch, source_key, runtime_id);
 
         target.nested_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.nested_descs, copied, allow_global_reuse);
         target.tag_variants = try self.copyBoxyTagVariantSpanToRuntime(hooks, source.tag_variants, copied, allow_global_reuse);
@@ -1606,7 +1606,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         span: LIR.BoxySpan,
-        copied: *std.AutoHashMap(usize, u32),
+        copied: *std.AutoHashMapUnmanaged(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
         if (runtimeBoxySpanStart(span) != null) return span;
@@ -1632,7 +1632,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         span: LIR.BoxySpan,
-        copied: *std.AutoHashMap(usize, u32),
+        copied: *std.AutoHashMapUnmanaged(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
         if (runtimeBoxySpanStart(span) != null) return span;
@@ -1663,7 +1663,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         span: LIR.BoxySpan,
-        copied: *std.AutoHashMap(usize, u32),
+        copied: *std.AutoHashMapUnmanaged(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
         if (runtimeBoxySpanStart(span) != null) return span;
@@ -1691,7 +1691,7 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         span: LIR.BoxySpan,
-        copied: *std.AutoHashMap(usize, u32),
+        copied: *std.AutoHashMapUnmanaged(usize, u32),
         allow_global_reuse: bool,
     ) Error!LIR.BoxySpan {
         if (runtimeBoxySpanStart(span) != null) return span;
@@ -5278,59 +5278,57 @@ pub const BoxyRuntime = struct {
         value: Value,
         layout_idx: layout_mod.Idx,
     ) Error!void {
-        // Roc's own Ryu formatter rather than `{d}`: std's float formatting
-        // divides a 128-bit intermediate by ten, which lowers to the
-        // `__udivti3`/`__umodti3` compiler-rt libcalls. Ryu stays within 64-bit
-        // arithmetic, so the standalone runtime object keeps no undefined
-        // compiler-rt references, and inspect output matches how Roc renders
-        // fractions everywhere else.
+        // Fractions render through Roc's own Ryu formatter and integers widen
+        // to 128 bits and render through `compiler_rt_128`, both rather than
+        // `{d}`. Two reasons. std's formatting divides a 128-bit intermediate
+        // by ten, which lowers to the `__udivti3`/`__umodti3` compiler-rt
+        // libcalls the standalone runtime object must not reference; these
+        // helpers stay within 64-bit arithmetic. And `std.fmt` instantiates a
+        // separate formatter per argument type, so one `{d}` per integer width
+        // links the whole `std.Io` writer stack into an object whose only
+        // output path is the host crash callback. Ryu also matches how Roc
+        // renders fractions everywhere else.
         var float_buf: [builtins.compiler_rt_128.float_string_capacity]u8 = undefined;
-        const text = switch (self.helper.sizeOf(layout_idx)) {
-            1 => if (isUnsigned(layout_idx))
-                try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u8)})
-            else
-                try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(i8)}),
-            2 => if (isUnsigned(layout_idx))
-                try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u16)})
-            else
-                try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(i16)}),
-            4 => blk: {
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                break :blk if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac)
-                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f32_to_str(&float_buf, value.read(f32)))
-                else if (isUnsigned(layout_idx))
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u32)})
-                else
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(i32)});
-            },
-            8 => blk: {
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                break :blk if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac)
-                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f64_to_str(&float_buf, value.read(f64)))
-                else if (isUnsigned(layout_idx))
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(u64)})
-                else
-                    try std.fmt.allocPrint(self.eval_arena, "{d}", .{value.read(i64)});
-            },
-            16 => blk: {
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac) {
-                    var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-                    const dec = builtins.dec.RocDec{ .num = value.read(i128) };
-                    break :blk try self.eval_arena.dupe(u8, dec.format_to_buf(&dec_buf));
+        var int_buf: [builtins.compiler_rt_128.int_string_capacity(i128)]u8 = undefined;
+        const size = self.helper.sizeOf(layout_idx);
+        const text = switch (size) {
+            1, 2, 4, 8, 16 => blk: {
+                // Only 4, 8, and 16 byte scalars can carry a fraction; the
+                // narrower widths are integers whatever the layout says.
+                if (size >= 4) {
+                    const layout_val = self.layout_store.getLayout(layout_idx);
+                    if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac) {
+                        break :blk switch (size) {
+                            4 => try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f32_to_str(&float_buf, value.read(f32))),
+                            8 => try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f64_to_str(&float_buf, value.read(f64))),
+                            else => dec: {
+                                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                                const dec = builtins.dec.RocDec{ .num = value.read(i128) };
+                                break :dec try self.eval_arena.dupe(u8, dec.format_to_buf(&dec_buf));
+                            },
+                        };
+                    }
                 }
-                // `compiler_rt_128` rather than `{d}`: std's integer formatting
-                // divides the 128-bit value by ten, which lowers to the
-                // `__udivti3`/`__umodti3` compiler-rt libcalls. These helpers
-                // decompose to 64-bit arithmetic, so the standalone runtime
-                // object stays free of undefined compiler-rt references.
-                var int_buf: [builtins.compiler_rt_128.int_string_capacity(i128)]u8 = undefined;
-                break :blk if (isUnsigned(layout_idx))
-                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.u128_to_str(&int_buf, value.read(u128)).str)
-                else
-                    try self.eval_arena.dupe(u8, builtins.compiler_rt_128.i128_to_str(&int_buf, value.read(i128)).str);
+                if (isUnsigned(layout_idx)) {
+                    const widened: u128 = switch (size) {
+                        1 => value.read(u8),
+                        2 => value.read(u16),
+                        4 => value.read(u32),
+                        8 => value.read(u64),
+                        else => value.read(u128),
+                    };
+                    break :blk try self.eval_arena.dupe(u8, builtins.compiler_rt_128.u128_to_str(&int_buf, widened).str);
+                }
+                const widened: i128 = switch (size) {
+                    1 => value.read(i8),
+                    2 => value.read(i16),
+                    4 => value.read(i32),
+                    8 => value.read(i64),
+                    else => value.read(i128),
+                };
+                break :blk try self.eval_arena.dupe(u8, builtins.compiler_rt_128.i128_to_str(&int_buf, widened).str);
             },
-            else => try std.fmt.allocPrint(self.eval_arena, "0", .{}),
+            else => try self.eval_arena.dupe(u8, "0"),
         };
         defer self.eval_arena.free(text);
         try out.appendSlice(self.eval_arena, text);
@@ -5346,9 +5344,13 @@ pub const BoxyRuntime = struct {
                 '\r' => try out.appendSlice(self.eval_arena, "\\r"),
                 '\t' => try out.appendSlice(self.eval_arena, "\\t"),
                 else => if (byte < 0x20) {
-                    const escaped = try std.fmt.allocPrint(self.eval_arena, "\\u({x})", .{byte});
-                    defer self.eval_arena.free(escaped);
-                    try out.appendSlice(self.eval_arena, escaped);
+                    // Hand-written hex rather than `{x}`: see `appendScalarInspect`
+                    // for why this object links no `std.fmt` formatter.
+                    const hex_digits = "0123456789abcdef";
+                    try out.appendSlice(self.eval_arena, "\\u(");
+                    if (byte >= 0x10) try out.append(self.eval_arena, hex_digits[byte >> 4]);
+                    try out.append(self.eval_arena, hex_digits[byte & 0xf]);
+                    try out.append(self.eval_arena, ')');
                 } else {
                     try out.append(self.eval_arena, byte);
                 },
@@ -6931,8 +6933,8 @@ pub const BoxyRuntime = struct {
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!bool {
-        var visited = std.AutoHashMap(*const LirProgram.BoxyTypeDesc, void).init(self.scratch);
-        defer visited.deinit();
+        var visited = std.AutoHashMapUnmanaged(*const LirProgram.BoxyTypeDesc, void){};
+        defer visited.deinit(self.scratch);
         return try self.descriptorContainsUnspecifiedBoxInner(hooks, desc, &visited);
     }
 
@@ -6940,9 +6942,9 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
-        visited: *std.AutoHashMap(*const LirProgram.BoxyTypeDesc, void),
+        visited: *std.AutoHashMapUnmanaged(*const LirProgram.BoxyTypeDesc, void),
     ) Error!bool {
-        const entry = try visited.getOrPut(desc);
+        const entry = try visited.getOrPut(self.scratch, desc);
         if (entry.found_existing) return false;
 
         const layout_value = self.layout_store.getLayout(desc.payload_layout);
