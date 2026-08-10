@@ -2,9 +2,10 @@
 //!
 //! The command-line entrypoint owns terminal I/O. This module owns statement
 //! splitting, definition replacement, source construction, and evaluation
-//! through the current checked-artifact eval helpers.
+//! through the checked-module inspected-evaluation API.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const compile = @import("compile");
@@ -17,7 +18,7 @@ const Allocator = std.mem.Allocator;
 const CoreCtx = @import("ctx").CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
-const ModuleSource = eval.test_helpers.ModuleSource;
+const ModuleSource = eval.Inspected.ModuleSource;
 
 /// Upper bound on the size of an imported module file the REPL will read.
 const max_import_file_bytes: usize = 16 * 1024 * 1024;
@@ -25,9 +26,11 @@ const max_import_file_bytes: usize = 16 * 1024 * 1024;
 const ReplSession = @This();
 
 const RenderError = Allocator.Error || error{WriteFailed};
-const ModuleRenderError = eval.test_helpers.TestHelperError || RenderError;
-const ReplInitError = eval.BuiltinModules.InitError;
-const ReplStepError = eval.test_helpers.TestHelperError || RenderError;
+const ModuleRenderError = eval.Inspected.Error || RenderError;
+/// Everything that can go wrong while standing up a session's builtin modules.
+pub const ReplInitError = eval.BuiltinModules.InitError;
+/// Everything that can go wrong while evaluating or inspecting one REPL input.
+pub const ReplStepError = eval.Inspected.Error || RenderError;
 const ReplTestError = ReplStepError || ReplInitError || error{
     ParseError,
     TestExpectedEqual,
@@ -42,6 +45,9 @@ roc_ctx: CoreCtx,
 backend_kind: eval.EvalBackend,
 specialization_strategy: base.SpecializationStrategy,
 definitions: DefinitionStore,
+virtual_modules: VirtualModuleStore,
+import_policy: ImportPolicy,
+last_events: []eval.InspectedRun.Event = &.{},
 builtin_modules: *eval.BuiltinModules,
 /// Whether this session owns `builtin_modules` (and must deinit it). Tests can
 /// borrow a shared, already-published instance to avoid re-publishing the
@@ -67,6 +73,54 @@ pub const StepResult = union(enum) {
     }
 };
 
+/// Why a REPL input failed, so a frontend can decide whether to keep reading
+/// (incomplete input) or report the failure.
+pub const LanguageDiagnosticKind = enum {
+    incomplete_input,
+    parse_error,
+    compile_error,
+    unsupported_file_import,
+};
+
+/// A rendered REPL failure plus enough structure for a frontend to route it.
+pub const LanguageDiagnostic = struct {
+    kind: LanguageDiagnosticKind,
+    input: ?InputInfo,
+    message: []u8,
+};
+
+/// Metadata for a definition the session just accepted into its scope.
+pub const DefinitionCommit = struct {
+    name: []const u8,
+    kind: DefinitionKind,
+    file_import: bool,
+};
+
+/// Presentation-neutral outcome of processing one Roc REPL statement.
+pub const LanguageStepResult = union(enum) {
+    expression: []u8,
+    definition: DefinitionCommit,
+    diagnostic: LanguageDiagnostic,
+    runtime_crash: []u8,
+    none,
+
+    pub fn deinit(self: LanguageStepResult, allocator: Allocator) void {
+        switch (self) {
+            .expression, .runtime_crash => |bytes| allocator.free(bytes),
+            .diagnostic => |diagnostic| allocator.free(diagnostic.message),
+            .definition, .none => {},
+        }
+    }
+};
+
+/// A frontend command that has already been parsed by its owning UI.
+pub const Command = union(enum) {
+    help,
+    definitions,
+    type_of: []const u8,
+    exit,
+};
+
 pub fn init(
     allocator: Allocator,
     roc_ctx: CoreCtx,
@@ -82,9 +136,23 @@ pub fn init(
         .backend_kind = backend_kind,
         .specialization_strategy = specialization_strategy,
         .definitions = DefinitionStore.init(),
+        .virtual_modules = .{},
+        .import_policy = .filesystem,
         .builtin_modules = builtin_modules,
         .owns_builtin_modules = true,
     };
+}
+
+/// Construct a REPL whose imports can only resolve from caller-provided modules.
+pub fn initVirtual(
+    allocator: Allocator,
+    roc_ctx: CoreCtx,
+    backend_kind: eval.EvalBackend,
+    specialization_strategy: base.SpecializationStrategy,
+) ReplInitError!ReplSession {
+    var session = try init(allocator, roc_ctx, backend_kind, specialization_strategy);
+    session.import_policy = .virtual_only;
+    return session;
 }
 
 /// Construct a session that borrows a caller-owned, already-published
@@ -103,20 +171,65 @@ fn initBorrowingBuiltins(
         .backend_kind = backend_kind,
         .specialization_strategy = .lss,
         .definitions = DefinitionStore.init(),
+        .virtual_modules = .{},
+        .import_policy = .filesystem,
         .builtin_modules = builtin_modules,
         .owns_builtin_modules = false,
     };
 }
 
 pub fn deinit(self: *ReplSession) void {
+    self.clearLastEvents();
     self.definitions.deinit(self.allocator);
+    self.virtual_modules.deinit(self.allocator);
     if (self.owns_builtin_modules) {
         self.builtin_modules.deinit();
         self.allocator.destroy(self.builtin_modules);
     }
 }
 
-fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin {
+const ImportPolicy = enum { filesystem, virtual_only };
+
+fn clearLastEvents(self: *ReplSession) void {
+    for (self.last_events) |*event| event.deinit(self.allocator);
+    self.allocator.free(self.last_events);
+    self.last_events = &.{};
+}
+
+/// Transfer the ordered host events from the most recent evaluated expression.
+pub fn takeEvents(self: *ReplSession) []eval.InspectedRun.Event {
+    const events = self.last_events;
+    self.last_events = &.{};
+    return events;
+}
+
+/// Remove every REPL definition while retaining the configured virtual modules.
+pub fn clear(self: *ReplSession) void {
+    self.clearLastEvents();
+    self.definitions.deinit(self.allocator);
+    self.definitions = DefinitionStore.init();
+}
+
+/// Atomically replace the virtual module set. Successful replacement clears
+/// definitions because their checked import identities may have changed.
+pub fn replaceVirtualModules(self: *ReplSession, modules: []const ModuleSource) (Allocator.Error || error{ DuplicateVirtualModule, ReservedVirtualModule })!void {
+    var replacement: VirtualModuleStore = .{};
+    errdefer replacement.deinit(self.allocator);
+
+    for (modules) |module| {
+        if (std.mem.eql(u8, module.name, eval.InspectedRun.repl_effect_module_name)) {
+            return error.ReservedVirtualModule;
+        }
+        if (replacement.find(module.name) != null) return error.DuplicateVirtualModule;
+        try replacement.append(self.allocator, module.name, module.source);
+    }
+
+    self.virtual_modules.deinit(self.allocator);
+    self.virtual_modules = replacement;
+    self.clear();
+}
+
+fn prePublishedBuiltin(self: *ReplSession) eval.Inspected.PrePublishedBuiltin {
     return .{
         .env = self.builtin_modules.builtin_module.env,
         .indices = self.builtin_modules.builtin_indices,
@@ -124,7 +237,7 @@ fn prePublishedBuiltin(self: *ReplSession) eval.test_helpers.PrePublishedBuiltin
     };
 }
 
-/// Process one complete REPL statement or command and return the user-visible output.
+/// Process one complete Roc REPL statement and return the user-visible output.
 pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     const result = try self.stepWithConfig(input, reporting.ReportingConfig.initColorTerminal());
     return switch (result) {
@@ -143,58 +256,108 @@ pub fn step(self: *ReplSession, input: []const u8) ReplStepError![]u8 {
     };
 }
 
-/// Process one complete REPL statement or command and keep stdout/stderr output separate.
+/// Execute a typed command that was parsed by a frontend-owned command router.
+pub fn executeCommandWithConfig(self: *ReplSession, command: Command, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+    self.clearLastEvents();
+    return switch (command) {
+        .help => .{ .output = try self.helpText() },
+        .definitions => .{ .output = try self.printDefs(report_config.shouldUseColors()) },
+        .type_of => |name| .{ .output = try self.printTypeOfVar(name, report_config.shouldUseColors()) },
+        .exit => .exit,
+    };
+}
+
+/// Process one complete Roc REPL statement and keep stdout/stderr output separate.
 pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+    const result = try self.stepLanguageWithConfig(input, report_config);
+    return switch (result) {
+        .expression => |output| .{ .output = output },
+        .definition => |definition| if (definition.kind == .annotation)
+            .none
+        else
+            .{ .output = try std.fmt.allocPrint(
+                self.allocator,
+                "{s} `{s}`",
+                .{ if (definition.kind == .import) "imported" else "assigned", definition.name },
+            ) },
+        .diagnostic => |diagnostic| .{ .diagnostic = diagnostic.message },
+        .runtime_crash => |message| .{ .runtime_crash = message },
+        .none => .none,
+    };
+}
+
+/// Process one complete Roc REPL statement without frontend commands or
+/// presentation strings.
+pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) ReplStepError!LanguageStepResult {
+    self.clearLastEvents();
     const line = std.mem.trim(u8, input, " \t\r\n");
     if (line.len == 0) return .none;
 
-    if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
-    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs(report_config.shouldUseColors()) };
-    if (std.mem.startsWith(u8, line, ":t ")) {
-        const rest = std.mem.trim(u8, line[3..], " \t");
-        return .{ .output = try self.printTypeOfVar(rest, report_config.shouldUseColors()) };
-    }
-    if (std.mem.eql(u8, line, ":exit") or
-        std.mem.eql(u8, line, ":quit") or
-        std.mem.eql(u8, line, ":q") or
-        std.mem.eql(u8, line, "exit"))
-    {
-        return .exit;
-    }
-
     const input_info = switch (try self.inputStatus(line)) {
         .complete => |info| info,
-        .incomplete, .invalid => return .{ .diagnostic = try self.renderStatementParseDiagnostics(line, report_config) },
+        .incomplete => return .{ .diagnostic = .{
+            .kind = .incomplete_input,
+            .input = null,
+            .message = try self.renderStatementParseDiagnostics(line, report_config),
+        } },
+        .invalid => return .{ .diagnostic = .{
+            .kind = .parse_error,
+            .input = null,
+            .message = try self.renderStatementParseDiagnostics(line, report_config),
+        } },
     };
 
     switch (input_info.kind) {
-        .expression => return try self.evaluateExpression(line, report_config),
+        .expression => {
+            const result = try self.evaluateExpression(line, report_config);
+            return switch (result) {
+                .output => |output| .{ .expression = output },
+                .diagnostic => |message| .{ .diagnostic = .{
+                    .kind = .compile_error,
+                    .input = input_info,
+                    .message = message,
+                } },
+                .runtime_crash => |message| .{ .runtime_crash = message },
+                .none, .exit => error.Internal,
+            };
+        },
         .definition => {
             const name = input_info.name orelse line;
+            if (input_info.file_import and self.import_policy == .virtual_only) {
+                return .{ .diagnostic = .{
+                    .kind = .unsupported_file_import,
+                    .input = input_info,
+                    .message = try self.allocator.dupe(u8, "File imports are not available in this REPL. Provide named virtual modules instead."),
+                } };
+            }
             if (input_info.definition_kind == .annotation) {
-                try self.addOrReplaceDefinition(line, name, .annotation);
-                return .none;
+                try self.addOrReplaceDefinitionWithImportKind(line, name, .annotation, false);
+                return .{ .definition = .{ .name = name, .kind = .annotation, .file_import = false } };
             }
 
             var snapshot = try self.definitions.snapshot(self.allocator);
-            errdefer snapshot.deinit(self.allocator);
-            try self.addOrReplaceDefinition(line, name, input_info.definition_kind);
-            const validation = self.validateDefinitions(report_config) catch DefinitionValidation{ .valid = false, .error_message = null };
+            errdefer self.definitions.restore(self.allocator, &snapshot);
+            try self.addOrReplaceDefinitionWithImportKind(line, name, input_info.definition_kind, input_info.file_import);
+            const validation = try self.validateDefinitions(report_config);
             if (!validation.valid) {
                 self.definitions.restore(self.allocator, &snapshot);
-                // Drop any pending annotation for this name. A `y : Str` typed before a
-                // failed `y = 5` would otherwise survive and poison every subsequent
-                // REPL turn with "Declaration Has No Value".
-                if (input_info.definition_kind == .value and !self.definitions.hasKind(name, .value)) {
-                    self.definitions.removeByNameAndKind(self.allocator, name, .annotation);
-                }
-                if (validation.error_message) |msg| return .{ .diagnostic = msg };
-                return .{ .diagnostic = try self.allocator.dupe(u8, "Definition failed to compile") };
+                if (validation.error_message) |msg| return .{ .diagnostic = .{
+                    .kind = .compile_error,
+                    .input = input_info,
+                    .message = msg,
+                } };
+                return .{ .diagnostic = .{
+                    .kind = .compile_error,
+                    .input = input_info,
+                    .message = try self.allocator.dupe(u8, "Definition failed to compile"),
+                } };
             }
-            const verb = if (input_info.definition_kind == .import) "imported" else "assigned";
-            const message = try std.fmt.allocPrint(self.allocator, "{s} `{s}`", .{ verb, name });
             snapshot.deinit(self.allocator);
-            return .{ .output = message };
+            return .{ .definition = .{
+                .name = name,
+                .kind = input_info.definition_kind,
+                .file_import = input_info.file_import,
+            } };
         },
     }
 }
@@ -208,12 +371,6 @@ pub fn splitInputIntoStatements(self: *ReplSession, input: []const u8) Allocator
 pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []const u8) Allocator.Error![][]const u8 {
     const trimmed_input = std.mem.trim(u8, input, " \t\r\n");
     if (trimmed_input.len == 0) return allocator.alloc([]const u8, 0);
-    if (isSpecialCommand(trimmed_input)) {
-        const out = try allocator.alloc([]const u8, 1);
-        out[0] = try allocator.dupe(u8, trimmed_input);
-        return out;
-    }
-
     var result = std.ArrayList([]const u8).empty;
     errdefer {
         for (result.items) |slice| allocator.free(slice);
@@ -265,7 +422,17 @@ pub fn freeStatementSlicesWithAllocator(allocator: Allocator, slices: []const []
 
 /// Add or replace one stored definition while preserving definition order.
 pub fn addOrReplaceDefinition(self: *ReplSession, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
-    try self.definitions.addOrReplace(self.allocator, source, name, kind);
+    try self.addOrReplaceDefinitionWithImportKind(source, name, kind, false);
+}
+
+fn addOrReplaceDefinitionWithImportKind(
+    self: *ReplSession,
+    source: []const u8,
+    name: []const u8,
+    kind: DefinitionKind,
+    file_import: bool,
+) Allocator.Error!void {
+    try self.definitions.addOrReplace(self.allocator, source, name, kind, file_import);
 }
 
 /// Build a block expression containing all current definitions followed by `expr`.
@@ -319,19 +486,50 @@ fn importDefinitionsSource(self: *const ReplSession) Allocator.Error![]u8 {
 
 /// Outcome of resolving the sibling modules imported by the current session.
 ///
-/// SECURITY: This reads sibling module files from the process working directory.
-/// It lives in the native CLI `ReplSession` (compiled only into the `roc`
-/// binary). The WASM playground REPL is a separate, freestanding implementation
-/// (`src/playground_wasm/main.zig`) whose `CoreCtx` rejects all file I/O at
-/// compile time, so it never reaches this code and cannot expose server files
-/// through the import system.
+/// SECURITY: native CLI sessions may read sibling module files from their
+/// configured directory. Virtual-only sessions resolve exclusively from the
+/// explicit in-memory module set; the filesystem branch is compile-time dead
+/// in freestanding builds.
 const ImportResolution = union(enum) {
     /// Module sources ordered so every module precedes the modules that import
-    /// it (the order `test_helpers` requires). Caller owns each name/source and
+    /// it (the order inspected compilation requires). Caller owns each name/source and
     /// the slice; free with `freeModuleSources`.
     resolved: []ModuleSource,
     /// A rendered, caller-owned diagnostic explaining why resolution failed.
     failed: []u8,
+};
+
+const VirtualModule = struct {
+    name: []u8,
+    source: []u8,
+};
+
+const VirtualModuleStore = struct {
+    items: std.ArrayList(VirtualModule) = .empty,
+
+    fn append(self: *VirtualModuleStore, allocator: Allocator, name: []const u8, source: []const u8) Allocator.Error!void {
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
+        try self.items.append(allocator, .{ .name = owned_name, .source = owned_source });
+    }
+
+    fn find(self: *const VirtualModuleStore, name: []const u8) ?[]const u8 {
+        for (self.items.items) |module| {
+            if (std.mem.eql(u8, module.name, name)) return module.source;
+        }
+        return null;
+    }
+
+    fn deinit(self: *VirtualModuleStore, allocator: Allocator) void {
+        for (self.items.items) |module| {
+            allocator.free(module.name);
+            allocator.free(module.source);
+        }
+        self.items.deinit(allocator);
+        self.* = .{};
+    }
 };
 
 const VisitState = enum { in_progress, done };
@@ -444,62 +642,87 @@ fn addModuleRecursive(
         try visited.put(key, .in_progress);
     }
 
-    const rel_path = try modulePathFromName(self.allocator, module_name);
-    defer self.allocator.free(rel_path);
-
-    // Resolve relative to `module_root`. When it is the default `.` we read
-    // `rel_path` directly so diagnostics stay free of a `./` prefix.
-    const read_path = if (std.mem.eql(u8, self.module_root, "."))
-        rel_path
-    else
-        try std.fs.path.join(self.allocator, &.{ self.module_root, rel_path });
-    defer if (read_path.ptr != rel_path.ptr) self.allocator.free(read_path);
-
-    const source = std.Io.Dir.cwd().readFileAlloc(self.roc_ctx.std_io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
-        failure.* = switch (err) {
-            error.FileNotFound => try std.fmt.allocPrint(
+    const source = if (self.import_policy == .virtual_only and
+        std.mem.eql(u8, module_name, eval.InspectedRun.repl_effect_module_name))
+        try self.allocator.dupe(u8, eval.InspectedRun.repl_effect_module_source)
+    else if (self.virtual_modules.find(module_name)) |virtual_source|
+        try self.allocator.dupe(u8, virtual_source)
+    else source: {
+        if (self.import_policy == .virtual_only) {
+            failure.* = try std.fmt.allocPrint(
                 self.allocator,
-                "I couldn't find the imported module `{s}` (looked for `{s}` relative to the current directory).",
-                .{ module_name, read_path },
-            ),
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.ConnectionResetByPeer,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileTooBig,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotOpenForReading,
-            error.OutOfMemory,
-            error.PathAlreadyExists,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.SocketUnconnected,
-            error.StreamTooLong,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => try std.fmt.allocPrint(
+                "The imported module `{s}` was not provided to this REPL.",
+                .{module_name},
+            );
+            return;
+        }
+
+        if (comptime builtin.target.os.tag == .freestanding) {
+            failure.* = try std.fmt.allocPrint(
                 self.allocator,
-                "I couldn't read the imported module `{s}` (`{s}`): {s}.",
-                .{ module_name, read_path, @errorName(err) },
-            ),
-        };
-        return;
+                "The imported module `{s}` was not provided to this REPL.",
+                .{module_name},
+            );
+            return;
+        } else {
+            const rel_path = try modulePathFromName(self.allocator, module_name);
+            defer self.allocator.free(rel_path);
+
+            // Resolve relative to `module_root`. When it is the default `.` we read
+            // `rel_path` directly so diagnostics stay free of a `./` prefix.
+            const read_path = if (std.mem.eql(u8, self.module_root, "."))
+                rel_path
+            else
+                try std.fs.path.join(self.allocator, &.{ self.module_root, rel_path });
+            defer if (read_path.ptr != rel_path.ptr) self.allocator.free(read_path);
+
+            break :source std.Io.Dir.cwd().readFileAlloc(self.roc_ctx.std_io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
+                failure.* = switch (err) {
+                    error.FileNotFound => try std.fmt.allocPrint(
+                        self.allocator,
+                        "I couldn't find the imported module `{s}` (looked for `{s}` relative to the current directory).",
+                        .{ module_name, read_path },
+                    ),
+                    error.AccessDenied,
+                    error.AntivirusInterference,
+                    error.BadPathName,
+                    error.Canceled,
+                    error.ConnectionResetByPeer,
+                    error.DeviceBusy,
+                    error.FileBusy,
+                    error.FileLocksUnsupported,
+                    error.FileTooBig,
+                    error.InputOutput,
+                    error.IsDir,
+                    error.LockViolation,
+                    error.NameTooLong,
+                    error.NetworkNotFound,
+                    error.NoDevice,
+                    error.NoSpaceLeft,
+                    error.NotDir,
+                    error.NotOpenForReading,
+                    error.OutOfMemory,
+                    error.PathAlreadyExists,
+                    error.PermissionDenied,
+                    error.PipeBusy,
+                    error.ProcessFdQuotaExceeded,
+                    error.ReadOnlyFileSystem,
+                    error.SocketUnconnected,
+                    error.StreamTooLong,
+                    error.SymLinkLoop,
+                    error.SystemFdQuotaExceeded,
+                    error.SystemResources,
+                    error.Unexpected,
+                    error.WouldBlock,
+                    => try std.fmt.allocPrint(
+                        self.allocator,
+                        "I couldn't read the imported module `{s}` (`{s}`): {s}.",
+                        .{ module_name, read_path, @errorName(err) },
+                    ),
+                };
+                return;
+            };
+        }
     };
     errdefer self.allocator.free(source);
 
@@ -655,18 +878,278 @@ fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplSte
     return out.toOwnedSlice(self.allocator);
 }
 
-fn initParsedResources(self: *ReplSession) ReplStepError!eval.test_helpers.ParsedResources {
+/// Type information for an expression without evaluating it or changing the session.
+pub fn inspectExpressionType(
+    self: *ReplSession,
+    expr: []const u8,
+    report_config: reporting.ReportingConfig,
+) ReplStepError!StepResult {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(
+        self.allocator,
+        "{s}\nrepl_inspect_value = || {{\n{s}\n}}\nmain = \"\"\n",
+        .{ definitions, expr },
+    );
+    defer self.allocator.free(source);
+
+    const import_sources = switch (try self.resolveImports()) {
+        .resolved => |modules| modules,
+        .failed => |message| return .{ .diagnostic = message },
+    };
+    defer self.freeModuleSources(import_sources);
+
+    var parsed = eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        self.allocator,
+        .module,
+        source,
+        import_sources,
+        self.prePublishedBuiltin(),
+        self.roc_ctx,
+    ) catch |err| switch (err) {
+        error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
+        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
+        else => return err,
+    };
+    defer parsed.deinit(self.allocator);
+
+    if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
+        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+    }
+
+    const def_idx = getDefOfName(parsed.module_env, "repl_inspect_value") orelse
+        return .{ .diagnostic = try self.allocator.dupe(u8, "Expression did not produce a checked definition") };
+
+    var current_var = ModuleEnv.varFrom(def_idx);
+    const return_var = while (true) {
+        const resolved = parsed.module_env.types.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .alias => |alias| current_var = parsed.module_env.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |function| {
+                    if (function.args.len() != 0) return error.Internal;
+                    break function.ret;
+                },
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return error.Internal,
+            },
+            .err, .flex, .rigid => return error.Internal,
+        }
+    };
+    var tw = try parsed.module_env.initTypeWriter();
+    defer tw.deinit();
+    try tw.write(return_var, .one_line);
+    return .{ .output = try self.allocator.dupe(u8, tw.get()) };
+}
+
+/// One completion candidate: the identifier, what kind of definition it is,
+/// and its rendered type when the session could infer one.
+pub const CompletionItem = struct {
+    label: []u8,
+    kind: DefinitionKind,
+    detail: ?[]u8,
+
+    fn deinit(self: *CompletionItem, allocator: Allocator) void {
+        allocator.free(self.label);
+        if (self.detail) |detail| allocator.free(detail);
+    }
+};
+
+/// Whether this session contains an annotation whose value has not been entered
+/// yet. This is a valid intermediate REPL state, but the whole definition set
+/// cannot be checked until the matching value arrives.
+pub fn hasPendingAnnotation(self: *const ReplSession) bool {
+    for (self.definitions.items.items) |definition| {
+        if (definition.kind == .annotation and !self.definitions.hasKind(definition.name, .value)) return true;
+    }
+    return false;
+}
+
+/// Whether completion details contain checked types for value definitions.
+pub fn completionDetailsAvailable(self: *const ReplSession) bool {
+    return !self.hasPendingAnnotation();
+}
+
+fn appendCompletionItem(
+    self: *ReplSession,
+    items: *std.ArrayList(CompletionItem),
+    name: []const u8,
+    kind: DefinitionKind,
+    detail: ?[]u8,
+) Allocator.Error!void {
+    errdefer if (detail) |bytes| self.allocator.free(bytes);
+    const label = try self.allocator.dupe(u8, name);
+    errdefer self.allocator.free(label);
+    try items.append(self.allocator, .{
+        .label = label,
+        .kind = kind,
+        .detail = detail,
+    });
+}
+
+fn completionItemsWithoutDetails(self: *ReplSession) Allocator.Error![]CompletionItem {
+    var items = std.ArrayList(CompletionItem).empty;
+    errdefer {
+        for (items.items) |*item| item.deinit(self.allocator);
+        items.deinit(self.allocator);
+    }
+
+    for (self.definitions.items.items) |definition| {
+        if (definition.kind == .annotation and self.definitions.hasKind(definition.name, .value)) continue;
+        try self.appendCompletionItem(&items, definition.name, definition.kind, null);
+    }
+    return items.toOwnedSlice(self.allocator);
+}
+
+/// Return top-level definitions available in this session. Value details are
+/// checked types unless the session contains a pending standalone annotation;
+/// callers can distinguish that explicit state with `completionDetailsAvailable`.
+pub fn completionItems(self: *ReplSession) ReplStepError![]CompletionItem {
+    if (!self.completionDetailsAvailable()) return self.completionItemsWithoutDetails();
+
+    var parsed = try self.initParsedResources();
+    defer parsed.deinit(self.allocator);
+
+    var items = std.ArrayList(CompletionItem).empty;
+    errdefer {
+        for (items.items) |*item| item.deinit(self.allocator);
+        items.deinit(self.allocator);
+    }
+
+    var tw = try parsed.module_env.initTypeWriter();
+    defer tw.deinit();
+    for (self.definitions.items.items) |definition| {
+        if (definition.kind == .annotation) continue;
+        var detail: ?[]u8 = null;
+        if (definition.kind == .value) {
+            if (getDefOfName(parsed.module_env, definition.name)) |def_idx| {
+                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+                detail = try self.allocator.dupe(u8, tw.get());
+            }
+        }
+        try self.appendCompletionItem(&items, definition.name, definition.kind, detail);
+    }
+    return items.toOwnedSlice(self.allocator);
+}
+
+/// Release a completion list returned by `completionItems`.
+pub fn freeCompletionItems(self: *ReplSession, items: []CompletionItem) void {
+    for (items) |*item| item.deinit(self.allocator);
+    self.allocator.free(items);
+}
+
+/// A definition currently held by the session, with the source text that
+/// created it so a frontend can re-display or persist the session.
+pub const StoredDefinition = struct {
+    name: []u8,
+    source: []u8,
+    kind: DefinitionKind,
+    file_import: bool,
+
+    fn deinit(self: *StoredDefinition, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.source);
+    }
+};
+
+/// Copy the ordered definitions that constitute the current session state.
+pub fn storedDefinitions(self: *const ReplSession) Allocator.Error![]StoredDefinition {
+    const stored = try self.allocator.alloc(StoredDefinition, self.definitions.items.items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (stored[0..initialized]) |*definition| definition.deinit(self.allocator);
+        self.allocator.free(stored);
+    }
+
+    for (self.definitions.items.items, 0..) |definition, index| {
+        const name = try self.allocator.dupe(u8, definition.name);
+        errdefer self.allocator.free(name);
+        const source = try self.allocator.dupe(u8, definition.source);
+        stored[index] = .{
+            .name = name,
+            .source = source,
+            .kind = definition.kind,
+            .file_import = definition.file_import,
+        };
+        initialized += 1;
+    }
+    return stored;
+}
+
+/// Release a definition list returned by `storedDefinitions`.
+pub fn freeStoredDefinitions(self: *const ReplSession, stored: []StoredDefinition) void {
+    for (stored) |*definition| definition.deinit(self.allocator);
+    self.allocator.free(stored);
+}
+
+/// Number of definitions currently in the session scope.
+pub fn definitionCount(self: *const ReplSession) usize {
+    return self.definitions.count();
+}
+
+/// A module the session serves from memory instead of the filesystem.
+pub const StoredVirtualModule = struct {
+    name: []u8,
+    source: []u8,
+
+    fn deinit(self: *StoredVirtualModule, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.source);
+    }
+};
+
+/// Copy the virtual modules required to reconstruct this session.
+pub fn storedVirtualModules(self: *const ReplSession, allocator: Allocator) Allocator.Error![]StoredVirtualModule {
+    const modules = try allocator.alloc(StoredVirtualModule, self.virtual_modules.items.items.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (modules[0..initialized]) |*module| module.deinit(allocator);
+        allocator.free(modules);
+    }
+    for (self.virtual_modules.items.items, 0..) |module, index| {
+        const name = try allocator.dupe(u8, module.name);
+        errdefer allocator.free(name);
+        const source = try allocator.dupe(u8, module.source);
+        modules[index] = .{ .name = name, .source = source };
+        initialized += 1;
+    }
+    return modules;
+}
+
+/// Release a virtual-module list returned by `storedVirtualModules`.
+pub fn freeStoredVirtualModules(_: *const ReplSession, allocator: Allocator, modules: []StoredVirtualModule) void {
+    for (modules) |*module| module.deinit(allocator);
+    allocator.free(modules);
+}
+
+fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedResources {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = \"\"\n", .{definitions});
     defer self.allocator.free(source);
 
-    return try eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    const import_sources = switch (try self.resolveImports()) {
+        .resolved => |modules| modules,
+        .failed => |message| {
+            self.allocator.free(message);
+            return error.TypeCheckError;
+        },
+    };
+    defer self.freeModuleSources(import_sources);
+
+    return try eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
         .module,
         source,
-        &.{},
+        import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
     );
@@ -702,7 +1185,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     };
     defer self.freeModuleSources(import_sources);
 
-    if (eval.test_helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    if (eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
         .module,
         source,
@@ -712,7 +1195,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     )) |parsed_value| {
         var parsed = parsed_value;
         defer parsed.deinit(self.allocator);
-        if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
+        if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
             const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.AccessDenied,
@@ -799,6 +1282,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.TypeCheckError,
                 error.Unexpected,
                 error.Unseekable,
+                error.UnsupportedHostedFunction,
+                error.InvalidHostedFunctionSignature,
                 error.UnsupportedLirImageVersion,
                 error.UnsupportedLlvmTriple,
                 error.UnsupportedLowLevel,
@@ -902,6 +1387,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.ThreadQuotaExceeded,
                 error.Unexpected,
                 error.Unseekable,
+                error.UnsupportedHostedFunction,
+                error.InvalidHostedFunctionSignature,
                 error.UnsupportedLirImageVersion,
                 error.UnsupportedLlvmTriple,
                 error.UnsupportedLowLevel,
@@ -1010,6 +1497,8 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -1030,7 +1519,10 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = {s}\n", .{ definitions, expr });
+    // Keep the expression inside the explicit zero-argument root so `dbg`,
+    // failed `expect`, and crash callbacks occur during inspected execution,
+    // not while checking finalizes a top-level value.
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
     const import_sources = switch (try self.resolveImports()) {
@@ -1043,7 +1535,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
+    var compiled = eval.Inspected.compileProgramForTargetWithBuiltinAndContext(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1139,6 +1631,8 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.ThreadQuotaExceeded,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -1161,8 +1655,12 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // leave the session definitions intact instead of executing the explicit
     // runtime-error node and aborting the remaining batch input. Warnings
     // (e.g. an unused loop binder) never block evaluation.
-    if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
-        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+    if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
+        return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
+            self.allocator,
+            &compiled.resources,
+            report_config,
+        ) };
     }
 
     const lowered = &compiled.lowered;
@@ -1174,12 +1672,28 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         .boxy_sidecar_desc = lir.LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
     };
-    const result = switch (self.backend_kind) {
-        .interpreter => try eval.InspectedRun.run(self.allocator, .interpreter, program),
-        .dev => try eval.InspectedRun.run(self.allocator, .dev, program),
-        .wasm => try eval.InspectedRun.run(self.allocator, .wasm, program),
-        .llvm => try eval.InspectedRun.run(self.allocator, .llvm, program),
+    const result = (switch (self.backend_kind) {
+        .interpreter => eval.InspectedRun.run(
+            self.allocator,
+            .interpreter,
+            program,
+            if (self.import_policy == .virtual_only) eval.InspectedRun.replEffectHost() else .reject,
+        ),
+        .dev => eval.InspectedRun.run(self.allocator, .dev, program, {}),
+        .wasm => eval.InspectedRun.run(self.allocator, .wasm, program, {}),
+        .llvm => eval.InspectedRun.run(self.allocator, .llvm, program, {}),
+    }) catch |err| switch (err) {
+        error.UnsupportedHostedFunction => return .{ .diagnostic = try self.allocator.dupe(
+            u8,
+            "This REPL only supports the hosted function Repl.emit!.",
+        ) },
+        error.InvalidHostedFunctionSignature => return .{ .diagnostic = try self.allocator.dupe(
+            u8,
+            "Repl.emit! has an invalid runtime signature.",
+        ) },
+        else => return err,
     };
+    self.last_events = result.events;
     return switch (result.outcome) {
         .returned => |output| .{ .output = output },
         .crashed => |message| .{ .runtime_crash = message },
@@ -1187,7 +1701,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
-    return eval.test_helpers.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
+    return eval.Inspected.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
         error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
         error.AccessDenied,
         error.AntivirusInterference,
@@ -1273,6 +1787,8 @@ fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const
         error.TypeCheckError,
         error.Unexpected,
         error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
         error.UnsupportedLirImageVersion,
         error.UnsupportedLlvmTriple,
         error.UnsupportedLowLevel,
@@ -1372,7 +1888,8 @@ fn trimOwnedRight(allocator: Allocator, raw: []u8) Allocator.Error![]u8 {
     return result;
 }
 
-const InputKind = enum {
+/// Whether a REPL line binds a name or is evaluated for its value.
+pub const InputKind = enum {
     definition,
     expression,
 };
@@ -1385,10 +1902,12 @@ pub const DefinitionKind = enum {
     import,
 };
 
-const InputInfo = struct {
+/// What the session made of an input line, used to label transcript entries.
+pub const InputInfo = struct {
     kind: InputKind,
     definition_kind: DefinitionKind = .value,
     name: ?[]const u8 = null,
+    file_import: bool = false,
 };
 
 /// Whether a REPL input line forms a complete, parseable statement.
@@ -1487,6 +2006,7 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
             .kind = .definition,
             .definition_kind = .import,
             .name = ast.resolve(file_import.name_tok),
+            .file_import = true,
         },
         .malformed => return .invalid,
     } };
@@ -1565,14 +2085,11 @@ fn declarationName(ast: *const parse.AST, pattern_idx: parse.AST.Pattern.Idx) ?[
     return null;
 }
 
-fn isSpecialCommand(line: []const u8) bool {
-    return std.mem.startsWith(u8, line, ":") or std.mem.eql(u8, line, "exit");
-}
-
 const Definition = struct {
     name: []u8,
     source: []u8,
     kind: DefinitionKind,
+    file_import: bool,
 
     fn deinit(self: *Definition, allocator: Allocator) void {
         allocator.free(self.name);
@@ -1606,35 +2123,40 @@ pub const DefinitionStore = struct {
         return false;
     }
 
-    pub fn removeByNameAndKind(self: *DefinitionStore, allocator: Allocator, name: []const u8, kind: DefinitionKind) void {
-        var i: usize = 0;
-        while (i < self.items.items.len) {
-            const definition = &self.items.items[i];
-            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
-                var removed = self.items.orderedRemove(i);
-                removed.deinit(allocator);
-                return;
-            }
-            i += 1;
-        }
-    }
-
-    fn addOrReplace(self: *DefinitionStore, allocator: Allocator, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
+    fn addOrReplace(
+        self: *DefinitionStore,
+        allocator: Allocator,
+        source: []const u8,
+        name: []const u8,
+        kind: DefinitionKind,
+        file_import: bool,
+    ) Allocator.Error!void {
         for (self.items.items) |*definition| {
             if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
                 const new_source = try allocator.dupe(u8, source);
+                errdefer allocator.free(new_source);
                 const new_name = try allocator.dupe(u8, name);
                 allocator.free(definition.source);
                 allocator.free(definition.name);
-                definition.* = .{ .name = new_name, .source = new_source, .kind = kind };
+                definition.* = .{
+                    .name = new_name,
+                    .source = new_source,
+                    .kind = kind,
+                    .file_import = file_import,
+                };
                 return;
             }
         }
 
+        const owned_name = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_name);
+        const owned_source = try allocator.dupe(u8, source);
+        errdefer allocator.free(owned_source);
         try self.items.append(allocator, .{
-            .name = try allocator.dupe(u8, name),
-            .source = try allocator.dupe(u8, source),
+            .name = owned_name,
+            .source = owned_source,
             .kind = kind,
+            .file_import = file_import,
         });
     }
 
@@ -1643,10 +2165,15 @@ pub const DefinitionStore = struct {
         errdefer result.deinit(allocator);
         try result.items.ensureTotalCapacity(allocator, self.items.items.len);
         for (self.items.items) |definition| {
+            const name = try allocator.dupe(u8, definition.name);
+            errdefer allocator.free(name);
+            const source = try allocator.dupe(u8, definition.source);
+            errdefer allocator.free(source);
             result.items.appendAssumeCapacity(.{
-                .name = try allocator.dupe(u8, definition.name),
-                .source = try allocator.dupe(u8, definition.source),
+                .name = name,
+                .source = source,
                 .kind = definition.kind,
+                .file_import = definition.file_import,
             });
         }
         return result;
@@ -1751,7 +2278,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
     const source = try replExprSource(&repl, expr);
     defer testing.allocator.free(source);
 
-    var compiled = try eval.test_helpers.compileInspectedProgramForTargetWithBuiltin(
+    var compiled = try eval.Inspected.compileInspectedProgramForTargetWithBuiltin(
         testing.allocator,
         repl.roc_ctx.std_io,
         .module,
@@ -1778,7 +2305,7 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
     const source = try replExprSource(&repl, expr);
     defer testing.allocator.free(source);
 
-    var compiled = try eval.test_helpers.compileInspectedProgramWithBuiltin(
+    var compiled = try eval.Inspected.compileInspectedProgramWithBuiltin(
         testing.allocator,
         repl.roc_ctx.std_io,
         .module,
@@ -1798,15 +2325,15 @@ fn expectCompiledBackend(
     backend: TestBackend,
     expr: []const u8,
     expected: []const u8,
-    lowered: *eval.test_helpers.LoweredProgram,
+    lowered: *eval.Inspected.LoweredProgram,
 ) ReplTestError!void {
     const eval_backend = toEvalBackend(backend);
     if (!eval.backendAvailable(eval_backend)) return;
 
     const result = switch (backend) {
-        .interpreter => try eval.test_helpers.lirInterpreterInspectedStr(testing.allocator, lowered),
-        .dev => try eval.test_helpers.devEvaluatorInspectedStr(testing.allocator, lowered),
-        .wasm => try eval.test_helpers.wasmEvaluatorInspectedStr(testing.allocator, lowered),
+        .interpreter => try eval.Inspected.lirInterpreterInspectedStr(testing.allocator, lowered),
+        .dev => try eval.Inspected.devEvaluatorInspectedStr(testing.allocator, lowered),
+        .wasm => try eval.Inspected.wasmEvaluatorInspectedStr(testing.allocator, lowered),
     };
     defer testing.allocator.free(result);
 
@@ -1871,17 +2398,121 @@ test "Repl - special commands" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
-    const help_result = try repl.step(":help");
-    defer testing.allocator.free(help_result);
-    try testing.expect(std.mem.find(u8, help_result, "Enter an expression") != null);
+    const help_result = try repl.executeCommandWithConfig(.help, reporting.ReportingConfig.initForTesting());
+    defer help_result.deinit(testing.allocator);
+    switch (help_result) {
+        .output => |output| try testing.expect(std.mem.find(u8, output, "Enter an expression") != null),
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
 
-    const exit_result = try repl.step(":exit");
-    defer testing.allocator.free(exit_result);
-    try testing.expectEqualStrings("Goodbye!", exit_result);
+    const exit_result = try repl.executeCommandWithConfig(.exit, reporting.ReportingConfig.initForTesting());
+    defer exit_result.deinit(testing.allocator);
+    try testing.expect(exit_result == .exit);
 
     const empty_result = try repl.step("");
     defer testing.allocator.free(empty_result);
     try testing.expectEqualStrings("", empty_result);
+}
+
+test "Repl - language stepping returns structured definition metadata" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig("answer = 42", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .definition => |definition| {
+            try testing.expectEqualStrings("answer", definition.name);
+            try testing.expectEqual(DefinitionKind.value, definition.kind);
+        },
+        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - virtual session records ordered one-way effects" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    repl.import_policy = .virtual_only;
+    const config = reporting.ReportingConfig.initColorTerminal();
+
+    const imported = try repl.stepLanguageWithConfig("import Repl", config);
+    defer imported.deinit(testing.allocator);
+    switch (imported) {
+        .definition => |definition| try testing.expectEqual(DefinitionKind.import, definition.kind),
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl import failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .expression, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+
+    const inspected = try repl.inspectExpressionType(
+        "Repl.emit!({ name: \"log\", payload: \"héllo\" })",
+        config,
+    );
+    defer inspected.deinit(testing.allocator);
+    switch (inspected) {
+        .output => |type_name| try testing.expectEqualStrings("{}", type_name),
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl emit inspection failed:\n{s}\n", .{diagnostic});
+            return error.TestUnexpectedResult;
+        },
+        .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
+
+    const emitted = try repl.stepLanguageWithConfig(
+        "Repl.emit!({ name: \"log\", payload: Str.concat(\"a long runtime-allocated \", \"effect payload\") })",
+        config,
+    );
+    defer emitted.deinit(testing.allocator);
+    switch (emitted) {
+        .expression => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl emit failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+
+    const events = repl.takeEvents();
+    defer {
+        for (events) |*event| event.deinit(testing.allocator);
+        testing.allocator.free(events);
+    }
+    try testing.expectEqual(@as(usize, 1), events.len);
+    switch (events[0]) {
+        .effect => |effect| {
+            try testing.expectEqualStrings("log", effect.name);
+            try testing.expectEqualStrings("a long runtime-allocated effect payload", effect.payload);
+        },
+        .dbg, .expect_failed, .crashed => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - failed annotated value restores the exact pending annotation state" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
+
+    const annotation = try repl.stepLanguageWithConfig("pending : Str", config);
+    defer annotation.deinit(testing.allocator);
+    switch (annotation) {
+        .definition => |definition| try testing.expectEqual(DefinitionKind.annotation, definition.kind),
+        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+
+    const failed_value = try repl.stepLanguageWithConfig("pending = 42", config);
+    defer failed_value.deinit(testing.allocator);
+    switch (failed_value) {
+        .diagnostic => |diagnostic| try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind),
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+
+    const stored = try repl.storedDefinitions();
+    defer repl.freeStoredDefinitions(stored);
+    try testing.expectEqual(@as(usize, 1), stored.len);
+    try testing.expectEqualStrings("pending : Str", stored[0].source);
+    try testing.expectEqual(DefinitionKind.annotation, stored[0].kind);
 }
 
 test "Repl - import keyword routing" {

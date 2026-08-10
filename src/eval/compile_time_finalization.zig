@@ -799,6 +799,8 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
+                    error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
                     // expect_err statements only occur in top-level expect
                     // test roots, never in compile-time constant roots.
                     error.ExpectErr => unreachable,
@@ -1863,6 +1865,8 @@ fn evalCompileTimeRoot(
         error.DivisionByZero => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero") },
         error.Crash => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed") },
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
+        error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
+        error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time root reached an invalid hosted function signature"),
     };
     return .{ .value = result };
 }

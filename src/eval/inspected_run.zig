@@ -28,8 +28,11 @@ const LayoutStore = layout.Store;
 const LirImage = lir.LirImage;
 const LirProcSpecId = lir.LirProcSpecId;
 const RocStr = builtins.str.RocStr;
-const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+const RuntimeHostEnv = @import("runtime_host.zig");
 const GuardedList = lir.LirStore.GuardedList;
+
+/// An ordered host event produced while running the inspected root.
+pub const Event = RuntimeHostEnv.HostEvent;
 
 const WasmRunner = if (builtin.target.os.tag == .freestanding) struct {
     const StubOutcome = union(enum) {
@@ -40,6 +43,7 @@ const WasmRunner = if (builtin.target.os.tag == .freestanding) struct {
     const StubResult = struct {
         outcome: StubOutcome,
         allocation_count: u32,
+        events: []Event,
     };
 
     fn runWasmOutcomeWithStats(_: Allocator, _: []const u8, _: u32, _: bool) error{WasmExecFailed}!StubResult {
@@ -65,6 +69,88 @@ pub const Program = struct {
     main_proc: LirProcSpecId,
 };
 
+/// Explicit dependency for platform-hosted calls during inspected execution.
+/// The runtime environment is provided by this layer so custom events share
+/// the exact ordering and ownership boundary of dbg/expect/crash events.
+pub const HostedCallDependency = struct {
+    dispatch: *const fn (*RuntimeHostEnv, Interpreter.HostedCall) Interpreter.Error!void,
+};
+
+/// How a run answers hosted calls: `reject` fails them, `hosted_calls`
+/// dispatches them to a dependency module.
+pub const ExecutionHost = union(enum) {
+    reject,
+    hosted_calls: HostedCallDependency,
+};
+
+/// Module name a REPL imports to emit one-way effects.
+pub const repl_effect_module_name = "Repl";
+/// Hosted symbol backing `Repl.emit!`.
+pub const repl_effect_hosted_symbol = "roc_repl_emit!";
+/// Source of the in-memory `Repl` module, served to REPL sessions that opt in
+/// to effects so no file on disk is required.
+pub const repl_effect_module_source =
+    \\Repl := [].{
+    \\    roc_repl_emit! : { name : Str, payload : Str } => {}
+    \\    emit! : { name : Str, payload : Str } => {}
+    \\    emit! = |request| Repl.roc_repl_emit!(request)
+    \\}
+;
+
+/// The dedicated REPL's explicit one-way-effect dependency. Callers opt into
+/// it; ordinary inspected evaluation always passes `.reject`.
+pub fn replEffectHost() ExecutionHost {
+    return .{ .hosted_calls = .{ .dispatch = dispatchReplEffect } };
+}
+
+fn dispatchReplEffect(runtime_env: *RuntimeHostEnv, call: Interpreter.HostedCall) Interpreter.Error!void {
+    if (!std.mem.eql(u8, call.symbol, repl_effect_hosted_symbol)) {
+        return error.UnsupportedHostedFunction;
+    }
+    if (call.arg_layouts.len != 1 or call.arg_offsets.len != 1) {
+        return error.InvalidHostedFunctionSignature;
+    }
+
+    const arg_layout_idx = call.layouts.runtimeRepresentationLayoutIdx(call.arg_layouts[0]);
+    const arg_layout = call.layouts.getLayout(arg_layout_idx);
+    if (arg_layout.tag != .struct_) return error.InvalidHostedFunctionSignature;
+    const struct_idx = arg_layout.getStruct().idx;
+    if (call.layouts.getStructData(struct_idx).fields.count != 2) {
+        return error.InvalidHostedFunctionSignature;
+    }
+    if (call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0)) != .str or
+        call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1)) != .str or
+        call.layouts.layoutSizeAlign(call.layouts.getLayout(call.ret_layout)).size != 0)
+    {
+        return error.InvalidHostedFunctionSignature;
+    }
+
+    const record_offset: usize = call.arg_offsets[0];
+    const name_offset = std.math.add(
+        usize,
+        record_offset,
+        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+    ) catch return error.InvalidHostedFunctionSignature;
+    const payload_offset = std.math.add(
+        usize,
+        record_offset,
+        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+    ) catch return error.InvalidHostedFunctionSignature;
+    if (name_offset > call.args.len or call.args.len - name_offset < @sizeOf(RocStr) or
+        payload_offset > call.args.len or call.args.len - payload_offset < @sizeOf(RocStr))
+    {
+        return error.InvalidHostedFunctionSignature;
+    }
+    const name_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + name_offset);
+    const payload_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + payload_offset);
+    const name = name_ptr.*;
+    const payload = payload_ptr.*;
+    const roc_ops = runtime_env.get_ops();
+    defer name.decref(roc_ops);
+    defer payload.decref(roc_ops);
+    try runtime_env.recordEffect(name.asSlice(), payload.asSlice());
+}
+
 /// Semantic result of executing a Roc root. The caller owns the byte slice in
 /// either variant and must call `deinit` when it is no longer needed.
 pub const Outcome = union(enum) {
@@ -81,10 +167,17 @@ pub const Outcome = union(enum) {
 /// Backend-neutral semantic outcome plus host-observed allocation count.
 pub const Result = struct {
     outcome: Outcome,
+    events: []Event,
     allocation_count: u32,
 
     pub fn deinit(self: Result, allocator: Allocator) void {
         self.outcome.deinit(allocator);
+        self.deinitEvents(allocator);
+    }
+
+    pub fn deinitEvents(self: Result, allocator: Allocator) void {
+        for (self.events) |*event| event.deinit(allocator);
+        allocator.free(self.events);
     }
 };
 
@@ -93,8 +186,10 @@ const InterpreterError = Allocator.Error || error{
     Crash,
     DivisionByZero,
     ExpectErr,
+    InvalidHostedFunctionSignature,
     Internal,
     RuntimeError,
+    UnsupportedHostedFunction,
 };
 
 const DevError = Allocator.Error || error{
@@ -144,11 +239,20 @@ fn BackendError(comptime backend_kind: Backend) type {
     };
 }
 
+fn ExecutionHostArg(comptime backend_kind: Backend) type {
+    return if (backend_kind == .interpreter) ExecutionHost else void;
+}
+
 /// Execute an inspect-wrapped root. Roc crashes are returned as `.crashed`;
 /// the error channel is reserved for compiler, allocator, and engine failures.
-pub fn run(allocator: Allocator, comptime backend_kind: Backend, program: Program) BackendError(backend_kind)!Result {
+pub fn run(
+    allocator: Allocator,
+    comptime backend_kind: Backend,
+    program: Program,
+    execution_host: ExecutionHostArg(backend_kind),
+) BackendError(backend_kind)!Result {
     return switch (backend_kind) {
-        .interpreter => runInterpreter(allocator, program),
+        .interpreter => runInterpreter(allocator, program, execution_host),
         .dev => runDev(allocator, program),
         .wasm => runWasm(allocator, program),
         .llvm => runLlvm(allocator, program),
@@ -158,14 +262,52 @@ pub fn run(allocator: Allocator, comptime backend_kind: Backend, program: Progra
 fn crashResult(
     allocator: Allocator,
     runtime_env: *RuntimeHostEnv,
-    fallback_message: ?[]const u8,
+    runtime_message: ?[]const u8,
 ) (Allocator.Error || error{Internal})!Result {
-    const message = runtime_env.takeCrashMessage() orelse if (fallback_message) |bytes|
+    var recorded = try runtime_env.snapshot(allocator);
+    errdefer recorded.deinit(allocator);
+
+    var event_message: ?[]const u8 = null;
+    for (recorded.events) |event| {
+        switch (event) {
+            .crashed => |bytes| event_message = bytes,
+            .dbg, .expect_failed, .effect => {},
+        }
+    }
+
+    const message = if (event_message orelse runtime_message) |bytes|
         try allocator.dupe(u8, bytes)
     else
         return error.Internal;
+    errdefer allocator.free(message);
+
+    if (event_message == null) {
+        const explicit_message = runtime_message orelse return error.Internal;
+        const extended = try allocator.alloc(Event, recorded.events.len + 1);
+        errdefer allocator.free(extended);
+        @memcpy(extended[0..recorded.events.len], recorded.events);
+        extended[recorded.events.len] = .{ .crashed = try allocator.dupe(u8, explicit_message) };
+        allocator.free(recorded.events);
+        recorded.events = extended;
+    }
+
     return .{
         .outcome = .{ .crashed = message },
+        .events = recorded.events,
+        .allocation_count = runtime_env.allocationCallCount(),
+    };
+}
+
+fn returnedResult(
+    allocator: Allocator,
+    runtime_env: *const RuntimeHostEnv,
+    output: []u8,
+) Allocator.Error!Result {
+    errdefer allocator.free(output);
+    const recorded = try runtime_env.snapshot(allocator);
+    return .{
+        .outcome = .{ .returned = output },
+        .events = recorded.events,
         .allocation_count = runtime_env.allocationCallCount(),
     };
 }
@@ -181,17 +323,40 @@ fn mainProcArgLayouts(allocator: Allocator, program: Program) Allocator.Error![]
     return arg_layouts;
 }
 
-fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Result {
+const BoundHostedCallDependency = struct {
+    runtime_env: *RuntimeHostEnv,
+    dependency: ?HostedCallDependency,
+
+    fn dispatch(context: *anyopaque, call: Interpreter.HostedCall) Interpreter.Error!void {
+        const self: *BoundHostedCallDependency = @ptrCast(@alignCast(context));
+        const dependency = self.dependency orelse return error.UnsupportedHostedFunction;
+        return dependency.dispatch(self.runtime_env, call);
+    }
+};
+
+fn runInterpreter(allocator: Allocator, program: Program, execution_host: ExecutionHost) InterpreterError!Result {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.initWithBoxyTables(
+    var bound_host: BoundHostedCallDependency = .{
+        .runtime_env = &runtime_env,
+        .dependency = switch (execution_host) {
+            .reject => null,
+            .hosted_calls => |dependency| dependency,
+        },
+    };
+
+    var interp = try Interpreter.initWithBoxyTablesAndHostedCallHandler(
         allocator,
         program.store,
         program.layouts,
         program.boxy_tables,
         runtime_env.get_ops(),
         .preserve,
+        .{
+            .context = &bound_host,
+            .dispatch = BoundHostedCallDependency.dispatch,
+        },
     );
     defer interp.deinit();
 
@@ -207,20 +372,19 @@ fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Resul
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
         error.ComptimeExhaustiveness,
         error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
+        error.UnsupportedHostedFunction,
         => return err,
     };
     const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
-    return .{
-        .outcome = .{ .returned = try copyReturnedRocStr(
-            allocator,
-            program.layouts,
-            ret_layout,
-            eval_result.value.ptr,
-            null,
-        ) },
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+        allocator,
+        program.layouts,
+        ret_layout,
+        eval_result.value.ptr,
+        null,
+    ));
 }
 
 fn runDev(allocator: Allocator, program: Program) DevError!Result {
@@ -295,16 +459,13 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             .crashed => return crashResult(allocator, &runtime_env, null),
         }
 
-        return .{
-            .outcome = .{ .returned = try copyReturnedRocStr(
-                allocator,
-                program.layouts,
-                ret_layout,
-                ret_buf.ptr,
-                runtime_env.get_ops(),
-            ) },
-            .allocation_count = runtime_env.allocationCallCount(),
-        };
+        return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+            allocator,
+            program.layouts,
+            ret_layout,
+            ret_buf.ptr,
+            runtime_env.get_ops(),
+        ));
     }
 }
 
@@ -344,6 +505,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
             .returned => |output| .{ .returned = output },
             .crashed => |message| .{ .crashed = message },
         },
+        .events = result.events,
         .allocation_count = result.allocation_count,
     };
 }
@@ -476,16 +638,13 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         .crashed => return crashResult(allocator, &runtime_env, null),
     }
 
-    return .{
-        .outcome = .{ .returned = try copyReturnedRocStr(
-            allocator,
-            program.layouts,
-            ret_layout,
-            ret_buf.ptr,
-            runtime_env.get_ops(),
-        ) },
-        .allocation_count = runtime_env.allocationCallCount(),
-    };
+    return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
+        allocator,
+        program.layouts,
+        ret_layout,
+        ret_buf.ptr,
+        runtime_env.get_ops(),
+    ));
 }
 
 fn installBoxyGlobal(
