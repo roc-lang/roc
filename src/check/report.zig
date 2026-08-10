@@ -765,7 +765,7 @@ pub const ReportBuilder = struct {
                                 D.bytes("field is optional, so it may be missing."),
                                 D.bytes("It cannot be used as if it is always present—access it with"),
                                 D.bytes(".?").withAnnotation(.inline_code),
-                                D.bytes("instead.").withNoPrecedingSpace(),
+                                D.bytes("instead."),
                             }, self, report);
                         },
                         .actual => {

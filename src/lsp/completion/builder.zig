@@ -975,7 +975,6 @@ pub const CompletionBuilder = struct {
             self.logDebug("addFieldsFromRecord: field '{s}'", .{field_name});
             if (field_name.len == 0) continue;
 
-            // An absent field is not on the record, so it is never a completion.
             const field_var = field_presence.typeVar();
 
             // Get field type for detail
@@ -993,12 +992,11 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            const added = try self.addItem(.{
+            _ = try self.addItem(.{
                 .label = field_name,
                 .kind = @intFromEnum(CompletionItemKind.field),
                 .detail = detail,
             });
-            if (added) {} else {}
         }
     }
 
@@ -1012,7 +1010,6 @@ pub const CompletionBuilder = struct {
         for (field_names, field_presences) |field_name_idx, field_presence| {
             const name = module_env.getIdentText(field_name_idx);
             if (std.mem.eql(u8, name, field_name)) {
-                // An absent field carries no type var.
                 return field_presence.typeVar();
             }
         }

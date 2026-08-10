@@ -93,6 +93,10 @@ pub const AbsorbedRecordDefault = struct {
     record_var: Var,
     name: Ident.Idx,
     default: types_mod.DefaultId,
+    /// The record pair enclosing this absorption, when it happened inside a
+    /// record-vs-record relation. One side is the construction whose omission
+    /// this default fills.
+    enclosing_records: ?[2]Var,
 
     pub const SafeList = MkSafeList(@This());
 };
@@ -142,6 +146,22 @@ pub const Env = struct {
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    /// Answers whether a var is the type var of a record-construction
+    /// expression. A defaulted field's value is materialized at the
+    /// construction that omitted it, so absorbing a defaulted row into an empty
+    /// one is only meaningful when such a construction owns the omission.
+    construction_probe: ?ConstructionProbe = null,
+};
+
+/// Lets the unifier ask the checker whether a var belongs to a record
+/// construction, without the unifier itself depending on the CIR.
+pub const ConstructionProbe = struct {
+    ctx: *const anyopaque,
+    isRecordConstruction: *const fn (ctx: *const anyopaque, var_: Var) bool,
+
+    fn matches(self: ConstructionProbe, var_: Var) bool {
+        return self.isRecordConstruction(self.ctx, var_);
+    }
 };
 
 /// The semantic relation applied to the initial pair of a unification call.
@@ -221,6 +241,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.occurs_scratch,
         opts.row_width_relation,
         opts.field_presence_relation,
+        env.construction_probe,
+        opts.record_construction_var,
     );
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -286,6 +308,14 @@ const Unifier = struct {
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_a: ?Var,
     unresolved_b: ?Var,
+    /// The two record vars of the innermost record-vs-record relation currently
+    /// being unified. A row absorbed into an empty record names that empty row's
+    /// var, which for a nested literal is the literal's internal extension var
+    /// rather than the literal's own var; the enclosing pair is how the checker
+    /// gets back to the construction expression that owns the omission.
+    enclosing_records: ?[2]Var,
+    construction_probe: ?ConstructionProbe,
+    record_construction_var: ?Var,
 
     /// Init unifier
     pub fn init(
@@ -296,6 +326,8 @@ const Unifier = struct {
         occurs_scratch: *occurs.Scratch,
         row_width_relation: RowWidthRelation,
         field_presence_relation: FieldPresenceRelation,
+        construction_probe: ?ConstructionProbe,
+        record_construction_var: ?Var,
     ) Unifier {
         return .{
             .ident_store = ident_store,
@@ -307,7 +339,25 @@ const Unifier = struct {
             .field_presence_relation = field_presence_relation,
             .unresolved_a = null,
             .unresolved_b = null,
+            .enclosing_records = null,
+            .construction_probe = construction_probe,
+            .record_construction_var = record_construction_var,
         };
+    }
+
+    /// Whether some record construction owns an omission absorbed at this point.
+    /// Without a probe the checker is not tracking constructions, so absorption
+    /// keeps its prior behavior.
+    fn absorptionOwnerExists(self: *const Self, record_var: Var) bool {
+        const probe = self.construction_probe orelse return true;
+        if (probe.matches(record_var)) return true;
+        if (self.enclosing_records) |pair| {
+            if (probe.matches(pair[1]) or probe.matches(pair[0])) return true;
+        }
+        if (self.record_construction_var) |owner| {
+            if (probe.matches(owner)) return true;
+        }
+        return false;
     }
 
     fn getTypeIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
@@ -499,6 +549,7 @@ const Unifier = struct {
                 self.unresolved_a = handler.saved_unresolved_a;
                 self.unresolved_b = handler.saved_unresolved_b;
             },
+            .restore_enclosing_records => |saved| self.enclosing_records = saved,
             .unify_vars => |vars| try self.unifyVars(&vars),
             .merge => |merge_frame| try self.merge(&merge_frame.vars, merge_frame.content),
             .merge_to_nominal => |merge_frame| try self.mergeToNominal(&merge_frame.vars, merge_frame.direction),
@@ -1972,6 +2023,7 @@ const Unifier = struct {
     fn validateAbsorbableRecordFields(
         self: *Self,
         fields: RecordFieldSafeMultiList.Range,
+        owner_exists: bool,
     ) Error!void {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
@@ -1979,7 +2031,12 @@ const Unifier = struct {
                 .required => return error.TypeMismatch,
                 .unknown => |unknown| switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                     .field_presence => |presence| switch (presence) {
-                        .optional, .defaulted => {},
+                        .optional => {},
+                        // An absent optional field needs nothing written, but a
+                        // defaulted one has a value that has to land in some
+                        // construction. With no construction to write it to, the
+                        // narrower record simply is not the wider one.
+                        .defaulted => if (!owner_exists) return error.TypeMismatch,
                         .required => return error.TypeMismatch,
                     },
                     .flex, .rigid, .alias, .structure, .err => return error.TypeMismatch,
@@ -2010,6 +2067,7 @@ const Unifier = struct {
                         .record_var = record_var,
                         .name = field.name,
                         .default = default,
+                        .enclosing_records = self.enclosing_records,
                     });
                 },
                 .required => unreachable,
@@ -2060,8 +2118,9 @@ const Unifier = struct {
         self: *Self,
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
+        owner_exists: bool,
     ) Error!void {
-        try self.validateAbsorbableRecordFields(fields);
+        try self.validateAbsorbableRecordFields(fields, owner_exists);
         var ext = mb_ext orelse return;
         var guard = types_mod.debug.IterationGuard.init("validateAbsorbableRecordRow");
 
@@ -2074,10 +2133,10 @@ const Unifier = struct {
                 .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .record => |record| {
-                        try self.validateAbsorbableRecordFields(record.fields);
+                        try self.validateAbsorbableRecordFields(record.fields, owner_exists);
                         ext = record.ext;
                     },
-                    .record_unbound => |tail_fields| return self.validateAbsorbableRecordFields(tail_fields),
+                    .record_unbound => |tail_fields| return self.validateAbsorbableRecordFields(tail_fields, owner_exists),
                     .empty_record => return,
                     .tuple,
                     .nominal_type,
@@ -2106,7 +2165,7 @@ const Unifier = struct {
         }
         if (self.row_width_relation == .exact) return error.TypeMismatch;
 
-        try self.validateAbsorbableRecordRow(fields, mb_ext);
+        try self.validateAbsorbableRecordRow(fields, mb_ext, self.absorptionOwnerExists(record_var));
         try self.recordAbsorbedRecordDefaults(record_var, fields, mb_ext);
 
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
@@ -2206,6 +2265,14 @@ const Unifier = struct {
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        // Pushed before any child work so it pops once that work has drained;
+        // a plain `defer` would restore while the children are still queued.
+        _ = try self.scratch.unify_work_stack.append(
+            self.scratch.gpa,
+            .{ .restore_enclosing_records = self.enclosing_records },
+        );
+        self.enclosing_records = .{ vars.a.var_, vars.b.var_ };
 
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
@@ -3425,6 +3492,9 @@ const WorkFrame = union(enum) {
         saved_unresolved_a: ?Var,
         saved_unresolved_b: ?Var,
     },
+    /// Restores the enclosing record pair once a record relation's scheduled
+    /// children have drained. Pushed before those children so it pops after them.
+    restore_enclosing_records: ?[2]Var,
     unify_vars: ResolvedVarDescs,
     merge: struct {
         vars: ResolvedVarDescs,
@@ -3451,7 +3521,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3465,7 +3535,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, null, null);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 

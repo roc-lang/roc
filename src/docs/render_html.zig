@@ -93,8 +93,6 @@ const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const 
     .{ .name = "Dec", .owner = "Num" },  .{ .name = "Numeral", .owner = "Num" },
 };
 
-/// Writes the published URL for a builtin type referenced from another package's
-/// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
 /// The `name`↔`type` separator for a record field: `?:` marks an optional
 /// field, plain `:` a required or defaulted one (a defaulted field's `??`
 /// default is written as a suffix after the type).
@@ -105,6 +103,8 @@ fn fieldSeparator(kind: DocType.Field.Kind) []const u8 {
     };
 }
 
+/// Writes the published URL for a builtin type referenced from another package's
+/// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
 fn writeBuiltinTypeUrl(w: Writer, type_name: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll(builtins_docs_base_url);
     for (builtin_nested_type_owners) |nested| {

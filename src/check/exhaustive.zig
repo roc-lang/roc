@@ -1324,12 +1324,12 @@ fn isTypeInhabitedWithKnownEmpty(
                         // Records - all fields must be inhabited (AND semantics)
                         .record => |record| {
                             const presences = type_store.getRecordFieldsSlice(record.fields).items(.presence);
-                            try pushRecordAndWork(gpa, &work_list, &record_field_vars, presences);
+                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
                         },
 
                         .record_unbound => |fields| {
                             const presences = type_store.getRecordFieldsSlice(fields).items(.presence);
-                            try pushRecordAndWork(gpa, &work_list, &record_field_vars, presences);
+                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
                         },
 
                         // Tuples - all elements must be inhabited (AND semantics)
@@ -1481,7 +1481,9 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1490,7 +1492,9 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1644,7 +1648,9 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1652,7 +1658,9 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1827,7 +1835,9 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1842,7 +1852,9 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1984,7 +1996,9 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1992,7 +2006,9 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).presence.typeVar();
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -2028,8 +2044,27 @@ fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars
     }
 }
 
+/// An optional field may be absent, so the record is inhabited no matter what
+/// that field's payload type is: only fields that are always present join the
+/// AND. A defaulted field is always present (its default is materialized at
+/// every omission site), and a presence that has not resolved to a concrete
+/// kind is treated as present so inhabitedness stays conservative.
+fn fieldIsAlwaysPresent(type_store: *TypeStore, presence: types.RecordField.Presence) bool {
+    return switch (presence.decode()) {
+        .required => true,
+        .unknown => |unknown| switch (type_store.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |kind| switch (kind) {
+                .optional => false,
+                .required, .defaulted => true,
+            },
+            .flex, .rigid, .alias, .structure, .err => true,
+        },
+    };
+}
+
 fn pushRecordAndWork(
     gpa: std.mem.Allocator,
+    type_store: *TypeStore,
     work_list: *std.ArrayList(WorkItem),
     field_vars: *std.ArrayList(Var),
     presences: []const types.RecordField.Presence,
@@ -2037,6 +2072,7 @@ fn pushRecordAndWork(
     field_vars.clearRetainingCapacity();
     try field_vars.ensureTotalCapacity(gpa, presences.len);
     for (presences) |presence| {
+        if (!fieldIsAlwaysPresent(type_store, presence)) continue;
         field_vars.appendAssumeCapacity(presence.typeVar());
     }
     try pushAndWork(gpa, work_list, field_vars.items);
@@ -4482,13 +4518,17 @@ test "record inhabitedness retains its field-var scratch buffer" {
     var scratch: std.ArrayList(Var) = .empty;
     defer scratch.deinit(gpa);
 
-    try pushRecordAndWork(gpa, &work_list, &scratch, &presences);
+    // Built on the testing allocator so it stays out of `counting`'s tallies.
+    var type_store = try TypeStore.initCapacity(std.testing.allocator, 4, 0);
+    defer type_store.deinit();
+
+    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
     try std.testing.expect(scratch.capacity >= presences.len);
 
     work_list.clearRetainingCapacity();
     const allocations = counting.allocations;
     const resizes = counting.resize_index;
-    try pushRecordAndWork(gpa, &work_list, &scratch, &presences);
+    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
 
     try std.testing.expectEqual(allocations, counting.allocations);
     try std.testing.expectEqual(resizes, counting.resize_index);

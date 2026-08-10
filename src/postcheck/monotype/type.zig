@@ -1685,6 +1685,9 @@ pub const DurableView = struct {
         }
         for (self.fields) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+            if (field.value_ty) |value_ty| {
+                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+            }
         }
         for (self.tags) |tag| {
             if (!self.spanInBounds(self.spans.len, tag.payloads)) return .type_span_out_of_bounds;
@@ -1744,6 +1747,9 @@ pub const DurableView = struct {
         const fields_ = self.fieldSpan(span_);
         for (fields_) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+            if (field.value_ty) |value_ty| {
+                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+            }
         }
         if (fields_.len > 1) {
             for (fields_[1..], 1..) |field, index| {

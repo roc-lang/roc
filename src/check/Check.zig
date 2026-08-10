@@ -3587,7 +3587,13 @@ fn unifyEnv(self: *Self) unifier.Env {
         .type_writer = &self.type_writer,
         .unify_scratch = &self.unify_scratch,
         .occurs_scratch = &self.occurs_scratch,
+        .construction_probe = .{ .ctx = self, .isRecordConstruction = probeRecordConstruction },
     };
+}
+
+fn probeRecordConstruction(ctx: *const anyopaque, var_: Var) bool {
+    const self: *const Self = @ptrCast(@alignCast(ctx));
+    return self.sourceRecordConstructionForVar(var_) != null;
 }
 
 fn sourceRecordConstructionForVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
@@ -3604,6 +3610,15 @@ fn sourceRecordConstructionForVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
 fn recordAbsorbedDefaults(self: *Self, construction_var: ?Var, a: Var, b: Var) std.mem.Allocator.Error!void {
     for (self.unify_scratch.absorbed_record_defaults.items.items) |absorbed| {
         var mb_expr = self.sourceRecordConstructionForVar(absorbed.record_var);
+        // The pair enclosing the absorption names the construction directly,
+        // including when it is nested inside the operands (a record literal in
+        // a tag payload, say), which the outer operand vars cannot reach.
+        if (mb_expr == null) {
+            if (absorbed.enclosing_records) |pair| {
+                mb_expr = self.sourceRecordConstructionForVar(pair[1]) orelse
+                    self.sourceRecordConstructionForVar(pair[0]);
+            }
+        }
         if (mb_expr == null) {
             if (construction_var) |owner| mb_expr = self.sourceRecordConstructionForVar(owner);
         }
@@ -3644,7 +3659,11 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     else
         null;
     const unify_env = self.unifyEnv();
-    const result = try unifier.unify(&unify_env, a, b, opts);
+    // The unifier decides whether a defaulted row may be absorbed at all, so it
+    // needs the same owner the absorption will later be attributed to.
+    var unify_opts = opts;
+    unify_opts.record_construction_var = construction_var;
+    const result = try unifier.unify(&unify_env, a, b, unify_opts);
 
     if (result.isOk()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
