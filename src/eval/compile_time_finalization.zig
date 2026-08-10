@@ -286,7 +286,7 @@ fn finalize(
             const root_id = state.rootIdForRequestIndex(request_index);
             if (!state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
-                    finalizationInvariant("compile-time root request order referenced an unfinished dependency");
+                    finalizationInvariant("compile-time root request order placed a root before its field defaults or another dependency");
                 }
                 _ = try lowerEvalAndFinishRoots(
                     allocator,
