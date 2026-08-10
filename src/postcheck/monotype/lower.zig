@@ -32020,18 +32020,17 @@ const BodyContext = struct {
     /// the binder's type by this kind, so lowering consumes the same
     /// explicit kind through the shared cross-view walk
     /// (`checkedRecordFieldByName`). The field is always concretely on the
-    /// row—the destructure's probe put it there—so an interior or
-    /// absent resolution is an upstream failure, not a case.
+    /// row—the destructure's probe put it there. A scheme interior is the
+    /// required-equivalent tail of a generic row; only absence is an
+    /// upstream failure.
     fn recordDestructFieldKind(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
         destruct: checked.CheckedRecordDestruct,
     ) Allocator.Error!checked.CheckedFieldKind.Tag {
         const target = try self.builder.recordFieldName(self.view, destruct.label);
-        return switch (try self.checkedRecordFieldByName(record_checked_ty, target)) {
-            .found => |field| field.kind.tag,
-            .scheme_interior, .absent => Common.invariant("record destructure field was missing from its checked row"),
-        };
+        return recordDestructKindFromResolution(try self.checkedRecordFieldByName(record_checked_ty, target)) orelse
+            Common.invariant("record destructure field was missing from its checked row");
     }
 
     /// Whether any destructured field's kind is `optional`. Such a pattern
@@ -32346,6 +32345,14 @@ const BodyContext = struct {
         scheme_interior,
         absent,
     };
+
+    fn recordDestructKindFromResolution(resolution: CheckedFieldResolution) ?checked.CheckedFieldKind.Tag {
+        return switch (resolution) {
+            .found => |field| field.kind.tag,
+            .scheme_interior => .required,
+            .absent => null,
+        };
+    }
 
     /// Find `field_name`'s checked record field on the row behind
     /// `checked_ty`, walking aliases, nominal backing, and the extension
@@ -48287,6 +48294,17 @@ test "sealed record omission takes its default identity from the monotype field"
     };
 
     try std.testing.expectEqual(expected, BodyContext.sealedDefaultedFieldIdentity(field));
+}
+
+test "record destructure treats a scheme-interior field as required" {
+    try std.testing.expectEqual(
+        @as(?checked.CheckedFieldKind.Tag, .required),
+        BodyContext.recordDestructKindFromResolution(.scheme_interior),
+    );
+    try std.testing.expectEqual(
+        @as(?checked.CheckedFieldKind.Tag, null),
+        BodyContext.recordDestructKindFromResolution(.absent),
+    );
 }
 
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
