@@ -765,18 +765,6 @@ pub const RecordField = struct {
         return std.mem.order(u8, a_text, b_text);
     }
 
-    /// The field's value type variable, when the field can carry one. Delegates
-    /// to `Presence.typeVar`.
-    pub fn typeVar(self: Self) ?Var {
-        return self.presence.typeVar();
-    }
-
-    /// The presence-axis variable of an as-yet-undetermined field, when it has
-    /// one. Delegates to `Presence.presenceVar`.
-    pub fn presenceVar(self: Self) ?Var {
-        return self.presence.presenceVar();
-    }
-
     /// Whether a record field's kind is concretely required or still carried
     /// on a presence var (design.md "Field Kinds (All-Dynamic Optional
     /// Fields)").

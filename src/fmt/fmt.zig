@@ -1578,11 +1578,7 @@ const Formatter = struct {
 
                 const access_indent = fmt.curr_indent;
                 const segments = fmt.ast.store.fieldAccessSegmentSlice(fa.segments);
-                if (comptime builtin.mode == .Debug) {
-                    std.debug.assert(segments.len > 0);
-                } else if (segments.len == 0) {
-                    unreachable;
-                }
+                std.debug.assert(segments.len > 0);
 
                 for (segments, 0..) |segment, i| {
                     // Nested field-access nodes used to restore indentation after

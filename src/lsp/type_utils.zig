@@ -64,9 +64,8 @@ pub const RecordFieldInfo = struct {
 /// Iterator over record fields.
 /// This avoids allocations by providing an iterator interface over internal storage.
 ///
-/// The type of a field now lives on its presence's second axis, so the iterator
-/// derives `type_var` from the presence. Absent fields are guaranteed not on the
-/// record and carry no type, so they are skipped.
+/// The type of a field lives on its presence's second axis, so the iterator
+/// derives `type_var` from the presence.
 pub const RecordFieldsIterator = struct {
     names: []const Ident.Idx,
     presences: []const Presence,
@@ -74,21 +73,15 @@ pub const RecordFieldsIterator = struct {
 
     /// Get the next field, or null if exhausted
     pub fn next(self: *RecordFieldsIterator) ?RecordFieldInfo {
-        while (self.index < self.names.len) {
-            const idx = self.index;
-            self.index += 1;
-            const presence = self.presences[idx];
-            {
-                const type_var = presence.typeVar();
-                return RecordFieldInfo{
-                    .name = self.names[idx],
-                    .type_var = type_var,
-                    .presence = presence,
-                };
-            }
-            // Absent field: skip.
-        }
-        return null;
+        if (self.index >= self.names.len) return null;
+        const idx = self.index;
+        self.index += 1;
+        const presence = self.presences[idx];
+        return .{
+            .name = self.names[idx],
+            .type_var = presence.typeVar(),
+            .presence = presence,
+        };
     }
 
     /// Reset the iterator to the beginning
