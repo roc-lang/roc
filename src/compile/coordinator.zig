@@ -2103,7 +2103,7 @@ pub const Coordinator = struct {
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
                     switch (rep.severity) {
-                        .info, .warning => {},
+                        .warning => {},
                         .runtime_error, .fatal => return true,
                     }
                 }
