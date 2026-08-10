@@ -1003,6 +1003,36 @@ fn recordSchemeRequirementCandidate(
     owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
 
+/// Keep the first occurrence of each exact evidence substitution, then group
+/// pairs by scheme var without changing producer order within a group.
+/// Evidence lists are normally only a few entries long, so a stable in-place
+/// scan avoids a per-instantiation hash-table allocation.
+fn canonicalizeSchemeUsePairs(pairs: *std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair)) void {
+    var write: usize = 0;
+    for (pairs.items) |pair| {
+        var seen = false;
+        for (pairs.items[0..write]) |existing| {
+            if (std.meta.eql(existing, pair)) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        pairs.items[write] = pair;
+        write += 1;
+    }
+    pairs.shrinkRetainingCapacity(write);
+
+    std.mem.sort(ModuleEnv.SchemeUsePair, pairs.items, {}, struct {
+        fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
+            // pairForResolved deliberately selects the first substitution for
+            // an old root. Preserve the producer's insertion order for ties;
+            // ordering by the fresh id would silently change that selection.
+            return a.old_var < b.old_var;
+        }
+    }.lessThan);
+}
+
 fn shrinkSchemeRequirementCandidatesTo(self: *Self, new_len: usize) void {
     while (self.scheme_requirement_candidates.items.len > new_len) {
         const candidate_idx: u32 = @intCast(self.scheme_requirement_candidates.items.len - 1);
@@ -4509,29 +4539,7 @@ fn instantiateVarHelp(
             .fresh_var = @intFromEnum(self.types.resolveVar(requirement.constraint.fn_var).var_),
         });
     }
-    // Deduplicate exact substitutions before sorting. Equal pairs need not be
-    // adjacent in producer order, and sorting by fresh var would change the
-    // first substitution selected by checked-artifact consumers.
-    var seen_evidence_pairs = std.AutoHashMap(ModuleEnv.SchemeUsePair, void).init(self.gpa);
-    defer seen_evidence_pairs.deinit();
-    var evidence_write: usize = 0;
-    for (self.scratch_evidence_pairs.items) |pair| {
-        const entry = try seen_evidence_pairs.getOrPut(pair);
-        if (entry.found_existing) continue;
-        entry.value_ptr.* = {};
-        self.scratch_evidence_pairs.items[evidence_write] = pair;
-        evidence_write += 1;
-    }
-    self.scratch_evidence_pairs.shrinkRetainingCapacity(evidence_write);
-
-    std.mem.sort(ModuleEnv.SchemeUsePair, self.scratch_evidence_pairs.items, {}, struct {
-        fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
-            // pairForResolved deliberately selects the first substitution for
-            // an old root. Preserve the producer's insertion order for ties;
-            // ordering by the fresh id would silently change that selection.
-            return a.old_var < b.old_var;
-        }
-    }.lessThan);
+    canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
     const needs_evidence = try self.schemeHasEvidenceParams(var_to_instantiate);
     if (self.scratch_evidence_pairs.items.len > 0 or needs_evidence) {
         if (nested_function_use) |source_expr| {
@@ -10740,22 +10748,7 @@ fn replayPredeclaredSchemeUse(
         });
     }
 
-    var seen_pairs = std.AutoHashMap(ModuleEnv.SchemeUsePair, void).init(self.gpa);
-    defer seen_pairs.deinit();
-    var pair_write: usize = 0;
-    for (self.scratch_evidence_pairs.items) |pair| {
-        const entry = try seen_pairs.getOrPut(pair);
-        if (entry.found_existing) continue;
-        entry.value_ptr.* = {};
-        self.scratch_evidence_pairs.items[pair_write] = pair;
-        pair_write += 1;
-    }
-    self.scratch_evidence_pairs.shrinkRetainingCapacity(pair_write);
-    std.mem.sort(ModuleEnv.SchemeUsePair, self.scratch_evidence_pairs.items, {}, struct {
-        fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
-            return a.old_var < b.old_var;
-        }
-    }.lessThan);
+    canonicalizeSchemeUsePairs(&self.scratch_evidence_pairs);
 
     const scheme_uses_before = self.cir.scheme_uses.items.items.len;
     try self.cir.recordSchemeUse(

@@ -3986,10 +3986,9 @@ name, owner environment, and exact method binding is the same semantic solver
 state and is rejected as recursive dispatch; a chain whose concrete type
 structure changes has a different digest and continues. Rejection settles
 only that cyclic obligation and processing continues with unrelated queued
-relations. This finite-state rule replaces the old 64-round, 16K-entry, and
-instantiation-recursion cutoffs. A repeated observation of the same raw edge
-first reuses its recorded target and state key; canonical type traversal and
-digest construction occur only when selecting a target for a new edge.
+relations. A repeated observation of the same raw edge first reuses its
+recorded target and state key; canonical type traversal and digest construction
+occur only when selecting a target for a new edge.
 
 Only roots actually promoted to generalized rank can instantiate a side-table
 scheme. A mixed recursive group can provisionally capture requirements for a
@@ -4041,9 +4040,9 @@ exactly once, then checks the receiver, helper, and result annotation sites plus
 the rejection direction using error severity rather than raw warning-inclusive
 problem counts. The literal-constrained lambda parameter regression proves two
 concrete instantiations remain independent. Static-dispatch termination is
-pinned on both sides: an 80-layer nested requirement chain succeeds past the
-former round cap, while a repeated self-nested state reports one recursive
-dispatch error without abandoning unrelated queue entries.
+pinned on both sides: an 80-layer nested requirement chain succeeds, while a
+repeated self-nested state reports one recursive dispatch error without
+abandoning unrelated queue entries.
 The cross-module weak-receiver regression proves that, after the receiver has
 settled, publication preserves the discharged root scheme's polymorphism
 without checker-local requirement state.
