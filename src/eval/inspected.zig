@@ -143,7 +143,7 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         return self.fixed_buffer.allocator();
     }
 
-    fn getUsedSize(self: *const @This()) usize {
+    pub fn getUsedSize(self: *const @This()) usize {
         return self.fixed_buffer.end_index;
     }
 
@@ -886,6 +886,7 @@ pub fn compileProgramForTargetWithBuiltin(
         target_usize,
         pre_published_builtin,
         null,
+        .lss,
     );
 }
 
@@ -900,6 +901,7 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -913,7 +915,9 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
-    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, target_usize, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);

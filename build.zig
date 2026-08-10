@@ -662,13 +662,13 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2129, .end = 2135 },
+        .{ .file = "inspected.zig", .start = 2147, .end = 2147 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 2849, .end = 2859 },
+        .{ .file = "inspected.zig", .start = 2936, .end = 2940 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
-        .{ .file = "inspected_run.zig", .start = 97, .end = 103 },
+        .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -4191,6 +4191,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "compile", .module = roc_modules.compile },
             .{ .name = "ctx", .module = roc_modules.ctx },
             .{ .name = "eval", .module = roc_modules.eval },
+            .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "parse", .module = roc_modules.parse },
             .{ .name = "reporting", .module = roc_modules.reporting },
         },

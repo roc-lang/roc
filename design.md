@@ -5687,7 +5687,7 @@ Its direct body is therefore not a future-call frontier: a body-required
 receiver at a direct call edge there must resolve during checking. Passing a
 generalized function as data—even to inspection—does not call it. A nested
 closure body remains outside that frontier until an explicit checked call
-invokes it. The checker carries that direct-call fact through only the
+invokes it. The checker carries that direct-call data through only the
 value-producing child of a closure, block, conditional, or match; conditions,
 guards, and preceding block statements are not call edges.
 

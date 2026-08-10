@@ -383,10 +383,7 @@ pub const Interpreter = struct {
         yes,
     };
 
-    pub const Error = boxy_runtime.Error || error{
-        UnsupportedHostedFunction,
-        InvalidHostedFunctionSignature,
-    };
+    pub const Error = boxy_runtime.Error;
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -4098,6 +4095,8 @@ pub const Interpreter = struct {
                 error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
                 error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
                 error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
+                error.UnsupportedHostedFunction => roc_ops.crash("LIR/interpreter erased callable capture drop reached an unsupported hosted function"),
+                error.InvalidHostedFunctionSignature => roc_ops.crash("LIR/interpreter erased callable capture drop reached an invalid hosted function signature"),
                 error.ExpectErr => unreachable,
             };
             return;
