@@ -1136,7 +1136,7 @@ test "Monotype materialized list patterns retain graph element provenance" {
     try expectContains(materialized, "self.applyPendingMaterializedPatterns(");
     try expectContains(materialized, "sequence_index == rest_index");
     try expectContains(materialized, "self.preRegisterPatternBindersAtNode(pattern_id, value_node)");
-    try expectContains(materialized, "self.relateRecordRestNodeToSource(value_node, rest_node)");
+    try expectContains(materialized, "self.requireRecordRestFieldsInSource(value_node, rest_node)");
     try expectContains(materialized, "fn recordRestNodeForPattern(");
     try expectNotContains(materialized, "activeTypeFromCell");
     try expectNotContains(materialized, "activeTypeFromNode");

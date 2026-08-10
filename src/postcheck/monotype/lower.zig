@@ -19352,7 +19352,7 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
-            .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
+            .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, request_fn_node),
             .const_node, .expect, .unevaluable => Common.invariant("callable eval binding root did not output a callable value"),
         };
     }
@@ -19361,7 +19361,6 @@ const BodyContext = struct {
         self: *BodyContext,
         view: ModuleView,
         template: checked.CallableEvalTemplate,
-        root: checked.CompileTimeRoot,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
@@ -19379,8 +19378,6 @@ const BodyContext = struct {
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
         try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
-        try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
-        try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
 
         return try body_ctx.lowerPendingCallableEvalRoot(
             view,
@@ -42914,7 +42911,7 @@ const BodyContext = struct {
         rest_cell: DraftTypeCell,
         rest_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        try self.relateRecordRestNodeToSource(value_node, rest_node);
+        try self.requireRecordRestFieldsInSource(value_node, rest_node);
         const rest_fields = try self.allocator.dupe(InstField, (try self.graph.recordNodes(rest_node)).fields);
         defer self.allocator.free(rest_fields);
         std.mem.sort(InstField, rest_fields, &self.builder.program.names, instRecordFieldLessThan);
@@ -42937,15 +42934,18 @@ const BodyContext = struct {
         });
     }
 
-    fn relateRecordRestNodeToSource(
+    /// Require the source record to carry every field the rest pattern binds.
+    /// Selecting an absent field is an invariant violation, so the selection
+    /// itself is the check; the two sides need no relation, because the rest
+    /// node's fields are instantiated from the source's own row.
+    fn requireRecordRestFieldsInSource(
         self: *BodyContext,
         source_node: NodeId,
         rest_node: NodeId,
     ) Allocator.Error!void {
         const rest_fields = (try self.graph.recordNodes(rest_node)).fields;
         for (rest_fields) |field| {
-            const source_field_node = try self.graph.recordFieldNode(source_node, field.name);
-            try self.graph.unify(field.ty, source_field_node);
+            _ = try self.graph.recordFieldNode(source_node, field.name);
         }
     }
 
