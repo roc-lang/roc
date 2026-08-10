@@ -1167,6 +1167,21 @@ test "check type - record - opt - optional access through generalized function r
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - record - opt - generalized optional access rejects a field absent from the caller row" {
+    const source =
+        \\Rec := { present : Str }
+        \\
+        \\get_missing = |r| r.?zzz
+        \\
+        \\use : Rec -> Str
+        \\use = |r| get_missing(r) ?? "missing"
+        \\
+        \\main! = |_| {}
+    ;
+    // The helper's inferred optional slot cannot widen `Rec`'s committed row.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
 test "check type - record - opt - unconstrained literal field kind commits to required at finalize" {
     // Kind defaulting as a checker pass (design.md "Field Kinds"): a record
     // literal mints a flex kind var per field, and `hello` is never used at

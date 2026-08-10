@@ -180,9 +180,9 @@ pending_default_checks: std.ArrayList(PendingDefaultCheck),
 /// (`.?` on an always-present field), and a still-flex kind pins to
 /// `optional` BEFORE the scheme forms, so instantiated copies of a
 /// generalized function's rows carry the concrete kind (design.md "Field
-/// Kinds"). `optional_access_watermark` tracks the judged prefix.
+/// Kinds"). Entries owned by an enclosing rank remain pending for that
+/// rank's boundary; judged entries are removed.
 optional_field_accesses: std.ArrayList(OptionalFieldAccess),
-optional_access_watermark: usize = 0,
 /// Field-kind vars minted by record LITERALS (the fresh flex `.unknown`
 /// presence every literal field gets), recorded at the mint site so the
 /// finalize sweep (`defaultLiteralFieldKinds`) can commit still-undetermined
@@ -19579,10 +19579,12 @@ fn judgeRecordUpdates(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 }
 
 fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    while (self.optional_access_watermark < self.optional_field_accesses.items.len) {
-        const access = self.optional_field_accesses.items[self.optional_access_watermark];
-        self.optional_access_watermark += 1;
-        switch (self.types.resolveVar(access.presence_var).desc.content) {
+    var retained: usize = 0;
+    var index: usize = 0;
+    while (index < self.optional_field_accesses.items.len) : (index += 1) {
+        const access = self.optional_field_accesses.items[index];
+        const resolved = self.types.resolveVar(access.presence_var);
+        switch (resolved.desc.content) {
             .field_presence => |field_presence| switch (field_presence) {
                 .required, .defaulted => {
                     _ = try self.problems.appendProblem(self.gpa, .{ .optional_access_of_required_field = .{
@@ -19593,6 +19595,11 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                 .optional => {},
             },
             .flex => {
+                if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+                    self.optional_field_accesses.items[retained] = access;
+                    retained += 1;
+                    continue;
+                }
                 const optional_var = try self.freshFromContent(
                     .{ .field_presence = .optional },
                     env,
@@ -19603,6 +19610,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
             .rigid, .alias, .structure, .err => {},
         }
     }
+    self.optional_field_accesses.shrinkRetainingCapacity(retained);
 }
 
 /// Judge every not-yet-judged record-destructure field bind (design.md
