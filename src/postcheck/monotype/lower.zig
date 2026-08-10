@@ -18433,14 +18433,14 @@ const BodyContext = struct {
             .empty_record => return try self.lowerRecordExpr(.{
                 .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                 .ext = @as(?checked.CheckedExprId, null),
-            }, expr.ty, ty, &.{}),
+            }, ty, &.{}),
             .str => |segments| try self.lowerStr(segments),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
             .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .list => |items| .{ .list = try self.lowerListExpr(items, ty) },
             .tuple => |items| return try self.addConstructorExpr(ty, .{ .tuple = try self.lowerExprSpanAtTypes(items, self.builder.tupleItemTypes(ty)) }),
-            .record => |record| return try self.lowerRecordExpr(record, expr.ty, ty, &.{}),
+            .record => |record| return try self.lowerRecordExpr(record, ty, &.{}),
             .tag => |tag| {
                 const name = try self.builder.tagName(self.view, tag.name);
                 return try self.addConstructorExpr(ty, .{ .tag = .{
@@ -31898,25 +31898,9 @@ const BodyContext = struct {
         return true;
     }
 
-    /// The lowered default value for a field the construction omitted, when
-    /// the checked row declares one (design.md "Defaulted Fields"): the
-    /// default's archived checked expression is lowered INLINE at the
-    /// field's monotype—defaults are pure, so inlining is its evaluation.
-    /// Null when the field has no default (the caller's invariant fires).
-    fn defaultedFieldValue(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-        field_ty: Type.TypeId,
-    ) Allocator.Error!?DraftExprId {
-        const default = (try self.checkedFieldDefault(checked_ty, field_name)) orelse return null;
-        return try self.defaultedFieldValueFromDefault(default, field_ty);
-    }
-
     /// Materialize one archived field default (by identity) at `field_ty`:
     /// prefer the declaring module's finalized constant, falling back to
-    /// inlining the pure default expression while this module's own roots
-    /// are still being finalized (see `defaultedFieldValue`).
+    /// its pure expression while this module's roots are being finalized.
     fn defaultedFieldValueFromDefault(
         self: *BodyContext,
         default: checked.CheckedFieldDefault,
@@ -31938,8 +31922,7 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
     }
 
-    /// View-independent core of the two entry points above: the declaring
-    /// module comes from identity bytes.
+    /// View-independent core of the two entry points above.
     fn defaultedFieldValueAt(
         self: *BodyContext,
         origin_hash: *const [32]u8,
@@ -31993,17 +31976,6 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Find `field_name`'s default identity on the checked row behind
-    /// `checked_ty`, walking aliases and the extension chain.
-    fn checkedFieldDefault(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-    ) Allocator.Error!?checked.CheckedFieldDefault {
-        const kind = (try self.checkedFieldKind(checked_ty, field_name)) orelse return null;
-        return kind.defaultIdentity();
-    }
-
     /// Find `field_name`'s declared kind on the checked row behind
     /// `checked_ty`, walking aliases, nominal backing, and the extension
     /// chain. The kind is view-portable: its tag is POD and a defaulted
@@ -32032,6 +32004,14 @@ const BodyContext = struct {
             return .optional;
         }
         return if (field.default != null) .defaulted else .required;
+    }
+
+    fn sealedDefaultedFieldIdentity(field: Type.Field) Type.FieldDefault {
+        if (field.kind_state != .resolved or field.value_ty != null) {
+            Common.invariant("sealed defaulted field did not have a resolved inline slot");
+        }
+        return field.default orelse
+            Common.invariant("sealed defaulted field carried no Monotype default identity");
     }
 
     /// The declared kind of one record-destructure field, read from the
@@ -32664,7 +32644,6 @@ const BodyContext = struct {
     fn lowerRecordExpr(
         self: *BodyContext,
         record: anytype,
-        checked_ty: checked.CheckedTypeId,
         ty: Type.TypeId,
         pre_lowered: []const PreLoweredChild,
     ) Allocator.Error!DraftExprId {
@@ -32774,11 +32753,11 @@ const BodyContext = struct {
                 const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
                 spread_reads[i] = .{ .local = read_local, .value = read };
                 break :blk try self.localExpr(read_local, field.ty);
-            } else if (try self.defaultedFieldValue(checked_ty, field.name, field.ty)) |default_value|
-                // An omitted DEFAULTED field materializes its default into
-                // the inline slot (design.md "Defaulted Fields").
-                default_value
-            else if (field_kind == .optional)
+            } else if (field_kind == .defaulted) defaulted: {
+                const default = sealedDefaultedFieldIdentity(field);
+                break :defaulted (try self.defaultedFieldValueFromMonoDefault(default, field.ty)) orelse
+                    Common.invariant("sealed defaulted field had no archived default value");
+            } else if (field_kind == .optional)
                 // An OMITTED OPTIONAL field (admitted by width absorption)
                 // constructs the slot's Missing tag.
                 try self.optionalSlotMissingExpr(field.ty)
@@ -48294,6 +48273,20 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
         .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |p| @field(exact_numeral.Target, @tagName(p)),
     };
+}
+
+test "sealed record omission takes its default identity from the monotype field" {
+    const expected: Type.FieldDefault = .{
+        .module = @enumFromInt(17),
+        .expr_node = 23,
+    };
+    const field: Type.Field = .{
+        .name = @enumFromInt(5),
+        .ty = @enumFromInt(11),
+        .default = expected,
+    };
+
+    try std.testing.expectEqual(expected, BodyContext.sealedDefaultedFieldIdentity(field));
 }
 
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
