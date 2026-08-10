@@ -23255,16 +23255,9 @@ fn publishCompileTimeRootRequestEligibility(
 ) Allocator.Error!void {
     for (roots) |*root| {
         const concrete = try checkedTypeIsConcreteCompileTimeRoot(allocator, &checked_types.store, root.checked_type);
-        const eligible = concrete and switch (root.kind) {
-            .expect => !checked_bodies.exprContainsDiagnosticError(root.expr),
-            .constant,
-            .hoisted_constant,
-            .callable_binding,
-            .numeral_conversion,
-            .quote_conversion,
-            .field_default,
-            => true,
-        };
+        // The checker already owns this diagnostic; evaluating the root would
+        // only add a secondary compile-time crash for its replacement node.
+        const eligible = concrete and !checked_bodies.exprContainsDiagnosticError(root.expr);
         root.request_eligibility = if (eligible) .eligible else .ineligible;
     }
 }

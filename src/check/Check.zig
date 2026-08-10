@@ -2579,11 +2579,11 @@ fn replaceExprWithRuntimeError(
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
-    try self.invalidateHoistedExprSubtree(expr_idx);
+    try self.invalidateExprSubtreeMetadata(expr_idx);
     self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
 }
 
-fn invalidateHoistedExprSubtree(self: *Self, root: CIR.Expr.Idx) Allocator.Error!void {
+fn invalidateExprSubtreeMetadata(self: *Self, root: CIR.Expr.Idx) Allocator.Error!void {
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
 
@@ -2592,6 +2592,17 @@ fn invalidateHoistedExprSubtree(self: *Self, root: CIR.Expr.Idx) Allocator.Error
     while (next < work.items.len) : (next += 1) {
         try self.markHoistInvalidatedExprChildren(work.items[next], &work);
     }
+
+    // Replacing the root makes every construction in its old subtree
+    // unreachable. Retire the omission plans attached to those constructions
+    // before checked-artifact publication consumes the surviving source tree.
+    var retained: usize = 0;
+    for (self.cir.record_omitted_defaults.items.items) |omitted| {
+        if (omitted.expr == root or self.hoist_invalidated_exprs.contains(omitted.expr)) continue;
+        self.cir.record_omitted_defaults.items.items[retained] = omitted;
+        retained += 1;
+    }
+    self.cir.record_omitted_defaults.items.shrinkRetainingCapacity(retained);
 }
 
 fn markHoistInvalidatedExpr(
@@ -19875,6 +19886,12 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     // Diagnose every cycle against the original checked expressions before
     // applying error recovery; poisoning one side of a mutual cycle must not
     // hide the other side's cycle from this judgment.
+    const omitted_defaults = try self.gpa.dupe(
+        ModuleEnv.RecordOmittedDefault,
+        self.cir.record_omitted_defaults.items.items,
+    );
+    defer self.gpa.free(omitted_defaults);
+
     for (recursive_defaults.items) |pending| {
         const region = self.cir.store.getExprRegion(pending.default_expr);
         _ = try self.problems.appendProblem(self.gpa, .{ .recursive_default_value = .{
@@ -19889,6 +19906,20 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = region,
         } });
+
+        // A construction that omits this rejected default would otherwise
+        // restore the replacement runtime-error expression during postcheck
+        // or compile-time evaluation. Match the checker's exact omission
+        // identity and replace those construction sites without reporting a
+        // second problem.
+        for (omitted_defaults) |omitted| {
+            if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
+            if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
+            if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+            try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
+            try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+        }
+
         try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
         try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
     }
