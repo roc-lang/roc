@@ -1461,6 +1461,40 @@ test "unify - closed record extends open" {
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.module_env.types.getSlot(open));
 }
 
+test "unify - width absorption validates the complete extension chain before mutation" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const value_ty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const optional_kind = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });
+    const tail = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{
+        try env.mkRecordField("required_tail", value_ty),
+    })).content);
+    const head = try env.module_env.types.freshFromContent((try env.mkRecord(&.{
+        try env.mkUnknownRecordField("optional_head", optional_kind, value_ty),
+    }, tail)).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    const result = try env.unifyWriteNoReport(head, empty);
+    try std.testing.expectEqual(Result.mismatch, result);
+    try std.testing.expect(env.module_env.types.resolveVar(head).desc_idx != env.module_env.types.resolveVar(empty).desc_idx);
+}
+
+test "unify - zero-field unbound row and empty record canonicalize without a fresh tail" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const no_fields = try env.module_env.types.appendRecordFields(&.{});
+    const unbound = try env.module_env.types.freshFromContent(.{ .structure = .{ .record_unbound = no_fields } });
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.ok, try env.unify(unbound, empty));
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(empty).desc.content);
+    try std.testing.expectEqual(@as(usize, 0), env.scratch.fresh_vars.len());
+}
+
 // unification - structure/structure - records shared field presence //
 //
 // These exercise `unifySharedFieldPresence`: two closed records that share one

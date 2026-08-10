@@ -878,6 +878,20 @@ test "check type - record - opt - conditional presence rejected (unannotated)" {
     );
 }
 
+test "check type - record - opt - nominal backing rejects wider committed value" {
+    const source =
+        \\Cfg := { a : Str }
+        \\
+        \\to_cfg : { a : Str, b ?: Str } -> Cfg
+        \\to_cfg = |ext| Cfg.(ext)
+        \\main! = |_| {}
+    ;
+    // A committed closed row has one fixed layout. Nominal construction from
+    // an existing value is exact-width, so the argument cannot widen Cfg's
+    // backing with an extra optional slot.
+    try checkTypesModule(source, .fail_first, "Invalid Nominal Type");
+}
+
 test "check type - record - opt - list literal absorbs omitted optional field (annotated)" {
     const source =
         \\main! = |_| {}

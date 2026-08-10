@@ -3643,17 +3643,37 @@ fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier
 
 /// Unify two types with a context for error reporting.
 fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.runUnify(a, b, env, .{ .context = ctx });
+    const row_width_relation: unifier.RowWidthRelation = if (std.meta.activeTag(ctx) == .platform_requirement)
+        .exact
+    else
+        .construction;
+    return self.runUnify(a, b, env, .{
+        .context = ctx,
+        .row_width_relation = row_width_relation,
+    });
+}
+
+fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    return expr == .e_record or expr == .e_empty_record;
 }
 
 /// Check one relation owned by a call without letting a rejected relation
 /// poison the callee or argument type graphs. Those graphs can be shared with
 /// otherwise valid producer expressions; the call expression is the sole
 /// executable boundary that becomes erroneous.
-fn unifyCallRelation(self: *Self, expected: Var, actual: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+fn unifyCallRelation(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    env: *Env,
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
         .on_mismatch = .write_no_report,
+        .row_width_relation = row_width_relation,
     });
     if (result.isOk()) return .ok;
 
@@ -3677,10 +3697,12 @@ fn unifyNominalConstructorBacking(
     actual_backing: Var,
     env: *Env,
     ctx: problem.Context.NominalConstructorContext,
+    row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
     return self.runUnify(expected_backing, actual_backing, env, .{
         .context = .{ .nominal_constructor = ctx },
         .root_relation = .nominal_constructor_backing,
+        .row_width_relation = row_width_relation,
     });
 }
 
@@ -12635,6 +12657,7 @@ fn checkPatternHelp(
                 nominal.backing_type,
                 pattern_region,
                 env,
+                .exact,
             );
         },
         .nominal_external => |nominal| {
@@ -12651,6 +12674,7 @@ fn checkPatternHelp(
                     nominal.backing_type,
                     pattern_region,
                     env,
+                    .exact,
                 );
             } else {
                 try self.markErroneous(pattern_var);
@@ -13876,6 +13900,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 nominal.backing_type,
                 expr_region,
                 env,
+                if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
             );
         },
         .e_nominal_external => |nominal| {
@@ -13894,6 +13919,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     nominal.backing_type,
                     expr_region,
                     env,
+                    if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
                 );
             } else {
                 try self.markErroneous(expr_var);
@@ -14534,6 +14560,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                             const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
                                             const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
 
+                                            const row_width_relation: unifier.RowWidthRelation = if (self.exprIsFreshRecordConstruction(call_arg_expr_idxs[i]) or
+                                                self.exprIsFreshRecordConstruction(call_arg_expr_idxs[j])) .construction else .exact;
                                             const unify_result = try self.unifyCallRelation(arg_1, arg_2, env, .{
                                                 .fn_args_bound_var = .{
                                                     .fn_name = func_name,
@@ -14543,7 +14571,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                                     .second_arg_index = @intCast(j),
                                                     .num_args = @intCast(call_arg_expr_idxs.len),
                                                 },
-                                            });
+                                            }, row_width_relation);
                                             if (unify_result.isProblem()) {
                                                 // Context already set by unifyInContext
                                                 // Stop execution
@@ -14565,7 +14593,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         .arg_index = @intCast(arg_index),
                                         .num_args = @intCast(call_arg_expr_idxs.len),
                                         .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                    } });
+                                    } }, if (self.exprIsFreshRecordConstruction(call_expr_idx)) .construction else .exact);
                                     if (unify_result.isProblem()) {
                                         // Stop execution
                                         try self.markErroneous(expr_var);
@@ -14604,7 +14632,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .fn_name = func_name,
                                     .expected_args = @intCast(func_args_len),
                                     .actual_args = @intCast(call_arg_expr_idxs.len),
-                                } });
+                                } }, .exact);
                                 if (arity_result.isProblem()) {
                                     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                                 }
@@ -14632,7 +14660,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
                             const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
 
-                            const call_result = try self.unifyCallRelation(func_var, call_func_var, env, .none);
+                            const call_result = try self.unifyCallRelation(func_var, call_func_var, env, .none, .exact);
                             if (call_result.isProblem()) {
                                 try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
                             }
@@ -16723,7 +16751,7 @@ fn enforceRecordBuilderMap2Return(
         .arg_index = 2,
         .num_args = 3,
         .arg_var = mapper_var,
-    } });
+    } }, .exact);
 }
 
 fn singleParameterWrapperPayload(self: *Self, wrapper_var: Var) ?Var {
@@ -19107,6 +19135,7 @@ fn checkNominalTypeUsage(
     backing_type: CIR.Expr.NominalBackingType,
     region: Region,
     env: *Env,
+    row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!NominalCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -19153,6 +19182,7 @@ fn checkNominalTypeUsage(
             actual_backing_var,
             env,
             .{ .backing_type = context_backing_type },
+            row_width_relation,
         );
 
         // Handle the result of unification

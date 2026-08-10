@@ -362,7 +362,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "5" },
     },
     .{
-        .name = "optional record field: generalized update adopts optional slot layout",
+        .name = "optional record field: generalized update cannot change a committed optional slot",
         .source_kind = .module,
         .source =
         \\set_a = |record| { ..record, a: 5 }
@@ -372,7 +372,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = set_a(record).?a ?? 0
         ,
-        .expected = .{ .inspect_str = "5" },
+        .expected = .problem,
     },
     .{
         .name = "optional record field: runtime miss takes the Err(MissingField) match branch",
@@ -760,14 +760,10 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "{ b: { c: <missing> } }" },
     },
-    // The next three tests pin CURRENT width-absorption semantics, which are
-    // under active language-design debate: a closed annotated parameter row
-    // absorbs a caller's extra optional fields by widening its instantiation.
-    // If a polarity restriction lands (absorption only into a literal's
-    // still-unbound row), these calls become type errors and these tests must
-    // be renegotiated—they document behavior, not a language guarantee.
+    // Committed record values have fixed layouts. A closed parameter cannot
+    // widen at a call site to absorb the caller's extra optional slots.
     .{
-        .name = "optional record field: closed param absorbs a wider value's missing optional slot",
+        .name = "optional record field: closed param rejects a wider value's missing optional slot",
         .source_kind = .module,
         .source =
         \\f : { b : Str } -> Str
@@ -778,13 +774,13 @@ const core_tests = [_]TestCase{
         \\
         \\main = f(v)
         ,
-        .expected = .{ .inspect_str = "\"hello\"" },
+        .expected = .{ .problem = {} },
     },
     .{
         // The extra optional field sorts BEFORE the accessed field: if the
         // call dropped `a ?:` from the type while the value kept the wide
         // layout, reading `b` at the narrow offset would read the `a` slot.
-        .name = "optional record field: closed param absorbs a wider value's present optional slot",
+        .name = "optional record field: closed param rejects a wider value's present optional slot",
         .source_kind = .module,
         .source =
         \\f : { b : Str } -> Str
@@ -795,10 +791,10 @@ const core_tests = [_]TestCase{
         \\
         \\main = f(w)
         ,
-        .expected = .{ .inspect_str = "\"world\"" },
+        .expected = .{ .problem = {} },
     },
     .{
-        .name = "optional record field: one function takes narrow and wide rows via separate instantiations",
+        .name = "optional record field: one closed function rejects separate wide-row instantiation",
         .source_kind = .module,
         .source =
         \\f : { b : Str } -> Str
@@ -812,7 +808,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = Str.concat(f(narrow), f(wide))
         ,
-        .expected = .{ .inspect_str = "\"nw\"" },
+        .expected = .{ .problem = {} },
     },
     .{
         .name = "defaulted record field: heap Str default materializes from the empty literal",

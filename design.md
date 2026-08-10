@@ -3403,27 +3403,23 @@ The kind rules:
   record annotated with a required field cannot flow where an optional
   field is expected (or vice versa)—reconstruct the record instead. Only
   an undetermined kind can become either.
-- Width absorption is OPT-IN: when row unification runs a field into a
-  CLOSED row that lacks it (the empty-record tail), the field passes
-  exactly when its kind RESOLVED `optional`—an annotation declared it—
-  and the merged row keeps the field (the closed record gains a tagged
-  slot constructed as missing). An undetermined kind does NOT absorb (it
-  is a missing-field mismatch, same as `required`): absorbing undetermined
-  fields would silently accept typo'd extra fields and merge any two
-  record literals. Consequence: a definition may supply an optional field
-  on one control-flow branch and omit it on another exactly when a `?:`
-  annotation is in scope to pin the kind before the branches merge; the
-  unannotated conditional stays rejected, and `.?` on a field a closed
-  record does not declare at all is a missing-field error. The old
-  `absent` presence state is REMOVED: a field a row genuinely lacks is
-  simply not in the row, and every field on a row carries a value type.
-  One corner of this rule is under active language-design debate: a
-  CLOSED ANNOTATED parameter row also absorbs a caller's extra optional
-  fields by widening at instantiation (pinned as behavior, not a
-  guarantee, by the width-absorption eval tests in
-  src/eval/test/eval_tests.zig), and a polarity restriction (absorb only
-  into inferred `record_unbound` rows) is the designed-but-undecided
-  alternative.
+- Width absorption is OPT-IN and POLARITY-RESTRICTED. The checker marks each
+  unification relation as construction/inference or exact-width. Construction
+  relations may survive meeting a closed empty tail only when every surviving
+  field already has resolved kind `optional` or `defaulted`; omitted optional
+  fields become missing tagged slots and omitted defaulted fields materialize
+  their defaults. Calls with committed arguments, nominal construction from an
+  existing value, and platform requirements use exact-width relations, so a
+  wider value cannot widen a closed parameter, nominal backing, or host ABI
+  type during instantiation. An undetermined or `required` field does NOT
+  absorb; accepting either would silently merge typo'd extra fields or
+  arbitrary record literals. Consequence: a definition may supply an
+  optional/defaulted field on one control-flow branch and omit it on another
+  exactly when an annotation pins the kind before the branch rows merge; the
+  unannotated conditional stays rejected, and `.?` on a field a closed record
+  does not declare is a missing-field error. The old `absent` presence state is
+  REMOVED: a field a row genuinely lacks is simply not in the row, and every
+  field on a row carries a value type.
 - `.?field` on a field whose kind resolved `required` or `defaulted` is
   rejected as unintended (the field is always present; use `.`). Accesses
   are recorded and judged at EVERY GENERALIZATION BOUNDARY—receivers are

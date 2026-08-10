@@ -142,6 +142,14 @@ pub const RootRelation = enum {
     nominal_constructor_backing,
 };
 
+/// Whether a unification relation may add optional/defaulted fields while
+/// checking a fresh record construction. Committed values and external
+/// boundaries use `exact` so their fixed layouts cannot widen.
+pub const RowWidthRelation = enum {
+    construction,
+    exact,
+};
+
 /// Controls what a top-level type mismatch does to the two operands.
 pub const MismatchBehavior = enum {
     /// Merge both operands into a single `.err` type. This is the default: it
@@ -161,6 +169,7 @@ pub const Options = struct {
     context: Context = .none,
     on_mismatch: MismatchBehavior = .poison_to_err,
     root_relation: RootRelation = .ordinary,
+    row_width_relation: RowWidthRelation = .construction,
 };
 
 /// Unify two type variables.
@@ -176,7 +185,14 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     env.unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(env.ident_store, env.self_module_identity, env.types, env.unify_scratch, env.occurs_scratch);
+    var unifier = Unifier.init(
+        env.ident_store,
+        env.self_module_identity,
+        env.types,
+        env.unify_scratch,
+        env.occurs_scratch,
+        opts.row_width_relation,
+    );
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -235,6 +251,7 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    row_width_relation: RowWidthRelation,
     /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
     /// This allows error messages to point to the original expression rather than the resolved type.
     unresolved_b: ?Var,
@@ -246,6 +263,7 @@ const Unifier = struct {
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
+        row_width_relation: RowWidthRelation,
     ) Unifier {
         return .{
             .ident_store = ident_store,
@@ -253,6 +271,7 @@ const Unifier = struct {
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
+            .row_width_relation = row_width_relation,
             .unresolved_b = null,
         };
     }
@@ -1043,13 +1062,17 @@ const Unifier = struct {
                         );
                     },
                     .record_unbound => |b_fields| {
-                        try self.unifyTwoRecords(
-                            vars,
-                            a_fields,
-                            .unbound,
-                            b_fields,
-                            .unbound,
-                        );
+                        if (a_fields.len() == 0 and b_fields.len() == 0) {
+                            try self.merge(vars, .{ .structure = .empty_record });
+                        } else {
+                            try self.unifyTwoRecords(
+                                vars,
+                                a_fields,
+                                .unbound,
+                                b_fields,
+                                .unbound,
+                            );
+                        }
                     },
                     .nominal_type => |b_type| {
                         // Try to unify anonymous unbound record (a) with nominal record (b)
@@ -1651,13 +1674,8 @@ const Unifier = struct {
         const range_start: u32 = @intCast(self.types_store.record_fields.len());
 
         for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
-            // `next_presences` should always be set if we got here, if it's not
-            // an invariant was violated.
-            std.debug.assert(shared.next_presence != null);
-            if (shared.next_presence == null) {
-                return error.TypeMismatch;
-            }
-            const next_presence = shared.next_presence.?;
+            const next_presence = shared.next_presence orelse
+                std.debug.panic("type unifier invariant violated: shared record field had no merged presence", .{});
 
             _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
@@ -1914,68 +1932,90 @@ const Unifier = struct {
         }
     }
 
+    fn validateAbsorbableRecordFields(self: *Self, fields: RecordFieldSafeMultiList.Range) Error!void {
+        var iter = self.types_store.iterRecordFields(fields);
+        while (iter.next()) |field| {
+            switch (field.presence) {
+                .required => return error.TypeMismatch,
+                .unknown => |unknown| switch (self.types_store.resolveVar(unknown.presence).desc.content) {
+                    .field_presence => |presence| switch (presence) {
+                        .optional, .defaulted => {},
+                        .required => return error.TypeMismatch,
+                    },
+                    .flex, .rigid, .alias, .structure, .err => return error.TypeMismatch,
+                },
+            }
+        }
+    }
+
+    /// Validate the complete extension chain before width absorption mutates
+    /// either equivalence class. A later failure must not leak head fields into
+    /// the closed tail used to render field-difference diagnostics.
+    fn validateAbsorbableRecordRow(
+        self: *Self,
+        fields: RecordFieldSafeMultiList.Range,
+        mb_ext: ?Var,
+    ) Error!void {
+        try self.validateAbsorbableRecordFields(fields);
+        var ext = mb_ext orelse return;
+        var guard = types_mod.debug.IterationGuard.init("validateAbsorbableRecordRow");
+
+        while (true) {
+            guard.tick();
+            switch (self.types_store.resolveVar(ext).desc.content) {
+                .flex => return,
+                .rigid, .field_presence => return error.TypeMismatch,
+                .err => return error.ErroneousType,
+                .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
+                .structure => |flat_type| switch (flat_type) {
+                    .record => |record| {
+                        try self.validateAbsorbableRecordFields(record.fields);
+                        ext = record.ext;
+                    },
+                    .record_unbound => |tail_fields| return self.validateAbsorbableRecordFields(tail_fields),
+                    .empty_record => return,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return error.TypeMismatch,
+                },
+            }
+        }
+    }
+
     /// Unify a record row with the empty record.
     ///
-    /// This is width absorption (design.md "Field Kinds (All-Dynamic
-    /// Optional Fields)"): a field running into a closed row that lacks it
-    /// is acceptable exactly when its kind RESOLVED `optional`—an
-    /// annotation declared it, so the merged row keeps the field with a
-    /// tagged slot constructed as missing. An undetermined kind does NOT
-    /// absorb: optionality is opt-in via `?:`, and silently absorbing
-    /// undetermined fields would accept typo'd extras and merge any two
-    /// literal records. The ROW is the surviving content of the merge—
-    /// collapsing to `.empty_record` would discard the fields' existence,
-    /// which row rendering and publication rely on.
-    ///
-    /// The check runs BEFORE any mutation: error reports snapshot the
-    /// post-failure solved graph, so merging first would leak this row into
-    /// the other side's ext chain and corrupt field-diff hints (a typo'd
-    /// field would show up as expected on both sides).
-    ///
-    /// `mb_ext` is the row's extension (null for `record_unbound` rows, which
-    /// close to a fresh empty extension).
+    /// Width absorption is permitted only for a relation explicitly marked as
+    /// fresh construction (design.md "Field Kinds (All-Dynamic Optional
+    /// Fields)"). Exact relations reject a non-empty row before mutation, so
+    /// committed values, nominal backings, calls, and host-boundary types keep
+    /// one fixed field set and layout.
     fn unifyRowWithEmptyRecord(
         self: *Self,
         vars: *const ResolvedVarDescs,
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
     ) Error!void {
-        var check_iter = self.types_store.iterRecordFields(fields);
-        while (check_iter.next()) |field| {
-            switch (field.presence) {
-                .required => return error.TypeMismatch,
-                .unknown => |unknown| switch (self.types_store.resolveVar(unknown.presence).desc.content) {
-                    .field_presence => |fp| switch (fp) {
-                        .required => return error.TypeMismatch,
-                        // `optional` absorbs as a tagged slot constructed
-                        // missing; `defaulted` absorbs as an inline slot
-                        // materialized from the default (design.md
-                        // "Defaulted Fields").
-                        .optional, .defaulted => {},
-                    },
-                    // Only a RESOLVED `optional`/`defaulted` kind absorbs; an
-                    // undetermined kind is a missing-field mismatch (as is a
-                    // malformed non-kind content).
-                    .flex, .rigid, .alias, .structure, .err => return error.TypeMismatch,
-                },
-            }
+        if (fields.len() == 0 and mb_ext == null) {
+            try self.merge(vars, .{ .structure = .empty_record });
+            return;
         }
+        if (self.row_width_relation == .exact) return error.TypeMismatch;
 
-        // Close the extension first—its tail rows re-enter this function
-        // and pre-check themselves before mutating anything.
+        try self.validateAbsorbableRecordRow(fields, mb_ext);
+
         const empty_var = try self.fresh(vars, .{ .structure = .empty_record });
         if (mb_ext) |ext| {
             try self.unifyGuarded(ext, empty_var);
         }
-
         try self.merge(vars, Content{ .structure = .{ .record = .{
             .fields = fields,
             .ext = mb_ext orelse empty_var,
         } } });
-
-        // Every surviving field's kind already RESOLVED `optional` (the
-        // pre-check refused everything else), so there is nothing to bind:
-        // the merged row keeps the fields as absorbed optional slots.
     }
 
     /// Unify two extensible records.
@@ -2471,21 +2511,18 @@ const Unifier = struct {
             var shared = self.scratch.in_both_fields.get(idx).*;
 
             // Merge field presence
-            const mb_next_presence = try self.unifySharedFieldPresence(vars, shared.a.presence, shared.b.presence, did_field_error_flag);
-            if (mb_next_presence == null) {
-                try self.applyMismatchHandling(.{ .set_flag = did_field_error_flag });
-            }
+            const next_presence = try self.unifySharedFieldPresence(vars, shared.a.presence, shared.b.presence, did_field_error_flag);
 
             // Update the scratch with the unified
-            shared.next_presence = mb_next_presence;
+            shared.next_presence = next_presence;
             self.scratch.in_both_fields.get(idx).* = shared;
         }
     }
 
-    /// Given two field presences, unify them
-    /// present ~ present  = good
-    /// present ~ present  = good
-    fn unifySharedFieldPresence(self: *Self, vars: *const ResolvedVarDescs, a_presence: RecordFieldPresence, b_presence: RecordFieldPresence, did_field_error_flag: u32) Error!?RecordFieldPresence {
+    /// Merge shared field wrappers while scheduling their value and kind pairs:
+    /// required/required stays required, required/unknown pins the unknown kind
+    /// required, and unknown/unknown keeps the wrapper whose kind pair is joined.
+    fn unifySharedFieldPresence(self: *Self, vars: *const ResolvedVarDescs, a_presence: RecordFieldPresence, b_presence: RecordFieldPresence, did_field_error_flag: u32) Error!RecordFieldPresence {
         const mismatch_handler: MismatchHandling = .{ .set_flag = did_field_error_flag };
         switch (a_presence) {
             .required => |a_var| {
@@ -3300,7 +3337,7 @@ pub fn partitionFields(
     a_fields_range: RecordFieldSafeList.Range,
     b_fields_range: RecordFieldSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction);
     return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
 }
 
@@ -3314,7 +3351,7 @@ pub fn partitionTags(
     a_tags_range: TagSafeList.Range,
     b_tags_range: TagSafeList.Range,
 ) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch);
+    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction);
     return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
 }
 
