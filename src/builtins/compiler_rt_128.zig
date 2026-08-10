@@ -690,10 +690,14 @@ pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
 // Uses Roc's vendored Ryu binary-to-decimal conversion followed by manual
 // decimal formatting, avoiding Zig formatting symbols in compiled programs.
 
+/// Buffer size that `f32_to_str` and `f64_to_str` always fit within: a
+/// subnormal f64 in decimal notation is the longest output either produces.
+pub const float_string_capacity = 400;
+
 /// Format an f64 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
     return formatFloatDecimal(buf, @bitCast(val), false);
 }
@@ -701,7 +705,7 @@ pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
 /// Format an f32 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
     return formatFloatDecimal(buf, @as(u64, @as(u32, @bitCast(val))), true);
 }
@@ -886,7 +890,9 @@ pub fn pow10_i128(exp: u6) i128 {
 // On wasm32, Zig codegen emits calls to these for native i128 multiply ops.
 // We provide them ourselves so the builtins module is fully self-contained.
 comptime {
-    if (is_wasm) {
+    const root = @import("root");
+    const omit_wasm_exports = @hasDecl(root, "roc_omit_wasm_compiler_rt_exports") and root.roc_omit_wasm_compiler_rt_exports;
+    if (is_wasm and !omit_wasm_exports) {
         @export(&wasm_multi3, .{ .name = "__multi3", .linkage = .strong });
         @export(&wasm_muloti4, .{ .name = "__muloti4", .linkage = .strong });
     }

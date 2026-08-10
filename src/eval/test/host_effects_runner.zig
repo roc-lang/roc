@@ -27,6 +27,8 @@ const backend = @import("backend");
 const roc_target = @import("roc_target");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
+const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
+const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 const collections = @import("collections");
 
 /// Public struct `TestCase`.
@@ -323,10 +325,11 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
+        Interpreter.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
         .preserve,
     );
@@ -354,6 +357,16 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     return runtime_env.snapshot(allocator);
 }
 
+fn boxyNativeFnTable() BoxyNativeFnTable {
+    var table: BoxyNativeFnTable = undefined;
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const name = comptime boxy_fn.symbolName();
+        table[field.value] = @intFromPtr(&@field(eval.boxy_abi, name));
+    }
+    return table;
+}
+
 fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
@@ -365,15 +378,19 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(
+        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
             static_strings.entries,
+            lowered.view.boxy_erased_arg_desc_offsets,
+            lowered.view.boxy_erased_arg_desc_params,
             .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        var native_fns = boxyNativeFnTable();
+        codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
         const proc = lowered.view.store.getProcSpec(lowered.mainProc());
@@ -394,6 +411,18 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+
+        eval.boxy_abi.initGlobal(
+            allocator,
+            &lowered.view.store,
+            &lowered.view.layouts,
+            Interpreter.BoxyTables.fromImageView(&lowered.view),
+            runtime_env.get_ops(),
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AlreadyInitialized => @panic("host-effects runner invariant violated: boxy runtime was already initialized"),
+        };
+        defer eval.boxy_abi.deinitGlobal();
 
         const arg_buffer = try helpers.zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
         defer if (arg_buffer) |buf| allocator.free(buf);

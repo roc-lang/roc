@@ -84,12 +84,14 @@ export fn wasm_main() [*]const u8 {
     const payload = builtins.erased_callable.payloadPtr(callable);
     var args = U64Arg{ .arg0 = 41 };
     var value: u64 = 0;
+    var ret_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(
         &roc_ops,
         @ptrCast(&value),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(callable),
         null,
+        &ret_desc,
     );
     roc_drop_boxed_callable(callable);
 

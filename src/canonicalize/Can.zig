@@ -11703,7 +11703,7 @@ fn runExprKernel(
         .finish_block_while_stmt => {
             const state = stacks.takeFinishBlockWhileStmt();
             defer self.loop_depth -= 1;
-            defer self.scratch_captures.clearFrom(state.captures_top);
+            errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
             const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.body_ast);
@@ -11721,6 +11721,11 @@ fn runExprKernel(
             const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
             const stmt_idx = try self.addClassifiedWhileStatement(state.cond.idx, body.idx, state.region);
+            // The loop's capture range is a child of the block's range. Release
+            // that child ownership before propagating so block-level deduplication
+            // does not mistake a soon-to-be-cleared loop capture for an existing
+            // block capture.
+            self.scratch_captures.clearFrom(state.captures_top);
             try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });
@@ -11777,7 +11782,7 @@ fn runExprKernel(
             defer self.endDefiningBoundVars(state.saved_defining_bound_vars);
             defer self.in_statement_position = state.saved_stmt_pos;
             defer self.scratch_bound_vars.clearFrom(state.bound_vars_top);
-            defer self.scratch_captures.clearFrom(state.captures_top);
+            errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
             const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_body);
@@ -11801,6 +11806,10 @@ fn runExprKernel(
                     .body = body.idx,
                 },
             }, state.region);
+            // Transfer the loop's free variables into the enclosing block after
+            // releasing the child capture range; otherwise parent deduplication
+            // sees the child entry and cleanup immediately removes it.
+            self.scratch_captures.clearFrom(state.captures_top);
             try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });

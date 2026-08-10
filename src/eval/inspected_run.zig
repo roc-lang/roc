@@ -13,6 +13,7 @@ const collections = @import("collections");
 const lir = @import("lir");
 const layout = @import("layout");
 const roc_target = @import("roc_target");
+const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
 
 const Allocator = std.mem.Allocator;
@@ -20,8 +21,11 @@ const EvalDynLib = @import("dynlib.zig").DynLib;
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
+const boxy_abi = @import("boxy_abi.zig");
+const boxy_runtime = @import("boxy_runtime.zig");
 const LayoutIdx = layout.Idx;
 const LayoutStore = layout.Store;
+const LirImage = lir.LirImage;
 const LirProcSpecId = lir.LirProcSpecId;
 const RocStr = builtins.str.RocStr;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -55,6 +59,9 @@ pub const Backend = enum {
 pub const Program = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    boxy_tables: boxy_runtime.BoxyTables = .{},
+    boxy_sidecar_blob: ?[]const u8 = null,
+    boxy_sidecar_desc: ?LirImage.BoxySidecar = null,
     main_proc: LirProcSpecId,
 };
 
@@ -178,10 +185,11 @@ fn runInterpreter(allocator: Allocator, program: Program) InterpreterError!Resul
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var interp = try Interpreter.initWithBoxyTables(
         allocator,
         program.store,
         program.layouts,
+        program.boxy_tables,
         runtime_env.get_ops(),
         .preserve,
     );
@@ -226,15 +234,19 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(
+        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
             program.store,
             program.layouts,
             static_strings.entries,
+            program.boxy_tables.erased_arg_desc_offsets,
+            program.boxy_tables.erased_arg_desc_params,
             .preserve,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        var native_fns = boxy_abi.nativeFnTable();
+        codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());
 
         const proc = program.store.getProcSpec(program.main_proc);
@@ -255,6 +267,9 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+
+        const boxy_installed = try installBoxyGlobal(allocator, program, runtime_env.get_ops());
+        defer if (boxy_installed) boxy_abi.deinitGlobal();
 
         const arg_buffer = try zeroedEntrypointArgBuffer(allocator, program.layouts, arg_layouts);
         defer if (arg_buffer) |buf| allocator.free(buf);
@@ -300,12 +315,19 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         allocator,
         program.store,
         program.layouts,
+        program.boxy_tables.erased_arg_desc_offsets,
+        program.boxy_tables.erased_arg_desc_params,
         .default,
     );
     defer codegen.deinit();
 
     const proc = program.store.getProcSpec(program.main_proc);
-    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, wasm32_builtins.bytes) catch |err| switch (err) {
+    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
+        .runtime_object = wasm32_boxy_runtime.bytes[0..],
+        .sidecar_blob = program.boxy_sidecar_blob orelse return error.Internal,
+        .sidecar_desc = program.boxy_sidecar_desc orelse return error.Internal,
+    } else null;
+    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, wasm32_builtins.bytes, runtime_input) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionTypeMismatch => return error.Internal,
     };
@@ -373,7 +395,12 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, program.store);
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        allocator,
+        program.store,
+        program.boxy_tables.erased_arg_desc_offsets,
+        program.boxy_tables.erased_arg_desc_params,
+    );
     codegen.layout_store = program.layouts;
     defer codegen.deinit();
 
@@ -409,7 +436,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const boxy_abi.BoxyNativeFnTable) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_main") orelse return error.LlvmBackendUnavailable;
 
     var runtime_env = RuntimeHostEnv.init(allocator);
@@ -417,6 +444,9 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
         runtime_env.setLongjmpOnCrash(false);
     }
+
+    const boxy_installed = try installBoxyGlobal(allocator, program, runtime_env.get_ops());
+    defer if (boxy_installed) boxy_abi.deinitGlobal();
 
     const arg_buffer = try zeroedEntrypointArgBuffer(allocator, program.layouts, arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -433,11 +463,13 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     if (sj != 0) return crashResult(allocator, &runtime_env, null);
 
     var test_context: TestInvocationContext = .{};
+    var native_fns = boxy_abi.nativeFnTable();
     entry(
         runtime_env.get_ops(),
         &test_context,
         ret_buf.ptr,
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        &native_fns,
     );
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
@@ -454,6 +486,29 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         ) },
         .allocation_count = runtime_env.allocationCallCount(),
     };
+}
+
+fn installBoxyGlobal(
+    allocator: Allocator,
+    program: Program,
+    roc_ops: *builtins.host_abi.RocOps,
+) Allocator.Error!bool {
+    if (!program.boxy_tables.needsRuntimeForStore(program.store)) return false;
+
+    // A crash can longjmp past a previous teardown, so clear stale state
+    // before installing this program's explicit runtime inputs.
+    boxy_abi.deinitGlobal();
+    boxy_abi.initGlobal(
+        allocator,
+        program.store,
+        program.layouts,
+        program.boxy_tables,
+        roc_ops,
+    ) catch |err| switch (err) {
+        error.AlreadyInitialized => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return true;
 }
 
 fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {

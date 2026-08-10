@@ -86,6 +86,7 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     checked_module_state: lir.CheckedPipeline.CheckedModuleState = .complete,
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
@@ -126,6 +127,7 @@ fn lowerModuleWithOptions(
         .{ .requests = resources.checked_artifact.root_requests.requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = options.specialization_strategy,
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
@@ -655,6 +657,18 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -1164,6 +1178,21 @@ fn collectAssignCallProcs(
             },
             .assign_call_erased => |stmt| try work.append(allocator, stmt.next),
             .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .assign_low_level => |stmt| try work.append(allocator, stmt.next),
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| try work.append(allocator, stmt.next),
@@ -1852,6 +1881,7 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         .native,
         try sharedPrePublishedBuiltin(),
         null,
+        .lss,
     );
     defer compiled.deinit(allocator);
 
@@ -2744,6 +2774,52 @@ test "interpreter captures the virtual source frame of an inlined crash" {
     return error.TestUnexpectedResult;
 }
 
+test "boxy lowering preserves a runtime-built crash message" {
+    const allocator = std.testing.allocator;
+    const expected_message = "runtime-built crash message long enough for heap storage: 42";
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\main : I64
+        \\main = {
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+    , .none, .{ .specialization_strategy = .boxy });
+    defer lowered_source.deinit(allocator);
+
+    const result = &lowered_source.lowered.lir_result;
+    var found_local_crash_message = false;
+    for (0..result.store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt = result.store.getCFStmt(stmt_id);
+        if (std.meta.activeTag(stmt) != .crash) continue;
+        switch (stmt.crash.msg) {
+            .literal => {},
+            .local => found_local_crash_message = true,
+        }
+    }
+    try std.testing.expect(found_local_crash_message);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.initWithBoxyTables(
+        allocator,
+        &result.store,
+        &result.layouts,
+        eval.boxy_runtime.BoxyTables.fromResult(result),
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage() orelse return error.TestUnexpectedResult);
+        return;
+    };
+    return error.TestUnexpectedResult;
+}
+
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
         \\State : { n : I64 }
@@ -3186,6 +3262,18 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -3469,6 +3557,21 @@ fn collectLirResultProcShape(
             .assign_packed_erased_fn => |stmt| {
                 shape.packed_erased_fn_count += 1;
                 try work.append(allocator, stmt.next);
+            },
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
             },
             .assign_low_level => |stmt| {
                 shape.low_level_count += 1;
@@ -6492,7 +6595,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\}
     ;
 
-    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null);
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null, .lss);
     defer compiled.deinit(allocator);
 
     // The program must check cleanly: a reported problem would resolve the
@@ -6892,7 +6995,7 @@ fn recordFieldReadCounts(
                 }
                 cursor = stmt.next;
             },
-            .assign_call => |stmt| {
+            inline .assign_call, .assign_call_dict => |stmt| {
                 seen_call = true;
                 cursor = stmt.next;
             },
@@ -6900,7 +7003,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -6910,6 +7013,7 @@ fn recordFieldReadCounts(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
+            .boxy_tag_match,
             .loop_continue,
             .loop_break,
             .join,
@@ -7022,7 +7126,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -7046,6 +7150,10 @@ fn fieldReadRetainCount(
                     for (0..GuardedList.borrowLen(arms)) |i| {
                         try stack.append(allocator, GuardedList.at(arms, i).on_match);
                     }
+                    try stack.append(allocator, stmt.on_miss);
+                },
+                .boxy_tag_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
                     try stack.append(allocator, stmt.on_miss);
                 },
                 .join => |stmt| {
@@ -7256,7 +7364,7 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -7294,6 +7402,7 @@ fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) b
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
+            .boxy_tag_match,
             .loop_continue,
             .loop_break,
             .jump,

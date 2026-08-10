@@ -68,6 +68,7 @@ pub const GlueArgs = struct {
     platform_path: []const u8,
     report_config: reporting.ReportingConfig,
     opt: GlueOpt = .dev,
+    specialization_strategy: base.SpecializationStrategy = .lss,
     no_cache: bool = false,
     /// Prebuilt plugin dylib from a `roc install`ed glue spec. When set, it
     /// is the only dylib considered: its stamp must verify, and a mismatch is
@@ -288,7 +289,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
-    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, args.specialization_strategy, std_io);
     defer spec.deinit(gpa);
     const lowered = &spec.lowered;
     const root_artifact = spec.root_artifact;
@@ -404,6 +405,7 @@ fn compileGlueSpec(
     glue_spec: []const u8,
     no_cache: bool,
     report_config: reporting.ReportingConfig,
+    specialization_strategy: base.SpecializationStrategy,
     std_io: std.Io,
 ) GlueError!CompiledGlueSpec {
     std.Io.Dir.cwd().access(std_io, glue_spec, .{}) catch {
@@ -467,6 +469,7 @@ fn compileGlueSpec(
         .{ .requests = lir_roots },
         .{
             .target_usize = script_target_usize,
+            .specialization_strategy = specialization_strategy,
         },
     ) catch {
         return error.OutOfMemory;
@@ -546,10 +549,10 @@ fn buildGlueSpecDylibFileInner(
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, .lss, std_io);
     defer spec.deinit(gpa);
 
-    const stamp = gluePluginStamp(spec.root_artifact.key);
+    const stamp = gluePluginStamp(spec.root_artifact.key, .lss);
     const temp_path = try buildGlueDylib(gpa, &spec.lowered, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
     defer {
         std.Io.Dir.deleteFileAbsolute(std_io, std.mem.sliceTo(temp_path, 0)) catch {};
@@ -578,7 +581,8 @@ const GluePluginStampV1 = extern struct {
     size: u32,
     kind: u32,
     abi_version: u32,
-    reserved: u32 = 0,
+    /// Zero is reserved for plugin stamps created before strategy identity was explicit.
+    specialization_strategy_tag: u32,
     target_hash: [32]u8,
     compiler_hash: [32]u8,
     glue_platform_hash: [32]u8,
@@ -613,7 +617,7 @@ fn runGlueSpecDylib(
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-    const stamp = gluePluginStamp(root_artifact_key);
+    const stamp = gluePluginStamp(root_artifact_key, args.specialization_strategy);
     var dylib: ?BuiltGlueDylib = try getOrBuildGlueDylib(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
     defer if (dylib) |d| d.deinit(gpa, std_io);
 
@@ -650,7 +654,7 @@ fn runGlueSpecDylib(
     };
     defer lib.close();
 
-    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const eval_mod.boxy_abi.BoxyNativeFnTable) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GlueDylibUnavailable;
 
     runtime_env.resetObservation();
@@ -660,12 +664,34 @@ fn runGlueSpecDylib(
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
+    const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
+    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+        try eval_mod.boxy_abi.createRuntimeFromStores(
+            gpa,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            boxy_tables,
+            runtime_env.get_ops(),
+        )
+    else
+        null;
+    defer if (boxy_runtime) |runtime| eval_mod.boxy_abi.deinitRuntime(runtime);
+    const previous_boxy_runtime = if (boxy_runtime) |runtime|
+        eval_mod.boxy_abi.swapActiveRuntime(runtime)
+    else
+        null;
+    defer if (boxy_runtime != null) {
+        _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    };
+    const boxy_fns = eval_mod.boxy_abi.nativeFnTable();
+
     const sj = crash_boundary.set();
     if (sj == 0) {
         entry(
             @ptrCast(runtime_env.get_ops()),
             @ptrCast(result_ptr),
             @ptrCast(types_list),
+            &boxy_fns,
         );
     }
 
@@ -759,7 +785,12 @@ fn buildGlueDylib(
     opt: GlueOpt,
     std_io: std.Io,
 ) GlueError![:0]const u8 {
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        gpa,
+        &lowered.lir_result.store,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
+    );
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
     codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
@@ -945,17 +976,30 @@ fn glueDylibOutputHash(root_artifact_key: CheckedArtifact.CheckedModuleArtifactK
     return digest;
 }
 
-fn gluePluginStamp(root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey) GluePluginStampV1 {
+fn gluePluginStamp(
+    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    specialization_strategy: base.SpecializationStrategy,
+) GluePluginStampV1 {
     return .{
         .magic = glue_plugin_stamp_magic,
         .size = @sizeOf(GluePluginStampV1),
         .kind = @intFromEnum(GluePluginKind.glue),
         .abi_version = glue_plugin_abi_version,
+        .specialization_strategy_tag = @as(u32, @intFromEnum(specialization_strategy)) + 1,
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
         .artifact_input_hash = root_artifact_key.bytes,
     };
+}
+
+test "glue dylib output hash includes specialization strategy" {
+    const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = [_]u8{0x5a} ** 32,
+    };
+    const lss_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
+    const boxy_hash = glueDylibOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));
+    try std.testing.expect(!std.mem.eql(u8, &lss_hash, &boxy_hash));
 }
 
 fn hashTarget() [32]u8 {
@@ -2604,7 +2648,7 @@ const TypeTable = struct {
                 // ABI fact glue emits is an explicit dual-width query
                 // (`sizeAt(.u32/.u64)`, `getStructFieldOffsetByOriginalIndexAt(..., .u32/.u64)`,
                 // ...), so this fixed choice cannot affect glue output.
-                .{ .target_usize = .u64, .layout_request_const_plans = false },
+                .{ .target_usize = .u64, .specialization_strategy = .lss, .layout_request_const_plans = false },
             );
             defer lowered.deinit();
 
