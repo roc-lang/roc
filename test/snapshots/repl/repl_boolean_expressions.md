@@ -17,7 +17,7 @@ type=repl
 # OUTPUT
 **Does Not Exist**
 `Bool.true` does not exist.
-`Bool` is in scope, but it has no associated `true`. repl:1:1:
+`Bool` is in scope, but it has no associated `true`.
 
 ```roc
 Bool.true # incorrect, tags must be UPPERCASE
@@ -26,7 +26,7 @@ Bool.true # incorrect, tags must be UPPERCASE
 ---
 **Does Not Exist**
 `Bool.false` does not exist.
-`Bool` is in scope, but it has no associated `false`. repl:1:1:
+`Bool` is in scope, but it has no associated `false`.
 
 ```roc
 Bool.false

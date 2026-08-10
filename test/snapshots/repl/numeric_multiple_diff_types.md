@@ -32,7 +32,7 @@ But the function needs the first argument to be:
 ---
 **Name Not In Scope**
 Nothing is named `b` in this scope.
-Is it misspelled, or is there an import missing? repl:3:22:
+Is it misspelled, or is there an import missing?
 
 ```roc
 main = Str.concat(a, b)
