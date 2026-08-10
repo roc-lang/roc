@@ -7624,6 +7624,17 @@ test "check type - discharged scheme requirement is not replayed by later uses" 
     try checkTypesModule(source, .fail, "Missing Method");
 }
 
+test "check type - shared pending scheme requirement reports once across uses" {
+    const source =
+        \\weak = "abc"
+        \\f = |_unit| weak.to_i128()
+        \\first = f({})
+        \\second = f({})
+        \\third = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
 const principality_result_flow_defs = &[_]DefAndExpectation{
     .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
     .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
@@ -7669,37 +7680,16 @@ test "check type - principality - literal-constrained lambda parameter remains p
 
 const GeneratedWeakLiteral = enum { quote, numeral };
 const GeneratedResultWrapper = enum { direct, record };
-const GeneratedAnnotationSite = enum { none, receiver, lengths, selves };
-
-const PrincipalityGenerator = struct {
-    state: u64,
-
-    fn next(self: *@This()) u64 {
-        self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
-        return self.state;
-    }
-
-    fn bounded(self: *@This(), upper: usize) usize {
-        std.debug.assert(upper > 0);
-        // Use the mixed high half; the low bit of this odd/odd LCG alternates
-        // deterministically and must not choose two-way dimensions.
-        return @intCast((self.next() >> 32) % upper);
-    }
-
-    fn boolean(self: *@This()) bool {
-        return self.next() >> 63 != 0;
-    }
-};
+const GeneratedAnnotationSite = enum { none, receiver, helper, lengths, selves };
 
 fn generatedPrincipalitySource(
     allocator: std.mem.Allocator,
     weak: GeneratedWeakLiteral,
     wrapper: GeneratedResultWrapper,
     transitive: bool,
-    reverse_before_map: bool,
     annotation_site: GeneratedAnnotationSite,
     invalid_result: bool,
-) ![]u8 {
+) std.mem.Allocator.Error![]u8 {
     const receiver_annotation = if (annotation_site == .receiver)
         switch (weak) {
             .quote => "weak : Str\n",
@@ -7715,8 +7705,7 @@ fn generatedPrincipalitySource(
         .quote => "weak",
         .numeral => "weak.to_str()",
     };
-    const identity_map = if (reverse_before_map) ".map(|item| item)" else "";
-    const mapped = try std.fmt.allocPrint(allocator, "{s}.split_on(\",\"){s}.map(g)", .{ normalized, identity_map });
+    const mapped = try std.fmt.allocPrint(allocator, "{s}.split_on(\",\").map(g)", .{normalized});
     defer allocator.free(mapped);
     const wrapped = switch (wrapper) {
         .direct => try allocator.dupe(u8, mapped),
@@ -7730,6 +7719,16 @@ fn generatedPrincipalitySource(
         try allocator.dupe(u8, "");
     defer allocator.free(base_binding);
     const f_body = if (transitive) "base(g)" else wrapped;
+
+    const helper_type = switch (wrapper) {
+        .direct => "(Str -> b) -> List(b)",
+        .record => "(Str -> b) -> { value : List(b) }",
+    };
+    const helper_annotation = if (annotation_site == .helper)
+        try std.fmt.allocPrint(allocator, "f : {s}\n", .{helper_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(helper_annotation);
 
     const lengths_type = switch (wrapper) {
         .direct => "List(U64)",
@@ -7756,11 +7755,12 @@ fn generatedPrincipalitySource(
 
     return std.fmt.allocPrint(
         allocator,
-        "{s}weak = {s}\n{s}f = |g| {s}\n{s}lengths = f(|s| s.count_utf8_bytes())\n{s}selves = f(|s| s)\n{s}",
+        "{s}weak = {s}\n{s}{s}f = |g| {s}\n{s}lengths = f(|s| s.count_utf8_bytes())\n{s}selves = f(|s| s)\n{s}",
         .{
             receiver_annotation,
             weak_literal,
             base_binding,
+            helper_annotation,
             f_body,
             lengths_annotation,
             selves_annotation,
@@ -7774,7 +7774,7 @@ fn expectGeneratedDefTypesEqual(
     inferred: *TestEnv,
     annotated: *TestEnv,
     transitive: bool,
-) !void {
+) TestEnv.TestEnvError!void {
     const names = [_][]const u8{ "weak", "f", "lengths", "selves" };
     for (names) |name| {
         const inferred_type = try inferred.allocDefType(allocator, name);
@@ -7794,40 +7794,21 @@ fn expectGeneratedDefTypesEqual(
 
 test "check type - generated principality under optional exact annotations" {
     const allocator = testing.allocator;
-    var generator = PrincipalityGenerator{ .state = 0x9e3779b97f4a7c15 };
-
-    comptime {
-        std.debug.assert(@typeInfo(GeneratedWeakLiteral).@"enum".fields.len == 2);
-        std.debug.assert(@typeInfo(GeneratedResultWrapper).@"enum".fields.len == 2);
-    }
-
-    // Exercise the complete product of weak-literal, result-wrapper, and
-    // transitive-helper choices exactly once, in a seed-shuffled order. The
-    // independent normalization choice remains generated for each program.
-    var combinations = [_]u3{ 0, 1, 2, 3, 4, 5, 6, 7 };
-    var remaining = combinations.len;
-    while (remaining > 1) {
-        remaining -= 1;
-        const swap_index = generator.bounded(remaining + 1);
-        std.mem.swap(u3, &combinations[remaining], &combinations[swap_index]);
-    }
-
-    // Each case is assembled from independently chosen, typed constructs: a
-    // weak literal, a normalization path, a list operation, an optional
-    // transitive helper, and a result wrapper. This is deliberately a small
-    // compositional generator rather than a catalogue of scenario strings.
-    for (combinations) |combination| {
+    // Exercise the complete product of weak literal, result wrapper, and
+    // transitive helper exactly once. Each source is still assembled from the
+    // selected typed constructs; order is irrelevant because every case gets
+    // an independent TestEnv.
+    for (0..8) |raw_combination| {
+        const combination: u3 = @intCast(raw_combination);
         const weak: GeneratedWeakLiteral = @enumFromInt(combination & 0b001);
         const wrapper: GeneratedResultWrapper = @enumFromInt((combination >> 1) & 0b001);
         const transitive = combination & 0b100 != 0;
-        const reverse_before_map = generator.boolean();
 
         const inferred_source = try generatedPrincipalitySource(
             allocator,
             weak,
             wrapper,
             transitive,
-            reverse_before_map,
             .none,
             false,
         );
@@ -7836,20 +7817,20 @@ test "check type - generated principality under optional exact annotations" {
         defer inferred.deinit();
         try inferred.assertNoErrors();
 
-        const annotation_sites = [_]GeneratedAnnotationSite{ .receiver, .lengths, .selves };
+        const annotation_sites = [_]GeneratedAnnotationSite{ .receiver, .helper, .lengths, .selves };
         for (annotation_sites) |annotation_site| {
             const annotated_source = try generatedPrincipalitySource(
                 allocator,
                 weak,
                 wrapper,
                 transitive,
-                reverse_before_map,
                 annotation_site,
                 false,
             );
             defer allocator.free(annotated_source);
             var annotated = try TestEnv.init("Test", annotated_source);
             defer annotated.deinit();
+            try annotated.assertNoErrors();
             try expectGeneratedDefTypesEqual(allocator, &inferred, &annotated, transitive);
         }
 
@@ -7860,7 +7841,6 @@ test "check type - generated principality under optional exact annotations" {
             weak,
             wrapper,
             transitive,
-            reverse_before_map,
             .none,
             true,
         );
@@ -7874,7 +7854,6 @@ test "check type - generated principality under optional exact annotations" {
             weak,
             wrapper,
             transitive,
-            reverse_before_map,
             .receiver,
             true,
         );

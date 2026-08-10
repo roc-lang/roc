@@ -305,11 +305,16 @@ pending_dispatch_targets: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
 /// requirements not structurally reachable from the type root. Requirements
 /// are copied under the same substitution as the root at every use.
 type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty,
-/// Active scheme lookup by resolved root. Generalized roots are stable after
-/// publication, so this is the same direct-index pattern used by the dispatch
-/// target registry rather than an O(number of schemes) scan at every use.
-/// The entry is removed when its last pending requirement is discharged.
-type_scheme_by_root: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Active scheme lookup by stable source vars. Union-find representatives are
+/// deliberately not identities: unification may replace one at any time. Each
+/// binding explicitly registers its expression, pattern, and definition vars
+/// against the same scheme index, and retirement removes all of those aliases.
+type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Constraint function vars whose deferred relation was actually consumed by
+/// static-dispatch checking (success or rejection). Receiver shape alone is not
+/// evidence of discharge: an unrelated error can poison the receiver, and a
+/// bounded dispatch pass can stop before visiting a concrete receiver.
+settled_static_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Dispatch requirements discovered while checking a prospective scheme.
 /// Candidates live in an append-only arena while any prospective owner is
 /// active, and the owner index lets each generalization boundary visit only its
@@ -443,6 +448,10 @@ has_can_diagnostics: bool,
 /// freshly created receiver var is recorded here (and, separately, on the
 /// ambiguity worklist below).
 instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
+/// Indices of explicit requirement dispatchers kept out of the hot deferred
+/// queue while their receivers remain flex. Generalization boundaries compact
+/// this list as receivers settle.
+pending_scheme_requirement_dispatchers: std.ArrayListUnmanaged(u32) = .empty,
 /// Worklist for the local ambiguity judgment. Every dispatch-constrained
 /// receiver var enters this list at the moment it acquires a constraint—
 /// either at a creation site (method call, desugared binop/unaryop,
@@ -453,6 +462,10 @@ instantiation_dispatchers: std.ArrayListUnmanaged(InstantiationDispatcher),
 /// pre-def instantiations) are judged once at end of check, after the final
 /// constraint fixpoint has had its chance to pin them.
 ambiguity_candidates: std.ArrayListUnmanaged(AmbiguityCandidate),
+/// Exact raw receiver/source index for the ambiguity worklist. Fresh copies
+/// remain distinct, while repeated explicit requirements on one shared outer
+/// receiver contribute only one judgment candidate.
+ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
 /// def's entries begin. Generalization events scan only from here: entries
 /// below the cursor belong to earlier defs and are either already judged or
@@ -735,6 +748,12 @@ const InstantiationDispatcher = struct {
     /// `checkExpr`.
     instantiation_expr: ?CIR.Expr.Idx,
     source: Source = .attached_constraint,
+    /// Whether this exact copied range is already present in the ordinary
+    /// deferred-dispatch queue. Explicit requirements whose receiver remains
+    /// flex stay registry-only until final compatibility has had a chance to
+    /// ground them; this avoids rechecking one inert queue entry per use after
+    /// every expression.
+    deferred_enqueued: bool = false,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -754,6 +773,7 @@ const InstantiationDispatcher = struct {
 /// is registered in the ordinary deferred-dispatch worklist.
 const TypeScheme = struct {
     root_var: Var,
+    indexed_vars: std.ArrayListUnmanaged(Var) = .empty,
     dispatch_requirements: std.ArrayListUnmanaged(SchemeDispatchRequirement) = .empty,
 };
 
@@ -763,6 +783,7 @@ const TypeScheme = struct {
 const SchemeDispatchRequirement = struct {
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
+    source: SchemeRequirementCandidate.Source,
 };
 
 const InstantiatedSchemeDispatchRequirement = struct {
@@ -777,6 +798,10 @@ const SchemeRequirementCandidate = struct {
     owner_root: Var,
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
+
+    source: Source,
+
+    const Source = enum { creation, scheme_copy };
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -792,6 +817,10 @@ const AmbiguityCandidate = struct {
     /// `.creation` candidates.
     instantiation_expr: ?CIR.Expr.Idx,
     source: Source,
+    /// Prospective definition that owned this record. The same shared receiver
+    /// may gain a different relation in a later definition and must then be
+    /// judged again at that later boundary.
+    dedup_owner: ?Var,
     /// Set once the candidate has been judged (either verdict or acquittal) so
     /// later events and the end-of-check residual pass skip it.
     judged: bool = false,
@@ -809,6 +838,12 @@ const AmbiguityCandidate = struct {
         /// gated on an in-module dispatch use or a body-forced contract.
         instantiation,
     };
+};
+
+const AmbiguityCandidateKey = struct {
+    var_: Var,
+    source: AmbiguityCandidate.Source,
+    owner: ?Var,
 };
 
 /// A candidate the local judgment found unpinnable at its judgment event. The
@@ -878,6 +913,7 @@ fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
+    source: SchemeRequirementCandidate.Source,
 ) Allocator.Error!void {
     if (self.constraintIsLiteralConversion(constraint)) return;
     const owner_root = self.active_scheme_root orelse return;
@@ -895,6 +931,7 @@ fn recordSchemeRequirementCandidate(
         .owner_root = owner_root,
         .receiver_var = receiver_var,
         .constraint = constraint,
+        .source = source,
     });
     owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
@@ -1786,9 +1823,13 @@ pub fn deinit(self: *Self) void {
     self.group_states.deinit(self.gpa);
     self.group_stack.deinit(self.gpa);
     self.pending_dispatch_targets.deinit(self.gpa);
-    for (self.type_schemes.items) |*scheme| scheme.dispatch_requirements.deinit(self.gpa);
+    for (self.type_schemes.items) |*scheme| {
+        scheme.indexed_vars.deinit(self.gpa);
+        scheme.dispatch_requirements.deinit(self.gpa);
+    }
     self.type_schemes.deinit(self.gpa);
-    self.type_scheme_by_root.deinit(self.gpa);
+    self.type_scheme_by_var.deinit(self.gpa);
+    self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
     self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
@@ -1857,7 +1898,9 @@ pub fn deinit(self: *Self) void {
     self.local_binding_roots.deinit(self.gpa);
     self.type_writer.deinit();
     self.instantiation_dispatchers.deinit(self.gpa);
+    self.pending_scheme_requirement_dispatchers.deinit(self.gpa);
     self.ambiguity_candidates.deinit(self.gpa);
+    self.ambiguity_candidate_by_key.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
@@ -4066,11 +4109,9 @@ const InstantiateRegionBehavior = union(enum) {
 };
 
 fn typeSchemeIndexForRoot(self: *Self, root_var: Var) ?usize {
-    const root = self.types.resolveVar(root_var).var_;
-    const raw_index = self.type_scheme_by_root.get(root) orelse return null;
+    const raw_index = self.type_scheme_by_var.get(root_var) orelse return null;
     const index: usize = raw_index;
     std.debug.assert(index < self.type_schemes.items.len);
-    std.debug.assert(self.types.resolveVar(self.type_schemes.items[index].root_var).var_ == root);
     return index;
 }
 
@@ -4360,13 +4401,15 @@ fn instantiateVarHelp(
         }
         try self.scratch_evidence_pairs.append(self.gpa, .{
             .old_var = @intFromEnum(self.types.resolveVar(requirement.scheme_fn_var).var_),
-            .fresh_var = @intFromEnum(requirement.constraint.fn_var),
+            .fresh_var = @intFromEnum(self.types.resolveVar(requirement.constraint.fn_var).var_),
         });
     }
     std.mem.sort(ModuleEnv.SchemeUsePair, self.scratch_evidence_pairs.items, {}, struct {
         fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
-            return a.old_var < b.old_var or
-                (a.old_var == b.old_var and a.fresh_var < b.fresh_var);
+            // pairForResolved deliberately selects the first substitution for
+            // an old root. Preserve the producer's insertion order for ties;
+            // ordering by the fresh id would silently change that selection.
+            return a.old_var < b.old_var;
         }
     }.lessThan);
     // The structural var-map walk above already emits constrained receiver and
@@ -4420,20 +4463,28 @@ fn instantiateVarHelp(
     for (instantiated_requirements.items) |requirement| {
         const constraint_range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
         const instantiation_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
+        const receiver_is_flex = self.types.resolveVar(requirement.receiver_var).desc.content == .flex;
+        const dispatcher_idx: u32 = @intCast(self.instantiation_dispatchers.items.len);
         try self.instantiation_dispatchers.append(self.gpa, .{
             .dispatcher_var = requirement.receiver_var,
             .constraints = constraint_range,
             .instantiation_expr = instantiation_expr,
             .source = .scheme_requirement,
+            .deferred_enqueued = !receiver_is_flex,
         });
-        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
-            .var_ = requirement.receiver_var,
-            .constraints = constraint_range,
-            .failure_expr = if (instantiation_expr) |expr_idx|
-                .from(@intFromEnum(expr_idx))
-            else
-                .none,
-        });
+        if (receiver_is_flex) {
+            try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
+        }
+        if (!receiver_is_flex) {
+            _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
+                .var_ = requirement.receiver_var,
+                .constraints = constraint_range,
+                .failure_expr = if (instantiation_expr) |expr_idx|
+                    .from(@intFromEnum(expr_idx))
+                else
+                    .none,
+            });
+        }
         try self.recordAmbiguityCandidate(
             requirement.receiver_var,
             .instantiation,
@@ -4442,6 +4493,7 @@ fn instantiateVarHelp(
         try self.recordSchemeRequirementCandidate(
             requirement.receiver_var,
             requirement.constraint,
+            .scheme_copy,
         );
     }
 
@@ -5992,6 +6044,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // against the settled end state.
     try self.judgeResidualAmbiguityCandidates();
     try self.applyAmbiguityVerdicts();
+    try self.finalizeTypeSchemeRequirementsAtCheckedBoundary();
 
     try self.reportPolymorphicExecutableRootResults();
 
@@ -7243,8 +7296,8 @@ fn beginAmbiguityPinnableSets(self: *Self) void {
 
 /// Add one scheme root's complete interface closure to `external_pinnable`.
 /// See `finishAmbiguityPinnableSets`.
-fn addAmbiguityPinnableRoot(self: *Self, scheme_root: Var) std.mem.Allocator.Error!void {
-    try self.collectReachableVars(scheme_root, &self.external_pinnable);
+fn addAmbiguityPinnableRoot(self: *Self, interface_root: Var, scheme_root: Var) std.mem.Allocator.Error!void {
+    try self.collectReachableVars(interface_root, &self.external_pinnable);
     try self.addSchemeRequirementRelationsToReachableSet(scheme_root, &self.external_pinnable);
 }
 
@@ -7258,13 +7311,18 @@ fn addSchemeRequirementRelationsToReachableSet(
     out: *std.AutoHashMap(Var, void),
 ) Allocator.Error!void {
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_root) orelse return;
+    var relation_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer relation_vars.deinit();
     for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
         const receiver_root = self.types.resolveVar(requirement.receiver_var).var_;
+        relation_vars.clearRetainingCapacity();
         try self.collectReachableVarsExcluding(
             requirement.constraint.fn_var,
             receiver_root,
-            out,
+            &relation_vars,
         );
+        var relation_iter = relation_vars.keyIterator();
+        while (relation_iter.next()) |var_| try out.put(var_.*, {});
     }
 }
 
@@ -7411,20 +7469,45 @@ fn poisonConstraintFailure(
 }
 
 /// Record a dispatch-constrained receiver on the ambiguity worklist (see
-/// `ambiguity_candidates`). The var is stored as recorded and resolved through
-/// the union-find at judgment time, so receivers merged by later unification
-/// are deduplicated by the judgment's reported-var set rather than here.
+/// `ambiguity_candidates`). Exact repeated records are deduplicated here;
+/// distinct raw vars that later unify are still deduplicated by the judgment's
+/// resolved reported-var set.
 fn recordAmbiguityCandidate(
     self: *Self,
     receiver_var: Var,
     source: AmbiguityCandidate.Source,
     instantiation_expr: ?CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
+    const key = AmbiguityCandidateKey{
+        .var_ = receiver_var,
+        .source = source,
+        .owner = self.active_scheme_root,
+    };
+    const entry = try self.ambiguity_candidate_by_key.getOrPut(self.gpa, key);
+    if (entry.found_existing) return;
+    errdefer {
+        const did_remove = self.ambiguity_candidate_by_key.remove(key);
+        std.debug.assert(did_remove);
+    }
+    entry.value_ptr.* = @intCast(self.ambiguity_candidates.items.len);
     try self.ambiguity_candidates.append(self.gpa, .{
         .var_ = receiver_var,
         .instantiation_expr = instantiation_expr,
         .source = source,
+        .dedup_owner = self.active_scheme_root,
     });
+}
+
+fn shrinkAmbiguityCandidatesTo(self: *Self, new_len: usize) void {
+    while (self.ambiguity_candidates.items.len > new_len) {
+        const candidate = self.ambiguity_candidates.pop().?;
+        const did_remove = self.ambiguity_candidate_by_key.remove(.{
+            .var_ = candidate.var_,
+            .source = candidate.source,
+            .owner = candidate.dedup_owner,
+        });
+        std.debug.assert(did_remove);
+    }
 }
 
 /// The constraint an ambiguity judgment selects for one candidate receiver,
@@ -7651,13 +7734,18 @@ fn instantiationArgumentsCanPin(
 /// literals. A candidate left non-generalized may still be pinned by later
 /// defs or the final constraint fixpoint, so it stays on the worklist for the
 /// end-of-check residual judgment.
-fn judgeAmbiguityCandidatesAtGeneralization(self: *Self, scheme_root: Var) Allocator.Error!void {
-    try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(&.{scheme_root});
+fn judgeAmbiguityCandidatesAtGeneralization(self: *Self, interface_root: Var, scheme_root: Var) Allocator.Error!void {
+    try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(&.{interface_root}, &.{scheme_root});
 }
 
 /// `judgeAmbiguityCandidatesAtGeneralization` for a whole binding group: the
 /// pinnable frontier includes every member's scheme root.
-fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: []const Var) Allocator.Error!void {
+fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(
+    self: *Self,
+    interface_roots: []const Var,
+    scheme_roots: []const Var,
+) Allocator.Error!void {
+    std.debug.assert(interface_roots.len == scheme_roots.len);
     var sets_built = false;
     for (self.ambiguity_candidates.items[self.ambiguity_candidates_def_start..]) |*candidate| {
         if (candidate.judged) continue;
@@ -7678,8 +7766,8 @@ fn judgeAmbiguityCandidatesAtGeneralizationMultiRoot(self: *Self, scheme_roots: 
         candidate.judged = true;
         if (!sets_built) {
             self.beginAmbiguityPinnableSets();
-            for (scheme_roots) |scheme_root| {
-                try self.addAmbiguityPinnableRoot(scheme_root);
+            for (interface_roots, scheme_roots) |interface_root, scheme_root| {
+                try self.addAmbiguityPinnableRoot(interface_root, scheme_root);
             }
             try self.finishAmbiguityPinnableSets(
                 self.open_literal_vars.items[self.open_literal_vars_def_start..],
@@ -7715,7 +7803,7 @@ fn judgeResidualAmbiguityCandidates(self: *Self) Allocator.Error!void {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def_var = ModuleEnv.varFrom(def_idx);
         if (self.types.varResolvesToFunction(def_var)) {
-            try self.addAmbiguityPinnableRoot(def_var);
+            try self.addAmbiguityPinnableRoot(def_var, def_var);
         }
     }
     try self.finishAmbiguityPinnableSets(
@@ -7962,17 +8050,6 @@ fn checkInstantiatedStaticDispatchConstraints(
 
             const has_ambiguity_verdict = self.hasInstantiationAmbiguityVerdict(dispatcher.dispatcher_var);
 
-            // Explicit requirements are already in the ordinary deferred
-            // worklist. A concrete receiver was therefore validated before
-            // this final fixpoint, and a still-flex receiver belongs to an
-            // enclosing scheme unless ambiguity judgment found this use
-            // unpinnable. In the latter case compatibility/defaulting below is
-            // the registry's one remaining job.
-            if (dispatcher.source == .scheme_requirement) {
-                if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content != .flex) continue;
-                if (!has_ambiguity_verdict) continue;
-            }
-
             // The ambiguity judgment has already decided which generalized
             // instantiations are unpinnable. Only those receivers will be
             // materialized through the specialization default at this use;
@@ -7989,6 +8066,18 @@ fn checkInstantiatedStaticDispatchConstraints(
                         .error_expr = dispatcher.instantiation_expr,
                     },
                 );
+            }
+
+            if (dispatcher.source == .scheme_requirement) {
+                // A concrete copy was queued when it was instantiated. A flex
+                // copy was intentionally kept out of the hot queue; enqueue it
+                // exactly once if compatibility above just grounded it. If it
+                // remains flex, either an enclosing scheme owns it or its
+                // ambiguity verdict will report it without pretending the
+                // relation was discharged.
+                if (dispatcher.deferred_enqueued) continue;
+                if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content == .flex) continue;
+                self.instantiation_dispatchers.items[dispatcher_idx].deferred_enqueued = true;
             }
 
             _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
@@ -9718,7 +9807,11 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
     const saved_active_scheme_root = self.active_scheme_root;
-    self.active_scheme_root = expr_var;
+    // A singleton value definition has no scheme boundary and therefore owns
+    // no side-table candidates. Recursive groups still provisionally own every
+    // member here because the shared group boundary decides which roots
+    // actually generalize.
+    self.active_scheme_root = if (def_is_function or group_prechecked) expr_var else saved_active_scheme_root;
     defer self.active_scheme_root = saved_active_scheme_root;
     const def_does_fx = try self.checkExpr(def.expr, env, def_expectation);
     if (def.annotation != null) {
@@ -9756,6 +9849,12 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Unify the def and ptrn
     _ = try self.unify(def_var, ptrn_var, env);
+
+    // Scheme identity follows stable source vars, never the mutable class
+    // representative. Publish every binding alias explicitly after the
+    // ordinary pattern/body unifications have completed.
+    try self.bindTypeSchemeVar(expr_var, ptrn_var);
+    try self.bindTypeSchemeVar(expr_var, def_var);
 
     if (ptrn_result.isOk()) {
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
@@ -10096,7 +10195,7 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             member_roots[i] = ModuleEnv.varFrom(member_def.expr);
         }
 
-        try self.runGroupBoundary(member_roots, env);
+        try self.runGroupBoundary(member_roots, member_roots, env);
         for (scc.defs) |member_def_idx| {
             const member_def = self.cir.store.getDef(member_def_idx);
             if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(member_def.expr))) {
@@ -10105,7 +10204,8 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         }
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
         self.retireNonGeneralizedTypeSchemes(member_roots);
-        try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
+        try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots);
+        try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots, member_roots);
         env.var_pool.popRank();
     }
 
@@ -10124,7 +10224,12 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
 /// into an unchecked group is outstanding), interleaved with boundary literal
 /// defaulting to a fixpoint, since a defaulting round can pin a receiver and
 /// surface a new obligation.
-fn runGroupBoundary(self: *Self, roots: []const Var, env: *Env) std.mem.Allocator.Error!void {
+fn runGroupBoundary(
+    self: *Self,
+    owner_roots: []const Var,
+    interface_roots: []const Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
     while (true) {
         // Deferred dispatch receivers may have been pinned since the last
         // in-body pass—in a recursive group, the members' def-level
@@ -10134,10 +10239,10 @@ fn runGroupBoundary(self: *Self, roots: []const Var, env: *Env) std.mem.Allocato
         try self.checkStaticDispatchConstraints(env, false);
         try self.resolveGroupPendingDispatchTargets(env);
         const pending_before = self.pending_dispatch_targets.items.len;
-        try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(roots, env);
+        try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(owner_roots, interface_roots, env);
         if (self.pending_dispatch_targets.items.len == pending_before) break;
     }
-    try self.finalizeFunctionEffectsAtBoundary(roots, env);
+    try self.finalizeFunctionEffectsAtBoundary(interface_roots, env);
     // Invariant D: every remaining deferred dispatch constraint targets a
     // checked def, an annotated scheme, or a still-flex receiver.
     std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
@@ -14189,6 +14294,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 self.suppress_generalize_expr = closure.lambda_idx;
             }
             does_fx = try self.checkExpr(closure.lambda_idx, env, nested_expected) or does_fx;
+            // The inner lambda owns generalization, while every source lookup
+            // names the closure wrapper. Register that explicit source-level
+            // alias instead of recovering the relationship from the mutable
+            // union-find representative later.
+            try self.bindTypeSchemeVar(ModuleEnv.varFrom(closure.lambda_idx), expr_var_raw);
             // The closure is the executable function-value expression. If its
             // delegated lambda check failed as a whole, poison the closure so
             // the lambda remains a valid structural child until the closure is
@@ -15002,21 +15112,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // singleton group's def RHS). Resolve dispatch obligations into
             // unchecked groups before anything here generalizes (Invariant D),
             // interleaved with boundary defaulting.
-            try self.runGroupBoundary(&.{expr_var}, env);
+            try self.runGroupBoundary(&.{expr_var_raw}, &.{expr_var}, env);
         } else {
             // Inner lambda: boundary defaulting runs first—it must see
             // ranks BEFORE they are promoted to generalized. Pending dispatch
             // obligations (pinned at the group's boundary rank) escape this
             // frame and stay live for the group boundary.
-            try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
+            try self.defaultLiteralsAtGeneralizationBoundary(expr_var_raw, expr_var, env);
         }
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-        self.retireNonGeneralizedTypeSchemes(&.{expr_var});
+        self.retireNonGeneralizedTypeSchemes(&.{expr_var_raw});
+        try self.retireStructurallyPublishedTypeSchemeRequirements(&.{expr_var});
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
         // local question about one scheme (see
         // `judgeAmbiguityCandidatesAtGeneralization`).
-        try self.judgeAmbiguityCandidatesAtGeneralization(expr_var);
+        try self.judgeAmbiguityCandidatesAtGeneralization(expr_var, expr_var_raw);
     }
 
     try hoist_frame.finish(does_fx);
@@ -16082,19 +16193,22 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                 }
+                try self.bindTypeSchemeVar(decl_expr_var, decl_pattern_var);
 
                 if (decl_fn_frame) {
                     // This statement's binding-group boundary: the pattern and
                     // any recursive links generalize together, then the frame
                     // pops so the statement's own var unifies with the
                     // finished scheme below.
-                    try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, env);
+                    try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, decl_pattern_var, env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
                     self.retireNonGeneralizedTypeSchemes(&.{decl_pattern_var});
+                    try self.retireStructurallyPublishedTypeSchemeRequirements(&.{decl_pattern_var});
                     env.var_pool.popRank();
                 }
 
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+                try self.bindTypeSchemeVar(decl_expr_var, stmt_var);
 
                 if (decl_is_fn) {
                     _ = self.local_processing_ptrns.remove(decl_stmt.pattern);
@@ -17801,7 +17915,7 @@ fn mkBinopConstraint(
     );
 
     _ = try self.unify(constrained_var, lhs_var, env);
-    try self.recordSchemeRequirementCandidate(lhs_var, constraint);
+    try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation);
     try self.recordAmbiguityCandidate(lhs_var, .creation, null);
 }
 
@@ -17897,7 +18011,7 @@ fn mkUnaryOp(
     );
 
     _ = try self.unify(constrained_var, arg_var, env);
-    try self.recordSchemeRequirementCandidate(arg_var, constraint);
+    try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation);
     try self.recordAmbiguityCandidate(arg_var, .creation, null);
 }
 
@@ -18087,7 +18201,7 @@ fn mkReceiverDispatchConstraint(
     );
 
     _ = try self.unify(constrained_var, receiver_var, env);
-    try self.recordSchemeRequirementCandidate(receiver_var, constraint);
+    try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation);
     try self.recordAmbiguityCandidate(receiver_var, .creation, null);
     return constraint_fn_var;
 }
@@ -18123,7 +18237,7 @@ fn mkTypeMethodCallConstraint(
     );
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
-    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint);
+    try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation);
     try self.recordAmbiguityCandidate(dispatcher_var, .creation, null);
     return constraint_fn_var;
 }
@@ -18975,6 +19089,8 @@ const Probe = struct {
     deferred_constraints_len: usize,
     regions_len: usize,
     instantiation_dispatchers_len: usize,
+    pending_scheme_requirement_dispatchers_len: usize,
+    ambiguity_candidates_len: usize,
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
@@ -18997,6 +19113,8 @@ const Probe = struct {
         // Per-instantiation dispatchers recorded during the probe reference fresh
         // receiver vars that were just rolled back with the type store.
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
+        self.check.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(self.pending_scheme_requirement_dispatchers_len);
+        self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         while (self.check.scheme_requirement_candidates.items.len > self.scheme_requirement_candidates_len) {
             const candidate_idx: u32 = @intCast(self.check.scheme_requirement_candidates.items.len - 1);
             const candidate = self.check.scheme_requirement_candidates.pop().?;
@@ -19044,6 +19162,8 @@ const Probe = struct {
 fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const regions_len = self.regions.items.items.len;
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
+    const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
+    const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
@@ -19062,6 +19182,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
             0,
         .regions_len = regions_len,
         .instantiation_dispatchers_len = instantiation_dispatchers_len,
+        .pending_scheme_requirement_dispatchers_len = pending_scheme_requirement_dispatchers_len,
+        .ambiguity_candidates_len = ambiguity_candidates_len,
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
@@ -19236,7 +19358,10 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // constraints (e.g. Dec.plus, Dec.to_str returning Str); resolve
     // them so the validations below see settled types.
     if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
-        try self.checkStaticDispatchConstraints(env, true);
+        // `true` means a literal-defaulting pass actually ran; it controls
+        // diagnostic attribution and unresolved-dispatch deferral, not merely
+        // whether this is the final call site.
+        try self.checkStaticDispatchConstraints(env, run_defaults);
         try self.checkAllConstraints(env);
     }
 
@@ -19254,7 +19379,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     }
     try self.validateResolvedOpenNumeralLiterals(env);
     if (scope == .module) {
-        try self.checkInstantiatedStaticDispatchConstraints(env, true);
+        try self.checkInstantiatedStaticDispatchConstraints(env, run_defaults);
     }
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
@@ -19871,32 +19996,56 @@ fn emitBoundaryWarningAfterCommit(
     } });
 }
 
-fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: *Env) std.mem.Allocator.Error!void {
-    try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(&.{def_root_var}, env);
+fn defaultLiteralsAtGeneralizationBoundary(
+    self: *Self,
+    owner_root: Var,
+    interface_root: Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(&.{owner_root}, &.{interface_root}, env);
 }
 
 fn ensureTypeScheme(self: *Self, root_var: Var) Allocator.Error!usize {
     if (self.typeSchemeIndexForRoot(root_var)) |scheme_idx| return scheme_idx;
-    const root = self.types.resolveVar(root_var).var_;
-    try self.type_scheme_by_root.ensureUnusedCapacity(self.gpa, 1);
+    try self.type_scheme_by_var.ensureUnusedCapacity(self.gpa, 1);
     const scheme_idx = self.type_schemes.items.len;
-    try self.type_schemes.append(self.gpa, .{ .root_var = root });
-    self.type_scheme_by_root.putAssumeCapacityNoClobber(root, @intCast(scheme_idx));
+    try self.type_schemes.append(self.gpa, .{ .root_var = root_var });
+    errdefer _ = self.type_schemes.pop();
+    try self.type_schemes.items[scheme_idx].indexed_vars.append(self.gpa, root_var);
+    self.type_scheme_by_var.putAssumeCapacityNoClobber(root_var, @intCast(scheme_idx));
     return scheme_idx;
+}
+
+/// Register another stable source var that names an existing side-table
+/// scheme. This is called at binding publication points; it does not inspect or
+/// reconstruct union-find classes.
+fn bindTypeSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
+    const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
+    if (self.type_scheme_by_var.get(alias_var)) |existing_idx| {
+        std.debug.assert(existing_idx == @as(u32, @intCast(scheme_idx)));
+        return;
+    }
+    try self.type_scheme_by_var.ensureUnusedCapacity(self.gpa, 1);
+    try self.type_schemes.items[scheme_idx].indexed_vars.append(self.gpa, alias_var);
+    self.type_scheme_by_var.putAssumeCapacityNoClobber(alias_var, @intCast(scheme_idx));
 }
 
 fn removeTypeSchemeAt(self: *Self, scheme_idx: usize) void {
     const last_idx = self.type_schemes.items.len - 1;
     var removed = self.type_schemes.swapRemove(scheme_idx);
-    const did_remove = self.type_scheme_by_root.remove(removed.root_var);
-    std.debug.assert(did_remove);
+    for (removed.indexed_vars.items) |indexed_var| {
+        const did_remove = self.type_scheme_by_var.remove(indexed_var);
+        std.debug.assert(did_remove);
+    }
+    removed.indexed_vars.deinit(self.gpa);
     removed.dispatch_requirements.deinit(self.gpa);
 
     if (scheme_idx != last_idx) {
-        const moved_root = self.type_schemes.items[scheme_idx].root_var;
-        const moved_index = self.type_scheme_by_root.getPtr(moved_root) orelse unreachable;
-        std.debug.assert(moved_index.* == @as(u32, @intCast(last_idx)));
-        moved_index.* = @intCast(scheme_idx);
+        for (self.type_schemes.items[scheme_idx].indexed_vars.items) |indexed_var| {
+            const moved_index = self.type_scheme_by_var.getPtr(indexed_var) orelse unreachable;
+            std.debug.assert(moved_index.* == @as(u32, @intCast(last_idx)));
+            moved_index.* = @intCast(scheme_idx);
+        }
     }
 }
 
@@ -19917,20 +20066,18 @@ fn typeSchemeHasRequirement(
     return false;
 }
 
-/// Retire side-table requirements as soon as their shared receiver has
-/// settled (or their callable relation has already been rejected). A scheme
-/// with no remaining side-table facts is removed from the hot-path index; its
-/// generalized root type continues to instantiate normally.
+/// Retire side-table requirements only after their exact deferred callable was
+/// consumed or rejected. A receiver becoming concrete, rigid, aliased, or
+/// erroneous is not by itself evidence that this relation was visited.
 fn retireResolvedTypeSchemeRequirements(self: *Self) void {
     var scheme_idx: usize = 0;
     while (scheme_idx < self.type_schemes.items.len) {
         const scheme = &self.type_schemes.items[scheme_idx];
-        std.debug.assert(self.type_scheme_by_root.get(scheme.root_var) == @as(?u32, @intCast(scheme_idx)));
+        std.debug.assert(self.type_scheme_by_var.get(scheme.root_var) == @as(?u32, @intCast(scheme_idx)));
 
         var write: usize = 0;
         for (scheme.dispatch_requirements.items) |requirement| {
-            const receiver = self.types.resolveVar(requirement.receiver_var);
-            const still_pending = receiver.desc.content == .flex and
+            const still_pending = !self.settled_static_dispatch_constraint_fns.contains(requirement.constraint.fn_var) and
                 !self.types.varStaticDispatchRejected(requirement.constraint.fn_var);
             if (!still_pending) continue;
             scheme.dispatch_requirements.items[write] = requirement;
@@ -19942,6 +20089,109 @@ fn retireResolvedTypeSchemeRequirements(self: *Self) void {
         } else {
             scheme_idx += 1;
         }
+    }
+}
+
+/// A creation relation is already attached to its receiver. Once a boundary
+/// publishes both the side-table scheme root and that generalized receiver,
+/// the structural constraint is the durable representation and the temporary
+/// side-table copy is redundant. Requiring both prevents one definition from
+/// retiring an unrelated scheme merely because its interface mentions the same
+/// receiver. Scheme-copy relations are never retired by this rule: their
+/// copied callable is not attached to the shared receiver.
+fn retireStructurallyPublishedTypeSchemeRequirements(
+    self: *Self,
+    interface_roots: []const Var,
+) Allocator.Error!void {
+    var published_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer published_vars.deinit();
+    for (interface_roots) |interface_root| {
+        try self.collectReachableVars(interface_root, &published_vars);
+    }
+
+    var scheme_idx: usize = 0;
+    while (scheme_idx < self.type_schemes.items.len) {
+        const scheme = &self.type_schemes.items[scheme_idx];
+        if (!published_vars.contains(self.types.resolveVar(scheme.root_var).var_)) {
+            scheme_idx += 1;
+            continue;
+        }
+
+        var write: usize = 0;
+        for (scheme.dispatch_requirements.items) |requirement| {
+            const receiver = self.types.resolveVar(requirement.receiver_var);
+            const structurally_published = requirement.source == .creation and
+                receiver.desc.rank == .generalized and
+                published_vars.contains(receiver.var_);
+            if (structurally_published) continue;
+            scheme.dispatch_requirements.items[write] = requirement;
+            write += 1;
+        }
+        scheme.dispatch_requirements.shrinkRetainingCapacity(write);
+        if (write == 0) {
+            self.removeTypeSchemeAt(scheme_idx);
+        } else {
+            scheme_idx += 1;
+        }
+    }
+}
+
+/// TypeScheme is deliberately checker-local and is never serialized. At the
+/// checked-module boundary every requirement must therefore be either exactly
+/// discharged/rejected or absorbed into a receiver whose structural
+/// constraints generalized normally. Any remaining relation is an explicit
+/// unresolved-dispatch error; silently dropping it would make importing the
+/// module less constrained than checking it locally.
+fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!void {
+    self.retireResolvedTypeSchemeRequirements();
+
+    for (self.type_schemes.items) |scheme| {
+        const scheme_is_err = self.types.resolveVar(scheme.root_var).desc.content == .err;
+        for (scheme.dispatch_requirements.items) |requirement| {
+            if (self.types.varStaticDispatchRejected(requirement.constraint.fn_var)) continue;
+
+            if (scheme_is_err) {
+                try self.markStaticDispatchRejected(requirement.constraint);
+                continue;
+            }
+
+            const receiver = self.types.resolveVar(requirement.receiver_var);
+            if (receiver.desc.content != .err and !self.reported_dispatch_vars.contains(receiver.var_)) {
+                const source_expr = constraintIntroExpr(requirement.constraint);
+                const region = if (source_expr) |expr_idx|
+                    self.cir.store.getExprRegion(expr_idx)
+                else
+                    self.getRegionAt(requirement.receiver_var);
+                const snapshot = try self.snapshots.snapshotVarForError(
+                    self.types,
+                    &self.type_writer,
+                    requirement.receiver_var,
+                );
+                _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+                    .region = region,
+                    .secondary_region = null,
+                    .dispatcher_snapshot = snapshot,
+                    .method_name = requirement.constraint.fn_name,
+                    .is_binop = requirement.constraint.origin == .desugared_binop,
+                    .binop_negated = requirement.constraint.origin.binopNegated(),
+                    .runtime_error_inserted = source_expr != null,
+                } } });
+                try self.reported_dispatch_vars.put(receiver.var_, {});
+                try self.poisonConstraintFailureSource(
+                    requirement.receiver_var,
+                    requirement.constraint,
+                    source_expr,
+                );
+            }
+            try self.markStaticDispatchRejected(requirement.constraint);
+        }
+    }
+
+    while (self.type_schemes.items.len > 0) self.removeTypeSchemeAt(self.type_schemes.items.len - 1);
+
+    if (builtin.mode == .Debug) {
+        std.debug.assert(self.type_scheme_by_var.count() == 0);
+        std.debug.assert(self.scheme_requirement_candidate_indices_by_owner.count() == 0);
     }
 }
 
@@ -19967,6 +20217,10 @@ fn captureSchemeDispatchRequirements(
     roots: []const Var,
     rank: Rank,
 ) Allocator.Error!void {
+    // Generalization boundaries are never speculative solver work. Keeping
+    // this invariant explicit means probes only need to rewind append-only
+    // candidates; they can never create or destructively capture TypeSchemes.
+    std.debug.assert(!self.commit_probe_active);
     for (roots) |root| {
         var owner_indices = (self.scheme_requirement_candidate_indices_by_owner.fetchRemove(root) orelse continue).value;
         defer owner_indices.deinit(self.gpa);
@@ -19979,13 +20233,22 @@ fn captureSchemeDispatchRequirements(
             // at a later enclosing boundary.
             const receiver = self.types.resolveVar(candidate.receiver_var);
             if (receiver.desc.content != .flex) continue;
-            if (@intFromEnum(receiver.desc.rank) >= @intFromEnum(rank)) continue;
+            if (receiver.desc.rank == .generalized) continue;
+            const needs_explicit_requirement = switch (candidate.source) {
+                .creation => @intFromEnum(receiver.desc.rank) < @intFromEnum(rank),
+                // A copied relation is detached from its receiver descriptor.
+                // Even a receiver in this boundary's rank therefore needs the
+                // callable side recorded in the enclosing scheme.
+                .scheme_copy => true,
+            };
+            if (!needs_explicit_requirement) continue;
 
             const scheme_idx = try self.ensureTypeScheme(root);
             if (self.typeSchemeHasRequirement(scheme_idx, candidate.receiver_var, candidate.constraint)) continue;
             try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
                 .receiver_var = candidate.receiver_var,
                 .constraint = candidate.constraint,
+                .source = candidate.source,
             });
         }
     }
@@ -20007,13 +20270,19 @@ fn addSchemeDispatchRequirementsToBoundaryReachability(
 /// reachable protection set is seeded from every member's root, so a literal
 /// reachable from any member's signature stays open across the shared
 /// boundary.
-fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: []const Var, env: *Env) std.mem.Allocator.Error!void {
+fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
+    self: *Self,
+    owner_roots: []const Var,
+    interface_roots: []const Var,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(owner_roots.len == interface_roots.len);
     const rank = env.rank();
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
     // even when this boundary has no literal candidates of its own.
-    try self.captureSchemeDispatchRequirements(def_root_vars, rank);
+    try self.captureSchemeDispatchRequirements(owner_roots, rank);
 
     // The candidate universe is the var pool entry this generalize call will
     // promote. (The global open-literal worklist is NOT usable here: a sub-def
@@ -20032,7 +20301,10 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
         has_candidate = true;
         break;
     }
-    if (!has_candidate) return;
+    if (!has_candidate) {
+        try self.checkGroundedSchemeRequirementsAtBoundary(env);
+        return;
+    }
 
     // Collect the module's `.eql` edges once so the recursive-def pass and the
     // fixpoint below iterate just the edges, not the whole constraint list.
@@ -20056,10 +20328,10 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
     // constrained through a recursive call is already reachable from the
     // member's root.
     self.boundary_reachable_vars.clearRetainingCapacity();
-    for (def_root_vars) |def_root_var| {
-        try self.collectReachableVars(def_root_var, &self.boundary_reachable_vars);
+    for (interface_roots) |interface_root| {
+        try self.collectReachableVars(interface_root, &self.boundary_reachable_vars);
     }
-    try self.addSchemeDispatchRequirementsToBoundaryReachability(def_root_vars);
+    try self.addSchemeDispatchRequirementsToBoundaryReachability(owner_roots);
 
     // Pending `eql` constraints are recursive-group cross-reference edges; a
     // literal awaiting unification with the def's type through one is NOT
@@ -20090,6 +20362,47 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(self: *Self, def_root_vars: 
         .rank = rank,
         .pool_len = pool_vars.len,
     } });
+    try self.checkGroundedSchemeRequirementsAtBoundary(env);
+}
+
+/// A copied explicit requirement stays out of the hot deferred queue while its
+/// receiver is flex. If that receiver grounds at the boundary that owns the
+/// copy's callable variables, validate it before generalization freezes those
+/// variables. This scans only at generalization boundaries, never after every
+/// expression.
+fn checkGroundedSchemeRequirementsAtBoundary(
+    self: *Self,
+    env: *Env,
+) Allocator.Error!void {
+    while (true) {
+        var appended = false;
+        var pending_write: usize = 0;
+        for (self.pending_scheme_requirement_dispatchers.items) |dispatcher_idx| {
+            const dispatcher = &self.instantiation_dispatchers.items[dispatcher_idx];
+            std.debug.assert(dispatcher.source == .scheme_requirement);
+            if (dispatcher.deferred_enqueued) continue;
+            if (self.types.resolveVar(dispatcher.dispatcher_var).desc.content == .flex) {
+                self.pending_scheme_requirement_dispatchers.items[pending_write] = dispatcher_idx;
+                pending_write += 1;
+                continue;
+            }
+
+            _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
+                .var_ = dispatcher.dispatcher_var,
+                .constraints = dispatcher.constraints,
+                .failure_expr = if (dispatcher.instantiation_expr) |expr_idx|
+                    .from(@intFromEnum(expr_idx))
+                else
+                    .none,
+            });
+            dispatcher.deferred_enqueued = true;
+            appended = true;
+        }
+        self.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(pending_write);
+        if (!appended) return;
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
+    }
 }
 
 /// Whether any deferred static-dispatch constraint's receiver has resolved to
@@ -21156,6 +21469,36 @@ fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchM
     return expr == .e_lambda or expr == .e_closure;
 }
 
+fn sameDeferredDispatchRelation(a: DeferredConstraintCheck, b: DeferredConstraintCheck) bool {
+    return a.var_ == b.var_ and
+        a.constraints.start == b.constraints.start and
+        a.constraints.len() == b.constraints.len();
+}
+
+fn deferredDispatchRelationWasRetained(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+    scratch_top: u32,
+) bool {
+    for (self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_top)) |retained| {
+        if (sameDeferredDispatchRelation(deferred, retained)) return true;
+    }
+    return false;
+}
+
+/// Record exact callable relations that this pass conclusively consumed. This
+/// is checker lifecycle data, so speculative commit-probes never update it;
+/// their committed constraints are revisited by the ordinary post-commit pass.
+fn recordSettledDeferredDispatchRelation(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+) Allocator.Error!void {
+    if (self.commit_probe_active) return;
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
+        try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
+    }
+}
+
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -21165,14 +21508,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
     defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
 
+    const initial_deferred_count = env.deferred_static_dispatch_constraints.items.items.len;
+    const runaway_limit = std.math.add(usize, initial_deferred_count, max_deferred_dispatch_iterations) catch std.math.maxInt(usize);
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
+        const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
         const failure_expr = deferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
         defer inheritDeferredConstraintFailureExpr(env, deferred_children_start, deferred_constraint.failure_expr);
 
-        if (deferred_constraint_index >= max_deferred_dispatch_iterations) {
+        if (deferred_constraint_index >= runaway_limit) {
             // Runaway: a non-terminating static-dispatch cycle keeps re-deriving an
             // unsatisfiable `where` constraint on the same type because the
             // recursion never bottoms out (the element type's method has the wrong
@@ -21211,6 +21557,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 try self.markStaticDispatchRejected(constraint);
             }
             try self.markErroneous(deferred_constraint.var_);
+            try self.recordSettledDeferredDispatchRelation(deferred_constraint);
             break;
         }
 
@@ -22152,6 +22499,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                 }
                 break :dispatch_resolution;
             }
+        }
+
+        if (!self.deferredDispatchRelationWasRetained(deferred_constraint, retained_top)) {
+            try self.recordSettledDeferredDispatchRelation(deferred_constraint);
         }
     }
 
@@ -26608,6 +26959,7 @@ fn checkFlexVarConstraintCompatibility(
         };
 
         const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
+        const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
         const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
         const open_literal_vars_len = self.open_literal_vars.items.len;
         const open_numeral_literals_len = self.open_numeral_literals.items.len;
@@ -26638,7 +26990,8 @@ fn checkFlexVarConstraintCompatibility(
             // those append-only records instead of reporting cascades from an
             // implementation that was never a valid target.
             self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
-            self.ambiguity_candidates.shrinkRetainingCapacity(ambiguity_candidates_len);
+            self.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(pending_scheme_requirement_dispatchers_len);
+            self.shrinkAmbiguityCandidatesTo(ambiguity_candidates_len);
             self.open_literal_vars.shrinkRetainingCapacity(open_literal_vars_len);
             self.open_numeral_literals.shrinkRetainingCapacity(open_numeral_literals_len);
             self.cir.scheme_uses.items.shrinkRetainingCapacity(scheme_uses_len);

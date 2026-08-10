@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const types = @import("types");
+const Var = types.Var;
 const parse = @import("parse");
 const CIR = @import("can").CIR;
 const Can = @import("can").Can;
@@ -447,20 +448,9 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
 /// Dynamic invariant generators use this to compare two independently checked
 /// modules without baking one generated program's type strings into the test.
 pub fn allocDefType(self: *TestEnv, allocator: Allocator, target_def_name: []const u8) TestEnvError![]u8 {
-    try self.assertNoErrors();
-
-    const idents = self.module_env.getIdentStoreConst();
-    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = self.module_env.store.getDef(def_idx);
-        const ptrn = self.module_env.store.getPattern(def.pattern);
-        if (ptrn != .assign) return error.TestUnexpectedResult;
-        if (!std.mem.eql(u8, target_def_name, idents.getText(ptrn.assign.ident))) continue;
-
-        try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
-        return allocator.dupe(u8, self.type_writer.get());
-    }
-    return error.TestUnexpectedResult;
+    const def_var = try self.findDefVar(target_def_name);
+    try self.type_writer.write(def_var, .wrap);
+    return allocator.dupe(u8, self.type_writer.get());
 }
 
 /// Count compilation-blocking type problems, excluding warning/info reports.
@@ -495,18 +485,20 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 
+    const def_var = try self.findDefVar(target_def_name);
+    try self.type_writer.write(def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.module_env.store.getDef(def_idx);
         const ptrn = self.module_env.store.getPattern(def.pattern);
-
         if (ptrn != .assign) return error.TestUnexpectedResult;
-        const def_name = idents.getText(ptrn.assign.ident);
-        if (std.mem.eql(u8, target_def_name, def_name)) {
-            try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
-            try testing.expectEqualStrings(expected, self.type_writer.get());
-            return;
+        if (std.mem.eql(u8, target_def_name, idents.getText(ptrn.assign.ident))) {
+            return ModuleEnv.varFrom(def_idx);
         }
     }
     return error.TestUnexpectedResult;

@@ -3311,10 +3311,24 @@ pass may recover ownership from reachability, creation order, rank shape, or
 source syntax. An explicit owner index lets each boundary consume only its own
 candidates instead of rescanning module-wide dispatch sites; the backing arena
 is cleared when the last active owner is consumed. Exact duplicate
-receiver/relation roots are stored once. A relation copied from another scheme
-remains explicit only while its receiver still belongs to an outer rank, which
-carries requirements transitively through helper definitions without turning
-same-rank, value-restricted uses into schemes.
+receiver/relation roots are stored once. A newly created relation needs the
+side table only when its receiver belongs to an outer rank. A relation copied
+from another scheme is already detached from the receiver descriptor, so it
+remains explicit even when the receiver happens to share the enclosing
+boundary's rank; only a generalized receiver is excluded. This carries
+requirements transitively through helper definitions without turning ordinary
+same-rank creation sites into schemes.
+
+Owner keys are stable raw source vars. An annotation or expected type may
+introduce a separate solved var without changing the owner key passed to the
+boundary, and a closure wrapper is explicitly registered as an alias of the
+inner lambda that owns its scheme. Active schemes are likewise indexed by
+their expression, pattern, and definition source vars rather than by a
+union-find representative, since unification may replace that representative.
+A receiver already at `Rank.generalized` is never captured as an outer-rank
+pending requirement. Generalization boundaries cannot run inside a commit
+probe; probes may append candidates, but rollback rewinds those candidates and
+can never leave a TypeScheme pointing into rolled-back store data.
 
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
@@ -3322,19 +3336,28 @@ value stays shared, while a receiver quantified by an enclosing scheme is
 copied. The callable root is copied even though its outer receiver keeps that
 root below generalized rank; everything below the callable root follows
 ordinary rank behavior, so its generalized argument and result variables are
-fresh per use. Each copied relation is registered as a distinct deferred static
-dispatch check and enters the ordinary instantiation ambiguity and compatibility
-worklists. Copies are never merged merely because they share a receiver.
+fresh per use. Each copied relation enters the instantiation ambiguity and
+compatibility worklists. A copy whose receiver is still flex stays on a
+dedicated pending index instead of the per-expression deferred queue. When a
+generalization boundary grounds such a receiver, the copied relation is
+enqueued and validated before its callable variables generalize; final
+compatibility does the same for copies grounded at module finalization. Copies
+are never merged merely because they share a receiver, while ambiguity
+candidates for the same raw receiver and owner event are judged only once.
 
 Only roots actually promoted to generalized rank can instantiate a side-table
 scheme. A mixed recursive group can provisionally capture requirements for a
 value-restricted member before generalization; the checker removes that entry
-as soon as the generalizer leaves the root non-generalized. Active schemes are
-indexed directly by resolved root. Once static dispatch settles or rejects a
-requirement's shared receiver, the requirement is retired, and an empty
-side-table scheme is removed (including its direct-index entry), so later
-ordinary uses instantiate only the generalized root type and cannot replay a
-discharged obligation.
+as soon as the generalizer leaves the root non-generalized. A requirement is
+retired only after static-dispatch checking actually consumes or rejects its
+exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
+receiver is not evidence of discharge. A creation relation whose generalized
+receiver is structurally published through the scheme root is represented
+durably by that receiver's own constraint list and no longer needs a duplicate
+side-table entry; copied relations never qualify for this retirement because
+they are detached. The checked-module boundary rejects any remaining
+checker-local requirement and empties the scheme index, so no import can
+observe a root type after its obligation was silently discarded.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
@@ -3361,13 +3384,14 @@ Both sides are pinned in src/check/test/type_checking_integration.zig.
 Accepted pairs cover top-level and enclosing weak receivers, weak numerals,
 multi-hop and transitively copied chains, repeated transitive helper uses, and
 results carried through the definition's return type; every pair has two uses
-at different result element types and asserts identical inferred types. A
+at different result item types and asserts identical inferred types. A
 retirement regression proves later uses do not replay a discharged missing
-method. The generated principality test seed-shuffles the complete product of
-small typed weak literals, transitive helpers, and result wrappers, independently
-generates normalization, then checks every exact annotation site and the
-rejection direction using error severity rather than raw warning-inclusive
-problem counts. The literal-constrained lambda parameter regression proves two
+method, and a shared pending requirement produces one diagnostic across
+multiple uses. The generated principality test checks the complete product of
+small typed weak literals, transitive helpers, and result wrappers exactly once,
+then checks the receiver, helper, and result annotation sites plus the rejection
+direction using error severity rather than raw warning-inclusive problem
+counts. The literal-constrained lambda parameter regression proves two
 concrete instantiations remain independent.
 The cross-module weak-receiver regression proves that, after the receiver has
 settled, publication preserves the discharged root scheme's polymorphism
