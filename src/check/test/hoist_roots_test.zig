@@ -205,8 +205,8 @@ test "iterator producer calls leave their closed inputs available for hoisting" 
     var test_env = try TestEnv.init("Test",
         \\main = |runtime| {
         \\    reversed = [1.U64, 2, 3].iter_rev()
-        \\    inclusive = 3.U8.down_to(1)
-        \\    exclusive = 3.U8.down_until(1)
+        \\    inclusive = 0.U8.to(3)
+        \\    exclusive = 0.U8.until(3)
         \\    List.len(List.from_iter(reversed)) +
         \\        List.len(List.from_iter(inclusive)) +
         \\        List.len(List.from_iter(exclusive)) +

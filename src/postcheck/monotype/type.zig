@@ -111,8 +111,6 @@ pub const IteratorKind = enum(u8) {
     range_inclusive,
     numeric_until,
     numeric_to,
-    descending_range_exclusive,
-    descending_range_inclusive,
     map,
     keep_if,
     drop_if,

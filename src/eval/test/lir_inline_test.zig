@@ -3962,19 +3962,6 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
         \\main : U64
         \\main = sum_it(4)
         },
-        .{ .name = "method-syntax descending range", .decrefs = 0, .src =
-        \\sum_it : U8 -> U64
-        \\sum_it = |n| {
-        \\    var $sum = 0
-        \\    for x in n.down_to(1) {
-        \\        $sum = $sum + x.to_u64()
-        \\    }
-        \\    $sum
-        \\}
-        \\
-        \\main : U64
-        \\main = sum_it(4)
-        },
     };
 
     for (cases) |c| {
@@ -5098,31 +5085,6 @@ test "static list iter_rev loop eliminates the public iterator boundary" {
     defer optimized.deinit(allocator);
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
-    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
-    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
-}
-
-test "static descending range loop eliminates the public iterator boundary" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\sum_down : U8 -> U64
-        \\sum_down = |from| {
-        \\    var $sum = 0
-        \\    for x in U8.down_to(from, 1) {
-        \\        $sum = $sum + x.to_u64()
-        \\    }
-        \\    $sum
-        \\}
-        \\
-        \\main : U64
-        \\main = sum_down(5)
-    ;
-
-    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
-    defer optimized.deinit(allocator);
-
-    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Num.U8.down_to"));
-    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.descending_inclusive_range"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
 }

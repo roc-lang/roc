@@ -986,8 +986,6 @@ pub const InstGraph = struct {
                         .range_inclusive,
                         .numeric_until,
                         .numeric_to,
-                        .descending_range_exclusive,
-                        .descending_range_inclusive,
                         => .{ .fixed = 1 },
                         .map,
                         .keep_if,

@@ -20082,7 +20082,7 @@ const BodyContext = struct {
         if (expected_ret) |expected| switch (procedure) {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .iter_descending_exclusive_range, .iter_descending_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_down_to, .numeric_down_until, .numeric_to, .numeric_until => {},
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -20194,20 +20194,6 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(.numeric_to, public_fn.ret, &.{}, null),
                 );
             },
-            .iter_descending_exclusive_range, .numeric_down_until => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.descending_range_exclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(.descending_range_exclusive, public_fn.ret, &.{}, null),
-                );
-            },
-            .iter_descending_inclusive_range, .numeric_down_to => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.descending_range_inclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(.descending_range_inclusive, public_fn.ret, &.{}, null),
-                );
-            },
             .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
             .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
             .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
@@ -20281,8 +20267,7 @@ const BodyContext = struct {
         // nominal component arguments. Their producer therefore keeps the
         // checked two-argument request while returning the exact private range.
         if (kind == .range_exclusive or kind == .range_inclusive or
-            kind == .numeric_until or kind == .numeric_to or
-            kind == .descending_range_exclusive or kind == .descending_range_inclusive)
+            kind == .numeric_until or kind == .numeric_to)
         {
             return try self.graphFunctionNode(args, expected);
         }
@@ -20457,8 +20442,6 @@ const BodyContext = struct {
             .range_inclusive,
             .numeric_until,
             .numeric_to,
-            .descending_range_exclusive,
-            .descending_range_inclusive,
             => return 1,
             .map,
             .keep_if,
@@ -44588,7 +44571,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .iter_descending_exclusive_range, .iter_descending_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_down_to, .numeric_down_until, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 

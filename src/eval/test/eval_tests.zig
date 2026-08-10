@@ -4278,69 +4278,6 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
     },
     .{
-        .name = "inspect: down_to counts down inclusively",
-        .source = "Iter.fold(U8.down_to(4, 1), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[4, 3, 2, 1]" },
-    },
-    .{
-        // The underflow boundary: stepping below 0 on an unsigned type must end
-        // the iterator rather than wrap or spin forever.
-        .name = "inspect: down_to reaching zero on an unsigned type terminates",
-        .source = "Iter.fold(U8.down_to(3, 0), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[3, 2, 1, 0]" },
-    },
-    .{
-        .name = "inspect: down_to on a single point yields that point",
-        .source = "Iter.fold(U8.down_to(3, 3), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[3]" },
-    },
-    .{
-        .name = "inspect: down_to with start below end is empty",
-        .source = "Iter.fold(U8.down_to(2, 5), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[]" },
-    },
-    .{
-        .name = "inspect: down_until excludes the end bound",
-        .source = "Iter.fold(U8.down_until(4, 1), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[4, 3, 2]" },
-    },
-    .{
-        .name = "inspect: down_until on a single point is empty",
-        .source = "Iter.fold(U8.down_until(3, 3), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[]" },
-    },
-    .{
-        .name = "inspect: down_to crosses zero on a signed type",
-        .source = "Iter.fold(I8.down_to(2, -2), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[2, 1, 0, -1, -2]" },
-    },
-    .{
-        // The signed mirror of the unsigned zero case: stepping below I8.lowest.
-        .name = "inspect: down_to reaching the signed minimum terminates",
-        .source = "Iter.fold(I8.down_to(-126, -128), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[-126, -127, -128]" },
-    },
-    .{
-        .name = "inspect: down_to reports an exact length",
-        .source = "Iter.size_hint(U8.down_to(4, 1))",
-        .expected = .{ .inspect_str = "Known(4)" },
-    },
-    .{
-        .name = "inspect: down_until reports an exact length",
-        .source = "Iter.size_hint(U8.down_until(4, 1))",
-        .expected = .{ .inspect_str = "Known(3)" },
-    },
-    .{
-        .name = "inspect: down_to composed with keep_if",
-        .source = "Iter.fold(U8.down_to(5, 1).keep_if(|x| x != 3), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[5, 4, 2, 1]" },
-    },
-    .{
-        .name = "inspect: down_to composed with step_by",
-        .source = "Iter.fold(U8.down_to(9, 1).step_by(3), [], |acc, item| acc.append(item))",
-        .expected = .{ .inspect_str = "[9, 6, 3]" },
-    },
-    .{
         .name = "inspect: Dict.iter yields pairs in insertion order",
         .source =
         \\{

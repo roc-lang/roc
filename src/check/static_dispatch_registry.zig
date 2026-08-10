@@ -160,12 +160,8 @@ pub const IteratorProcedureId = enum(u8) {
     iter_append,
     iter_exclusive_range,
     iter_inclusive_range,
-    iter_descending_exclusive_range,
-    iter_descending_inclusive_range,
     numeric_range_exclusive,
     numeric_range_inclusive,
-    numeric_down_to,
-    numeric_down_until,
     numeric_to,
     numeric_until,
     iter_from_step,
@@ -194,12 +190,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_append,
             .iter_exclusive_range,
             .iter_inclusive_range,
-            .iter_descending_exclusive_range,
-            .iter_descending_inclusive_range,
             .numeric_range_exclusive,
             .numeric_range_inclusive,
-            .numeric_down_to,
-            .numeric_down_until,
             .numeric_to,
             .numeric_until,
             .iter_from_step,
@@ -227,8 +219,6 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.Iter.append", .iter_append },
     .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
     .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
-    .{ "Builtin.Iter.descending_exclusive_range", .iter_descending_exclusive_range },
-    .{ "Builtin.Iter.descending_inclusive_range", .iter_descending_inclusive_range },
     .{ "iter_from_step", .iter_from_step },
     .{ "Builtin.iter_from_step", .iter_from_step },
     .{ "range_done", .range_done },
@@ -240,17 +230,13 @@ const iterator_numeric_type_names = [_][]const u8{
 };
 
 const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(blk: {
-    var entries: [iterator_procedure_base_names.len + iterator_numeric_type_names.len * 6]IteratorProcedureNameEntry = undefined;
+    var entries: [iterator_procedure_base_names.len + iterator_numeric_type_names.len * 4]IteratorProcedureNameEntry = undefined;
     for (iterator_procedure_base_names, 0..) |entry, index| entries[index] = entry;
     var index = iterator_procedure_base_names.len;
     for (iterator_numeric_type_names) |numeric| {
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_exclusive", .numeric_range_exclusive };
         index += 1;
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_inclusive", .numeric_range_inclusive };
-        index += 1;
-        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".down_to", .numeric_down_to };
-        index += 1;
-        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".down_until", .numeric_down_until };
         index += 1;
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".to", .numeric_to };
         index += 1;
@@ -275,12 +261,8 @@ const iterator_producer_method_names = std.StaticStringMap(void).initComptime(.{
     .{ "append", {} },
     .{ "exclusive_range", {} },
     .{ "inclusive_range", {} },
-    .{ "descending_exclusive_range", {} },
-    .{ "descending_inclusive_range", {} },
     .{ "range_exclusive", {} },
     .{ "range_inclusive", {} },
-    .{ "down_to", {} },
-    .{ "down_until", {} },
     .{ "to", {} },
     .{ "until", {} },
 });
