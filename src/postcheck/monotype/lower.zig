@@ -6612,11 +6612,12 @@ const Builder = struct {
         if (spec_index >= body_draft.template_specs.items.len) {
             Common.invariant("deferred template specialization index was outside the draft table");
         }
-        const spec = &body_draft.template_specs.items[spec_index];
+        const spec = body_draft.template_specs.items[spec_index];
         if (spec.state != .deferred) return;
 
         const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = fn_ty };
+        const signature_relation = draft_fn.signature_relation;
 
         const requested_evidence = StoredConstFnEvidence{
             .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
@@ -6664,7 +6665,7 @@ const Builder = struct {
         } else {
             self.countBodyDiagnostic("deferred_template_bodies_lowered");
         }
-        spec.resolved_slot = loaded_slot orelse blk: {
+        const resolved_slot: Ast.FnSlot = loaded_slot orelse blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
                 self.moduleForId(spec.method_scope),
@@ -6672,7 +6673,7 @@ const Builder = struct {
                 spec.source_fn_key,
                 fn_ty,
                 spec.evidence,
-                draft_fn.signature_relation,
+                signature_relation,
                 .already_counted,
                 request_digest,
                 null,
@@ -6680,7 +6681,11 @@ const Builder = struct {
             );
             break :blk .{ .local = self.defFnId(def) };
         };
-        spec.state = .resolved;
+        // `lowerTemplateWithMono` may append re-entrant requests to this
+        // caller's draft. Re-index after it returns rather than retaining a
+        // pointer into the possibly-reallocated template-spec list.
+        body_draft.template_specs.items[spec_index].resolved_slot = resolved_slot;
+        body_draft.template_specs.items[spec_index].state = .resolved;
     }
 
     /// Resolve context-free procedure requests that no representation-sensitive
@@ -9871,6 +9876,36 @@ fn registerTemplateSpecInterfaceLookups(
             .request_kind = 1,
             .request_fn_key = draftOpenRequestKey(interface_node),
         }, raw_spec);
+    }
+}
+
+fn unregisterTemplateSpecInterfaceLookups(
+    draft: *BodyDraftStore,
+    allocator: Allocator,
+    graph: *InstGraph,
+    family: DraftTemplateFamilyAddress,
+    evidence_digest: [32]u8,
+    request_fn_node: NodeId,
+    raw_spec: u32,
+) Allocator.Error!void {
+    var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
+    defer indexed_nodes.deinit();
+    var spec_interface = try graph.functionInterfaceIterator(request_fn_node);
+    while (spec_interface.next()) |interface_node| {
+        const indexed = try indexed_nodes.getOrPut(interface_node);
+        if (indexed.found_existing) continue;
+        const address = DraftTemplateLookupAddress{
+            .family = family,
+            .evidence_digest = evidence_digest,
+            .request_kind = 1,
+            .request_fn_key = draftOpenRequestKey(interface_node),
+        };
+        const candidates = draft.template_spec_lookup.getPtr(address) orelse continue;
+        for (candidates.items, 0..) |candidate, index| {
+            if (candidate != raw_spec) continue;
+            _ = candidates.orderedRemove(index);
+            break;
+        }
     }
 }
 
@@ -27791,10 +27826,17 @@ const BodyContext = struct {
         return switch (slot) {
             .local => |local| switch (local) {
                 .draft => |draft_fn| try self.completeDeferredIteratorResult(draft_fn),
-                .final => |final_fn| try self.adoptCompletedIteratorResult(
-                    imported_fallback,
-                    try self.activeNodeFromType(self.builder.program.fnSource(final_fn).mono_fn_ty),
-                ),
+                .final => |final_fn| blk: {
+                    const completed_node = try self.activeNodeFromType(self.builder.program.fnSource(final_fn).mono_fn_ty);
+                    const request_fn = try self.graph.functionNodes(imported_fallback);
+                    if (!try self.graph.containsIteratorInterface(request_fn.ret)) {
+                        break :blk completed_node;
+                    }
+                    break :blk try self.adoptCompletedIteratorResult(
+                        imported_fallback,
+                        completed_node,
+                    );
+                },
             },
             // Imported slots were selected from this exact request. Their
             // durable signature belongs to another shard, while the active
@@ -27850,10 +27892,8 @@ const BodyContext = struct {
             if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
         }
 
-        const spec_index = for (self.draft.template_specs.items, 0..) |spec, index| {
-            if (spec.fn_id == draft_fn) break index;
-        } else return current_node;
-        const spec = &self.draft.template_specs.items[spec_index];
+        const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return current_node;
+        const spec = self.draft.template_specs.items[spec_index];
         if (spec.state != .deferred) return current_node;
         // A same-family request inside the active root is an explicit
         // recursive edge. Its live graph must join the recursive argument and
@@ -27890,6 +27930,19 @@ const BodyContext = struct {
         const completed_node = try self.activeNodeFromType(completed_ty);
         if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
 
+        try unregisterTemplateSpecInterfaceLookups(
+            self.draft,
+            self.allocator,
+            self.graph,
+            DraftTemplateFamilyAddress.init(
+                spec.template_ref,
+                spec.method_scope,
+                spec.source_fn_key,
+            ),
+            self.draft.fns.items[@intFromEnum(draft_fn)].source.evidence_digest.bytes,
+            current_node,
+            @intCast(spec_index),
+        );
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
         self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
@@ -32601,7 +32654,15 @@ const BodyContext = struct {
         if (completed_function.args.len != operands.len) {
             Common.invariant("completed closed direct procedure call changed its argument arity");
         }
-        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(completed_function.ret))
+        const completed_ret_is_private = try self.graph.containsGeneratedPrivate(completed_function.ret);
+        if (completed_ret_is_private) {
+            try relateRequestComponent(
+                self.graph,
+                try expected_ret_cell.toGraphNode(self.graph),
+                completed_function.ret,
+            );
+        }
+        const call_ret_cell = if (completed_ret_is_private)
             DraftTypeCell.fromGraphNode(completed_function.ret)
         else
             expected_ret_cell;
@@ -33104,79 +33165,6 @@ const BodyContext = struct {
         };
     }
 
-    /// Whether a durable type contains a checker-authored iterator interface
-    /// at any structural depth. Closed direct calls use this explicit identity
-    /// to decide whether their callee body must get a chance to publish a
-    /// private representation before the result type is sealed.
-    fn typeContainsIteratorInterface(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.typeContainsIteratorInterfaceInner(ty, &seen);
-    }
-
-    fn typeContainsIteratorInterfaceInner(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        seen: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        const seen_entry = try seen.getOrPut(ty);
-        if (seen_entry.found_existing) return false;
-
-        return switch (self.builder.program.types.get(ty)) {
-            .primitive, .erased, .zst => false,
-            .list, .box => |child| try self.typeContainsIteratorInterfaceInner(child, seen),
-            .tuple => |items| blk: {
-                const children = self.builder.program.types.span(items);
-                for (0..GuardedList.borrowLen(children)) |index| {
-                    if (try self.typeContainsIteratorInterfaceInner(GuardedList.at(children, index), seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .func => |function| blk: {
-                const args = self.builder.program.types.span(function.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    if (try self.typeContainsIteratorInterfaceInner(GuardedList.at(args, index), seen)) break :blk true;
-                }
-                break :blk try self.typeContainsIteratorInterfaceInner(function.ret, seen);
-            },
-            .record => |fields| blk: {
-                const children = self.builder.program.types.fieldSpan(fields);
-                for (0..GuardedList.borrowLen(children)) |index| {
-                    if (try self.typeContainsIteratorInterfaceInner(GuardedList.at(children, index).ty, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tags| blk: {
-                const variants = self.builder.program.types.tagSpan(tags);
-                for (0..GuardedList.borrowLen(variants)) |tag_index| {
-                    const payloads = self.builder.program.types.span(GuardedList.at(variants, tag_index).payloads);
-                    for (0..GuardedList.borrowLen(payloads)) |payload_index| {
-                        if (try self.typeContainsIteratorInterfaceInner(GuardedList.at(payloads, payload_index), seen)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .named => |named| blk: {
-                if (named.builtin_owner) |owner| {
-                    if (static_dispatch.isIteratorOwner(owner)) break :blk true;
-                }
-                const args = self.builder.program.types.span(named.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    if (try self.typeContainsIteratorInterfaceInner(GuardedList.at(args, index), seen)) break :blk true;
-                }
-                if (named.backing) |backing| {
-                    if (try self.typeContainsIteratorInterfaceInner(backing.ty, seen)) break :blk true;
-                }
-                const declared = self.builder.program.types.declaredFieldSpan(named.declared_order);
-                for (0..GuardedList.borrowLen(declared)) |index| switch (GuardedList.at(declared, index)) {
-                    .named => {},
-                    .padding => |padding| if (try self.typeContainsIteratorInterfaceInner(padding, seen)) break :blk true,
-                };
-                break :blk false;
-            },
-        };
-    }
-
     fn setPayloadType(self: *BodyContext, ty: Type.TypeId) ?Type.TypeId {
         if (!self.typeHasBuiltinOwner(ty, .set)) return null;
         const named = switch (self.builder.program.types.get(ty)) {
@@ -33555,7 +33543,7 @@ const BodyContext = struct {
         );
         return switch (runtime_target) {
             .low_level => function.ret,
-            .procedure => if (try self.typeContainsIteratorInterface(function.ret))
+            .procedure => if (try self.graph.containsIteratorInterface(try self.activeNodeFromType(function.ret)))
                 null
             else
                 function.ret,
@@ -33615,15 +33603,14 @@ const BodyContext = struct {
                     callable_node = private_node;
                 }
                 if (phase == .expression_lowering) {
+                    const target_evidence = try self.evidenceForDispatchTarget(plan);
                     callable_node = try self.completeIteratorMethodResultAtNode(
                         lookup,
                         callable_node,
-                        try self.evidenceForDispatchTarget(plan),
+                        target_evidence,
                         switch (plan.resolution) {
-                            .direct_closed, .direct_parametric => true,
                             .evidence_dependent => false,
-                            .direct_pending => Common.invariant("unfinalized direct call reached Monotype result lookup"),
-                            .structural, .checked_error, .@"unreachable" => false,
+                            else => true,
                         },
                     );
                 }
@@ -42327,6 +42314,22 @@ const BodyContext = struct {
         return regions;
     }
 
+    fn matchScrutineeTypeNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+    ) Allocator.Error!NodeId {
+        return switch (self.view.bodies.expr(checked_expr).data) {
+            .call,
+            .dispatch_call,
+            .interpolation,
+            .type_dispatch_call,
+            .method_eq,
+            => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
+                try self.lowerExprTypeNode(checked_expr),
+            else => try self.lowerExprTypeNode(checked_expr),
+        };
+    }
+
     fn lowerMatch(
         self: *BodyContext,
         match: anytype,
@@ -42348,8 +42351,7 @@ const BodyContext = struct {
         // emitted. Ask the scrutinee producer for exact value evidence now so
         // a nested iterator payload is not projected from the checked-public
         // tag or record shape and permanently loses the callee's witness.
-        const scrutinee_node = (try self.exprCallResultEvidenceNode(match.cond, null)) orelse
-            try self.lowerExprTypeNode(match.cond);
+        const scrutinee_node = try self.matchScrutineeTypeNode(match.cond);
         const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node);
         const branches = try self.allocator.alloc(DraftBranch, branchCount(match.branches));
         defer self.allocator.free(branches);

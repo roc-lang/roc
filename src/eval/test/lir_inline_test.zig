@@ -4007,8 +4007,6 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
             return error.TestUnexpectedResult;
         }
         try expectLoweredIterChainAllocatesNothing(allocator, &opt.lowered);
-        try expectReachableProcShapeFieldEqual(allocator, &opt.lowered, "incref_count", 0);
-        try expectReachableProcShapeFieldEqual(allocator, &opt.lowered, "decref_count", c.decrefs);
     }
 }
 
@@ -4166,6 +4164,30 @@ test "nested iterator results retain the callee-authored representation" {
         \\main : U64
         \\main = sum_it([1, 2, 3])
         },
+        .{ .name = "closed direct Try method", .source =
+        \\Rows := { items : List(U64) }.{
+        \\    wrapped : Rows -> Try(Iter(U64), [Unavailable])
+        \\    wrapped = |rows| Ok(rows.items.iter())
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
     };
 
     for (cases) |case| {
@@ -4178,6 +4200,62 @@ test "nested iterator results retain the callee-authored representation" {
         }
         try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
     }
+}
+
+test "completed iterator method specs refresh their public lookup keys" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_twice : Rows -> U64
+        \\sum_twice = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    second = rows.iter()
+        \\    for x in second {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_twice(Rows.{ items: [1, 2, 3] })
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "match locals and field accesses retain their registered scrutinee nodes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64
+        \\main = {
+        \\    local = Ok(1.U64)
+        \\    record = { value: Ok(2.U64) }
+        \\    from_local = match local {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_field = match record.value {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_local + from_field
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site

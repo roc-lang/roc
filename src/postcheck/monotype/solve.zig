@@ -370,6 +370,12 @@ pub const InstGraph = struct {
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
+    /// Reusable scratch for iterator-interface containment walks. Node ids are
+    /// dense, so epochs provide exact cycle detection without allocating a
+    /// fresh list and hash set for every closed direct call.
+    iterator_interface_pending: std.ArrayList(NodeId),
+    iterator_interface_visit_epochs: std.ArrayList(u32),
+    iterator_interface_visit_epoch: u32,
     /// Allocation-free scratch for exact generated-private containment walks.
     /// Node ids are dense, so an epoch array replaces a fresh hash set on every
     /// query while preserving cycle detection exactly.
@@ -412,6 +418,9 @@ pub const InstGraph = struct {
             .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
+            .iterator_interface_pending = .empty,
+            .iterator_interface_visit_epochs = .empty,
+            .iterator_interface_visit_epoch = 0,
             .generated_private_pending = .empty,
             .generated_private_visit_epochs = .empty,
             .generated_private_visit_epoch = 0,
@@ -456,6 +465,8 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
+        self.iterator_interface_pending.deinit(allocator);
+        self.iterator_interface_visit_epochs.deinit(allocator);
         self.generated_private_pending.deinit(allocator);
         self.generated_private_visit_epochs.deinit(allocator);
         var generated_private_entries = self.generated_private_cache.valueIterator();
@@ -1282,6 +1293,7 @@ pub const InstGraph = struct {
         try self.class_member_next.append(self.allocator, null);
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
+        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         try self.generated_private_visit_epochs.append(self.allocator, 0);
         try self.row_exts.append(self.allocator, null);
         try self.request_source_interfaces.append(self.allocator, null);
@@ -1661,43 +1673,49 @@ pub const InstGraph = struct {
     /// carried by each named node; callers do not reconstruct iterator intent
     /// from a backing shape.
     pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
+        self.iterator_interface_pending.clearRetainingCapacity();
+        defer self.iterator_interface_pending.clearRetainingCapacity();
+        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.iterator_interface_visit_epochs.items, 0);
+            self.iterator_interface_visit_epoch = 1;
+        } else {
+            self.iterator_interface_visit_epoch += 1;
+        }
+        const visit_epoch = self.iterator_interface_visit_epoch;
 
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
+        try self.iterator_interface_pending.append(self.allocator, root);
+        while (self.iterator_interface_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
-            const seen_entry = try seen.getOrPut(node);
-            if (seen_entry.found_existing) continue;
+            const node_index = @intFromEnum(node);
+            if (self.iterator_interface_visit_epochs.items[node_index] == visit_epoch) continue;
+            self.iterator_interface_visit_epochs.items[node_index] = visit_epoch;
 
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
+                .tuple => |items| try self.iterator_interface_pending.appendSlice(self.allocator, items),
                 .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
+                    try self.iterator_interface_pending.appendSlice(self.allocator, function.args);
+                    try self.iterator_interface_pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try self.iterator_interface_pending.appendSlice(self.allocator, tag.payloads);
+                    try self.iterator_interface_pending.append(self.allocator, row.ext);
                 },
                 .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
+                    for (row.fields) |field| try self.iterator_interface_pending.append(self.allocator, field.ty);
+                    try self.iterator_interface_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
                     if (named.builtin_owner) |owner| {
                         if (static_dispatch.isIteratorOwner(owner)) return true;
                     }
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
-                    try pending.appendSlice(self.allocator, named.args);
+                    if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.node);
+                    try self.iterator_interface_pending.appendSlice(self.allocator, named.args);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
+                        .padding => |padding| try self.iterator_interface_pending.append(self.allocator, padding),
                     };
                 },
             }

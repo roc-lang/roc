@@ -23,6 +23,7 @@ const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
+const static_dispatch = @import("static_dispatch_registry.zig");
 
 const MkSafeList = collections.SafeList;
 
@@ -3177,8 +3178,8 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_hosted_lambda,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodNameIs(call.method_name, "iter"),
-        .e_dispatch_call => |call| !self.methodNameIs(call.method_name, "iter"),
+        .e_method_call => |call| !self.methodCallMayProduceIterator(call.method_name),
+        .e_dispatch_call => |call| !self.methodCallMayProduceIterator(call.method_name),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3256,8 +3257,8 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_run_low_level,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodNameIs(call.method_name, "iter"),
-        .e_dispatch_call => |call| !self.methodNameIs(call.method_name, "iter"),
+        .e_method_call => |call| !self.methodCallMayProduceIterator(call.method_name),
+        .e_dispatch_call => |call| !self.methodCallMayProduceIterator(call.method_name),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3292,8 +3293,8 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_method_call,
         .e_type_dispatch_call,
         => true,
-        .e_method_call => |call| !self.methodNameIs(call.method_name, "iter"),
-        .e_dispatch_call => |call| !self.methodNameIs(call.method_name, "iter"),
+        .e_method_call => |call| !self.methodCallMayProduceIterator(call.method_name),
+        .e_dispatch_call => |call| !self.methodCallMayProduceIterator(call.method_name),
         .e_for,
         .e_run_low_level,
         .e_lookup_required,
@@ -3353,8 +3354,8 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     };
 }
 
-fn methodNameIs(self: *const Self, method_name: Ident.Idx, comptime text: []const u8) bool {
-    return Ident.textEql(self.cir.getIdentText(method_name), text);
+fn methodCallMayProduceIterator(self: *const Self, method_name: Ident.Idx) bool {
+    return static_dispatch.methodNameMayProduceIterator(self.cir.getIdentText(method_name));
 }
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {

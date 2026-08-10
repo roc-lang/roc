@@ -42,15 +42,19 @@ To visit a list's items from last to first, use `List.iter_rev` instead of
 `iter`:
 
 ```roc
-var $sum = 0
+var $visited = []
 
 for n in [1, 2, 3, 4].iter_rev() {
-    $sum = $sum + n
+    $visited = $visited.append(n)
 }
+
+# $visited is now [4, 3, 2, 1]
 ```
 
 This reads the list backwards in place. Unlike `List.rev`, it does not build a
-reversed copy of the list first.
+reversed copy of the list first. `iter_rev` is specific to lists; to reverse
+the values from another iterator, first collect them with `List.from_iter`,
+then call `iter_rev` on that list.
 
 ### Pattern matching in `for`
 

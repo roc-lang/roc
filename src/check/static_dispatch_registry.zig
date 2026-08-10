@@ -208,6 +208,90 @@ pub const IteratorProcedureId = enum(u8) {
     }
 };
 
+const IteratorProcedureNameEntry = struct { []const u8, IteratorProcedureId };
+
+const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
+    .{ "Builtin.Iter.iter", .iter_iter },
+    .{ "Builtin.Iter.next", .iter_next },
+    .{ "Builtin.Iter.custom", .iter_custom },
+    .{ "Builtin.Iter.single", .iter_single },
+    .{ "Builtin.List.iter", .list_iter },
+    .{ "Builtin.List.iter_rev", .list_iter_rev },
+    .{ "Builtin.Str.iter_utf8", .str_iter_utf8 },
+    .{ "Builtin.Iter.map", .iter_map },
+    .{ "Builtin.Iter.keep_if", .iter_keep_if },
+    .{ "Builtin.Iter.drop_if", .iter_drop_if },
+    .{ "Builtin.Iter.take_first", .iter_take_first },
+    .{ "Builtin.Iter.drop_first", .iter_drop_first },
+    .{ "Builtin.Iter.concat", .iter_concat },
+    .{ "Builtin.Iter.append", .iter_append },
+    .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
+    .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
+    .{ "Builtin.Iter.descending_exclusive_range", .iter_descending_exclusive_range },
+    .{ "Builtin.Iter.descending_inclusive_range", .iter_descending_inclusive_range },
+    .{ "iter_from_step", .iter_from_step },
+    .{ "Builtin.iter_from_step", .iter_from_step },
+    .{ "range_done", .range_done },
+    .{ "Builtin.range_done", .range_done },
+};
+
+const iterator_numeric_type_names = [_][]const u8{
+    "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
+};
+
+const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(blk: {
+    var entries: [iterator_procedure_base_names.len + iterator_numeric_type_names.len * 6]IteratorProcedureNameEntry = undefined;
+    for (iterator_procedure_base_names, 0..) |entry, index| entries[index] = entry;
+    var index = iterator_procedure_base_names.len;
+    for (iterator_numeric_type_names) |numeric| {
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_exclusive", .numeric_range_exclusive };
+        index += 1;
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_inclusive", .numeric_range_inclusive };
+        index += 1;
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".down_to", .numeric_down_to };
+        index += 1;
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".down_until", .numeric_down_until };
+        index += 1;
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".to", .numeric_to };
+        index += 1;
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".until", .numeric_until };
+        index += 1;
+    }
+    break :blk &entries;
+});
+
+const iterator_producer_method_names = std.StaticStringMap(void).initComptime(.{
+    .{ "iter", {} },
+    .{ "custom", {} },
+    .{ "single", {} },
+    .{ "iter_rev", {} },
+    .{ "iter_utf8", {} },
+    .{ "map", {} },
+    .{ "keep_if", {} },
+    .{ "drop_if", {} },
+    .{ "take_first", {} },
+    .{ "drop_first", {} },
+    .{ "concat", {} },
+    .{ "append", {} },
+    .{ "exclusive_range", {} },
+    .{ "inclusive_range", {} },
+    .{ "descending_exclusive_range", {} },
+    .{ "descending_inclusive_range", {} },
+    .{ "range_exclusive", {} },
+    .{ "range_inclusive", {} },
+    .{ "down_to", {} },
+    .{ "down_until", {} },
+    .{ "to", {} },
+    .{ "until", {} },
+});
+
+/// Whether a surface method name can resolve to a registered iterator
+/// producer. Checking uses this explicit registry before the exact target has
+/// been selected, so producer calls do not swallow their hoistable inputs.
+pub fn methodNameMayProduceIterator(text: []const u8) bool {
+    return iterator_producer_method_names.has(text);
+}
+
 /// Return the compiler-owned iterator role assigned to a Builtin definition.
 pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
     const env = module.moduleEnvConst();
@@ -217,58 +301,7 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
     const ident = def.pattern.data.assign.ident;
     const text = module.getIdent(ident);
 
-    const exact = [_]struct { []const u8, IteratorProcedureId }{
-        .{ "Builtin.Iter.iter", .iter_iter },
-        .{ "Builtin.Iter.next", .iter_next },
-        .{ "Builtin.Iter.custom", .iter_custom },
-        .{ "Builtin.Iter.single", .iter_single },
-        .{ "Builtin.List.iter", .list_iter },
-        .{ "Builtin.List.iter_rev", .list_iter_rev },
-        .{ "Builtin.Str.iter_utf8", .str_iter_utf8 },
-        .{ "Builtin.Iter.map", .iter_map },
-        .{ "Builtin.Iter.keep_if", .iter_keep_if },
-        .{ "Builtin.Iter.drop_if", .iter_drop_if },
-        .{ "Builtin.Iter.take_first", .iter_take_first },
-        .{ "Builtin.Iter.drop_first", .iter_drop_first },
-        .{ "Builtin.Iter.concat", .iter_concat },
-        .{ "Builtin.Iter.append", .iter_append },
-        .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
-        .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
-        .{ "Builtin.Iter.descending_exclusive_range", .iter_descending_exclusive_range },
-        .{ "Builtin.Iter.descending_inclusive_range", .iter_descending_inclusive_range },
-        .{ "iter_from_step", .iter_from_step },
-        .{ "Builtin.iter_from_step", .iter_from_step },
-        .{ "range_done", .range_done },
-        .{ "Builtin.range_done", .range_done },
-    };
-    for (exact) |entry| {
-        if (Ident.textEql(text, entry[0])) return entry[1];
-    }
-
-    const numeric_types = [_][]const u8{
-        "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
-    };
-    inline for (numeric_types) |numeric| {
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".range_exclusive")) {
-            return .numeric_range_exclusive;
-        }
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".range_inclusive")) {
-            return .numeric_range_inclusive;
-        }
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".down_to")) {
-            return .numeric_down_to;
-        }
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".down_until")) {
-            return .numeric_down_until;
-        }
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".to")) {
-            return .numeric_to;
-        }
-        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".until")) {
-            return .numeric_until;
-        }
-    }
-    return null;
+    return iterator_procedure_by_name.get(text);
 }
 
 /// Public `MethodKey` declaration.

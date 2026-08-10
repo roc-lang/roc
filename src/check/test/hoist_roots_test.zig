@@ -4,6 +4,7 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 const hoist_roots = @import("../hoist_roots.zig");
+const static_dispatch = @import("../static_dispatch_registry.zig");
 
 test "hoist roots selected for referenced closed local binding chain" {
     var test_env = try TestEnv.init("Test",
@@ -198,6 +199,34 @@ test "hoist roots selected for direct closed static dispatch function body" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
+}
+
+test "iterator producer calls leave their closed inputs available for hoisting" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |runtime| {
+        \\    reversed = [1.U64, 2, 3].iter_rev()
+        \\    inclusive = 3.U8.down_to(1)
+        \\    exclusive = 3.U8.down_until(1)
+        \\    List.len(List.from_iter(reversed)) +
+        \\        List.len(List.from_iter(inclusive)) +
+        \\        List.len(List.from_iter(exclusive)) +
+        \\        runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        const method_name = switch (test_env.module_env.store.getExpr(root.expr)) {
+            .e_method_call => |call| call.method_name,
+            .e_dispatch_call => |call| call.method_name,
+            else => continue,
+        };
+        try std.testing.expect(!static_dispatch.methodNameMayProduceIterator(
+            test_env.module_env.getIdent(method_name),
+        ));
+    }
 }
 
 test "hoist roots are not selected for static dispatch requiring where evidence" {

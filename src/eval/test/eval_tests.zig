@@ -4273,6 +4273,11 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(0)" },
     },
     .{
+        .name = "inspect: non-list iterator can be collected before reversing",
+        .source = "Iter.fold(List.from_iter(1.U64..=5).iter_rev(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
+    },
+    .{
         .name = "inspect: down_to counts down inclusively",
         .source = "Iter.fold(U8.down_to(4, 1), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[4, 3, 2, 1]" },

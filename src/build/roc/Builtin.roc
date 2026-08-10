@@ -6304,13 +6304,7 @@ Builtin :: [].{
 		## ```
 		fold : Set(a), state, (state, a -> state) -> state
 		fold = |set, init, step| match set {
-			Items(list) => {
-				var $state = init
-				for item in list {
-					$state = step($state, item)
-				}
-				$state
-			}
+			Items(list) => List.fold(list, init, step)
 		}
 
 		## Iterate over the set's values in insertion order.
