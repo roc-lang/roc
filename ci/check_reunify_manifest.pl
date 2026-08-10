@@ -120,8 +120,14 @@ my @categories = (
             # root against their request, and a record rest pattern against the
             # source row its fields are instantiated from, which now only has
             # to require those fields to be present.
+            #
+            # Seven more stopped being their own sites without changing what
+            # they state: each spelled out `constrainTypeToCell` by hand, so
+            # they now call it. That is the same funnelling the shared relaters
+            # already do, and it puts every checked-type-to-request constraint
+            # in the one place directed instantiation has to take over.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 28, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 21, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -177,8 +183,12 @@ my @categories = (
         name    => 'logical-graph-import',
         exempt  => [],
         patterns => [
+            # Two $LOWER imports went away with the hand-spelled constraints
+            # that performed them: routing those sites through
+            # `constrainTypeToCell` means the cell decides how its sealed side
+            # reaches the graph, so the import happens inside the funnel.
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 22 } },
+              counts => { $SOLVE => 15, $LOWER => 20 } },
         ],
     },
     {

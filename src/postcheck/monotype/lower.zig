@@ -18344,7 +18344,7 @@ const BodyContext = struct {
                 );
             },
             .eval_template => |eval| blk: {
-                try self.graph.unify(try self.instNode(entry.checked_type), request_node);
+                try self.constrainTypeToCell(entry.checked_type, DraftTypeCell.fromGraphNode(request_node));
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
                     eval,
@@ -19377,7 +19377,7 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
-        try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
+        try body_ctx.constrainTypeToCell(wrapper.checked_fn_root, DraftTypeCell.fromGraphNode(wrapper_fn_node));
 
         return try body_ctx.lowerPendingCallableEvalRoot(
             view,
@@ -26847,8 +26847,8 @@ const BodyContext = struct {
         }
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
-        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
-        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        try caller.constrainTypeToCell(checked_ret_ty, DraftTypeCell.fromSealed(target_ty));
+        try self.constrainTypeToCell(checked_ret_ty, DraftTypeCell.fromSealed(target_ty));
         for (fn_graph.args, operands) |formal_node, operand| {
             try self.relateFormalToOperand(formal_node, caller, operand);
         }
@@ -28527,7 +28527,7 @@ const BodyContext = struct {
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
-                try self.graph.unify(try self.instNode(requested_ty), request_node);
+                try self.constrainTypeToCell(requested_ty, DraftTypeCell.fromGraphNode(request_node));
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     store_view,
                     eval,
@@ -28692,10 +28692,7 @@ const BodyContext = struct {
         body_ctx.current_fn_key = root_fn_key;
 
         const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
-        try self.graph.unify(
-            try body_ctx.instNode(entry_template.checked_fn_root),
-            wrapper_fn_node,
-        );
+        try body_ctx.constrainTypeToCell(entry_template.checked_fn_root, DraftTypeCell.fromGraphNode(wrapper_fn_node));
 
         const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
@@ -30688,7 +30685,7 @@ const BodyContext = struct {
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
         }
-        try self.graph.unify(expected_node, try self.instNode(expr.ty));
+        try self.constrainTypeToCell(expr.ty, DraftTypeCell.fromGraphNode(expected_node));
     }
 
     fn relateExprAtNode(
