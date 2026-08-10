@@ -132,9 +132,12 @@ my @categories = (
             # went when `relateRequestComponent` stopped repeating its own tail:
             # its three joins were one statement written in three branches, and
             # the branch structure now says which cases take the private
-            # interface and lets the rest fall through to the single join.
+            # interface and lets the rest fall through to the single join. The
+            # checked-to-request walk lost two the same way: a named pair with
+            # no backing on one side has nothing finer to relate, so those exits
+            # fall out to the walk's own terminal join instead of repeating it.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 18, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 16, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,

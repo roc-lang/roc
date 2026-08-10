@@ -1261,15 +1261,12 @@ fn relateCheckedMonoRequestNodeAt(
     switch (checked_content) {
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
-                if (sameNamedValueDefinition(checked_named, request_named)) {
-                    const checked_backing = checked_named.backing orelse {
-                        try graph.unify(checked_root, request_root);
-                        return;
-                    };
-                    const request_backing = request_named.backing orelse {
-                        try graph.unify(checked_root, request_root);
-                        return;
-                    };
+                // Two instances of one named definition relate through their
+                // backings. Without a backing on both sides there is nothing
+                // finer to relate, so the walk falls out to the join below.
+                if (sameNamedValueDefinition(checked_named, request_named)) backed: {
+                    const checked_backing = checked_named.backing orelse break :backed;
+                    const request_backing = request_named.backing orelse break :backed;
                     try relateCheckedMonoRequestNodeAt(
                         graph,
                         checked_backing.node,
