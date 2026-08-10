@@ -1385,6 +1385,15 @@ const CompileTimeRequestScheduler = struct {
         for (self.entries, 0..) |entry, i| {
             self.current_request_index = i;
             self.current_root_id = entry.root_id;
+
+            if (self.compile_time_roots.root(entry.root_id).kind != .field_default) {
+                for (self.entries) |candidate| {
+                    if (self.compile_time_roots.root(candidate.root_id).kind == .field_default) {
+                        try self.addUnconditionalRootDependency(candidate.root_id);
+                    }
+                }
+            }
+
             self.beginDependencyVisit();
             const template_ref = entry.request.procedure_template orelse {
                 checkedArtifactInvariant("compile-time root request had no entry wrapper template", .{});
@@ -1558,6 +1567,14 @@ const CompileTimeRequestScheduler = struct {
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
         if (!self.rootDependencyIsStrict(dependency_root)) return;
+        try self.addUnconditionalRootDependency(dependency_root);
+    }
+
+    fn addUnconditionalRootDependency(
+        self: *CompileTimeRequestScheduler,
+        dependency_root: ComptimeRootId,
+    ) Allocator.Error!void {
+        if (dependency_root == self.current_root_id) return;
         const raw = @intFromEnum(dependency_root);
         if (raw >= self.root_to_request_index.len) {
             checkedArtifactInvariant("compile-time root dependency was outside the root table", .{});

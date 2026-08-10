@@ -357,10 +357,10 @@ const RootCompletionState = struct {
     /// restore archived default constants from within OTHER roots' lowering
     ///—which happens before those roots' own evaluation—so every
     /// non-default root carries an implicit dependency edge on ALL field
-    /// defaults (design.md "Defaulted Fields"). Encoding the edge here (a
-    /// non-default request is not ready while this is nonzero) is what
-    /// makes the defaults evaluate as their own leading batch; the checker
-    /// registers default roots first, so the edge is satisfiable.
+    /// defaults (design.md "Defaulted Fields"). The checked-artifact request
+    /// scheduler records those edges explicitly; this counter validates the
+    /// durable order and makes the defaults evaluate as their own leading
+    /// batch.
     pending_field_defaults: usize,
 
     fn init(
