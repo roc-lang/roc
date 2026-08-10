@@ -4154,6 +4154,25 @@ fn instantiateVarWithSubs(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
+fn failInstantiationRecursionOverflow(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+) std.mem.Allocator.Error!Var {
+    // Non-terminating instantiation—e.g. a self-referential static-dispatch
+    // `where` constraint nested deeper than the var-map memo can collapse.
+    // Report an infinite-type error and yield a fresh err var rather than hang
+    // or use the partial (err-filled) result.
+    const overflow_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_to_instantiate);
+    _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+        .var_ = var_to_instantiate,
+        .snapshot = snapshot,
+        .def_name = null,
+    } });
+    return self.freshFromContent(.err, env, overflow_region);
+}
+
 /// Instantiate a variable
 fn instantiateVarHelp(
     self: *Self,
@@ -4173,6 +4192,9 @@ fn instantiateVarHelp(
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
+    if (instantiator.recursion_overflow) {
+        return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
+    }
 
     // A scheme is the root type plus its explicit pending dispatch
     // requirements. Copy both under this one var_map so generalized variables
@@ -4187,28 +4209,21 @@ fn instantiateVarHelp(
             // Instantiation grows the type store but not `type_schemes`; copy
             // the record before doing either recursive operation.
             const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
+            const receiver_var = try instantiator.instantiateVar(requirement.receiver_var);
+            if (instantiator.recursion_overflow) {
+                return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
+            }
+            const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
+            if (instantiator.recursion_overflow) {
+                return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
+            }
             try instantiated_requirements.append(self.gpa, .{
                 .scheme_receiver_var = requirement.receiver_var,
-                .receiver_var = try instantiator.instantiateVar(requirement.receiver_var),
+                .receiver_var = receiver_var,
                 .scheme_fn_var = requirement.constraint.fn_var,
-                .constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true),
+                .constraint = constraint,
             });
         }
-    }
-
-    if (instantiator.recursion_overflow) {
-        // Non-terminating instantiation—e.g. a self-referential static-dispatch
-        // `where` constraint nested deeper than the `var_map` memo can collapse.
-        // Report an infinite-type error and yield a fresh err var rather than
-        // hang or use the partial (err-filled) result.
-        const overflow_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
-        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_to_instantiate);
-        _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
-            .var_ = var_to_instantiate,
-            .snapshot = snapshot,
-            .def_name = null,
-        } });
-        return try self.freshFromContent(.err, env, overflow_region);
     }
 
     // If we had to insert any new type variables, ensure that we have
