@@ -289,6 +289,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
+    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
@@ -304,6 +305,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(io, &output_buffer);
         try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
+        if (migrates_optional_field_syntax) {
+            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {s}.\n", .{path});
+        }
     }
 }
 
@@ -339,10 +343,14 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
+    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
     try formatAstWithOptions(parse_ast.*, &stdout_writer.interface, options);
+    if (migrates_optional_field_syntax) {
+        try stderr.writeAll("Migrated legacy optional field syntax `:?` to `?:` from stdin.\n");
+    }
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
@@ -4576,6 +4584,10 @@ test "formatFilePath migrates a legacy optional field marker" {
     const formatted = try tmp.dir.readFileAlloc(io, "legacy.roc", gpa, .limited(1024));
     defer gpa.free(formatted);
     try std.testing.expectEqualStrings("v : { a ?: U8 }\n", formatted);
+    try std.testing.expectEqualStrings(
+        "Migrated legacy optional field syntax `:?` to `?:` in legacy.roc.\n",
+        stderr.written(),
+    );
 }
 
 test "formatFilePath leaves unrelated parse failures untouched" {
