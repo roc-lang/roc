@@ -969,14 +969,12 @@ pub const InstGraph = struct {
                         .custom,
                         .list,
                         .list_rev,
-                        .dict,
-                        .dict_rev,
-                        .set,
-                        .set_rev,
                         .str,
                         .single,
                         .range_exclusive,
                         .range_inclusive,
+                        .numeric_until,
+                        .numeric_to,
                         .descending_range_exclusive,
                         .descending_range_inclusive,
                         => .{ .fixed = 1 },
@@ -1656,6 +1654,55 @@ pub const InstGraph = struct {
                 => return false,
             }
         }
+    }
+
+    /// Whether this exact graph type contains the public iterator interface at
+    /// any structural depth. This consumes the checker-authored builtin owner
+    /// carried by each named node; callers do not reconstruct iterator intent
+    /// from a backing shape.
+    pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            const seen_entry = try seen.getOrPut(node);
+            if (seen_entry.found_existing) continue;
+
+            switch (self.nodes.items[@intFromEnum(node)]) {
+                .redirect => unreachable,
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    if (named.builtin_owner) |owner| {
+                        if (static_dispatch.isIteratorOwner(owner)) return true;
+                    }
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    try pending.appendSlice(self.allocator, named.args);
+                    for (named.declared_order) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                },
+            }
+        }
+        return false;
     }
 
     /// Whether this exact graph type contains compiler-generated private
@@ -2416,6 +2463,42 @@ pub const InstGraph = struct {
         payload_index: usize,
     ) Allocator.Error!NodeId {
         return self.tagPayloadNodeWithAccess(node, name, payload_index, .runtime_layout);
+    }
+
+    /// Build an exact value witness for one constructed tag while preserving
+    /// every other checked tag and the row extension. The caller supplies the
+    /// payload representations emitted by the constructor's children.
+    pub fn tagValueNodeWithPayloads(
+        self: *InstGraph,
+        raw_row: NodeId,
+        name: names.TagNameId,
+        payloads: []const NodeId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_row, "tag value", .runtime_layout);
+        const flat = try self.flattenTagRow(structural);
+        const tags = try self.arena().alloc(InstTag, flat.tags.len);
+        var found = false;
+        for (flat.tags, tags) |tag, *out| {
+            if (tag.name == name) {
+                if (found) Common.invariant("tag value witness found duplicate tag labels");
+                if (tag.payloads.len != payloads.len) {
+                    Common.invariant("tag value witness payload arity differed from its checked tag");
+                }
+                found = true;
+                out.* = .{
+                    .name = tag.name,
+                    .checked_name = tag.checked_name,
+                    .payloads = try self.arena().dupe(NodeId, payloads),
+                };
+            } else {
+                out.* = tag;
+            }
+        }
+        if (!found) Common.invariant("tag value witness did not find its checked tag");
+        return try self.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = self.find(flat.ext),
+        } });
     }
 
     /// Read every explicit tag and payload cell when the node is tag-row

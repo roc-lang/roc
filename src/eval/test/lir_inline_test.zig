@@ -3850,7 +3850,7 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
         \\sum_it : U8 -> U64
         \\sum_it = |n| {
         \\    var $sum = 0
-        \\    for x in n.until(0) {
+        \\    for x in 0.U8.until(n) {
         \\        $sum = $sum + x.to_u64()
         \\    }
         \\    $sum
@@ -3958,10 +3958,11 @@ fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
     try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
 }
 
-// Repro for https://github.com/roc-lang/roc/issues/10429: numeric `until` and
-// `range_exclusive` iterators consumed directly by `for` have scalar state,
-// with no heap or ARC operations.
-test "issue 10429 numeric until and range_exclusive loops have no heap or RC operations" {
+// Repro for https://github.com/roc-lang/roc/issues/10429: numeric ranges
+// consumed directly by `for` have scalar state, with no heap or ARC
+// operations. All four spellings live in one body so their distinct producer
+// representations cannot be accidentally deduplicated.
+test "issue 10429 numeric range spellings in one body have no heap or RC operations" {
     const allocator = std.testing.allocator;
     const numeric_types = [_][]const u8{
         "U8",  "I8",  "U16",  "I16",  "U32", "I32",
@@ -3970,41 +3971,109 @@ test "issue 10429 numeric until and range_exclusive loops have no heap or RC ope
 
     for (numeric_types) |numeric_type| {
         const source = try std.fmt.allocPrint(allocator,
-            \\until_last : {s} -> {s}
-            \\until_last = |n| {{
+            \\all_last : {s} -> ({s}, {s}, {s}, {s})
+            \\all_last = |n| {{
             \\    var $last = 0.{s}
             \\    for i in {s}.until(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
-            \\}}
-            \\
-            \\range_last : {s} -> {s}
-            \\range_last = |n| {{
-            \\    var $last = 0.{s}
+            \\    until_last = $last
+            \\    $last = 0.{s}
             \\    for i in {s}.range_exclusive(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
+            \\    exclusive_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.to(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    to_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.range_inclusive(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    (until_last, exclusive_last, to_last, $last)
             \\}}
             \\
-            \\main : {s} -> ({s}, {s})
-            \\main = |n| (until_last(n), range_last(n))
+            \\main : {s} -> ({s}, {s}, {s}, {s})
+            \\main = |n| all_last(n)
         , .{
             numeric_type, numeric_type, numeric_type, numeric_type,
             numeric_type, numeric_type, numeric_type, numeric_type,
-            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type,
         });
         defer allocator.free(source);
 
-        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
         defer optimized.deinit(allocator);
 
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("numeric range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
         try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "incref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
+    }
+}
+
+test "nested iterator results retain the callee-authored representation" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "record", .source =
+        \\wrap : List(U64) -> { it : Iter(U64) }
+        \\wrap = |items| { it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "Try", .source =
+        \\wrap : List(U64) -> Try(Iter(U64), [Unavailable])
+        \\wrap = |items| Ok(items.iter())
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| match wrap(items) {
+        \\    Ok(iter) => {
+        \\        var $sum = 0
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\    Err(_) => 0
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithProcDebugNames(allocator, case.source, .wrappers, true);
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("nested iterator result lost representation for {s} wrapper\n", .{case.name});
+            return error.TestUnexpectedResult;
+        }
+        try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
     }
 }
 

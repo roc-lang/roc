@@ -5872,7 +5872,9 @@ Builtin :: [].{
 			}
 		}
 
-		## Remove a value from the dictionary for a specified key.
+		## Remove a value from the dictionary for a specified key. Removal may
+		## change the iteration order of the remaining key-value pairs because
+		## the last pair can be moved into the removed pair's position.
 		## ```roc
 		## expect Dict.empty()
 		##            .insert("Some", "Value")
@@ -5899,7 +5901,9 @@ Builtin :: [].{
 			HashMap(data) => data.entries
 		}
 
-		## Iterate over the dictionary's key-value pairs in insertion order.
+		## Iterate over the dictionary's key-value pairs in their current internal
+		## order. This matches insertion order until an entry is removed;
+		## [Dict.remove] may reorder the remaining pairs.
 		## ```roc
 		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter(), [], |acc, pair| acc.append(pair)) == [(1, "One"), (2, "Two")]
 		## ```
@@ -5908,9 +5912,11 @@ Builtin :: [].{
 			HashMap(data) => List.iter(data.entries)
 		}
 
-		## Iterate over the dictionary's key-value pairs in reverse insertion
-		## order. Like [List.iter_rev], this reads the entries in place rather
-		## than building a reversed copy.
+		## Iterate over the dictionary's key-value pairs in reverse current
+		## internal order. This is reverse insertion order until an entry is
+		## removed; [Dict.remove] may reorder the remaining pairs. Like
+		## [List.iter_rev], this reads the entries in place rather than building a
+		## reversed copy.
 		## ```roc
 		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter_rev(), [], |acc, pair| acc.append(pair)) == [(2, "Two"), (1, "One")]
 		## ```

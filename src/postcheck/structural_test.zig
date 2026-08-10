@@ -447,6 +447,25 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
+test "Monotype iterator result completion stays out of relation replay and reindexes completed requests" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const dispatch_result = sourceSliceBetween(
+        lower_source,
+        "fn callableDispatchResultTypeNodeInPhase(",
+        "fn materializeEvidence(",
+    );
+    try expectContains(dispatch_result, "if (phase == .expression_lowering)");
+    try expectContains(dispatch_result, "completeIteratorMethodResultAtNode(");
+
+    const completion = sourceSliceBetween(
+        lower_source,
+        "fn completeDeferredIteratorResult(",
+        "fn constUseMonoType(",
+    );
+    try expectContains(completion, "registerTemplateSpecInterfaceLookups(");
+    try expectContains(completion, "completed_source.evidence_digest.bytes");
+}
+
 test "Monotype direct uninhabited calls lower argument through graph cell" {
     const lower_source = @embedFile("monotype/lower.zig");
     const direct_call = sourceSliceBetween(
@@ -1288,7 +1307,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const full_request = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgs",
-        "fn callArgumentEvidenceNode",
+        "fn exprCallResultEvidenceNode",
     );
     const iterator = sourceSliceBetween(
         lower_source,

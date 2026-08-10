@@ -4321,6 +4321,16 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\"), (1, \"one\")]" },
     },
     .{
+        .name = "inspect: Dict.remove may reorder remaining iteration entries",
+        .source =
+        \\{
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three").remove(1)
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\")]" },
+    },
+    .{
         .name = "inspect: Set.fold sums the values",
         .source = "Set.fold(Set.from_list([1, 2, 3.U64]), 0, |sum, item| sum + item)",
         .expected = .{ .inspect_str = "6" },
