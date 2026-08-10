@@ -767,31 +767,32 @@ fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_
 fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
     const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
     const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
-    if (left_root_private and right_root_private) {
-        try graph.unify(left_node, right_node);
+    // Exactly one private root means the public side reads the private one's
+    // interface rather than becoming it.
+    if (left_root_private != right_root_private) {
+        if (right_root_private) {
+            try graph.relateOpaqueInterface(left_node, right_node);
+        } else {
+            try graph.relateOpaqueInterface(right_node, left_node);
+        }
         return;
     }
-    if (right_root_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
-        return;
+    // Two private roots are the same private representation, so they join
+    // below without consulting what either one contains.
+    if (!left_root_private) {
+        const left_private = try graph.containsGeneratedPrivate(left_node);
+        const right_private = try graph.containsGeneratedPrivate(right_node);
+        if (left_private != right_private) {
+            if (right_private) {
+                try graph.relateOpaqueInterface(left_node, right_node);
+            } else {
+                try graph.relateOpaqueInterface(right_node, left_node);
+            }
+            return;
+        }
+        if (left_private and try relateMatchingRequestContainers(graph, left_node, right_node)) return;
     }
-    if (left_root_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
-        return;
-    }
-
-    const left_private = try graph.containsGeneratedPrivate(left_node);
-    const right_private = try graph.containsGeneratedPrivate(right_node);
-    if (left_private and right_private) {
-        if (try relateMatchingRequestContainers(graph, left_node, right_node)) return;
-        try graph.unify(left_node, right_node);
-    } else if (right_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
-    } else if (left_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
-    } else {
-        try graph.unify(left_node, right_node);
-    }
+    try graph.unify(left_node, right_node);
 }
 
 fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!bool {

@@ -128,9 +128,13 @@ my @categories = (
             # in the one place directed instantiation has to take over. An
             # eighth followed: the record rest pattern's own type against the
             # rest node, where `lowerTypeNode` is `instNode` with a timing
-            # scope, so the site was the funnel spelled out as well.
+            # scope, so the site was the funnel spelled out as well. Two more
+            # went when `relateRequestComponent` stopped repeating its own tail:
+            # its three joins were one statement written in three branches, and
+            # the branch structure now says which cases take the private
+            # interface and lets the rest fall through to the single join.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 20, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 18, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
