@@ -6031,6 +6031,61 @@ the record-update lowering's spread-read hoisting is what keeps conditional
 consumers in-place, by ending the container's liveness before the mutation
 rather than dismantling it.
 
+Tag unions dismantle by the same rules, with the variant folded into the
+field key. A union's claimable fields are (variant, field) pairs packed into
+the same 64-bit mask—variants in declaration order, each contributing its
+refcounted payload-struct fields in stored order, a non-struct payload
+contributing itself as its single field—an encoding both the analysis and
+the certifier derive from the union layout alone, and whose overflow simply
+leaves the union whole-released. Reads reach the fields through a
+`tag_payload_struct` view: a borrowed struct-payload view is a payload
+view—the variant-carrying analogue of a transparent alias—while a
+non-struct payload read is itself the read of the variant's single field. A
+discriminant read is no use at all beyond remembering its target: the tag
+word is disjoint from every stored unit, so it needs no ordering with takes.
+
+Variants make the exit-agreement rule path-sensitive where structs need none
+of it: a take of one variant's field lives inside that variant's match arm,
+and the exits reached through *other* arms must owe nothing for it. The
+dataflow therefore carries an excluded-variant set, refined at each switch
+on one of the container's remembered discriminant targets: an arm whose case
+value is some read variant's discriminant excludes every other read variant,
+and the default arm excludes each read variant whose discriminant is a
+listed case. An exit owes a variant's takes only while that variant is
+unexcluded, a read of an excluded variant keeps its field residual, and
+merges intersect the exclusions. Everything else—the may/must take
+dataflow, whole uses as borrows of every field, the single-definition spine
+—is unchanged.
+
+The death point of a dismantled union cannot name its variant statically, so
+its residual release dispatches at runtime: emission reads the discriminant
+fresh and switches on it, one arm per taken variant releasing exactly that
+variant's residual fields (through a fresh payload view for struct
+payloads), and a default arm holding the ordinary whole release for every
+variant the takes never addressed. Where the death point sits inside a
+matched arm—the common shape—the discriminant is a known constant there
+and the backend folds the dispatch back to straight-line code. Emission
+needs a discriminant scratch layout, taken from any single-definition
+discriminant read of the container; a union candidate without one keeps its
+whole release.
+
+The certifier extends its deferred claims to unions with the same encoding:
+a payload view's field read remembers the union container and the encoded
+(variant, field) bit, claims must stay within one variant, and a fully
+dismantled union's unit is spent when its claims cover exactly the claimed
+variant's mask—sound because control reaches that spend only when the
+container holds that variant. What makes the emitted dispatch certifiable is
+variant knowledge per path: reading a variant's payload proves the container
+holds it (anything else is already undefined), and switch arms on a
+discriminant refine it, resolved through single-definition pure-alias chains
+so the discriminant read and the payload reads meet on one container name.
+A path that excludes every variant of a live container is infeasible—the
+facts it accumulated cannot describe any runtime value—and its walk ends
+vacuously, which is exactly what lets the residual switch's unmatched arms
+and the whole-release default coexist with claims on the matched path.
+Exclusions and view provenance cross join quotients on the summary alongside
+claims.
+
 ### Debug Borrow Certifier
 
 Inference is implemented as a solver plus an independent certifier, because

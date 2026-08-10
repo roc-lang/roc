@@ -4844,6 +4844,9 @@ const Inserter = struct {
     /// and the container's atomicity covers its stored payloads exactly as
     /// the whole-struct helper would have.
     fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        if (container.variant_plans.len != 0) {
+            return self.dismantleUnionContainer(local, container, next);
+        }
         const atomicity = self.rcAtomicity(local);
         var tail = next;
         var index = container.residual.len;
@@ -4872,6 +4875,125 @@ const Inserter = struct {
             } });
         }
         return tail;
+    }
+
+    /// Release a dismantled tag union: the death point switches on the
+    /// runtime discriminant, each taken variant's arm releases only its
+    /// residual payload fields, and every other variant falls to a default
+    /// arm holding the ordinary whole release. At a death point inside a
+    /// matched arm the discriminant is a known constant, so the backend
+    /// folds the dispatch away and the residual releases run straight-line.
+    fn dismantleUnionContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        const atomicity = self.rcAtomicity(local);
+        const disc_layout = container.disc_layout orelse {
+            arcInvariant("ARC union dismantle was recorded without a discriminant layout");
+        };
+
+        const whole_rc = self.rcHelperForLocal(.decref, local);
+        const default_branch = try self.store.addCFStmt(.{ .decref = .{
+            .value = local,
+            .rc = whole_rc,
+            .atomicity = atomicity,
+            .next = next,
+        } });
+
+        var branch_storage: [8]LIR.CFSwitchBranch = undefined;
+        var branch_overflow = std.ArrayList(LIR.CFSwitchBranch).empty;
+        defer branch_overflow.deinit(self.emission_allocator);
+        const use_overflow = container.variant_plans.len > branch_storage.len;
+        if (use_overflow) {
+            try branch_overflow.ensureTotalCapacity(self.emission_allocator, container.variant_plans.len);
+        }
+
+        for (container.variant_plans, 0..) |plan, plan_index| {
+            var tail = next;
+            if (plan.residual.len != 0) {
+                if (plan.payload_is_struct) {
+                    const view = try self.store.addLocal(.{ .layout_idx = plan.payload_layout });
+                    try self.dismantle_temps.append(self.emission_allocator, view);
+                    var index = plan.residual.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const field = plan.residual[index];
+                        const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+                        if (self.layouts.rcHelperPlan(rc) == .noop) {
+                            arcInvariant("ARC union dismantle selected a noop RC helper for a refcounted residual field");
+                        }
+                        const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
+                        try self.dismantle_temps.append(self.emission_allocator, temp);
+                        tail = try self.store.addCFStmt(.{ .decref = .{
+                            .value = temp,
+                            .rc = rc,
+                            .atomicity = atomicity,
+                            .next = tail,
+                        } });
+                        tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                            .target = temp,
+                            .op = .{ .field = .{
+                                .source = view,
+                                .field_idx = @intCast(field.field_idx),
+                            } },
+                            .next = tail,
+                        } });
+                    }
+                    tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                        .target = view,
+                        .op = .{ .tag_payload_struct = .{
+                            .source = local,
+                            .variant_index = plan.variant_index,
+                            .tag_discriminant = plan.tag_discriminant,
+                        } },
+                        .next = tail,
+                    } });
+                } else {
+                    const field = plan.residual[0];
+                    const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+                    if (self.layouts.rcHelperPlan(rc) == .noop) {
+                        arcInvariant("ARC union dismantle selected a noop RC helper for a refcounted residual payload");
+                    }
+                    const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
+                    try self.dismantle_temps.append(self.emission_allocator, temp);
+                    tail = try self.store.addCFStmt(.{ .decref = .{
+                        .value = temp,
+                        .rc = rc,
+                        .atomicity = atomicity,
+                        .next = tail,
+                    } });
+                    tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                        .target = temp,
+                        .op = .{ .tag_payload_struct = .{
+                            .source = local,
+                            .variant_index = plan.variant_index,
+                            .tag_discriminant = plan.tag_discriminant,
+                        } },
+                        .next = tail,
+                    } });
+                }
+            }
+            const branch = LIR.CFSwitchBranch{ .value = plan.tag_discriminant, .body = tail };
+            if (use_overflow) {
+                branch_overflow.appendAssumeCapacity(branch);
+            } else {
+                branch_storage[plan_index] = branch;
+            }
+        }
+
+        const branches = try self.store.addCFSwitchBranches(
+            if (use_overflow) branch_overflow.items else branch_storage[0..container.variant_plans.len],
+        );
+        const disc_temp = try self.store.addLocal(.{ .layout_idx = disc_layout });
+        try self.dismantle_temps.append(self.emission_allocator, disc_temp);
+        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = disc_temp,
+            .branches = branches,
+            .default_branch = default_branch,
+            .continuation = next,
+        } });
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = disc_temp,
+            .op = .{ .discriminant = .{ .source = local } },
+            .next = switch_stmt,
+        } });
     }
 
     fn releaseMaybeInitializedLocal(self: *Inserter, condition: LIR.LocalId, condition_mask: u64, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {

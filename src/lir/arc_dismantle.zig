@@ -24,6 +24,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
+const arc_takes = @import("arc_takes.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -43,9 +44,30 @@ pub const ResidualField = struct {
     layout_idx: layout_mod.Idx,
 };
 
+/// Residual ownership plan for one taken variant of a dismantled tag union.
+/// At the death point, an arm keyed by the variant's discriminant releases
+/// exactly the refcounted payload fields its takes left behind.
+pub const VariantPlan = struct {
+    variant_index: u16,
+    tag_discriminant: u16,
+    /// Whether the payload is addressed through a struct view. A direct
+    /// payload is released as one value read straight off the union.
+    payload_is_struct: bool,
+    payload_layout: layout_mod.Idx,
+    residual: []const ResidualField,
+};
+
 /// Residual ownership plan for one container local selected for dismantling.
 pub const Container = struct {
     residual: []const ResidualField,
+    /// Tag-union dismantling: the death point switches on the runtime
+    /// discriminant, each planned variant releases its own residual, and
+    /// every unplanned variant keeps the whole release. Empty for struct
+    /// containers.
+    variant_plans: []const VariantPlan = &.{},
+    /// Layout for the discriminant scratch local of a tag-union dismantle,
+    /// taken from an observed discriminant read of the container.
+    disc_layout: ?layout_mod.Idx = null,
 };
 
 /// Per-procedure dismantling decisions consumed while emitting ARC operations.
@@ -114,12 +136,23 @@ const State = enum(u8) {
     /// Borrowed pure same-value alias of a candidate; reads through it
     /// attribute to the root container.
     transparent_alias,
+    /// Borrowed struct view of one variant's payload of a tag-union
+    /// candidate (or a pure alias of such a view); field reads through it
+    /// attribute to the root container under that variant.
+    payload_view,
 };
+
+/// Variant marker for reads of struct containers, which have no variant.
+const no_variant: u16 = std.math.maxInt(u16);
 
 const Read = struct {
     stmt: LIR.CFStmtId,
     target: LIR.LocalId,
     field_idx: u32,
+    /// Variant the read addresses for tag-union containers; `no_variant`
+    /// for struct containers.
+    variant_index: u16,
+    tag_discriminant: u16,
     consuming: bool,
 };
 
@@ -133,6 +166,11 @@ const Candidate = struct {
     /// stay valid as long as no whole use can run after a take, which the
     /// dataflow checks exactly like a borrow of every field at once.
     whole_uses: std.ArrayList(LIR.CFStmtId) = .empty,
+    /// Locals holding this container's discriminant, each defined exactly
+    /// once by that read. A switch on one of these partitions the paths by
+    /// variant, which is what lets takes on one variant coexist with exits
+    /// that never see that variant.
+    disc_targets: std.ArrayList(LIR.LocalId) = .empty,
 };
 
 const Analysis = struct {
@@ -141,8 +179,16 @@ const Analysis = struct {
     layouts: *const layout_mod.Store,
     solution: *const arc_solve.Solution,
     state: []State,
-    /// Root container local per transparent alias, `no_index` otherwise.
+    /// Root container local per transparent alias or payload view,
+    /// `no_index` otherwise.
     alias_root: []u32,
+    /// Variant addressed per payload view, parallel to `alias_root`.
+    view_variant: []u16,
+    /// Discriminant value per payload view, parallel to `alias_root`.
+    view_disc: []u16,
+    /// Definition count per local, saturating. Discriminant targets are
+    /// trusted for switch partitioning only when defined exactly once.
+    def_counts: []u8,
     candidates: std.AutoHashMapUnmanaged(u32, Candidate),
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
@@ -153,8 +199,12 @@ const Analysis = struct {
         while (it.next()) |candidate| {
             candidate.reads.deinit(self.gpa);
             candidate.whole_uses.deinit(self.gpa);
+            candidate.disc_targets.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
+        self.gpa.free(self.def_counts);
+        self.gpa.free(self.view_disc);
+        self.gpa.free(self.view_variant);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.state);
     }
@@ -164,10 +214,16 @@ const Analysis = struct {
     /// happens for locals that pass.
     fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        if (local_layout.tag != .struct_) return false;
+        if (local_layout.tag != .struct_ and local_layout.tag != .tag_union) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[@intFromEnum(local)]) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
+
+        if (local_layout.tag == .tag_union) {
+            const encoding = arc_takes.unionClaimEncoding(self.layouts, local_layout) orelse return false;
+            var it = encoding.iterate();
+            return it.next() != null;
+        }
 
         const info = self.layouts.getStructInfo(local_layout);
         var any_rc = false;
@@ -184,7 +240,7 @@ const Analysis = struct {
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
         const index = @intFromEnum(local);
         switch (self.state[index]) {
-            .ineligible, .transparent_alias => return null,
+            .ineligible, .transparent_alias, .payload_view => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
                 if (!self.passesGate(local)) {
@@ -202,7 +258,7 @@ const Analysis = struct {
     /// The container a source local stands for: itself, or its alias root.
     fn resolveRoot(self: *Analysis, local: LIR.LocalId) LIR.LocalId {
         const index = @intFromEnum(local);
-        if (self.state[index] == .transparent_alias) {
+        if (self.state[index] == .transparent_alias or self.state[index] == .payload_view) {
             return @enumFromInt(self.alias_root[index]);
         }
         return local;
@@ -236,7 +292,8 @@ const Analysis = struct {
     /// once by a value-producing assignment.
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @intFromEnum(local);
-        if (self.state[index] == .transparent_alias) {
+        self.def_counts[index] +|= 1;
+        if (self.state[index] == .transparent_alias or self.state[index] == .payload_view) {
             // A second definition of an alias re-points it; the root can no
             // longer attribute its reads.
             self.disqualify(local);
@@ -252,20 +309,130 @@ const Analysis = struct {
         }
     }
 
+    /// A definition that never produces a candidate binding but still counts
+    /// toward the local's definition total.
+    fn noteNonCandidateDef(self: *Analysis, local: LIR.LocalId) void {
+        self.def_counts[@intFromEnum(local)] +|= 1;
+    }
+
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!void {
+        const source_index = @intFromEnum(source);
+        const through_view = self.state[source_index] == .payload_view;
         const root = self.resolveRoot(source);
         const candidate = (try self.entryOf(root)) orelse return;
+        const root_layout = self.layouts.getLayout(self.store.getLocal(root).layout_idx);
+        if ((root_layout.tag == .tag_union) != through_view) {
+            // A direct field read of a tag union, or a view of a struct:
+            // neither addresses the container's field space.
+            self.disqualify(root);
+            return;
+        }
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
             .field_idx = field_idx,
+            .variant_index = if (through_view) self.view_variant[source_index] else no_variant,
+            .tag_discriminant = if (through_view) self.view_disc[source_index] else no_variant,
             .consuming = !self.solution.isBorrowed(target),
         });
     }
 
+    /// A read of the container's discriminant. The tag word is disjoint from
+    /// every stored payload unit, so the read itself needs no ordering with
+    /// takes; the target is remembered so switches on it can partition the
+    /// dataflow by variant.
+    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
+        const source_index = @intFromEnum(source);
+        if (self.state[source_index] == .payload_view) {
+            self.disqualify(source);
+            return;
+        }
+        const root = self.resolveRoot(source);
+        const candidate = (try self.entryOf(root)) orelse return;
+        try candidate.disc_targets.append(self.gpa, target);
+    }
+
+    /// A `tag_payload_struct` read of one variant's payload. A struct
+    /// payload read borrowed against the container becomes a payload view;
+    /// a non-struct payload read is the variant's single field. Handles the
+    /// target's definition bookkeeping itself: a view target is an alias
+    /// binding, not a candidate definition.
+    fn notePayloadStructRead(
+        self: *Analysis,
+        stmt: LIR.CFStmtId,
+        source: LIR.LocalId,
+        variant_index: u16,
+        tag_discriminant: u16,
+        target: LIR.LocalId,
+    ) Error!void {
+        const source_index = @intFromEnum(source);
+        if (self.state[source_index] == .payload_view) {
+            self.disqualify(source);
+            try self.noteDef(target, stmt);
+            return;
+        }
+        const root = self.resolveRoot(source);
+        const candidate = (try self.entryOf(root)) orelse {
+            self.disqualify(source);
+            try self.noteDef(target, stmt);
+            return;
+        };
+        const root_layout = self.layouts.getLayout(self.store.getLocal(root).layout_idx);
+        if (root_layout.tag != .tag_union) {
+            self.disqualify(root);
+            try self.noteDef(target, stmt);
+            return;
+        }
+        const info = self.layouts.getTagUnionInfo(root_layout);
+        if (variant_index >= info.variants.len) {
+            self.disqualify(root);
+            try self.noteDef(target, stmt);
+            return;
+        }
+        const payload_layout = self.layouts.getLayout(info.variants.get(variant_index).payload_layout);
+        if (payload_layout.tag == .struct_) {
+            const target_index = @intFromEnum(target);
+            self.def_counts[target_index] +|= 1;
+            if (self.state[target_index] == .transparent_alias or self.state[target_index] == .payload_view) {
+                // Re-pointing an existing alias: neither root can attribute
+                // reads through it any longer.
+                self.disqualify(target);
+                self.disqualify(root);
+                self.state[target_index] = .ineligible;
+                return;
+            }
+            const transparent = self.solution.isBorrowed(target) and
+                self.solution.leaderOf(target) == root;
+            if (!transparent) {
+                self.disqualify(root);
+                self.disqualify(target);
+                return;
+            }
+            if (self.state[target_index] == .candidate) {
+                if (self.candidates.getPtr(target_index)) |view_candidate| view_candidate.disqualified = true;
+            }
+            self.state[target_index] = .payload_view;
+            self.alias_root[target_index] = @intFromEnum(root);
+            self.view_variant[target_index] = variant_index;
+            self.view_disc[target_index] = tag_discriminant;
+            return;
+        }
+        // The payload is the variant's single field, addressed as field 0.
+        try candidate.reads.append(self.gpa, .{
+            .stmt = stmt,
+            .target = target,
+            .field_idx = 0,
+            .variant_index = variant_index,
+            .tag_discriminant = tag_discriminant,
+            .consuming = !self.solution.isBorrowed(target),
+        });
+        try self.noteDef(target, stmt);
+    }
+
     fn noteAliasDef(self: *Analysis, target: LIR.LocalId, source: LIR.LocalId) Error!void {
         const target_index = @intFromEnum(target);
-        if (self.state[target_index] == .transparent_alias) {
+        self.def_counts[target_index] +|= 1;
+        if (self.state[target_index] == .transparent_alias or self.state[target_index] == .payload_view) {
             // Redefinition of an existing alias: neither its old nor its new
             // root can attribute reads through it.
             self.disqualify(target);
@@ -273,6 +440,8 @@ const Analysis = struct {
             self.state[target_index] = .ineligible;
             return;
         }
+        const source_index = @intFromEnum(source);
+        const source_is_view = self.state[source_index] == .payload_view;
         const root = self.resolveRoot(source);
         const transparent = self.solution.isBorrowed(target) and
             self.solution.leaderOf(target) == root and
@@ -282,7 +451,13 @@ const Analysis = struct {
             if (self.state[target_index] == .candidate) {
                 if (self.candidates.getPtr(target_index)) |candidate| candidate.disqualified = true;
             }
-            self.state[target_index] = .transparent_alias;
+            if (source_is_view) {
+                self.state[target_index] = .payload_view;
+                self.view_variant[target_index] = self.view_variant[source_index];
+                self.view_disc[target_index] = self.view_disc[source_index];
+            } else {
+                self.state[target_index] = .transparent_alias;
+            }
             self.alias_root[target_index] = @intFromEnum(root);
         } else {
             // An owned alias duplicates the value; the container keeps a
@@ -302,22 +477,43 @@ const Analysis = struct {
 const FlowState = struct {
     may: u64,
     must: u64,
+    /// Variants (by index) this path cannot carry at runtime, refined by
+    /// switches on the container's own discriminant. An exit reached with a
+    /// variant excluded owes nothing for that variant's takes: control can
+    /// only arrive here when the container holds some other variant, whose
+    /// residual release the death point dispatches separately.
+    excluded: u64,
 
     fn meet(a: FlowState, b: FlowState) FlowState {
-        return .{ .may = a.may | b.may, .must = a.must & b.must };
+        return .{ .may = a.may | b.may, .must = a.must & b.must, .excluded = a.excluded & b.excluded };
     }
 
     fn eql(a: FlowState, b: FlowState) bool {
-        return a.may == b.may and a.must == b.must;
+        return a.may == b.may and a.must == b.must and a.excluded == b.excluded;
     }
 };
 
 /// How one statement reads the candidate under dataflow: which field's bit
-/// it touches and whether it consumes (owned result) or borrows.
+/// it touches, which variant it addresses (`no_variant` for struct fields
+/// and whole uses), and whether it consumes (owned result) or borrows.
 const ReadKind = struct {
     bit: u64,
+    variant_index: u16,
     consuming: bool,
     visited: bool = false,
+};
+
+/// The take dataflow's record of one region exit: the fields whose takes
+/// ran on every path reaching it, and the variants the path had excluded.
+const ExitRecord = struct {
+    must: u64,
+    excluded: u64,
+};
+
+/// One (variant, discriminant) pair addressed by a union candidate's reads.
+const VariantCase = struct {
+    variant_index: u16,
+    tag_discriminant: u16,
 };
 
 /// Solve takes for every reachable statement in the store.
@@ -358,12 +554,18 @@ pub fn compute(
         .solution = solution,
         .state = try gpa.alloc(State, store.localCount()),
         .alias_root = try gpa.alloc(u32, store.localCount()),
+        .view_variant = try gpa.alloc(u16, store.localCount()),
+        .view_disc = try gpa.alloc(u16, store.localCount()),
+        .def_counts = try gpa.alloc(u8, store.localCount()),
         .candidates = .empty,
         .is_param = is_param,
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
+    @memset(analysis.view_variant, no_variant);
+    @memset(analysis.view_disc, no_variant);
+    @memset(analysis.def_counts, 0);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The switch is exhaustive so a new statement
@@ -383,6 +585,7 @@ pub fn compute(
         visited.set(stmt_index);
         switch (store.getCFStmt(current)) {
             .init_uninitialized => |stmt| {
+                analysis.noteNonCandidateDef(stmt.target);
                 analysis.useWhole(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
@@ -400,7 +603,7 @@ pub fn compute(
                         }
                     },
                     .discriminant => |op| {
-                        analysis.useWhole(op.source);
+                        try analysis.noteDiscriminantRead(op.source, stmt.target);
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload => |op| {
@@ -408,15 +611,16 @@ pub fn compute(
                         try analysis.noteDef(stmt.target, current);
                     },
                     .tag_payload_struct => |op| {
-                        analysis.useWhole(op.source);
-                        try analysis.noteDef(stmt.target, current);
+                        try analysis.notePayloadStructRead(current, op.source, op.variant_index, op.tag_discriminant, stmt.target);
                     },
                     .list_reinterpret => |op| {
                         analysis.useWhole(op.backing_ref);
+                        analysis.noteNonCandidateDef(stmt.target);
                         analysis.disqualify(stmt.target);
                     },
                     .nominal => |op| {
                         analysis.useWhole(op.backing_ref);
+                        analysis.noteNonCandidateDef(stmt.target);
                         analysis.disqualify(stmt.target);
                     },
                 }
@@ -482,6 +686,7 @@ pub fn compute(
             },
             .set_local => |stmt| {
                 try analysis.useWholeAt(stmt.value, current);
+                analysis.noteNonCandidateDef(stmt.target);
                 analysis.useWhole(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
@@ -595,7 +800,7 @@ pub fn compute(
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
-    var exit_musts = std.ArrayList(u64).empty;
+    var exit_musts = std.ArrayList(ExitRecord).empty;
     defer exit_musts.deinit(gpa);
 
     var it = analysis.candidates.iterator();
@@ -653,14 +858,53 @@ pub fn compute(
 
         // Only refcounted fields carry stored units worth taking; a
         // container with no refcounted take keeps its ordinary whole
-        // release.
+        // release. A tag union's fields live behind its variants, so its
+        // bits use the shared (variant, field) claim encoding and its reads
+        // must address variants inside the exclusion mask's reach.
         const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
-        const info = layouts.getStructInfo(local_layout);
+        const is_union = local_layout.tag == .tag_union;
+        const encoding: ?arc_takes.UnionClaimEncoding = if (is_union)
+            (arc_takes.unionClaimEncoding(layouts, local_layout) orelse continue :candidates)
+        else
+            null;
         var rc_mask: u64 = 0;
-        for (0..info.fields.len) |i| {
-            const field = info.fields.get(@intCast(i));
-            if (layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
-                rc_mask |= @as(u64, 1) << @intCast(field.index);
+        if (encoding) |enc| {
+            var enc_it = enc.iterate();
+            while (enc_it.next()) |field| rc_mask |= @as(u64, 1) << field.bit;
+        } else {
+            const info = layouts.getStructInfo(local_layout);
+            for (0..info.fields.len) |i| {
+                const field = info.fields.get(@intCast(i));
+                if (layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
+                    rc_mask |= @as(u64, 1) << @intCast(field.index);
+                }
+            }
+        }
+
+        // The bit each read touches. A union read of a non-refcounted field
+        // has no bit and needs no ordering; a struct read keys directly by
+        // field index.
+        var variant_cases = std.ArrayList(VariantCase).empty;
+        defer variant_cases.deinit(gpa);
+        for (candidate.reads.items) |read| {
+            if (is_union) {
+                if (read.variant_index == no_variant or read.variant_index >= 64) continue :candidates;
+                var known = false;
+                for (variant_cases.items) |case| {
+                    if (case.variant_index == read.variant_index) {
+                        if (case.tag_discriminant != read.tag_discriminant) continue :candidates;
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    try variant_cases.append(gpa, .{
+                        .variant_index = read.variant_index,
+                        .tag_discriminant = read.tag_discriminant,
+                    });
+                }
+            } else if (read.variant_index != no_variant) {
+                continue :candidates;
             }
         }
 
@@ -673,10 +917,16 @@ pub fn compute(
         // themselves: a take inside one reaches itself as possibly-taken.
         read_kinds.clearRetainingCapacity();
         for (candidate.reads.items) |read| {
-            const bit = @as(u64, 1) << @intCast(read.field_idx);
-            if (rc_mask & bit == 0) continue;
+            const bit: u64 = if (encoding) |enc|
+                (if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| @as(u64, 1) << b else continue)
+            else blk: {
+                const b = @as(u64, 1) << @intCast(read.field_idx);
+                if (rc_mask & b == 0) continue;
+                break :blk b;
+            };
             try read_kinds.put(gpa, read.stmt, .{
                 .bit = bit,
+                .variant_index = read.variant_index,
                 .consuming = read.consuming,
             });
         }
@@ -685,31 +935,47 @@ pub fn compute(
         // is the intact container.
         for (candidate.whole_uses.items) |stmt| {
             const slot = try read_kinds.getOrPut(gpa, stmt);
-            if (slot.found_existing) {
-                slot.value_ptr.bit = ~@as(u64, 0);
-                slot.value_ptr.consuming = false;
-            } else {
-                slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
-            }
+            slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .variant_index = no_variant, .consuming = false };
         }
 
         var candidate_mask: u64 = 0;
         for (candidate.reads.items) |read| {
-            if (read.consuming) candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+            if (!read.consuming) continue;
+            if (encoding) |enc| {
+                if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| {
+                    candidate_mask |= @as(u64, 1) << b;
+                }
+            } else {
+                candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+            }
         }
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
+
+        // Emitting a union dismantle needs a discriminant scratch layout;
+        // one comes from any single-definition discriminant read of the
+        // container. Reads whose target is rebound cannot name the
+        // discriminant reliably and are skipped for switch partitioning too.
+        var disc_layout: ?layout_mod.Idx = null;
+        if (is_union) {
+            for (candidate.disc_targets.items) |disc_target| {
+                if (analysis.def_counts[@intFromEnum(disc_target)] != 1) continue;
+                disc_layout = store.getLocal(disc_target).layout_idx;
+                break;
+            }
+            if (disc_layout == null) continue :candidates;
+        }
 
         var poison: u64 = 0;
         exit_musts.clearRetainingCapacity();
         join_bodies.clearRetainingCapacity();
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
-        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
+        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0, .excluded = 0 } });
         var steps: usize = 0;
         // Each statement is re-walked at most once per lattice step of its
-        // reaching state; 2 bits per tracked field bound the lattice height.
-        const step_limit = (store.cfStmtCount() + 1) * (2 * 64 + 1);
+        // reaching state; 3 bits per tracked field bound the lattice height.
+        const step_limit = (store.cfStmtCount() + 1) * (3 * 64 + 1);
         flow: while (flow_frames.pop()) |frame| {
             var cursor = frame.cursor;
             var state = frame.state;
@@ -721,7 +987,14 @@ pub fn compute(
                 }
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
-                    if (kind.consuming) {
+                    if (kind.variant_index != no_variant and
+                        (state.excluded >> @intCast(kind.variant_index)) & 1 != 0)
+                    {
+                        // A read of a variant the path has excluded is
+                        // statically walkable but never runs here; keeping
+                        // its field residual sidesteps the contradiction.
+                        poison |= kind.bit;
+                    } else if (kind.consuming) {
                         // A take where the field may already be gone would
                         // double-consume its unit on that path.
                         poison |= state.may & kind.bit;
@@ -740,9 +1013,42 @@ pub fn compute(
                         cursor = stmt.remainder;
                     },
                     .switch_stmt => |stmt| {
+                        // A switch on the container's own discriminant
+                        // partitions the paths by variant: each arm excludes
+                        // every read variant whose discriminant is some
+                        // other case, and the default excludes every read
+                        // variant whose discriminant is a listed case.
+                        var partitions = false;
+                        if (is_union) {
+                            for (candidate.disc_targets.items) |disc_target| {
+                                if (disc_target != stmt.cond) continue;
+                                if (analysis.def_counts[@intFromEnum(disc_target)] != 1) continue;
+                                partitions = true;
+                                break;
+                            }
+                        }
                         const heads = store.getCFSwitchBranches(stmt.branches);
                         for (0..GuardedList.borrowLen(heads)) |i| {
-                            try flow_frames.append(gpa, .{ .cursor = GuardedList.at(heads, i).body, .state = state });
+                            const head = GuardedList.at(heads, i);
+                            var branch_state = state;
+                            if (partitions) {
+                                for (variant_cases.items) |case| {
+                                    if (case.tag_discriminant != head.value) {
+                                        branch_state.excluded |= @as(u64, 1) << @intCast(case.variant_index);
+                                    }
+                                }
+                            }
+                            try flow_frames.append(gpa, .{ .cursor = head.body, .state = branch_state });
+                        }
+                        if (partitions) {
+                            for (variant_cases.items) |case| {
+                                for (0..GuardedList.borrowLen(heads)) |i| {
+                                    if (GuardedList.at(heads, i).value == case.tag_discriminant) {
+                                        state.excluded |= @as(u64, 1) << @intCast(case.variant_index);
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         cursor = stmt.default_branch;
                     },
@@ -756,7 +1062,7 @@ pub fn compute(
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
                             poison |= state.may & ~state.must;
-                            try exit_musts.append(gpa, state.must);
+                            try exit_musts.append(gpa, .{ .must = state.must, .excluded = state.excluded });
                             break :chain;
                         };
                         const slot = try body_states.getOrPut(gpa, body);
@@ -790,7 +1096,7 @@ pub fn compute(
                     // point's residual is the same however it was reached.
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
                         poison |= state.may & ~state.must;
-                        try exit_musts.append(gpa, state.must);
+                        try exit_musts.append(gpa, .{ .must = state.must, .excluded = state.excluded });
                         break :chain;
                     },
                 }
@@ -806,27 +1112,69 @@ pub fn compute(
 
         // One static residual serves every death point, so a field is taken
         // only if every exit the flow reached agrees its take ran: an exit a
-        // taken field's take did not dominate would be under-released. Bits
-        // only ever leave the set, so this converges.
+        // taken field's take did not dominate would be under-released. An
+        // exit that excluded the field's variant owes nothing: the death
+        // point's variant dispatch never releases that variant's residual on
+        // paths that cannot carry it. Bits only ever leave the set, so this
+        // converges.
         var taken_mask: u64 = candidate_mask & ~poison;
         while (taken_mask != 0) {
             var missing: u64 = 0;
-            for (exit_musts.items) |must| missing |= taken_mask & ~must;
+            for (exit_musts.items) |exit| {
+                var owed = taken_mask;
+                if (encoding) |enc| {
+                    for (variant_cases.items) |case| {
+                        if ((exit.excluded >> @intCast(case.variant_index)) & 1 != 0) {
+                            owed &= ~enc.variantMask(case.variant_index);
+                        }
+                    }
+                }
+                missing |= owed & ~exit.must;
+            }
             if (missing == 0) break;
             taken_mask &= ~missing;
         }
         if (taken_mask == 0) continue;
 
         // Accepted. Record the takes and the residual: every refcounted
-        // field that was not taken is released at the death point.
+        // field that was not taken is released at the death point. A tag
+        // union's residual is per taken variant; the variants its reads
+        // never addressed keep the whole release behind the death point's
+        // variant dispatch.
         var residual = std.ArrayList(ResidualField).empty;
         defer residual.deinit(gpa);
-        for (0..info.fields.len) |i| {
-            const field = info.fields.get(@intCast(i));
-            const bit = @as(u64, 1) << @intCast(field.index);
-            if (taken_mask & bit != 0) continue;
-            if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
-            try residual.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
+        var variant_plans = std.ArrayList(VariantPlan).empty;
+        defer variant_plans.deinit(gpa);
+        if (encoding) |enc| {
+            const info = layouts.getTagUnionInfo(local_layout);
+            for (variant_cases.items) |case| {
+                if (taken_mask & enc.variantMask(case.variant_index) == 0) continue;
+                residual.clearRetainingCapacity();
+                var enc_it = enc.iterate();
+                while (enc_it.next()) |field| {
+                    if (field.variant != case.variant_index) continue;
+                    if (taken_mask & (@as(u64, 1) << field.bit) != 0) continue;
+                    try residual.append(gpa, .{ .field_idx = field.field_idx, .layout_idx = field.field_layout });
+                }
+                const payload_idx = info.variants.get(case.variant_index).payload_layout;
+                try variant_plans.append(gpa, .{
+                    .variant_index = case.variant_index,
+                    .tag_discriminant = case.tag_discriminant,
+                    .payload_is_struct = layouts.getLayout(payload_idx).tag == .struct_,
+                    .payload_layout = payload_idx,
+                    .residual = try result.arena.allocator().dupe(ResidualField, residual.items),
+                });
+            }
+            residual.clearRetainingCapacity();
+        } else {
+            const info = layouts.getStructInfo(local_layout);
+            for (0..info.fields.len) |i| {
+                const field = info.fields.get(@intCast(i));
+                const bit = @as(u64, 1) << @intCast(field.index);
+                if (taken_mask & bit != 0) continue;
+                if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
+                try residual.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
+            }
         }
 
         // A parameter solved borrowed dismantles only in emissions whose
@@ -835,7 +1183,10 @@ pub fn compute(
         const owned_only = solution.isBorrowed(local);
         const stored_residual = try result.arena.allocator().dupe(ResidualField, residual.items);
         for (candidate.reads.items) |read| {
-            const bit = @as(u64, 1) << @intCast(read.field_idx);
+            const bit: u64 = if (encoding) |enc|
+                (if (enc.bitFor(read.variant_index, @intCast(read.field_idx))) |b| @as(u64, 1) << b else continue)
+            else
+                @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
             // Borrowing reads of a taken field stay plain borrows; only the
             // consuming reads take the stored unit.
@@ -846,10 +1197,15 @@ pub fn compute(
                 try result.takes.put(gpa, read.stmt, {});
             }
         }
+        const stored_container = Container{
+            .residual = stored_residual,
+            .variant_plans = try result.arena.allocator().dupe(VariantPlan, variant_plans.items),
+            .disc_layout = disc_layout,
+        };
         if (owned_only) {
-            try result.owned_only_containers.put(gpa, local, .{ .residual = stored_residual });
+            try result.owned_only_containers.put(gpa, local, stored_container);
         } else {
-            try result.containers.put(gpa, local, .{ .residual = stored_residual });
+            try result.containers.put(gpa, local, stored_container);
         }
     }
 

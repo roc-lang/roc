@@ -7791,3 +7791,62 @@ test "wide loop-carried state scalarizes into flat join params" {
     // loops need no refcount traffic at all.
     try std.testing.expectEqual(@as(usize, 0), total_incref);
 }
+
+// A helper returning Try({ ...lists... }) called with `?` in a loop is the
+// canonical dying-tag-union shape: the Ok payload's lists are read out and
+// the union dies inside the matched arm. Field takes must dismantle the
+// union—no retain on the extracted lists, and the death point's residual
+// dispatch releases nothing on the taken variant—or every list mutation in
+// the caller's loop sees count 2 and copies.
+test "try-record extraction takes the dying union's payload without refcounting" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\helper : List(U16), List(U32), U64 -> Try({ xs: List(U16), ys: List(U32), n: U64 }, [Bug])
+        \\helper = |xs0, ys0, i| {
+        \\    xs = match List.set(xs0, i % 64, i.to_u16_wrap()) {
+        \\        Ok(v) => v
+        \\        Err(_) => return Err(Bug)
+        \\    }
+        \\    ys = match List.set(ys0, i % 64, i.to_u32_wrap()) {
+        \\        Ok(v) => v
+        \\        Err(_) => return Err(Bug)
+        \\    }
+        \\    Ok({ xs: xs, ys: ys, n: i * 2 })
+        \\}
+        \\
+        \\walk : U64 -> Try(U64, [Bug])
+        \\walk = |n| {
+        \\    var $xs = List.repeat(0.U16, 64)
+        \\    var $ys = List.repeat(0.U32, 64)
+        \\    var $acc = 0.U64
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        found = helper($xs, $ys, $i)?
+        \\        $xs = found.xs
+        \\        $ys = found.ys
+        \\        $acc = $acc + found.n
+        \\        $i = $i + 1
+        \\    }
+        \\    Ok($acc)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    match walk(n) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var total_incref: usize = 0;
+    const proc_count = optimized.lowered.lir_result.store.getProcSpecs().len;
+    for (0..proc_count) |index| {
+        const shape = try collectProcShape(allocator, &optimized.lowered, @enumFromInt(@as(u32, @intCast(index))));
+        total_incref += shape.incref_count;
+    }
+    try std.testing.expectEqual(@as(usize, 0), total_incref);
+}
+

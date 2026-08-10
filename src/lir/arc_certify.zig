@@ -104,6 +104,7 @@ const layout_mod = @import("layout");
 const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
+const arc_takes = @import("arc_takes.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -888,8 +889,15 @@ const ValueInfo = struct {
     /// unit-less consume or release of this value may claim the container's
     /// stored unit for that field instead of failing (a field take).
     payload_source: ValueId = no_value,
-    /// Original field index of the read, valid when `payload_source` is set.
+    /// Field index of the read, valid when `payload_source` is set: the
+    /// struct field index for struct containers, or the shared (variant,
+    /// field) claim-encoding bit for tag-union containers.
     payload_field: u16 = 0,
+    /// Tag-union container value this value is a payload-struct view of, or
+    /// `no_value`. Field reads through the view claim the container's
+    /// stored units under `view_variant`.
+    view_container: ValueId = no_value,
+    view_variant: u16 = 0,
 };
 
 /// One forked ownership state along a control-flow path.
@@ -918,6 +926,11 @@ const State = struct {
     /// fields: it can no longer be released or consumed whole, and at a
     /// terminal it must be fully claimed and residual-released instead.
     claims: std.AutoHashMapUnmanaged(ValueId, u64),
+    /// Variants (by index) a tag-union value cannot hold on this path,
+    /// refined by payload reads and by switches on its own discriminant. A
+    /// path that excludes every variant of a live container is infeasible
+    /// and certifies vacuously.
+    variant_excluded: std.AutoHashMapUnmanaged(ValueId, u64),
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, proc_local_count);
@@ -931,6 +944,7 @@ const State = struct {
             .conditional_condition = .empty,
             .conditional_condition_mask = .empty,
             .claims = .empty,
+            .variant_excluded = .empty,
         };
     }
 
@@ -941,6 +955,7 @@ const State = struct {
         self.conditional_condition.deinit(self.allocator);
         self.conditional_condition_mask.deinit(self.allocator);
         self.claims.deinit(self.allocator);
+        self.variant_excluded.deinit(self.allocator);
     }
 
     fn clone(self: *const State) Allocator.Error!State {
@@ -954,7 +969,9 @@ const State = struct {
         errdefer conditional_condition.deinit(self.allocator);
         var conditional_condition_mask = try self.conditional_condition_mask.clone(self.allocator);
         errdefer conditional_condition_mask.deinit(self.allocator);
-        const claims = try self.claims.clone(self.allocator);
+        var claims = try self.claims.clone(self.allocator);
+        errdefer claims.deinit(self.allocator);
+        const variant_excluded = try self.variant_excluded.clone(self.allocator);
         return .{
             .allocator = self.allocator,
             .local_dense = self.local_dense,
@@ -964,11 +981,20 @@ const State = struct {
             .conditional_condition = conditional_condition,
             .conditional_condition_mask = conditional_condition_mask,
             .claims = claims,
+            .variant_excluded = variant_excluded,
         };
     }
 
     fn claimsOf(self: *const State, value: ValueId) u64 {
         return self.claims.get(value) orelse 0;
+    }
+
+    fn variantExcludedOf(self: *const State, value: ValueId) u64 {
+        return self.variant_excluded.get(value) orelse 0;
+    }
+
+    fn setVariantExcluded(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
+        try self.variant_excluded.put(self.allocator, value, mask);
     }
 
     fn setClaims(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
@@ -1079,9 +1105,34 @@ const LocalSummary = struct {
     /// container local the read's later claim would target, or `no_dense`.
     /// Set identically on every member of the alias set.
     payload_source: u32 = no_dense,
-    /// Original field index of the read, valid with `payload_source`.
+    /// Field index of the read, valid with `payload_source`: a struct field
+    /// index or a tag-union claim-encoding bit.
     payload_field: u16 = 0,
+    /// For owned locals: variants (by index) the paths reaching this
+    /// summary have excluded for the value, via switches on its own
+    /// discriminant or reads of one variant's payload.
+    variant_excluded: u64 = 0,
+    /// For borrowed locals that are tag-union payload views: dense position
+    /// of the union container local, or `no_dense`.
+    view_container: u32 = no_dense,
+    view_variant: u16 = 0,
 };
+
+/// Pair-map marker for a (container, discriminant) witnessed with two
+/// different variant indexes; such a pair proves nothing.
+const ambiguous_variant: u16 = std.math.maxInt(u16);
+
+fn variantPairKey(container: LIR.LocalId, tag_discriminant: u16) u64 {
+    return (@as(u64, @intFromEnum(container)) << 16) | tag_discriminant;
+}
+
+/// The local a statement defines, for definition counting.
+fn defTargetOf(stmt: LIR.CFStmt) ?LIR.LocalId {
+    return switch (stmt) {
+        inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local => |assign| assign.target,
+        else => null,
+    };
+}
 
 const LocalClass = enum(u8) {
     unbound,
@@ -1220,6 +1271,15 @@ const Certifier = struct {
     current_stmt: LIR.CFStmtId = undefined,
     /// Join whose body the current segment certifies, for diagnostics.
     current_origin_join: ?LIR.JoinPointId = null,
+    /// Per-proc facts for variant partitioning, rebuilt by
+    /// `collectVariantFacts`: discriminant targets defined exactly once from
+    /// a container local defined exactly once, and the (container,
+    /// discriminant) -> variant pairs the proc's payload reads witness.
+    disc_sources: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId) = .empty,
+    variant_pairs: std.AutoHashMapUnmanaged(u64, u16) = .empty,
+    /// Set when the current path proved itself infeasible (a live container
+    /// excluded every variant); the segment walk ends vacuously.
+    path_infeasible: bool = false,
 
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
@@ -1239,6 +1299,8 @@ const Certifier = struct {
         self.erased_call_owner_checks.deinit(self.allocator);
         self.relevant_scratch.deinit(self.allocator);
         self.value_walk_scratch.deinit(self.allocator);
+        self.disc_sources.deinit(self.allocator);
+        self.variant_pairs.deinit(self.allocator);
     }
 
     fn clearRecords(self: *Certifier) void {
@@ -1441,6 +1503,12 @@ const Certifier = struct {
         const bit = @as(u64, 1) << @intCast(info.payload_field);
         const existing = state.claimsOf(container);
         if (existing & bit != 0) return false;
+        // A tag-union container's claims must all belong to one variant of
+        // its encoding: mixed-variant claims could never describe a runtime
+        // value.
+        if (self.unionEncodingOfValue(container)) |encoding| {
+            if (encoding.variantOfClaims(existing | bit) == null) return false;
+        }
         try state.setClaims(container, existing | bit);
         return true;
     }
@@ -1452,17 +1520,25 @@ const Certifier = struct {
         const claims = state.claimsOf(value);
         if (claims == 0) return false;
         if (state.balanceOf(value) != 1) return false;
-        const required = self.requiredClaimMask(value) orelse return false;
+        const required = self.requiredClaimMask(value, claims) orelse return false;
         return claims == required;
     }
 
     /// The refcounted-field mask a fully dismantled value must have claimed:
-    /// one bit per refcounted field of its struct layout. Null when the
-    /// value's layout does not support claims at all.
-    fn requiredClaimMask(self: *Certifier, value: ValueId) ?u64 {
+    /// one bit per refcounted field of its struct layout, or every claim bit
+    /// of the one variant a tag union's claims belong to—control only
+    /// reaches a union's spend with those claims when the container holds
+    /// that variant, whose other fields were residually released. Null when
+    /// the value's layout does not support claims at all.
+    fn requiredClaimMask(self: *Certifier, value: ValueId, claims: u64) ?u64 {
         if (value >= self.values.items.len) return null;
         const origin = self.values.items[value].origin;
         const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
+        if (origin_layout.tag == .tag_union) {
+            const encoding = arc_takes.unionClaimEncoding(self.layouts, origin_layout) orelse return null;
+            const variant = encoding.variantOfClaims(claims) orelse return null;
+            return encoding.variantMask(variant);
+        }
         if (origin_layout.tag != .struct_) return null;
         const info = self.layouts.getStructInfo(origin_layout);
         var mask: u64 = 0;
@@ -1586,7 +1662,7 @@ const Certifier = struct {
                             .condition_mask = condition.mask,
                         };
                     } else {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .variant_excluded = state.variantExcludedOf(value) };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
@@ -1613,11 +1689,18 @@ const Certifier = struct {
     fn addPayloadOriginToSummary(self: *Certifier, state: *const State, value: ValueId, summary: *LocalSummary) void {
         if (value >= self.values.items.len) return;
         const info = self.values.items[value];
-        if (info.payload_source == no_value) return;
-        if (state.balanceOf(info.payload_source) < 1) return;
-        const source_repr = self.repr_scratch.get(info.payload_source) orelse return;
-        summary.payload_source = source_repr;
-        summary.payload_field = info.payload_field;
+        if (info.payload_source != no_value and state.balanceOf(info.payload_source) >= 1) {
+            if (self.repr_scratch.get(info.payload_source)) |source_repr| {
+                summary.payload_source = source_repr;
+                summary.payload_field = info.payload_field;
+            }
+        }
+        if (info.view_container != no_value and state.balanceOf(info.view_container) >= 1) {
+            if (self.repr_scratch.get(info.view_container)) |container_repr| {
+                summary.view_container = container_repr;
+                summary.view_variant = info.view_variant;
+            }
+        }
     }
 
     /// Collects every normalized value that anchors a borrowed value in a join
@@ -1727,6 +1810,9 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.claims));
             hasher.update(std.mem.asBytes(&entry.payload_source));
             hasher.update(std.mem.asBytes(&entry.payload_field));
+            hasher.update(std.mem.asBytes(&entry.variant_excluded));
+            hasher.update(std.mem.asBytes(&entry.view_container));
+            hasher.update(std.mem.asBytes(&entry.view_variant));
         }
         return hasher.final();
     }
@@ -1744,6 +1830,7 @@ const Certifier = struct {
             const value = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (entry.claims != 0) try state.setClaims(value, entry.claims);
+            if (entry.variant_excluded != 0) try state.setVariantExcluded(value, entry.variant_excluded);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .conditional_owned or entry.repr != dense) continue;
@@ -1798,6 +1885,16 @@ const Certifier = struct {
                     const info = &self.values.items[value];
                     info.payload_source = container;
                     info.payload_field = entry.payload_field;
+                }
+            }
+            // Restore a payload view's union container the same way, so
+            // field reads after the join still claim through it.
+            if (entry.view_container != no_dense and entry.view_container < self.proc_locals.items.len) {
+                const container = state.valueAtDense(entry.view_container);
+                if (container != no_value) {
+                    const info = &self.values.items[value];
+                    info.view_container = container;
+                    info.view_variant = entry.view_variant;
                 }
             }
         }
@@ -1877,11 +1974,13 @@ const Certifier = struct {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims) return false,
+                .owned => if (ga.claims != sb.claims or ga.variant_excluded != sb.variant_excluded) return false,
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
                 .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs) or
                     ga.payload_source != sb.payload_source or
-                    ga.payload_field != sb.payload_field) return false,
+                    ga.payload_field != sb.payload_field or
+                    ga.view_container != sb.view_container or
+                    ga.view_variant != sb.view_variant) return false,
             }
         }
         return true;
@@ -2976,7 +3075,7 @@ const Certifier = struct {
                                     .condition_mask = condition.mask,
                                 };
                             } else {
-                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value) };
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .variant_excluded = state.variantExcludedOf(value) };
                             }
                         } else if (try self.valueIsLive(state, value)) {
                             summary = .{
@@ -3023,6 +3122,136 @@ const Certifier = struct {
         return self.summary_scratch.items;
     }
 
+    /// One reachable-statement walk collecting the facts variant
+    /// partitioning consumes: per-local definition counts, discriminant
+    /// reads, and the (container, discriminant) -> variant pairs witnessed
+    /// by `tag_payload_struct` reads. Only a discriminant target defined
+    /// exactly once, reading a container defined exactly once, can name the
+    /// container at a later switch; everything else is dropped.
+    fn collectVariantFacts(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
+        self.disc_sources.clearRetainingCapacity();
+        self.variant_pairs.clearRetainingCapacity();
+
+        var def_counts = std.AutoHashMapUnmanaged(LIR.LocalId, u8).empty;
+        defer def_counts.deinit(self.allocator);
+        // Parameters are defined once by the proc entry.
+        const proc_args = self.store.getLocalSpan(proc.args);
+        for (0..GuardedList.borrowLen(proc_args)) |param_index| {
+            try def_counts.put(self.allocator, GuardedList.at(proc_args, param_index), 1);
+        }
+        var disc_reads = std.ArrayList(struct { target: LIR.LocalId, source: LIR.LocalId }).empty;
+        defer disc_reads.deinit(self.allocator);
+        var alias_edges = std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId).empty;
+        defer alias_edges.deinit(self.allocator);
+        var pair_reads = std.ArrayList(struct { source: LIR.LocalId, variant: u16, disc: u16 }).empty;
+        defer pair_reads.deinit(self.allocator);
+
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, body);
+
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const stmt = self.store.getCFStmt(current);
+            if (defTargetOf(stmt)) |target| {
+                const slot = try def_counts.getOrPut(self.allocator, target);
+                if (slot.found_existing) {
+                    slot.value_ptr.* +|= 1;
+                } else {
+                    slot.value_ptr.* = 1;
+                }
+            }
+            switch (stmt) {
+                .assign_ref => |assign| switch (assign.op) {
+                    .discriminant => |op| try disc_reads.append(self.allocator, .{ .target = assign.target, .source = op.source }),
+                    .tag_payload_struct => |op| try pair_reads.append(self.allocator, .{
+                        .source = op.source,
+                        .variant = op.variant_index,
+                        .disc = op.tag_discriminant,
+                    }),
+                    .local => |source| if (assign.target != source) {
+                        try alias_edges.put(self.allocator, assign.target, source);
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+            switch (stmt) {
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |walk_stmt| try stack.append(self.allocator, walk_stmt.next),
+                .switch_stmt => |walk_stmt| {
+                    const branches = self.store.getCFSwitchBranches(walk_stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try stack.append(self.allocator, GuardedList.at(branches, i).body);
+                    }
+                    try stack.append(self.allocator, walk_stmt.default_branch);
+                    if (walk_stmt.continuation) |continuation| try stack.append(self.allocator, continuation);
+                },
+                .switch_initialized_payload => |walk_stmt| {
+                    try stack.append(self.allocator, walk_stmt.initialized_branch);
+                    try stack.append(self.allocator, walk_stmt.uninitialized_branch);
+                },
+                .str_match => |walk_stmt| {
+                    try stack.append(self.allocator, walk_stmt.on_match);
+                    try stack.append(self.allocator, walk_stmt.on_miss);
+                },
+                .str_match_set => |walk_stmt| {
+                    const arms = self.store.getStrMatchArms(walk_stmt.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        try stack.append(self.allocator, GuardedList.at(arms, i).on_match);
+                    }
+                    try stack.append(self.allocator, walk_stmt.on_miss);
+                },
+                .join => |walk_stmt| {
+                    try stack.append(self.allocator, walk_stmt.body);
+                    try stack.append(self.allocator, walk_stmt.remainder);
+                },
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            }
+        }
+
+        // Discriminant reads and payload reads may address the container
+        // through different pure aliases; both are resolved to the alias
+        // chain's root so the pair and the switch condition meet on one
+        // name. Every link must be single-definition or the chain proves
+        // nothing.
+        const Resolver = struct {
+            edges: *const std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+            counts: *const std.AutoHashMapUnmanaged(LIR.LocalId, u8),
+
+            fn root(ctx: @This(), start: LIR.LocalId) ?LIR.LocalId {
+                var current = start;
+                var remaining = ctx.edges.count() + 1;
+                while (remaining > 0) : (remaining -= 1) {
+                    if ((ctx.counts.get(current) orelse 0) != 1) return null;
+                    const next = ctx.edges.get(current) orelse return current;
+                    current = next;
+                }
+                return null;
+            }
+        };
+        const resolver = Resolver{ .edges = &alias_edges, .counts = &def_counts };
+
+        for (pair_reads.items) |read| {
+            const root = resolver.root(read.source) orelse continue;
+            const key = variantPairKey(root, read.disc);
+            const slot = try self.variant_pairs.getOrPut(self.allocator, key);
+            if (slot.found_existing) {
+                if (slot.value_ptr.* != read.variant) slot.value_ptr.* = ambiguous_variant;
+            } else {
+                slot.value_ptr.* = read.variant;
+            }
+        }
+
+        for (disc_reads.items) |read| {
+            if ((def_counts.get(read.target) orelse 0) != 1) continue;
+            const root = resolver.root(read.source) orelse continue;
+            try self.disc_sources.put(self.allocator, read.target, root);
+        }
+    }
+
     fn noteProcLocal(self: *Certifier, local: LIR.LocalId) Allocator.Error!void {
         if (!self.isRc(local)) return;
         const index = @intFromEnum(local);
@@ -3056,6 +3285,7 @@ const Certifier = struct {
         self.join_bodies.clearRetainingCapacity();
         self.clearReadsBeforeRebindCache();
         try self.collectProcLocals(proc, body);
+        try self.collectVariantFacts(proc, body);
         try self.collectMemoPoints(body);
         try self.relevant_scratch.resize(self.allocator, self.proc_locals.items.len, false);
 
@@ -3125,6 +3355,13 @@ const Certifier = struct {
         self.current_origin_join = segment.origin_join;
 
         while (true) {
+            if (self.path_infeasible) {
+                // The last statement proved this path cannot execute (a
+                // live container excluded every variant); the rest of the
+                // walk is vacuous.
+                self.path_infeasible = false;
+                return;
+            }
             self.current_stmt = cursor;
 
             if (self.memo_points.isSet(@intFromEnum(cursor))) {
@@ -3149,7 +3386,17 @@ const Certifier = struct {
                         .discriminant => |op| _ = try self.requireLive(&state, op.source),
                         .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx),
                         .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
-                        .tag_payload_struct => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
+                        .tag_payload_struct => |op| {
+                            const source_layout = self.layouts.getLayout(self.store.getLocal(op.source).layout_idx);
+                            var is_struct_payload = false;
+                            if (source_layout.tag == .tag_union) {
+                                const union_info = self.layouts.getTagUnionInfo(source_layout);
+                                if (op.variant_index < union_info.variants.len) {
+                                    is_struct_payload = self.layouts.getLayout(union_info.variants.get(op.variant_index).payload_layout).tag == .struct_;
+                                }
+                            }
+                            try self.bindPayloadStructRead(&state, assign.target, op.source, op.variant_index, is_struct_payload);
+                        },
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                     }
@@ -3293,15 +3540,38 @@ const Certifier = struct {
                 },
                 .switch_stmt => |switch_stmt| {
                     _ = try self.requireLive(&state, switch_stmt.cond);
+                    // A switch on a container's discriminant refines each
+                    // arm's variant knowledge. An arm whose refinement
+                    // excludes every variant of a live container cannot
+                    // execute—control only reaches this switch with the
+                    // facts the path already proved—so its walk is skipped
+                    // as vacuous rather than failing on impossible states.
+                    const partition = self.discSwitchPartition(&state, switch_stmt.cond);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
                         const branch = GuardedList.at(branches, branch_index);
+                        var arm_excluded: u64 = 0;
+                        if (partition) |part| {
+                            arm_excluded = self.armExclusion(part, branch.value);
+                            if ((part.excluded | arm_excluded) == part.all_mask) continue;
+                        }
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
+                        if (arm_excluded != 0) {
+                            try branch_state.setVariantExcluded(partition.?.container, partition.?.excluded | arm_excluded);
+                        }
                         try work.append(self.allocator, .{ .segment = .{ .cursor = branch.body, .state = branch_state, .origin_join = segment.origin_join } });
+                    }
+                    var default_excluded: u64 = 0;
+                    if (partition) |part| {
+                        default_excluded = self.defaultExclusion(part, branches);
+                        if ((part.excluded | default_excluded) == part.all_mask) return;
                     }
                     var default_state = try state.clone();
                     errdefer default_state.deinit();
+                    if (default_excluded != 0) {
+                        try default_state.setVariantExcluded(partition.?.container, partition.?.excluded | default_excluded);
+                    }
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     return;
                 },
@@ -3494,8 +3764,160 @@ const Certifier = struct {
         const value = try self.bindFresh(state, target, 0, &.{source_value});
         if (field_idx) |field| {
             const info = &self.values.items[value];
-            info.payload_source = source_value;
-            info.payload_field = field;
+            const source_info = self.values.items[source_value];
+            if (source_info.view_container != no_value) {
+                // A field read through a payload view claims the union
+                // container's stored unit under the view's variant.
+                const container = source_info.view_container;
+                const variant = source_info.view_variant;
+                try self.observeVariant(state, container, variant);
+                if (self.unionEncodingOfValue(container)) |encoding| {
+                    if (encoding.bitFor(variant, field)) |bit| {
+                        info.payload_source = container;
+                        info.payload_field = bit;
+                    }
+                }
+            } else {
+                info.payload_source = source_value;
+                info.payload_field = field;
+            }
+        }
+    }
+
+    /// The shared union claim encoding for a value whose origin local is a
+    /// tag union, or null.
+    fn unionEncodingOfValue(self: *Certifier, value: ValueId) ?arc_takes.UnionClaimEncoding {
+        if (value >= self.values.items.len) return null;
+        const origin = self.values.items[value].origin;
+        const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
+        return arc_takes.unionClaimEncoding(self.layouts, origin_layout);
+    }
+
+    /// Record that this path observed `container` holding `variant`: a
+    /// payload of that variant was read, which is only defined when the
+    /// container holds it. Excluding every variant proves the path
+    /// infeasible, ending its walk vacuously.
+    fn observeVariant(self: *Certifier, state: *State, container: ValueId, variant: u16) Allocator.Error!void {
+        if (container >= self.values.items.len) return;
+        const origin = self.values.items[container].origin;
+        const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
+        if (origin_layout.tag != .tag_union) return;
+        const variant_count = self.layouts.getTagUnionInfo(origin_layout).variants.len;
+        if (variant_count > 64 or variant >= variant_count) return;
+        const all_mask: u64 = if (variant_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(variant_count)) - 1;
+        const excluded = state.variantExcludedOf(container) | (all_mask & ~(@as(u64, 1) << @intCast(variant)));
+        try state.setVariantExcluded(container, excluded);
+        if (excluded == all_mask) self.path_infeasible = true;
+    }
+
+    const DiscPartition = struct {
+        container: ValueId,
+        container_local: LIR.LocalId,
+        excluded: u64,
+        all_mask: u64,
+    };
+
+    /// When the switch condition is a single-definition discriminant read of
+    /// a single-definition tag-union local still bound on this path, the
+    /// switch partitions that container's variants.
+    fn discSwitchPartition(self: *Certifier, state: *const State, cond: LIR.LocalId) ?DiscPartition {
+        const container_local = self.disc_sources.get(cond) orelse return null;
+        if (!self.isRc(container_local)) return null;
+        const raw = @intFromEnum(container_local);
+        if (raw >= state.local_dense.len or state.local_dense[raw] == no_dense) return null;
+        const container = state.valueOf(container_local);
+        if (container == no_value) return null;
+        const origin_layout = self.layouts.getLayout(self.store.getLocal(container_local).layout_idx);
+        if (origin_layout.tag != .tag_union) return null;
+        const variant_count = self.layouts.getTagUnionInfo(origin_layout).variants.len;
+        if (variant_count == 0 or variant_count > 64) return null;
+        const all_mask: u64 = if (variant_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(variant_count)) - 1;
+        return .{
+            .container = container,
+            .container_local = container_local,
+            .excluded = state.variantExcludedOf(container) & all_mask,
+            .all_mask = all_mask,
+        };
+    }
+
+    /// Variants an arm with this case value excludes: a witnessed pair for
+    /// the value excludes every other variant; otherwise each witnessed pair
+    /// with a different discriminant excludes its own variant.
+    fn armExclusion(self: *Certifier, part: DiscPartition, case_value: u64) u64 {
+        var excluded: u64 = 0;
+        var positive: ?u16 = null;
+        var it = self.variant_pairs.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if ((key >> 16) != @intFromEnum(part.container_local)) continue;
+            const variant = entry.value_ptr.*;
+            if (variant == ambiguous_variant or variant >= 64) continue;
+            const disc: u16 = @truncate(key);
+            if (disc == case_value) {
+                positive = variant;
+            } else {
+                excluded |= @as(u64, 1) << @intCast(variant);
+            }
+        }
+        if (positive) |variant| return part.all_mask & ~(@as(u64, 1) << @intCast(variant));
+        return excluded;
+    }
+
+    /// Variants the default arm excludes: each witnessed pair whose
+    /// discriminant is a listed case.
+    fn defaultExclusion(self: *Certifier, part: DiscPartition, branches: anytype) u64 {
+        var excluded: u64 = 0;
+        var it = self.variant_pairs.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if ((key >> 16) != @intFromEnum(part.container_local)) continue;
+            const variant = entry.value_ptr.*;
+            if (variant == ambiguous_variant or variant >= 64) continue;
+            const disc: u16 = @truncate(key);
+            var listed = false;
+            for (0..GuardedList.borrowLen(branches)) |i| {
+                if (GuardedList.at(branches, i).value == disc) {
+                    listed = true;
+                    break;
+                }
+            }
+            if (listed) excluded |= @as(u64, 1) << @intCast(variant);
+        }
+        return excluded;
+    }
+
+    /// A `tag_payload_struct` read: a struct payload binds a view whose
+    /// field reads claim through it; a non-struct payload is the variant's
+    /// single field.
+    fn bindPayloadStructRead(
+        self: *Certifier,
+        state: *State,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        variant_index: u16,
+        op_layout_is_struct: bool,
+    ) CertifyError!void {
+        const source_value = try self.requireLive(state, source);
+        if (source_value != no_value) {
+            try self.observeVariant(state, source_value, variant_index);
+        }
+        if (!self.isRc(target)) return;
+        if (source_value == no_value) {
+            return self.fail(
+                "payload read into refcounted local {d} from non-refcounted source {d}",
+                .{ @intFromEnum(target), @intFromEnum(source) },
+            );
+        }
+        const value = try self.bindFresh(state, target, 0, &.{source_value});
+        const info = &self.values.items[value];
+        if (op_layout_is_struct) {
+            info.view_container = source_value;
+            info.view_variant = variant_index;
+        } else if (self.unionEncodingOfValue(source_value)) |encoding| {
+            if (encoding.bitFor(variant_index, 0)) |bit| {
+                info.payload_source = source_value;
+                info.payload_field = bit;
+            }
         }
     }
 
