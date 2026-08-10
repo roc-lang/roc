@@ -3860,6 +3860,14 @@ pub const MonoLlvmCodeGen = struct {
                 }
             }
 
+            if (target_layout == .i128 or target_layout == .u128) {
+                if (plain_op == .num_div_by or plain_op == .num_div_trunc_by or
+                    plain_op == .num_rem_by or plain_op == .num_mod_by)
+                {
+                    break :blk try self.emitI128DivRem(plain_op, lhs, rhs, target_layout == .u128);
+                }
+            }
+
             const tag: LlvmBuilder.Function.Instruction.Tag = if (plain_op == .num_plus)
                 .add
             else if (plain_op == .num_minus)
@@ -3990,6 +3998,33 @@ pub const MonoLlvmCodeGen = struct {
         return self.combineI128Parts(low, high);
     }
 
+    /// 128-bit division, remainder and modulo, routed through the same
+    /// decomposed-to-64-bit builtins the dev and wasm backends call.
+    ///
+    /// No target Roc compiles to has a 128-bit divide instruction, so leaving a
+    /// `sdiv`/`udiv`/`srem`/`urem` on i128 in the module makes instruction
+    /// selection lower it to a compiler-rt libcall (`__divti3`, `__udivti3`,
+    /// ...). Nothing in a Roc object defines those, and a platform host is not
+    /// required to carry compiler-rt, so such an object fails to link: the
+    /// Windows test hosts, which bundle no compiler-rt, reject it outright.
+    fn emitI128DivRem(
+        self: *MonoLlvmCodeGen,
+        plain_op: lir.LowLevel,
+        lhs: LlvmBuilder.Value,
+        rhs: LlvmBuilder.Value,
+        unsigned: bool,
+    ) Error!LlvmBuilder.Value {
+        const builtin_fn = if (plain_op == .num_div_by or plain_op == .num_div_trunc_by)
+            LowLevelBuiltins.i128DivRem(false, unsigned)
+        else if (plain_op == .num_rem_by)
+            LowLevelBuiltins.i128DivRem(true, unsigned)
+        else if (plain_op == .num_mod_by)
+            LowLevelBuiltins.i128Mod(unsigned)
+        else
+            return error.UnsupportedLowLevel;
+        return self.callI128BinaryBuiltin(builtin_fn.symbolName(), lhs, rhs, true);
+    }
+
     fn emitIntegerShift(self: *MonoLlvmCodeGen, op: lir.LowLevel, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, target_layout: layout.Idx) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -4025,25 +4060,29 @@ pub const MonoLlvmCodeGen = struct {
                 // Dec multiply crashes on overflow, matching the interpreter and the
                 // dev/wasm backends; `dec_mul` takes `roc_ops` to raise the crash.
         else if (op == .num_times)
-            try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_times)), lhs, rhs, true)
+            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_times)), lhs, rhs, true)
         else if (op == .num_div_by)
-            try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_by)), lhs, rhs, true)
+            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_by)), lhs, rhs, true)
         else if (op == .num_div_trunc_by)
-            try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by)), lhs, rhs, true)
+            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by)), lhs, rhs, true)
             // A Dec's payload is a scaled i128; the truncating remainder and the
             // modulo of the raw payloads are the Dec remainder and modulo, so
             // these route through the same i128 wrappers the dev/wasm backends
             // use. Both wrappers take `roc_ops`.
         else if (op == .num_rem_by)
-            try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128DivRem(true, false)), lhs, rhs, true)
+            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128DivRem(true, false)), lhs, rhs, true)
         else if (op == .num_mod_by)
-            try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128Mod(false)), lhs, rhs, true)
+            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128Mod(false)), lhs, rhs, true)
         else
             return error.UnsupportedLowLevel;
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
-    fn callDecBinaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, pass_roc_ops: bool) Error!LlvmBuilder.Value {
+    /// Call a builtin that takes two 128-bit operands and writes a 128-bit
+    /// result, passing each operand as a 64-bit low/high pair. Dec's payload is
+    /// an i128, so its arithmetic wrappers share this shape with the plain i128
+    /// ones.
+    fn callI128BinaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, pass_roc_ops: bool) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const out_low = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const out_high = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
@@ -5170,15 +5209,20 @@ pub const MonoLlvmCodeGen = struct {
 
     /// A Dec's payload is its value scaled by 10^18, so recovering the whole
     /// part means dividing the payload by that scale before wrapping it into
-    /// the destination width. The quotient is divided at the full i128 width so
-    /// whole parts beyond i64 wrap rather than trap, and dividing by a constant
-    /// keeps the sequence foldable instead of calling into the builtins.
+    /// the destination width. The division runs at the full i128 width so whole
+    /// parts beyond i64 wrap rather than trap, and it goes through the same
+    /// i128 div-trunc builtin the dev and wasm backends call: see
+    /// `emitI128DivRem` for why the module must not contain a 128-bit divide.
     fn emitDecToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
         const payload = try self.loadScalar(self.slot(arg).ptr, .dec);
         const scale = builder.intValue(.i128, builtins.dec.RocDec.one_point_zero_i128) catch return error.OutOfMemory;
-        const whole = wip.bin(.sdiv, payload, scale, "") catch return error.OutOfMemory;
+        const whole = try self.callI128BinaryBuiltin(
+            builtinSymbol(LowLevelBuiltins.i128DivRem(false, false)),
+            payload,
+            scale,
+            true,
+        );
         const target_layout = self.localLayout(target);
         const wrapped = try self.coerceScalar(whole, self.scalarType(target_layout), true);
         try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
@@ -8011,7 +8055,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
-        const result = try self.callDecBinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs, true);
+        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs, true);
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
