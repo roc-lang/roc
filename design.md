@@ -5682,6 +5682,15 @@ value cannot gain an owner from a later use. A receiver that occurs only in a
 body-local result discarded directly or through local aliases is not in that
 frontier and is therefore statically unreachable during checking.
 
+An explicit zero-argument root request is called by its compilation consumer.
+Its direct body is therefore not a future-call frontier: a body-required
+receiver at a direct call edge there must resolve during checking. Passing a
+generalized function as data—even to inspection—does not call it. A nested
+closure body remains outside that frontier until an explicit checked call
+invokes it. The checker carries that direct-call fact through only the
+value-producing child of a closure, block, conditional, or match; conditions,
+guards, and preceding block statements are not call edges.
+
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This
 rule follows the instantiated function type recorded at the use; it does not

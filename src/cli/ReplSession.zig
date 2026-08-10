@@ -1521,9 +1521,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
 
     // Keep the expression inside the explicit zero-argument root so `dbg`,
     // failed `expect`, and crash callbacks occur during inspected execution,
-    // not while checking finalizes a top-level value. Do not add a `{ }` block
-    // around the expression: blocking a generalized where-clause helper leaves
-    // its instantiation graph node unresolved and panics Monotype lowering.
+    // not while checking finalizes a top-level value.
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
 
@@ -1658,7 +1656,11 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // runtime-error node and aborting the remaining batch input. Warnings
     // (e.g. an unused loop binder) never block evaluation.
     if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
-        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+        return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
+            self.allocator,
+            &compiled.resources,
+            report_config,
+        ) };
     }
 
     const lowered = &compiled.lowered;

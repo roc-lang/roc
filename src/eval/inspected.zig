@@ -2052,6 +2052,25 @@ fn moduleDiagnosticsHaveErrors(
     return false;
 }
 
+/// Render the diagnostics already produced in parsed resources. This preserves
+/// the exact checking inputs that produced them, including explicit executable
+/// roots, instead of re-parsing under a different root request.
+pub fn renderParsedResourcesProblemsWithConfig(
+    allocator: Allocator,
+    parsed: *const ParsedResources,
+    config: reporting.ReportingConfig,
+) Error![]u8 {
+    const main: CheckedModule = .{
+        .module_env = parsed.module_env,
+        .parse_ast = parsed.parse_ast,
+        .can = parsed.can,
+        .checker = parsed.checker,
+        .imported_envs = parsed.imported_envs,
+        .auto_imported_types = parsed.auto_imported_types,
+    };
+    return renderCheckedModuleProblemsWithConfig(allocator, &main, "repl", config);
+}
+
 /// Render reported problems for a source string checked with explicit import modules.
 pub fn renderProblemsWithConfigAndImports(
     allocator: Allocator,
