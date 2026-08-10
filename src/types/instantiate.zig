@@ -171,21 +171,6 @@ pub const Instantiator = struct {
         return self.instantiateVarHelp(initial_var, false);
     }
 
-    /// Instantiate the root even when it is not generalized, while applying
-    /// the ordinary rank rule to everything below it. A scheme-level pending
-    /// dispatch requirement uses this for its callable relation: the relation
-    /// root is anchored by an outer receiver and therefore is intentionally
-    /// not generalized, but its scheme-owned argument and result variables are.
-    pub fn instantiateSchemeDispatchConstraint(
-        self: *Self,
-        constraint: StaticDispatchConstraint,
-    ) std.mem.Allocator.Error!StaticDispatchConstraint {
-        var result = constraint;
-        result.fn_var = try self.instantiateVarHelp(constraint.fn_var, true);
-        result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
-        return result;
-    }
-
     fn instantiateVarHelp(
         self: *Self,
         initial_var: Var,
@@ -613,7 +598,7 @@ pub const Instantiator = struct {
             for (0..constraints_len) |i| {
                 // Re-fetch the constraint on each iteration since the backing array may have moved
                 const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
-                fresh_constraints.appendAssumeCapacity(try self.instantiateStaticDispatchConstraint(constraint));
+                fresh_constraints.appendAssumeCapacity(try self.instantiateStaticDispatchConstraint(constraint, false));
             }
 
             const fresh_constraints_range = try self.store.appendStaticDispatchConstraints(fresh_constraints.items);
@@ -621,9 +606,17 @@ pub const Instantiator = struct {
         }
     }
 
-    fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
+    /// Instantiate every variable-bearing field of a static-dispatch
+    /// constraint. `force_root_copy` is used by explicit scheme requirements:
+    /// their callable root is anchored below generalized rank by a shared outer
+    /// receiver, but the generalized variables below it still need a fresh copy.
+    pub fn instantiateStaticDispatchConstraint(
+        self: *Self,
+        constraint: StaticDispatchConstraint,
+        force_root_copy: bool,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
-        result.fn_var = try self.instantiateVar(constraint.fn_var);
+        result.fn_var = try self.instantiateVarHelp(constraint.fn_var, force_root_copy);
         result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;
     }

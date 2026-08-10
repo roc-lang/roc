@@ -463,8 +463,23 @@ pub fn allocDefType(self: *TestEnv, allocator: Allocator, target_def_name: []con
     return error.TestUnexpectedResult;
 }
 
-pub fn typeProblemCount(self: *const TestEnv) usize {
-    return self.checker.problems.problems.items.len;
+/// Count compilation-blocking type problems, excluding warning/info reports.
+/// Generated rejection tests use this instead of the raw problem-list length
+/// so a `LITERAL DEFAULTED` warning cannot masquerade as the expected error.
+pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var count: usize = 0;
+    for (self.checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        switch (report.severity) {
+            .runtime_error, .fatal => count += 1,
+            .info, .warning => {},
+        }
+    }
+    return count;
 }
 
 /// Get the inferred type of the last declaration and compare it to the provided

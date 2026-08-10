@@ -3308,9 +3308,13 @@ owner. At that root's generalization boundary,
 `captureSchemeDispatchRequirements` moves each still-open relation on an
 outer-rank receiver into the scheme. This is explicit producer data; no later
 pass may recover ownership from reachability, creation order, rank shape, or
-source syntax. A relation copied from another scheme remains explicit whenever
-it is still open, which carries requirements transitively through helper
-definitions.
+source syntax. An explicit owner index lets each boundary consume only its own
+candidates instead of rescanning module-wide dispatch sites; the backing arena
+is cleared when the last active owner is consumed. Exact duplicate
+receiver/relation roots are stored once. A relation copied from another scheme
+remains explicit only while its receiver still belongs to an outer rank, which
+carries requirements transitively through helper definitions without turning
+same-rank, value-restricted uses into schemes.
 
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
@@ -3319,7 +3323,18 @@ copied. The callable root is copied even though its outer receiver keeps that
 root below generalized rank; everything below the callable root follows
 ordinary rank behavior, so its generalized argument and result variables are
 fresh per use. Each copied relation is registered as a distinct deferred static
-dispatch check. Copies are never merged merely because they share a receiver.
+dispatch check and enters the ordinary instantiation ambiguity and compatibility
+worklists. Copies are never merged merely because they share a receiver.
+
+Only roots actually promoted to generalized rank can instantiate a side-table
+scheme. A mixed recursive group can provisionally capture requirements for a
+value-restricted member before generalization; the checker removes that entry
+as soon as the generalizer leaves the root non-generalized. Active schemes are
+indexed directly by resolved root. Once static dispatch settles or rejects a
+requirement's shared receiver, the requirement is retired, and an empty
+side-table scheme is removed (including its direct-index entry), so later
+ordinary uses instantiate only the generalized root type and cannot replay a
+discharged obligation.
 
 Boundary literal defaulting protects variables in the callable relation but
 does not protect the receiver solely because it is the callable's first
@@ -3327,7 +3342,13 @@ argument. A receiver owned by the current definition therefore defaults at that
 definition's boundary; a receiver owned by an enclosing scope remains outside
 the boundary's candidate universe. This keeps literal settlement with the scope
 that declared the literal while preventing a literal inside a pending relation
-from being guessed before that relation is discharged.
+from being guessed before that relation is discharged. Traversal treats the
+receiver root as opaque rather than traversing it and deleting it afterward;
+therefore unrelated sibling constraints on the receiver cannot accidentally
+protect their callable variables. The same receiver-blocked callable closure is
+part of the ambiguity judgment's external-pinnable interface, so variables that
+exist only in a side-table relation receive exactly the same ambiguity treatment
+as variables reachable from the root type.
 
 When the receiver settles, ordinary static-dispatch checking discharges the
 original relation and every registered use copy independently. Normal
@@ -3338,13 +3359,16 @@ confirms or narrows the inferred program.
 
 Both sides are pinned in src/check/test/type_checking_integration.zig.
 Accepted pairs cover top-level and enclosing weak receivers, weak numerals,
-multi-hop and transitively copied chains, and results carried through the
-definition's return type; every pair has two uses at different result element
-types and asserts identical inferred types. The generated principality test
-randomly composes small typed weak literals, normalization paths, list maps,
-transitive helpers, and result wrappers, then checks every generated exact
-annotation site and the rejection direction. The literal-constrained lambda
-parameter regression proves two concrete instantiations remain independent.
+multi-hop and transitively copied chains, repeated transitive helper uses, and
+results carried through the definition's return type; every pair has two uses
+at different result element types and asserts identical inferred types. A
+retirement regression proves later uses do not replay a discharged missing
+method. The generated principality test seed-shuffles the complete product of
+small typed weak literals, transitive helpers, and result wrappers, independently
+generates normalization, then checks every exact annotation site and the
+rejection direction using error severity rather than raw warning-inclusive
+problem counts. The literal-constrained lambda parameter regression proves two
+concrete instantiations remain independent.
 The cross-module weak-receiver regression proves that, after the receiver has
 settled, publication preserves the discharged root scheme's polymorphism
 without checker-local requirement state.
@@ -3413,7 +3437,7 @@ Other solved-graph mutations:
   default candidate order (`Dec` first); mutation happens only through
   committed probes of ordinary unification.
 - `captureSchemeDispatchRequirements` /
-  `Instantiator.instantiateSchemeDispatchConstraint`—policy: Pending Dispatch
+  `Instantiator.instantiateStaticDispatchConstraint(force_root_copy = true)`—policy: Pending Dispatch
   Requirements In Type Schemes (above). Capturing records no solved-graph
   mutation. Instantiation builds a fresh disjoint callable root, and every
   copied requirement is discharged only through ordinary unification in the

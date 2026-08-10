@@ -7594,6 +7594,36 @@ test "check type - principality - inferred transitive scheme requirement" {
     try checkTypesModuleDefs(source, principality_transitive_defs);
 }
 
+test "check type - principality - repeated transitive helper uses remain independent" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\pair = |g| (base(g), base(g))
+        \\f = |g| pair(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "base", .expected = "(Str -> b) -> List(b)" },
+        .{ .def = "pair", .expected = "(Str -> b) -> (List(b), List(b))" },
+        .{ .def = "f", .expected = "(Str -> b) -> (List(b), List(b))" },
+        .{ .def = "lengths", .expected = "(List(U64), List(U64))" },
+        .{ .def = "selves", .expected = "(List(Str), List(Str))" },
+    });
+}
+
+test "check type - discharged scheme requirement is not replayed by later uses" {
+    const source =
+        \\weak = "abc"
+        \\f = |_unit| weak.to_i128()
+        \\pin : Str
+        \\pin = weak
+        \\first = f({})
+        \\second = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
 const principality_result_flow_defs = &[_]DefAndExpectation{
     .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
     .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
@@ -7644,15 +7674,20 @@ const GeneratedAnnotationSite = enum { none, receiver, lengths, selves };
 const PrincipalityGenerator = struct {
     state: u64,
 
-    fn choose(self: *@This(), comptime E: type) E {
+    fn next(self: *@This()) u64 {
         self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
-        const fields = @typeInfo(E).@"enum".fields;
-        return @enumFromInt(self.state % fields.len);
+        return self.state;
+    }
+
+    fn bounded(self: *@This(), upper: usize) usize {
+        std.debug.assert(upper > 0);
+        // Use the mixed high half; the low bit of this odd/odd LCG alternates
+        // deterministically and must not choose two-way dimensions.
+        return @intCast((self.next() >> 32) % upper);
     }
 
     fn boolean(self: *@This()) bool {
-        self.state = self.state *% 6364136223846793005 +% 1442695040888963407;
-        return self.state & 1 == 1;
+        return self.next() >> 63 != 0;
     }
 };
 
@@ -7668,7 +7703,7 @@ fn generatedPrincipalitySource(
     const receiver_annotation = if (annotation_site == .receiver)
         switch (weak) {
             .quote => "weak : Str\n",
-            .numeral => "weak : I64\n",
+            .numeral => "weak : Dec\n",
         }
     else
         "";
@@ -7761,14 +7796,30 @@ test "check type - generated principality under optional exact annotations" {
     const allocator = testing.allocator;
     var generator = PrincipalityGenerator{ .state = 0x9e3779b97f4a7c15 };
 
+    comptime {
+        std.debug.assert(@typeInfo(GeneratedWeakLiteral).@"enum".fields.len == 2);
+        std.debug.assert(@typeInfo(GeneratedResultWrapper).@"enum".fields.len == 2);
+    }
+
+    // Exercise the complete product of weak-literal, result-wrapper, and
+    // transitive-helper choices exactly once, in a seed-shuffled order. The
+    // independent normalization choice remains generated for each program.
+    var combinations = [_]u3{ 0, 1, 2, 3, 4, 5, 6, 7 };
+    var remaining = combinations.len;
+    while (remaining > 1) {
+        remaining -= 1;
+        const swap_index = generator.bounded(remaining + 1);
+        std.mem.swap(u3, &combinations[remaining], &combinations[swap_index]);
+    }
+
     // Each case is assembled from independently chosen, typed constructs: a
     // weak literal, a normalization path, a list operation, an optional
     // transitive helper, and a result wrapper. This is deliberately a small
     // compositional generator rather than a catalogue of scenario strings.
-    for (0..8) |_| {
-        const weak = generator.choose(GeneratedWeakLiteral);
-        const wrapper = generator.choose(GeneratedResultWrapper);
-        const transitive = generator.boolean();
+    for (combinations) |combination| {
+        const weak: GeneratedWeakLiteral = @enumFromInt(combination & 0b001);
+        const wrapper: GeneratedResultWrapper = @enumFromInt((combination >> 1) & 0b001);
+        const transitive = combination & 0b100 != 0;
         const reverse_before_map = generator.boolean();
 
         const inferred_source = try generatedPrincipalitySource(
@@ -7816,7 +7867,7 @@ test "check type - generated principality under optional exact annotations" {
         defer allocator.free(rejected_source);
         var rejected = try TestEnv.init("Test", rejected_source);
         defer rejected.deinit();
-        try testing.expect(rejected.typeProblemCount() > 0);
+        try testing.expect((try rejected.typeProblemCount()) > 0);
 
         const rejected_annotated_source = try generatedPrincipalitySource(
             allocator,
@@ -7830,6 +7881,6 @@ test "check type - generated principality under optional exact annotations" {
         defer allocator.free(rejected_annotated_source);
         var rejected_annotated = try TestEnv.init("Test", rejected_annotated_source);
         defer rejected_annotated.deinit();
-        try testing.expect(rejected_annotated.typeProblemCount() > 0);
+        try testing.expect((try rejected_annotated.typeProblemCount()) > 0);
     }
 }
