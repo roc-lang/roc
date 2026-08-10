@@ -5712,7 +5712,6 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
     for (drained) |mod| {
         for (mod.reports) |*report| {
             switch (report.severity) {
-
                 .fatal, .runtime_error => counts.errors += 1,
                 .warning => counts.warnings += 1,
             }
@@ -7503,7 +7502,6 @@ fn discoverAndAddBundleModules(
                     .warning => {
                         try stderr.print("{s}: warning in module\n", .{mod.abs_path});
                     },
-
                 }
             }
         }
@@ -16201,7 +16199,6 @@ fn checkFileWithBuildEnvPreserved(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16251,7 +16248,6 @@ fn checkFileWithBuildEnvPreserved(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -16408,7 +16404,6 @@ fn checkFileWithBuildEnv(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16446,7 +16441,6 @@ fn checkFileWithBuildEnv(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }

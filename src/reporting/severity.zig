@@ -2,7 +2,6 @@
 
 /// Represents the severity level of a problem.
 pub const Severity = enum {
-
     /// Non-blocking issues that should be addressed.
     /// Will return a non-zero exit code to block committing to CI.
     warning,
