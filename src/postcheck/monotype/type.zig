@@ -486,7 +486,7 @@ pub const Store = struct {
         if (census.enabled) {
             switch (content) {
                 .named => |named| if (named.kind == .alias and named.builtin_owner != null) {},
-                else => {},
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {},
             }
         }
         self.assertMutable();
@@ -3405,7 +3405,7 @@ pub fn generatedEvidenceOwnerUsesBacking(owner: static_dispatch.BuiltinOwner) bo
         .iter,
         .stream,
         => true,
-        else => false,
+        .list, .box, .dict, .set, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
     };
 }
 

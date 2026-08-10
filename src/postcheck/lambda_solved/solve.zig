@@ -2553,7 +2553,7 @@ const Solver = struct {
         return switch (left) {
             .erased => right == .lambda_set,
             .lambda_set => right == .erased,
-            else => false,
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => false,
         };
     }
 

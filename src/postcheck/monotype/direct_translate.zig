@@ -690,7 +690,7 @@ const Emission = struct {
                 }
                 break :blk .{ .leaf = @intFromEnum(token) };
             },
-            else => .{ .leaf = @intFromEnum(token) },
+            .primitive, .record, .tuple, .tag_union, .func, .erased, .zst => .{ .leaf = @intFromEnum(token) },
         };
         return try self.engine.createSlot(token, self.freshProducer(), shape);
     }
@@ -908,7 +908,7 @@ pub const Translator = struct {
                     checked_ty,
                     skip_reason,
                 ),
-                else => err,
+                .pending_or_err, .numeric_default_unresolved, .open_row, .malformed_builtin_arity, .binder_not_found, .missing_backing, .undisposed_residual => err,
             },
             else => return err,
         };
@@ -1030,7 +1030,7 @@ pub const Translator = struct {
                     root,
                     skip_reason,
                 ),
-                else => return err,
+                .pending_or_err, .numeric_default_unresolved, .open_row, .malformed_builtin_arity, .binder_not_found, .missing_backing, .undisposed_residual => return err,
             },
             else => return err,
         };
@@ -1503,9 +1503,9 @@ const Walk = struct {
                         return try self.nominalReserveFill(checked_ty, nominal_ty, source);
                     }
                 },
-                else => {},
+                .primitive, .list, .box => {},
             },
-            else => {},
+            .record, .record_unbound, .tuple, .function, .tag_union => {},
         }
 
         const Ctx = struct {
@@ -1754,7 +1754,7 @@ const Walk = struct {
                     try self.appendRecordFields(out, record.fields);
                     current = record.ext;
                 },
-                else => return self.skip(.open_row),
+                .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => return self.skip(.open_row),
             }
         }
     }
@@ -1794,7 +1794,7 @@ const Walk = struct {
                     try out.append(self.owner.allocator, collections.GuardedList.at(field_span, i));
                 }
             },
-            else => return self.skip(.open_row),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return self.skip(.open_row),
         }
     }
 
@@ -1831,7 +1831,7 @@ const Walk = struct {
                     try self.appendTags(out, tag_union.tags);
                     current = tag_union.ext;
                 },
-                else => return self.skip(.open_row),
+                .pending, .err, .record, .record_unbound, .tuple, .nominal, .function, .empty_record => return self.skip(.open_row),
             }
         }
     }
@@ -1899,7 +1899,7 @@ const Walk = struct {
                     });
                 }
             },
-            else => return self.skip(.open_row),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return self.skip(.open_row),
         }
     }
 
@@ -1973,7 +1973,7 @@ const Walk = struct {
                 .crypto_blake3_hasher,
                 => .named,
             },
-            else => .named,
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => .named,
         };
     }
 
@@ -2115,7 +2115,7 @@ const Walk = struct {
                 }
                 return .{ .interned = try self.node(checked_ty) };
             },
-            else => return .{ .interned = try self.node(checked_ty) },
+            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .empty_record, .tag_union, .empty_tag_union => return .{ .interned = try self.node(checked_ty) },
         }
     }
 
@@ -2214,7 +2214,7 @@ const Walk = struct {
         const source = self.owner.resolver.nominalBacking(self.cursor, n) orelse {
             return switch (n.representation) {
                 .opaque_without_backing => null,
-                else => self.skip(.missing_backing),
+                .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => self.skip(.missing_backing),
             };
         };
         if (source.formal_args.len != args.len) return self.skip(.malformed_builtin_arity);
@@ -2612,7 +2612,7 @@ test "records translate child-first and share a stored id by content" {
     try testing.expectEqual(first, second);
     switch (store.get(first)) {
         .record => |span| try testing.expectEqual(@as(usize, 2), collections.GuardedList.borrowLen(store.fieldSpan(span))),
-        else => try testing.expect(false),
+        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -2651,7 +2651,7 @@ test "a self-referential record is built through the recursive-group builder" {
             try testing.expectEqual(@as(usize, 1), collections.GuardedList.borrowLen(field_span));
             try testing.expectEqual(root, collections.GuardedList.at(field_span, 0).ty);
         },
-        else => try testing.expect(false),
+        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -2835,7 +2835,7 @@ test "a nominal instance carries its declaration backing, matching the sealed re
             const expected_digest = store.typeDigest(&target_names, expected_backing);
             try testing.expectEqualSlices(u8, &expected_digest.bytes, &backing_digest.bytes);
         },
-        else => try testing.expect(false),
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -2902,7 +2902,7 @@ test "a two-parameter declaration binds both formals through a nested backing" {
             const expected_digest = store.typeDigest(&target_names, expected_backing);
             try testing.expectEqualSlices(u8, &expected_digest.bytes, &backing_digest.bytes);
         },
-        else => try testing.expect(false),
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -2921,7 +2921,7 @@ fn isSelfRecursiveTagUnion(store: *MonoType.Store, root: TypeId) bool {
             if (collections.GuardedList.borrowLen(payloads) != 1) return false;
             return collections.GuardedList.at(payloads, 0) == root;
         },
-        else => return false,
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
     }
 }
 
@@ -3024,7 +3024,7 @@ test "a mutually recursive tag-union pair builds a closed two-node group" {
                 const tag = collections.GuardedList.at(tag_span, 0);
                 break :payload_of collections.GuardedList.at(store.span(tag.payloads), 0);
             },
-            else => return testing.expect(false),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return testing.expect(false),
         }
     };
     try testing.expect(a_root != b_root);
@@ -3034,7 +3034,7 @@ test "a mutually recursive tag-union pair builds a closed two-node group" {
             const tag = collections.GuardedList.at(tag_span, 0);
             try testing.expectEqual(a_root, collections.GuardedList.at(store.span(tag.payloads), 0));
         },
-        else => try testing.expect(false),
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -3068,10 +3068,10 @@ test "a recursive tag union nested under a list reproduces the graph shape" {
             const list_id = collections.GuardedList.at(store.span(tag.payloads), 0);
             switch (store.get(list_id)) {
                 .list => |elem| try testing.expectEqual(root, elem),
-                else => try testing.expect(false),
+                .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => try testing.expect(false),
             }
         },
-        else => try testing.expect(false),
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => try testing.expect(false),
     }
 }
 
@@ -3210,7 +3210,7 @@ const IteratorFixture = struct {
 fn emittedDef(store: *const MonoType.Store, ty: TypeId) ?MonoType.TypeDef {
     return switch (store.get(ty)) {
         .named => |named| named.def,
-        else => null,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
     };
 }
 
@@ -3352,7 +3352,7 @@ test "a declared producer representation places its minted components and backin
     const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
     const named = switch (store.get(emitted)) {
         .named => |named| named,
-        else => return error.TestUnexpectedResult,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return error.TestUnexpectedResult,
     };
     const args = store.span(named.args);
     try testing.expectEqual(@as(usize, 2), collections.GuardedList.borrowLen(args));
@@ -3395,7 +3395,7 @@ test "issue 10170: a recursive minted backing seals without minting another iden
     const emitted = try translator.translateGroundRoot(iter.fixture.cursor(), iter.instance, &reason);
     const named = switch (store.get(emitted)) {
         .named => |named| named,
-        else => return error.TestUnexpectedResult,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(MonoType.IteratorRepresentation.minted, named.def.iterator_representation);
     try testing.expectEqual(@as(u8, 2), named.def.iterator_depth);
@@ -3403,7 +3403,7 @@ test "issue 10170: a recursive minted backing seals without minting another iden
     const backing = named.backing orelse return error.TestUnexpectedResult;
     const tags = switch (store.get(backing.ty)) {
         .tag_union => |span| store.tagSpan(span),
-        else => return error.TestUnexpectedResult,
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(@as(usize, 2), collections.GuardedList.borrowLen(tags));
     // The `One` payload closed back onto the emitted position rather than
@@ -3631,7 +3631,7 @@ test "a draft over a sealed slot interns bottom-up" {
     )).?;
     const sealed_fn = switch (store.get(sealed)) {
         .func => |func| func,
-        else => return error.TestUnexpectedResult,
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(list_of_item, sealed_fn.ret);
 }

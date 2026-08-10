@@ -3679,11 +3679,11 @@ const Builder = struct {
             const rehearsal = self.rehearsal orelse break :floor null;
             const requested_fn = switch (self.program.types.get(lower_fn_ty)) {
                 .func => |func| func,
-                else => break :floor null,
+                .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => break :floor null,
             };
             const checked_fn = switch (view.types.payload(template.checked_fn_root)) {
                 .function => |function| function,
-                else => break :floor null,
+                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :floor null,
             };
             const requested_args = self.program.types.span(requested_fn.args);
             if (checked_fn.args.len != GuardedList.borrowLen(requested_args)) break :floor null;
@@ -15982,7 +15982,7 @@ const BodyContext = struct {
             // scheme's actual that frame does not carry. The class keeps the
             // node until the request's recorded actual replaces it.
             .flex, .rigid => return try self.activeTypeFromNode(node),
-            else => {},
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
         }
         if (self.builder.rehearsal) |rehearsal| {
             const address = self.typeAddress(checked_ty);
@@ -17645,7 +17645,7 @@ const BodyContext = struct {
                 rehearsal.noteBodyTail(self.view.key.bytes, tail);
                 switch (tail_expr.data) {
                     .block => |block| tail = block.final_expr,
-                    else => break,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => break,
                 }
             }
         }
@@ -17898,7 +17898,7 @@ const BodyContext = struct {
             // A checked runtime error emits a crash and deliberately answers
             // unit rather than its own checked type, so it is not this seam.
             .runtime_error => {},
-            else => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         return ty;
     }
@@ -18075,7 +18075,7 @@ const BodyContext = struct {
                         const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                         return try self.lowerExprWithType(expr_id, expr_ty);
                     },
-                    else => return try self.lowerExprWithType(
+                    .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return try self.lowerExprWithType(
                         expr_id,
                         try self.typeForChecked(expr.ty),
                     ),
@@ -26600,7 +26600,7 @@ const BodyContext = struct {
                 // relations a frozen constant never joins.
                 const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
                     .function => |checked_function| checked_function.ret,
-                    else => break :born_final,
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :born_final,
                 };
                 if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
                     break :born_final;
@@ -26749,7 +26749,7 @@ const BodyContext = struct {
                 // constant never joins.
                 const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
                     .function => |checked_function| checked_function.ret,
-                    else => break :born_final,
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :born_final,
                 };
                 if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
                     break :born_final;
@@ -27373,7 +27373,7 @@ const BodyContext = struct {
             const procedure = self.iteratorProcedureForResolvedTarget(target) orelse break :covering null;
             const function = switch (checkedPayload(self.view, source_fn_ty)) {
                 .function => |function| function,
-                else => break :covering null,
+                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :covering null,
             };
             if (function.args.len == 0) break :covering null;
             const mint_evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
@@ -34646,7 +34646,7 @@ const BodyContext = struct {
         return switch (procedure) {
             .iter_map, .iter_keep_if, .iter_drop_if => 1,
             .iter_custom => 2,
-            else => null,
+            .iter_iter, .iter_next, .iter_single, .list_iter, .str_iter_utf8, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .iter_from_step, .range_done => null,
         };
     }
 
@@ -34691,12 +34691,12 @@ const BodyContext = struct {
                 if (receiver_index >= operands.len) return null;
                 const receiver_expr = switch (operands[receiver_index]) {
                     .checked_expr => |operand_expr| operand_expr,
-                    else => return null,
+                    .generated_interpolation_iter, .generated_numeral, .generated_quote => return null,
                 };
                 const evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
                     if (index < operands.len) switch (operands[index]) {
                         .checked_expr => |operand_expr| self.callableArgumentEvidenceDigest(operand_expr) catch null,
-                        else => null,
+                        .generated_interpolation_iter, .generated_numeral, .generated_quote => null,
                     } else null
                 else
                     null;
@@ -34706,7 +34706,7 @@ const BodyContext = struct {
                     .receiver = self.view.bodies.expr(receiver_expr).ty,
                     .state = if (operands.len > 2) switch (operands[2]) {
                         .checked_expr => |operand_expr| self.view.bodies.expr(operand_expr).ty,
-                        else => null,
+                        .generated_interpolation_iter, .generated_numeral, .generated_quote => null,
                     } else null,
                     .evidence = evidence,
                     .inner = self.iteratorReceiverChainForExpr(receiver_expr, depth_budget - 1),
@@ -34730,7 +34730,7 @@ const BodyContext = struct {
                     .inner = self.iteratorReceiverChainForExpr(receiver_expr, depth_budget - 1),
                 });
             },
-            else => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         }
     }
 
@@ -34761,7 +34761,7 @@ const BodyContext = struct {
         const mint_evidence: ?names.TypeDigest = if (iteratorProcedureEvidenceIndex(procedure)) |index|
             if (index < operands.len) switch (operands[index]) {
                 .checked_expr => |expr| try self.callableArgumentEvidenceDigest(expr),
-                else => null,
+                .generated_interpolation_iter, .generated_numeral, .generated_quote => null,
             } else null
         else
             null;
@@ -34782,7 +34782,7 @@ const BodyContext = struct {
                     if (receiver_index >= operands.len) break :receiver_link null;
                     break :receiver_link switch (operands[receiver_index]) {
                         .checked_expr => |receiver_expr| self.iteratorReceiverChainForExpr(receiver_expr, max_receiver_chain_links),
-                        else => null,
+                        .generated_interpolation_iter, .generated_numeral, .generated_quote => null,
                     };
                 },
             },
@@ -34804,7 +34804,7 @@ const BodyContext = struct {
                     .witness = .{ .callable = plan.callable_ty },
                 },
             },
-            else => null,
+            .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => null,
         };
     }
 
@@ -45268,7 +45268,7 @@ const BodyContext = struct {
             if (index >= plan_args.len) break :evidence null;
             break :evidence switch (plan_args[index]) {
                 .checked_expr => |expr| try self.callableArgumentEvidenceDigest(expr),
-                else => null,
+                .loop_iterator_state => null,
             };
         };
         const iterator_rule: spec_rehearsal.GeneratedEdge = .{

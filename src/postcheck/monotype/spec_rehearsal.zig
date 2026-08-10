@@ -320,6 +320,8 @@ pub const ReceiverLink = struct {
     inner: ?*const ReceiverLink = null,
 };
 
+/// Where a generated edge came from: the module that produced it plus the
+/// receiver and witness positions the rule reads.
 pub const GeneratedSource = struct {
     module_bytes: [32]u8,
     receiver: GeneratedReceiver,
@@ -1223,11 +1225,11 @@ const NamedFieldDifference = enum {
     ) NamedFieldDifference {
         const left_named = switch (left_store.get(left)) {
             .named => |named| named,
-            else => return .not_named,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return .not_named,
         };
         const right_named = switch (right_store.get(right)) {
             .named => |named| named,
-            else => return .not_named,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return .not_named,
         };
         if (!std.mem.eql(u8, &left_named.named_type.module.bytes, &right_named.named_type.module.bytes)) {
             return .instance_module;
@@ -1555,7 +1557,7 @@ pub const Rehearsal = struct {
                     }
                 }
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
         }
         const sealed = self.emitQuietly(
             cursor,
@@ -1577,7 +1579,7 @@ pub const Rehearsal = struct {
         while (remaining > 0) : (remaining -= 1) {
             switch (cursor.view.payload(current)) {
                 .alias => |alias_ty| current = alias_ty.backing,
-                else => return current,
+                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
         return current;
@@ -1597,11 +1599,11 @@ pub const Rehearsal = struct {
                         .nominal => |n| {
                             if (direct_translate.nominalIsOpenRepresentation(n)) return true;
                         },
-                        else => {},
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
                     }
                 }
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
         }
         return false;
     }
@@ -1638,7 +1640,7 @@ pub const Rehearsal = struct {
                     .func => |func| {
                         const emitted_fn = switch (self.types.get(emitted)) {
                             .func => |emitted_func| emitted_func,
-                            else => return,
+                            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return,
                         };
                         const emitted_args = self.types.span(emitted_fn.args);
                         if (func.args.len != GuardedList.borrowLen(emitted_args)) return;
@@ -1650,14 +1652,14 @@ pub const Rehearsal = struct {
                     .list => |elem| {
                         const emitted_elem = switch (self.types.get(emitted)) {
                             .list => |list_elem| list_elem,
-                            else => return,
+                            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return,
                         };
                         self.relateProvisionalToEmitted(elem, drafts, emitted_elem, depth + 1);
                     },
                     .named => |named| {
                         const emitted_named = switch (self.types.get(emitted)) {
                             .named => |emitted_value| emitted_value,
-                            else => return,
+                            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return,
                         };
                         const emitted_args = self.types.span(emitted_named.args);
                         if (named.args.len > GuardedList.borrowLen(emitted_args)) return;
@@ -1717,11 +1719,11 @@ pub const Rehearsal = struct {
         const ret_checked = frame.request_ret_checked orelse return start_root;
         const start_function = switch (self.types.get(start_root)) {
             .func => |func| func,
-            else => return start_root,
+            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return start_root,
         };
         switch (self.types.get(start_function.ret)) {
             .named => |named| if (named.def.iterator_representation != .none) return start_root,
-            else => return start_root,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return start_root,
         }
         const caller = self.lookup.cursor(frame.request_ret_module) orelse return start_root;
         const floor = self.translator.representationInputCount();
@@ -1962,7 +1964,7 @@ pub const Rehearsal = struct {
         });
         const function = switch (defining.view.payload(scheme.root)) {
             .function => |function| function,
-            else => {
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {
                 return null;
             },
         };
@@ -1992,7 +1994,7 @@ pub const Rehearsal = struct {
                 .stamp_position = switch (source.witness) {
                     .callable => |callable_ty| switch (caller.view.payload(callable_ty)) {
                         .function => |f| f.ret,
-                        else => null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => null,
                     },
                     .receiver_at_argument => null,
                 },
@@ -2023,7 +2025,7 @@ pub const Rehearsal = struct {
                         .representation = final_representation,
                     }) catch return null;
                 },
-                else => {},
+                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
             },
             .receiver_at_argument => {},
         }
@@ -2197,7 +2199,7 @@ pub const Rehearsal = struct {
     ) ?direct_translate.ProducerRepresentation {
         const primary = switch (spec.kind) {
             .list, .str, .single, .custom, .range_exclusive, .range_inclusive => true,
-            else => false,
+            .none, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .forced_dynamic => false,
         };
         var depth: u8 = 0;
         var receiver: ?Type.TypeId = null;
@@ -2212,7 +2214,7 @@ pub const Rehearsal = struct {
             receiver = receiver_ty;
             switch (self.types.get(receiver_ty)) {
                 .named => |named| depth = named.def.iterator_depth,
-                else => {},
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {},
             }
         } else |_| {}
 
@@ -2221,7 +2223,7 @@ pub const Rehearsal = struct {
             var count: usize = 0;
             switch (spec.kind) {
                 .range_exclusive, .range_inclusive => {},
-                else => {
+                .none, .custom, .list, .str, .single, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .forced_dynamic => {
                     const value = receiver orelse {
                         return null;
                     };
@@ -2299,7 +2301,7 @@ pub const Rehearsal = struct {
             self.translator.truncateRepresentationInputs(unstamped_floor);
             switch (self.types.get(unstamped)) {
                 .named => {},
-                else => {
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {
                     break :two_phase;
                 },
             }
@@ -2324,7 +2326,7 @@ pub const Rehearsal = struct {
         const ty = receiver_ty orelse return &.{};
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            else => return &.{},
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return &.{},
         };
         const args = self.types.span(named.args);
         const len = GuardedList.borrowLen(args);
@@ -2350,7 +2352,7 @@ pub const Rehearsal = struct {
     ) ?usize {
         const named = switch (self.types.get(sealed)) {
             .named => |named| named,
-            else => return null,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
         };
         if (named.def.iterator_representation == .none) return null;
         const args = self.types.span(named.args);
@@ -2414,7 +2416,7 @@ pub const Rehearsal = struct {
             .nominal => |nominal| {
                 const named = switch (self.types.get(sealed)) {
                     .named => |named| named,
-                    else => return,
+                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return,
                 };
                 if (self.declareSealedProducerInput(
                     .{ .module_bytes = cursor.module_bytes, .type_id = @intFromEnum(checked_ty) },
@@ -2432,7 +2434,7 @@ pub const Rehearsal = struct {
             .function => |function| {
                 const sealed_fn = switch (self.types.get(sealed)) {
                     .func => |func| func,
-                    else => return,
+                    .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return,
                 };
                 const sealed_args = self.types.span(sealed_fn.args);
                 if (function.args.len != GuardedList.borrowLen(sealed_args)) return;
@@ -2444,7 +2446,7 @@ pub const Rehearsal = struct {
             .tuple => |items| {
                 const sealed_items = switch (self.types.get(sealed)) {
                     .tuple => |span| self.types.span(span),
-                    else => return,
+                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => return,
                 };
                 if (items.len != GuardedList.borrowLen(sealed_items)) return;
                 for (items, 0..) |checked_item, index| {
@@ -2454,7 +2456,7 @@ pub const Rehearsal = struct {
             .record => |record| {
                 const sealed_fields = switch (self.types.get(sealed)) {
                     .record => |span| self.types.fieldSpan(span),
-                    else => return,
+                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return,
                 };
                 for (record.fields) |checked_field| {
                     const field_text = cursor.source_names.recordFieldLabelText(checked_field.name);
@@ -2472,7 +2474,7 @@ pub const Rehearsal = struct {
             .tag_union => |tag_union| {
                 const sealed_tags = switch (self.types.get(sealed)) {
                     .tag_union => |span| self.types.tagSpan(span),
-                    else => return,
+                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return,
                 };
                 for (tag_union.tags) |checked_tag| {
                     const tag_text = cursor.source_names.tagLabelText(checked_tag.name);
@@ -2492,7 +2494,7 @@ pub const Rehearsal = struct {
                     }
                 }
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .record_unbound, .empty_record, .empty_tag_union => {},
         }
     }
 
@@ -3045,7 +3047,7 @@ pub const Rehearsal = struct {
         const top = self.requests.items[self.requests.items.len - 1];
         const edge = switch (top) {
             .checked => |edge| edge,
-            else => {
+            .none, .generated => {
                 return false;
             },
         };
@@ -3704,7 +3706,7 @@ pub const Rehearsal = struct {
                 frame.request_ret_module = caller.module_bytes;
                 frame.request_ret_checked = @intFromEnum(request_function.ret);
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
         if (comptime census.enabled) provisional: {
@@ -4165,23 +4167,23 @@ pub const Rehearsal = struct {
                     current = functionArgumentAt(store, current, index) orelse return null;
                     checked_pos = switch (cursor.view.payload(checked_pos)) {
                         .function => |fn_ty| if (index < fn_ty.args.len) fn_ty.args[index] else return null,
-                        else => return null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
                     };
                 },
                 .fn_ret => {
                     current = switch (store.get(current)) {
                         .func => |fn_ty| fn_ty.ret,
-                        else => return null,
+                        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return null,
                     };
                     checked_pos = switch (cursor.view.payload(checked_pos)) {
                         .function => |fn_ty| fn_ty.ret,
-                        else => return null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
                     };
                 },
                 .named_arg => |index| {
                     const nominal_args = switch (cursor.view.payload(checked_pos)) {
                         .nominal => |nominal_ty| nominal_ty.args,
-                        else => return null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
                     };
                     if (index >= nominal_args.len) return null;
                     current = switch (store.get(current)) {
@@ -4195,14 +4197,14 @@ pub const Rehearsal = struct {
                         // An open-representation nominal is emitted as its
                         // backing structure, so the argument's position is
                         // wherever the declaration places that formal.
-                        else => self.storedThroughErasedNominal(cursor, checked_pos, current, index) orelse return null,
+                        .primitive, .record, .tuple, .tag_union, .func, .erased, .zst => self.storedThroughErasedNominal(cursor, checked_pos, current, index) orelse return null,
                     };
                     checked_pos = nominal_args[index];
                 },
                 .checked_tag_payload => |position| {
                     const declared = switch (cursor.view.payload(checked_pos)) {
                         .tag_union => |tag_ty| tag_ty.tags,
-                        else => return null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
                     };
                     if (position.tag >= declared.len) return null;
                     const declared_tag = declared[position.tag];
@@ -4222,7 +4224,7 @@ pub const Rehearsal = struct {
                                 }
                                 return null;
                             },
-                            else => return null,
+                            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
                         }
                     };
                     checked_pos = declared_args[position.payload];
@@ -4234,11 +4236,11 @@ pub const Rehearsal = struct {
                             if (index >= GuardedList.borrowLen(entries)) return null;
                             break :blk GuardedList.at(entries, index);
                         },
-                        else => return null,
+                        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => return null,
                     };
                     checked_pos = switch (cursor.view.payload(checked_pos)) {
                         .tuple => |elems| if (index < elems.len) elems[index] else return null,
-                        else => return null,
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return null,
                     };
                 },
                 .tag_union_ext => return self.tagRowRemainder(cursor, checked_pos, current),
@@ -4263,7 +4265,7 @@ pub const Rehearsal = struct {
     ) ?Type.TypeId {
         const nominal_ty = switch (cursor.view.payload(checked_nominal)) {
             .nominal => |nominal_ty| nominal_ty,
-            else => return null,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
         };
         const backing = self.translator.resolver.nominalBacking(cursor, nominal_ty) orelse return null;
         if (arg_index >= backing.formal_args.len) return null;
@@ -4288,11 +4290,11 @@ pub const Rehearsal = struct {
     ) ?Type.TypeId {
         const declared = switch (cursor.view.payload(checked_ty)) {
             .tag_union => |tag_ty| tag_ty.tags,
-            else => return null,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return null,
         };
         const entries = switch (self.types.get(stored_ty)) {
             .tag_union => |span| self.types.tagSpan(span),
-            else => return null,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
         };
         const entry_count = GuardedList.borrowLen(entries);
         // Copy the surviving variants out before interning: interning grows
@@ -4581,7 +4583,7 @@ pub const Rehearsal = struct {
                 frame.request_ret_module = caller.module_bytes;
                 frame.request_ret_checked = @intFromEnum(request_function.ret);
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
         }
         noteEnvironmentScheme(scheme);
 
@@ -4706,7 +4708,7 @@ pub const Rehearsal = struct {
         };
         switch (caller.view.payload(actual)) {
             .flex, .rigid => {},
-            else => {},
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
         }
         for (caller.view.schemes) |scheme| {
             for (scheme.generalizedVars(caller.view)) |binder| {
@@ -4868,7 +4870,7 @@ pub const Rehearsal = struct {
                 .flex, .rigid => |v| {
                     if (v.numeric_default_phase != null or v.row_default != null) return true;
                 },
-                else => {},
+                .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
             }
             self.pushCheckedChildren(view, ty, &stack) catch return true;
         }
@@ -5157,7 +5159,7 @@ pub const Rehearsal = struct {
             receiver = receiver_ty;
             switch (self.types.get(receiver_ty)) {
                 .named => |named| depth = named.def.iterator_depth,
-                else => {},
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {},
             }
         } else |_| {}
         const components = self.pooledReceiverComponents(receiver);
@@ -5200,13 +5202,13 @@ pub const Rehearsal = struct {
     ) Type.TypeId {
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            else => return ty,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return ty,
         };
         if (named.def.generated != null) return ty;
         if (named.def.iterator_topology == null) return ty;
         switch (named.def.iterator_representation) {
             .minted, .forced_dynamic => {},
-            else => return ty,
+            .none => return ty,
         }
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         if (named.def.iterator_representation == .forced_dynamic) {
@@ -5659,7 +5661,7 @@ pub const Rehearsal = struct {
         const ty = self.slot_types.get(@intFromEnum(slot)) orelse return;
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            else => return,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return,
         };
         if (named.def.iterator_representation == .none) return;
         const root = self.engine.find(slot);
@@ -5720,7 +5722,7 @@ pub const Rehearsal = struct {
                 }
                 return .{ .leaf = @intFromEnum(token) };
             },
-            else => return .{ .leaf = @intFromEnum(token) },
+            .primitive, .record, .tuple, .tag_union, .func, .erased, .zst => return .{ .leaf = @intFromEnum(token) },
         }
     }
 
@@ -5761,7 +5763,7 @@ fn receiverArgumentCount(store: *const Type.Store, receiver: Type.TypeId) ?usize
     return switch (store.get(receiver)) {
         .named => |named| GuardedList.borrowLen(store.span(named.args)),
         .list, .box => 1,
-        else => null,
+        .primitive, .record, .tuple, .tag_union, .func, .erased, .zst => null,
     };
 }
 
@@ -5776,7 +5778,7 @@ fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const E
         current = switch (step) {
             .nominal_backing => switch (store.get(current)) {
                 .named => |named| (named.backing orelse return null).ty,
-                else => return null,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
             },
             .record_field => |label| switch (store.get(current)) {
                 .record => |fields| blk: {
@@ -5789,7 +5791,7 @@ fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const E
                     }
                     break :blk found orelse return null;
                 },
-                else => return null,
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
             },
             .tuple_element => |index| switch (store.get(current)) {
                 .tuple => |items| blk: {
@@ -5797,7 +5799,7 @@ fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const E
                     if (index >= GuardedList.borrowLen(entries)) return null;
                     break :blk GuardedList.at(entries, index);
                 },
-                else => return null,
+                .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => return null,
             },
             .tag_payload => |payload| switch (store.get(current)) {
                 .tag_union => |tags| blk: {
@@ -5812,7 +5814,7 @@ fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const E
                     }
                     break :blk found orelse return null;
                 },
-                else => return null,
+                .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
             },
         };
     }
@@ -5972,7 +5974,7 @@ fn rowLabelsEqual(
         .record => |left_span| {
             const right_span = switch (right_store.get(right)) {
                 .record => |span| span,
-                else => return false,
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
             };
             const left_fields = left_store.fieldSpan(left_span);
             const right_fields = right_store.fieldSpan(right_span);
@@ -5986,7 +5988,7 @@ fn rowLabelsEqual(
         .tag_union => |left_span| {
             const right_span = switch (right_store.get(right)) {
                 .tag_union => |span| span,
-                else => return false,
+                .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
             };
             const left_tags = left_store.tagSpan(left_span);
             const right_tags = right_store.tagSpan(right_span);
@@ -6001,7 +6003,7 @@ fn rowLabelsEqual(
             }
             return true;
         },
-        else => return true,
+        .primitive, .named, .tuple, .list, .box, .func, .erased, .zst => return true,
     }
 }
 
@@ -6017,11 +6019,11 @@ fn representationPolicyCovers(
 ) bool {
     const left_named = switch (left_store.get(left)) {
         .named => |named| named,
-        else => return false,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
     };
     const right_named = switch (right_store.get(right)) {
         .named => |named| named,
-        else => return false,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
     };
     const left_descriptor = descriptorOf(left_named);
     const right_descriptor = descriptorOf(right_named);
@@ -6043,7 +6045,7 @@ fn receiverArgumentAt(store: *const Type.Store, receiver: Type.TypeId, index: us
             break :blk GuardedList.at(args, index);
         },
         .list, .box => |elem| if (index == 0) elem else null,
-        else => null,
+        .primitive, .record, .tuple, .tag_union, .func, .erased, .zst => null,
     };
 }
 
@@ -6059,7 +6061,7 @@ fn checkedThroughAliases(view: checked.CheckedTypeStoreView, ty: checked.Checked
     while (remaining > 0) : (remaining -= 1) {
         switch (view.payload(current)) {
             .alias => |alias_ty| current = alias_ty.backing,
-            else => return current,
+            .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return current,
         }
     }
     return current;
@@ -6072,7 +6074,7 @@ fn functionArgumentAt(store: *const Type.Store, root: Type.TypeId, index: u32) ?
             if (index >= GuardedList.borrowLen(args)) break :blk null;
             break :blk GuardedList.at(args, index);
         },
-        else => null,
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => null,
     };
 }
 

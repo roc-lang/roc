@@ -359,7 +359,7 @@ pub const Engine = struct {
         const nominal_backing = switch (self.slotConst(root).shape) {
             .iterator => |iter| iter.backing,
             .wrapper => |child| child,
-            else => return,
+            .evidence, .leaf => return,
         };
         // The backing child and the incoming backing are the same
         // representation, related as equal components.
@@ -409,7 +409,7 @@ pub const Engine = struct {
                     .descriptor = descriptor,
                 } };
             },
-            else => return error.NotAProducerRepresentation,
+            .wrapper, .leaf => return error.NotAProducerRepresentation,
         }
     }
 
@@ -449,11 +449,11 @@ pub const Engine = struct {
     ) RelateError!void {
         const left = switch (self.slotConst(l).shape) {
             .iterator => |iter| iter,
-            else => return error.LogicallyUnequal,
+            .evidence, .wrapper, .leaf => return error.LogicallyUnequal,
         };
         const right = switch (self.slotConst(r).shape) {
             .iterator => |iter| iter,
-            else => return error.LogicallyUnequal,
+            .evidence, .wrapper, .leaf => return error.LogicallyUnequal,
         };
 
         const join = policy.iteratorJoin(
@@ -483,11 +483,11 @@ pub const Engine = struct {
     ) RelateError!void {
         const left = switch (self.slotConst(l).shape) {
             .evidence => |ev| ev,
-            else => return error.LogicallyUnequal,
+            .iterator, .wrapper, .leaf => return error.LogicallyUnequal,
         };
         const right = switch (self.slotConst(r).shape) {
             .evidence => |ev| ev,
-            else => return error.LogicallyUnequal,
+            .iterator, .wrapper, .leaf => return error.LogicallyUnequal,
         };
         // The higher-scored backing stands; the backings are not related.
         switch (policy.chooseGeneratedEvidenceBacking(left.score, right.score)) {
@@ -514,25 +514,25 @@ pub const Engine = struct {
                     try self.relate(left.item, right.item, .component_equality);
                     try self.relate(left.backing, right.backing, .component_equality);
                 },
-                else => return error.LogicallyUnequal,
+                .evidence, .wrapper, .leaf => return error.LogicallyUnequal,
             },
             .wrapper => |left_child| switch (right_shape) {
                 .wrapper => |right_child| {
                     self.link(.left, l, r);
                     try self.relate(left_child, right_child, .component_equality);
                 },
-                else => return error.LogicallyUnequal,
+                .iterator, .evidence, .leaf => return error.LogicallyUnequal,
             },
             .leaf => |left_atom| switch (right_shape) {
                 .leaf => |right_atom| {
                     if (left_atom != right_atom) return error.LogicallyUnequal;
                     self.link(.left, l, r);
                 },
-                else => return error.LogicallyUnequal,
+                .iterator, .evidence, .wrapper => return error.LogicallyUnequal,
             },
             .evidence => switch (right_shape) {
                 .evidence => try self.stepEvidence(l, r),
-                else => return error.LogicallyUnequal,
+                .iterator, .wrapper, .leaf => return error.LogicallyUnequal,
             },
         }
     }

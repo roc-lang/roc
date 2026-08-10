@@ -1197,7 +1197,7 @@ const CheckReunifyManifestStep = struct {
                     );
                 }
             },
-            else => {
+            .signal, .stopped, .unknown => {
                 return step.fail("ci/check_reunify_manifest.pl terminated abnormally", .{});
             },
         }

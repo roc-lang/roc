@@ -4087,7 +4087,7 @@ fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Al
                 switch (resolved.desc.content) {
                     .rigid => reunify_census.recordSnapshotBinderSkippedRigid(),
                     .flex => reunify_census.recordSnapshotBinderSkippedFlex(),
-                    else => reunify_census.recordSnapshotBinderSkippedOther(),
+                    .alias, .structure, .err => reunify_census.recordSnapshotBinderSkippedOther(),
                 }
             }
             continue;
@@ -4415,14 +4415,15 @@ fn recordDenseInstantiationSite(
             break :ctx .{ target.node_idx, .dispatch_target, @intFromEnum(target.constraint_fn_var) };
         }
         if (self.instantiation_source_expr) |source_expr| {
-            switch (self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag) {
-                .expr_var,
-                .expr_external_lookup,
-                .expr_required_lookup,
-                .expr_field_access,
-                => break :ctx .{ @intFromEnum(source_expr), .value_use, 0 },
-                else => return,
+            const source_tag = self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag;
+            if (source_tag == .expr_var or
+                source_tag == .expr_external_lookup or
+                source_tag == .expr_required_lookup or
+                source_tag == .expr_field_access)
+            {
+                break :ctx .{ @intFromEnum(source_expr), .value_use, 0 };
             }
+            return;
         }
         return;
     };

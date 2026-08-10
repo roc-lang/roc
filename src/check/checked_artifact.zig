@@ -8590,7 +8590,7 @@ const ResidualDispositionScan = struct {
                 }
                 return true;
             },
-            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return try checked_traverse.checkedTypePayloadVisitAllChildren(
                 .forbid,
                 traversal,
                 self.store,
@@ -8645,7 +8645,7 @@ fn collectContextualTargets(
             }
             break :blk null;
         },
-        else => null,
+        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => null,
     };
     if (root_residual == null and ret_residual == null) return;
 
@@ -8667,7 +8667,7 @@ fn collectContextualTargets(
         if (ret_residual != null) {
             switch (store.payload(site.instantiated_root)) {
                 .function => |f| accumulateContextualTarget(&ret_target, &ret_conflict, f.ret),
-                else => {},
+                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => {},
             }
         }
     }
@@ -8924,7 +8924,7 @@ const SchemeBinderCoverageScan = struct {
                 }
                 return true;
             },
-            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return try checked_traverse.checkedTypePayloadVisitAllChildren(
                 .forbid,
                 traversal,
                 self.store,
@@ -9012,7 +9012,7 @@ const PlanCallableCoverageScan = struct {
                 }
                 return true;
             },
-            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return try checked_traverse.checkedTypePayloadVisitAllChildren(
                 .forbid,
                 traversal,
                 self.store,
@@ -9261,7 +9261,7 @@ fn debugVerifyCheckedIdReachable(store: *const CheckedTypeStore, id: CheckedType
     }
     switch (store.payload(id)) {
         .pending => checkedArtifactInvariant("boundary verifier: " ++ what ++ " payload is pending", .{}),
-        else => {},
+        .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
     }
 }
 
@@ -9388,7 +9388,7 @@ const MatcherWalk = struct {
         while (remaining > 0) : (remaining -= 1) {
             switch (self.store.payload(current)) {
                 .alias => |alias| current = alias.backing,
-                else => return current,
+                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
         return current;
@@ -9405,7 +9405,7 @@ const MatcherWalk = struct {
                 if (record.fields.len == 0) {
                     switch (self.store.payload(self.eraseAlias(record.ext))) {
                         .empty_record => return record.ext,
-                        else => {},
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .tag_union, .empty_tag_union => {},
                     }
                 }
             },
@@ -9416,11 +9416,11 @@ const MatcherWalk = struct {
                 if (tag_union.tags.len == 0) {
                     switch (self.store.payload(self.eraseAlias(tag_union.ext))) {
                         .empty_tag_union => return tag_union.ext,
-                        else => {},
+                        .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union => {},
                     }
                 }
             },
-            else => {},
+            .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .empty_tag_union => {},
         }
         return id;
     }
@@ -9469,7 +9469,7 @@ const MatcherWalk = struct {
                 if (@intFromEnum(left) == @intFromEnum(right)) return .match;
                 return .skip;
             },
-            else => {},
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => {},
         }
 
         const left_n = self.normalizeEmptyRow(left);
@@ -9489,7 +9489,7 @@ const MatcherWalk = struct {
             .nominal => |left_nominal| {
                 const right_nominal = switch (right_payload) {
                     .nominal => |n| n,
-                    else => return self.mismatch("nominal vs {s}", .{@tagName(right_payload)}),
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return self.mismatch("nominal vs {s}", .{@tagName(right_payload)}),
                 };
                 if (!canonicalNominalTypeKeyEql(checkedNominalTypeKey(left_nominal), checkedNominalTypeKey(right_nominal))) return self.mismatch("nominal identity differs", .{});
                 return self.compareSlices(left_nominal.args, right_nominal.args, visited, "nominal arg");
@@ -9497,7 +9497,7 @@ const MatcherWalk = struct {
             .function => |left_fn| {
                 const right_fn = switch (right_payload) {
                     .function => |f| f,
-                    else => return self.mismatch("function vs {s}", .{@tagName(right_payload)}),
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return self.mismatch("function vs {s}", .{@tagName(right_payload)}),
                 };
                 // The effect kind is not compared: a use site legitimately coerces a
                 // pure (or effect-unbound) scheme function to effectful (effect
@@ -9511,7 +9511,7 @@ const MatcherWalk = struct {
             .tuple => |left_items| {
                 const right_items = switch (right_payload) {
                     .tuple => |items| items,
-                    else => return self.mismatch("tuple vs {s}", .{@tagName(right_payload)}),
+                    .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return self.mismatch("tuple vs {s}", .{@tagName(right_payload)}),
                 };
                 return self.compareSlices(left_items, right_items, visited, "tuple elem");
             },
@@ -9577,7 +9577,7 @@ const MatcherWalk = struct {
                     try out.appendSlice(self.allocator, tu.tags);
                     current = tu.ext;
                 },
-                else => return current,
+                .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .empty_tag_union => return current,
             }
         }
         return current;
@@ -9642,7 +9642,7 @@ const MatcherWalk = struct {
                     try out.appendSlice(self.allocator, fields);
                     return current;
                 },
-                else => return current,
+                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return current,
             }
         }
         return current;
@@ -22858,7 +22858,7 @@ const PlanCallableIdentityVariableScan = struct {
                 try self.kept.put(root, root);
                 return true;
             },
-            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+            .pending, .err, .alias, .record, .record_unbound, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return try checked_traverse.checkedTypePayloadVisitAllChildren(
                 .forbid,
                 traversal,
                 self.store,
@@ -31646,6 +31646,7 @@ fn importsReportCanonicalizationFailure(imports: []const PublishImportArtifact) 
     return false;
 }
 
+/// Public `ImportedModuleView` declaration.
 pub const ImportedModuleView = struct {
     key: CheckedModuleArtifactKey,
     /// See `CheckedModuleArtifact.canonicalization_failed`.

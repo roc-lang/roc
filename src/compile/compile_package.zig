@@ -149,6 +149,9 @@ fn canonicalizationFailedAnywhere(env: *const ModuleEnv, imported_envs: []const 
     return false;
 }
 
+/// Everything publication needs to turn a checked module into an artifact:
+/// the module's own checked output, the views of what it imports, and the
+/// options compile-time finalization runs under.
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},

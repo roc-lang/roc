@@ -386,6 +386,7 @@ pub fn recordExecutableRootReachesError() void {
     _ = executable_root_reaches_error.fetchAdd(1, .monotonic);
 }
 
+/// Count a snapshot binder the census skipped because it was rigid.
 pub fn recordSnapshotBinderSkippedRigid() void {
     if (comptime !enabled) return;
     _ = snapshot_binder_skipped_rigid.fetchAdd(1, .monotonic);

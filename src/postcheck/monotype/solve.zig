@@ -396,6 +396,9 @@ pub const LoweringCostClock = struct {
     }
 };
 
+/// The instantiation graph: union-find classes over instantiation nodes,
+/// carrying each node's content until the single final seal turns it into a
+/// durable `Type`.
 pub const InstGraph = struct {
     allocator: Allocator,
     /// Set only by a measurement run; see `LoweringCostClock`.
@@ -4182,7 +4185,7 @@ pub const GraphTypeFinals = struct {
                 // consumers (reunify.md 8.5).
                 const occurrence_held = switch (self.graph.content(node)) {
                     .named => |named| named.generated_iterator != null,
-                    else => false,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
                 };
                 if (occurrence_held) {
                     try self.graph.types.excludeFromDedup(built);
