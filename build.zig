@@ -3173,7 +3173,6 @@ pub fn build(b: *std.Build) void {
         b,
         roc_modules,
         wasm32_resolved_target,
-        optimize,
         strip,
         omit_frame_pointer,
         "roc_boxy_runtime_wasm32_eval",
@@ -6624,16 +6623,23 @@ fn addMacosAflFuzzExe(
 /// Build a Boxy runtime object for `target`: the `roc_boxy_*` C-ABI wrappers
 /// plus `roc_boxy_init_embedded`. The selected root configures standalone
 /// extern-symbol calls or evaluator-vtable calls.
+///
+/// This object is linked into user programs, so its optimize mode is pinned
+/// rather than following the compiler's own. A `Debug` compiler would otherwise
+/// emit a `Debug` runtime into every generic program it builds, which enables
+/// builtins' hosted debug diagnostics and grows this object by an order of
+/// magnitude. `strip` still follows the build, so debug info for the runtime
+/// remains available wherever the rest of the build carries it.
 fn buildBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
-    optimize: OptimizeMode,
     strip: bool,
     omit_frame_pointer: ?bool,
     name: []const u8,
     root_source_file: std.Build.LazyPath,
 ) *Step.Compile {
+    const optimize: OptimizeMode = .ReleaseFast;
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -7126,7 +7132,6 @@ fn addMainExe(
                 b,
                 roc_modules,
                 cross_resolved_target,
-                optimize,
                 strip,
                 omit_frame_pointer,
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
