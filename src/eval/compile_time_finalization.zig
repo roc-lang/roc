@@ -854,11 +854,8 @@ fn lowerEvalAndFinishRoots(
             interpreter.getExpectFailures(),
         )) had_problem = true;
 
-        switch (compile_time_root.kind) {
-            .numeral_conversion, .quote_conversion => {
-                payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
-            },
-            .constant, .hoisted_constant, .callable_binding, .expect, .field_default => {},
+        if (compile_time_root.literalConversionKind() != null) {
+            payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
@@ -1442,13 +1439,10 @@ fn lowerDevEvalAndFinishRoots(
             had_problem = true;
         }
 
-        switch (job.compile_time_root.kind) {
-            .numeral_conversion, .quote_conversion => {
-                const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
-                payload = conversion.payload;
-                if (conversion.had_problem) had_problem = true;
-            },
-            .constant, .hoisted_constant, .callable_binding, .expect, .field_default => {},
+        if (job.compile_time_root.literalConversionKind() != null) {
+            const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
+            payload = conversion.payload;
+            if (conversion.had_problem) had_problem = true;
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
@@ -1746,21 +1740,15 @@ fn finishLiteralConversionRootDetailed(
     if (problem_store) |store| {
         const message_idx = try store.putExtraString(message);
         const region = module.checked_bodies.expr(root.expr).source_region;
-        switch (root.kind) {
-            .numeral_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+        switch (root.literalConversionKind() orelse finalizationInvariant("non literal-conversion root reported a conversion problem")) {
+            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
                 .message = message_idx,
                 .region = region,
             } }),
-            .quote_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
                 .message = message_idx,
                 .region = region,
             } }),
-            .constant,
-            .hoisted_constant,
-            .callable_binding,
-            .expect,
-            .field_default,
-            => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
         return .{
             .payload = .{ .const_node = try appendCrashConst(module, message) },

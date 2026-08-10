@@ -16771,11 +16771,10 @@ const BodyContext = struct {
             .field_default,
             => saved_source_region_override,
         };
-        const body = switch (root.kind) {
-            .numeral_conversion, .quote_conversion => blk: {
-                const ret_ty = try self.activeTypeFromCell(ret_cell);
-                break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
-            },
+        const body = if (root.literalConversionKind() != null) blk: {
+            const ret_ty = try self.activeTypeFromCell(ret_cell);
+            break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
+        } else switch (root.kind) {
             // A field default's root body is an ordinary pure expression
             // (design.md "Defaulted Fields"); it lowers through the general
             // comptime-root path.
@@ -16785,6 +16784,9 @@ const BodyContext = struct {
             .expect,
             .field_default,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
+            .numeral_conversion,
+            .quote_conversion,
+            => Common.invariant("literal-conversion root bypassed literal-conversion lowering"),
         };
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
         const body_ret_cell = self.exprTypeCell(body);

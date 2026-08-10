@@ -22822,6 +22822,14 @@ pub const CompileTimeRootKind = enum {
     field_default,
 };
 
+/// A field-default root can also own the checked literal conversion for its
+/// body. In that case its wrapper returns the conversion's `Try` and
+/// finalization archives the `Ok` payload as the field default constant.
+pub const CompileTimeLiteralConversionKind = enum(u8) {
+    numeral,
+    quote,
+};
+
 /// Public `CompileTimeRootPayload` declaration.
 pub const CompileTimeRootPayload = union(enum) {
     pending,
@@ -22848,8 +22856,18 @@ pub const CompileTimeRoot = struct {
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
+    literal_conversion: ?CompileTimeLiteralConversionKind = null,
     request_eligibility: CompileTimeRootRequestEligibility,
     payload: CompileTimeRootPayload,
+
+    pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
+        return switch (self.kind) {
+            .numeral_conversion => .numeral,
+            .quote_conversion => .quote,
+            .field_default => self.literal_conversion,
+            .constant, .hoisted_constant, .callable_binding, .expect => null,
+        };
+    }
 };
 
 /// Public `CompileTimeRootTable` declaration.
@@ -22888,6 +22906,9 @@ pub const CompileTimeRootTable = struct {
             roots.deinit(allocator);
         }
 
+        var field_default_root_by_expr = std.AutoHashMapUnmanaged(CheckedExprId, usize){};
+        defer field_default_root_by_expr.deinit(allocator);
+
         // Every archived field default is a compile-time constant root
         // (design.md "Defaulted Fields"): the declaring module evaluates the
         // pure default once, and construction sites—local and
@@ -22906,6 +22927,11 @@ pub const CompileTimeRootTable = struct {
                 .checked_type = checked_bodies.expr(entry.checked_expr).ty,
                 .payload = .pending,
             });
+            const inserted = try field_default_root_by_expr.getOrPut(allocator, entry.checked_expr);
+            if (inserted.found_existing) {
+                checkedArtifactInvariant("field default expression was registered as more than one root", .{});
+            }
+            inserted.value_ptr.* = roots.items.len - 1;
         }
 
         var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
@@ -23000,6 +23026,11 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            if (field_default_root_by_expr.get(checked_expr)) |root_index| {
+                roots.items[root_index].checked_type = try_ty;
+                roots.items[root_index].literal_conversion = .numeral;
+                continue;
+            }
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .numeral_conversion,
@@ -23032,6 +23063,11 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            if (field_default_root_by_expr.get(checked_expr)) |root_index| {
+                roots.items[root_index].checked_type = try_ty;
+                roots.items[root_index].literal_conversion = .quote;
+                continue;
+            }
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .quote_conversion,
@@ -23091,7 +23127,7 @@ pub const CompileTimeRootTable = struct {
     pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
         for (self.roots) |entry| {
             if (entry.expr != expr) continue;
-            if (entry.kind == .numeral_conversion or entry.kind == .quote_conversion) {
+            if (entry.literalConversionKind() != null) {
                 return entry;
             }
         }
@@ -23259,6 +23295,19 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     };
     if (matches) return;
     checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
+}
+
+fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
+    switch (root.kind) {
+        .field_default => {},
+        .constant,
+        .hoisted_constant,
+        .callable_binding,
+        .expect,
+        .numeral_conversion,
+        .quote_conversion,
+        => std.debug.assert(root.literal_conversion == null),
+    }
 }
 
 fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
@@ -28158,7 +28207,9 @@ pub const CheckedModuleArtifact = struct {
     // optional source-value types in stored const evidence.
     // Version 61 gives every compile-time request its exact checked-root ID.
     // Version 62 publishes exact record-construction omission defaults.
-    const serialized_layout_version: u32 = 62;
+    // Version 63 lets a field-default root own its literal conversion instead
+    // of publishing a second root for the same checked expression.
+    const serialized_layout_version: u32 = 63;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28355,6 +28406,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprCount());
+            verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
                 .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
@@ -29082,6 +29134,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprCount());
+            verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             if (root.kind == .expect) {
                 switch (root.payload) {
@@ -34170,8 +34223,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD3, 0x97, 0x73, 0x3A, 0x07, 0x36, 0x9E, 0xFD, 0xFC, 0x78, 0xB0, 0x2B, 0x6B, 0x8C, 0x0C, 0xD9,
-        0x1F, 0x5E, 0x0E, 0xD7, 0xCA, 0xFF, 0x97, 0x3E, 0x99, 0x0D, 0x1A, 0xE1, 0x58, 0x4C, 0x03, 0x48,
+        0x13, 0x5A, 0x97, 0xD6, 0xF2, 0xEF, 0x61, 0x1F, 0xA5, 0x55, 0xA7, 0xC6, 0xC9, 0x50, 0x90, 0x53,
+        0x00, 0x78, 0x7A, 0x77, 0x02, 0x78, 0x59, 0x1F, 0x54, 0xE3, 0x62, 0xE7, 0x47, 0x2F, 0xB7, 0xDC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

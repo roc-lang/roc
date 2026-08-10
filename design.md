@@ -3783,6 +3783,13 @@ compile-time root is a cache of the same value: materialization prefers
 restoring the declaring module's finalized constant and inlines only
 while that module's own roots are still mid-finalization (a cache-hit
 split, not a fallback—both paths produce the identical literal).
+When the default literal uses a custom `from_numeral` or `from_quote`, that
+same `field_default` root owns the literal-conversion mode and has the
+conversion call's `Try` result type. Its wrapper evaluates the raw conversion
+once; finalization reports `Err` with the literal-specific diagnostic or
+archives the `Ok` payload as the field-default constant. A second
+`numeral_conversion` or `quote_conversion` root for the same checked expression
+is forbidden.
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and an imported checked module is always

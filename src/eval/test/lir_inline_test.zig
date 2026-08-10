@@ -6181,6 +6181,48 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
+test "custom literal field default owns its conversion root" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\MyNum := [Value(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
+        \\}
+        \\
+        \\Label := [Label(Str)].{
+        \\    from_quote : Str -> Try(Label, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Label(str))
+        \\}
+        \\
+        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\
+        \\config : Config
+        \\config = {}
+        \\
+        \\main = config.size
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var default_count: usize = 0;
+    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .field_default) continue;
+        default_count += 1;
+        try std.testing.expect(root.literalConversionKind() != null);
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(root.id, conversion.id);
+    }
+    try std.testing.expectEqual(@as(usize, 2), default_count);
+}
+
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
     const allocator = std.testing.allocator;
     const source =

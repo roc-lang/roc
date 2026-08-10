@@ -937,6 +937,22 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"hello\"" },
     },
+    .{
+        .name = "defaulted record field: rejected custom literal is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects this default"))
+        \\}
+        \\
+        \\config : { value : Picky ?? 5 }
+        \\config = {}
+        \\
+        \\main = config.value
+        ,
+        .expected = .problem,
+    },
     // Frontend problems
     .{ .name = "problem: name not in scope", .source = "undefinedVar", .expected = .{ .problem = {} } },
     .{ .name = "problem: dec plus int type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },
