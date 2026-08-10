@@ -351,7 +351,7 @@ I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 (record_different_fields_error.md:7:30):
 
-── ! declaration has no value ───────────── record_different_fields_error.md:2:5
+── ● declaration has no value ───────────── record_different_fields_error.md:2:5
 
 This declaration has a type annotation but no implementation.
 
@@ -364,7 +364,7 @@ _privateField: "leading underscore",
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ! declaration has no value ───────────── record_different_fields_error.md:3:5
+── ● declaration has no value ───────────── record_different_fields_error.md:3:5
 
 This declaration has a type annotation but no implementation.
 
@@ -421,7 +421,7 @@ The value's type, which does not have a method named `from_quote`, is:
 
     {}
 
-── ! declaration has no value ───────────── record_different_fields_error.md:6:5
+── ● declaration has no value ───────────── record_different_fields_error.md:6:5
 
 This declaration has a type annotation but no implementation.
 

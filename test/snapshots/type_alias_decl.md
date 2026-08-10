@@ -55,7 +55,7 @@ UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
 
-── ! builtin type shadowed ────────────────────────────── type_alias_decl.md:7:1
+── ● builtin type shadowed ────────────────────────────── type_alias_decl.md:7:1
 
 The type `Try` shadows a builtin type.
 
@@ -78,7 +78,7 @@ Letters : [A, B, ..]
 
 Hint: You need a named variable, like `..others`, to use this here.
 
-── ! unused variable ─────────────────────────────────── type_alias_decl.md:36:5
+── ● unused variable ─────────────────────────────────── type_alias_decl.md:36:5
 
 Variable `person` is defined here and then never used:
 
@@ -88,7 +88,7 @@ person = { name: "Alice", age: 30 }
 If you don't need this variable, prefix it with an underscore like `_person` to
 suppress this warning. (type_alias_decl.md:36:5):
 
-── ! unused variable ─────────────────────────────────── type_alias_decl.md:39:5
+── ● unused variable ─────────────────────────────────── type_alias_decl.md:39:5
 
 Variable `color` is defined here and then never used:
 

@@ -25,7 +25,7 @@ match person {
 Is it misspelled, or is there an import missing?
 (pattern_destructure_nested.md:1:7):
 
-── ! unused variable ──────────────────────── pattern_destructure_nested.md:2:38
+── ● unused variable ──────────────────────── pattern_destructure_nested.md:2:38
 
 Variable `zipCode` is defined here and then never used:
 

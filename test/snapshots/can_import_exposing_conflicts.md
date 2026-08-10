@@ -19,7 +19,7 @@ main = {
 DUPLICATE DEFINITION - can_import_exposing_conflicts.md:1:1:1:34
 # PROBLEMS
 
-── ! duplicate definition ───────────────── can_import_exposing_conflicts.md:1:1
+── ● duplicate definition ───────────────── can_import_exposing_conflicts.md:1:1
 
 The name `Json` is being redeclared here:
 

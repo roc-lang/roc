@@ -27,7 +27,7 @@ The type `Decode` is not declared in this scope.
 
 (where_clauses_10.md:7:7):
 
-── ! declaration has no value ────────────────────────── where_clauses_10.md:3:1
+── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
 This declaration has a type annotation but no implementation.
 

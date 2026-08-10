@@ -470,7 +470,7 @@ x
 
 Is it misspelled, or is there an import missing? (fuzz_crash_020.md:53:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_020.md:52:11
+── ● unused variable ─────────────────────────────────── fuzz_crash_020.md:52:11
 
 Variable `lue` is defined here and then never used:
 
@@ -489,7 +489,7 @@ Blue=> {x
 
 Is it misspelled, or is there an import missing? (fuzz_crash_020.md:55:11):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_020.md:57:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:57:2
 
 Variable `er` is defined here and then never used:
 
@@ -508,7 +508,7 @@ ment
 
 Is it misspelled, or is there an import missing? (fuzz_crash_020.md:59:3):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_020.md:60:12
+── ● unused variable ─────────────────────────────────── fuzz_crash_020.md:60:12
 
 Variable `est` is defined here and then never used:
 
@@ -628,7 +628,7 @@ rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 
 Is it misspelled, or is there an import missing? (fuzz_crash_020.md:96:54):
 
-── ! duplicate definition ─────────────────────────────── fuzz_crash_020.md:97:2
+── ● duplicate definition ─────────────────────────────── fuzz_crash_020.md:97:2
 
 The name `t` is being redeclared here:
 
@@ -754,7 +754,7 @@ r(nu) # xpr
 
 Is it misspelled, or is there an import missing? (fuzz_crash_020.md:108:6):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_020.md:76:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:76:2
 
 Variable `w` is defined here and then never used:
 
@@ -764,7 +764,7 @@ w = "d"
 If you don't need this variable, prefix it with an underscore like `_w` to
 suppress this warning. (fuzz_crash_020.md:76:2):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_020.md:87:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:87:2
 
 Variable `i` is defined here and then never used:
 
@@ -774,7 +774,7 @@ i= "H, ${d}"
 If you don't need this variable, prefix it with an underscore like `_i` to
 suppress this warning. (fuzz_crash_020.md:87:2):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_020.md:96:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:96:2
 
 Variable `rd` is defined here and then never used:
 
@@ -784,7 +784,7 @@ rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 If you don't need this variable, prefix it with an underscore like `_rd` to
 suppress this warning. (fuzz_crash_020.md:96:2):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_020.md:97:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:97:2
 
 Variable `t` is defined here and then never used:
 
@@ -851,7 +851,7 @@ List( #rg
 
 (fuzz_crash_020.md:17:3):
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_020.md:22:1
+── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:22:1
 
 This declaration has a type annotation but no implementation.
 
@@ -864,7 +864,7 @@ line : ( # Cm
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_020.md:37:1
+── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:37:1
 
 This declaration has a type annotation but no implementation.
 
@@ -944,7 +944,7 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_020.md:74:1
+── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:74:1
 
 This declaration has a type annotation but no implementation.
 
@@ -957,7 +957,7 @@ main! : Listlt({}, _)
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ! declaration has no value ────────────────────────── fuzz_crash_020.md:113:1
+── ● declaration has no value ────────────────────────── fuzz_crash_020.md:113:1
 
 This declaration has a type annotation but no implementation.
 
@@ -1043,7 +1043,7 @@ But you are trying to use it as:
 
     Str
 
-── ! declaration has no value ────────────────────────── fuzz_crash_020.md:116:1
+── ● declaration has no value ────────────────────────── fuzz_crash_020.md:116:1
 
 This declaration has a type annotation but no implementation.
 

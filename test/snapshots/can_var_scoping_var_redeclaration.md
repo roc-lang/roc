@@ -19,7 +19,7 @@ result = redeclareTest({})
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
 
-── ! duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
+── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
 
 The name `x_` is being redeclared here:
 

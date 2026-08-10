@@ -53,7 +53,7 @@ processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 
 (type_app_complex_nested.md:4:48):
 
-── ! unused variable ─────────────────────────── type_app_complex_nested.md:7:12
+── ● unused variable ─────────────────────────── type_app_complex_nested.md:7:12
 
 Variable `maybeList` is defined here and then never used:
 

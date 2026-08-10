@@ -39,7 +39,7 @@ import u.R}g:r->R.a.E
 
 (fuzz_crash_042.md:1:20):
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_042.md:1:12
+── ● declaration has no value ─────────────────────────── fuzz_crash_042.md:1:12
 
 This declaration has a type annotation but no implementation.
 

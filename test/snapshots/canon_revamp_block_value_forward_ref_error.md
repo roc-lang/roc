@@ -25,7 +25,7 @@ y + 1
 Is it misspelled, or is there an import missing?
 (canon_revamp_block_value_forward_ref_error.md:2:5):
 
-── ! unused variable ───────── canon_revamp_block_value_forward_ref_error.md:3:5
+── ● unused variable ───────── canon_revamp_block_value_forward_ref_error.md:3:5
 
 Variable `y` is defined here and then never used:
 

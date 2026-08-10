@@ -71,7 +71,7 @@ B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 
 You're attempting do this here (everything.md:7:1):
 
-── ! unused variable ─────────────────────────────────────── everything.md:24:10
+── ● unused variable ─────────────────────────────────────── everything.md:24:10
 
 Variable `b` is defined here and then never used:
 
@@ -81,7 +81,7 @@ Z1((a, b,)) => a
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning. (everything.md:24:10):
 
-── ! unused variable ──────────────────────────────────────── everything.md:25:9
+── ● unused variable ──────────────────────────────────────── everything.md:25:9
 
 Variable `b` is defined here and then never used:
 
@@ -91,7 +91,7 @@ Z2(a, b,) => a
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning. (everything.md:25:9):
 
-── ! unused variable ─────────────────────────────────────── everything.md:26:11
+── ● unused variable ─────────────────────────────────────── everything.md:26:11
 
 Variable `b` is defined here and then never used:
 
@@ -101,7 +101,7 @@ Z3({ a, b, }) => a
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning. (everything.md:26:11):
 
-── ! unused variable ─────────────────────────────────────── everything.md:27:10
+── ● unused variable ─────────────────────────────────────── everything.md:27:10
 
 Variable `b` is defined here and then never used:
 
@@ -111,7 +111,7 @@ Z4([a, b,]) => a
 If you don't need this variable, prefix it with an underscore like `_b` to
 suppress this warning. (everything.md:27:10):
 
-── ! unused variable ──────────────────────────────────────── everything.md:17:2
+── ● unused variable ──────────────────────────────────────── everything.md:17:2
 
 Variable `h1` is defined here and then never used:
 
@@ -121,7 +121,7 @@ h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
 If you don't need this variable, prefix it with an underscore like `_h1` to
 suppress this warning. (everything.md:17:2):
 
-── ! unused variable ──────────────────────────────────────── everything.md:18:2
+── ● unused variable ──────────────────────────────────────── everything.md:18:2
 
 Variable `h2` is defined here and then never used:
 
@@ -131,7 +131,7 @@ h2 = h(x, y,)
 If you don't need this variable, prefix it with an underscore like `_h2` to
 suppress this warning. (everything.md:18:2):
 
-── ! unused variable ──────────────────────────────────────── everything.md:19:2
+── ● unused variable ──────────────────────────────────────── everything.md:19:2
 
 Variable `h3` is defined here and then never used:
 
@@ -141,7 +141,7 @@ h3 = A(x, y,)
 If you don't need this variable, prefix it with an underscore like `_h3` to
 suppress this warning. (everything.md:19:2):
 
-── ! unused variable ──────────────────────────────────────── everything.md:20:2
+── ● unused variable ──────────────────────────────────────── everything.md:20:2
 
 Variable `h4` is defined here and then never used:
 
@@ -151,7 +151,7 @@ h4 = [x, y,]
 If you don't need this variable, prefix it with an underscore like `_h4` to
 suppress this warning. (everything.md:20:2):
 
-── ! unused variable ──────────────────────────────────────── everything.md:21:2
+── ● unused variable ──────────────────────────────────────── everything.md:21:2
 
 Variable `h5` is defined here and then never used:
 
@@ -187,7 +187,7 @@ A where alias names a set of method constraints, declared like `a.Sortable :
 where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
 [a.Sortable]`
 
-── ! declaration has no value ─────────────────────────────── everything.md:14:1
+── ● declaration has no value ─────────────────────────────── everything.md:14:1
 
 This declaration has a type annotation but no implementation.
 

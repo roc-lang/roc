@@ -26,7 +26,7 @@ import "users.json" as data : Str
 Make sure the file exists relative to your source file
 (inline_ingested_file.md:1:1):
 
-── ! duplicate definition ────────────────────────── inline_ingested_file.md:2:1
+── ● duplicate definition ────────────────────────── inline_ingested_file.md:2:1
 
 The name `Json` is being redeclared here:
 

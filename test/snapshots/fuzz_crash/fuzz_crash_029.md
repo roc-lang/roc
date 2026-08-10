@@ -312,7 +312,7 @@ pkg: "..l", mmen  } # Cose
 
 (fuzz_crash_029.md:13:6):
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
+── ● declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
 
 This declaration has a type annotation but no implementation.
 

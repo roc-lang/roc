@@ -11,7 +11,7 @@ f=||{var c:[]}
 UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
 # PROBLEMS
 
-── ! unused variable ──────────────────────────── fmt_var_in_record_field.md:1:6
+── ● unused variable ──────────────────────────── fmt_var_in_record_field.md:1:6
 
 Variable `c` is defined here and then never used:
 

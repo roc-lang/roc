@@ -33,7 +33,7 @@ Stdout.line!("Hello, world!")
 Is it misspelled, or is there an import missing?
 (hello_world_with_block.md:11:2):
 
-── ! unused variable ───────────────────────────── hello_world_with_block.md:9:2
+── ● unused variable ───────────────────────────── hello_world_with_block.md:9:2
 
 Variable `world` is defined here and then never used:
 

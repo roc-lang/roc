@@ -12,7 +12,7 @@ b:r
 DECLARATION HAS NO VALUE - fuzz_crash_079.md:2:1:2:4
 # PROBLEMS
 
-── ! declaration has no value ──────────────────────────── fuzz_crash_079.md:2:1
+── ● declaration has no value ──────────────────────────── fuzz_crash_079.md:2:1
 
 This declaration has a type annotation but no implementation.
 

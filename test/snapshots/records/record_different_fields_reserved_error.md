@@ -276,7 +276,7 @@ I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 (record_different_fields_reserved_error.md:7:19):
 
-── ! declaration has no value ──── record_different_fields_reserved_error.md:3:5
+── ● declaration has no value ──── record_different_fields_reserved_error.md:3:5
 
 This declaration has a type annotation but no implementation.
 

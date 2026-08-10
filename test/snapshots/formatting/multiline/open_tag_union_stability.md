@@ -25,7 +25,7 @@ a,
 
 (open_tag_union_stability.md:2:2):
 
-── ! declaration has no value ────────────────── open_tag_union_stability.md:1:1
+── ● declaration has no value ────────────────── open_tag_union_stability.md:1:1
 
 This declaration has a type annotation but no implementation.
 

@@ -20,7 +20,7 @@ MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 
-── ! unconditional condition ──────────────────────────── if_then_else_9.md:3:11
+── ● unconditional condition ──────────────────────────── if_then_else_9.md:3:11
 
 This if condition is known at compile time, so this conditional will always
 make the same choice.

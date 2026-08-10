@@ -38,7 +38,7 @@ I am part way through parsing this tuple, but it is empty.
 
 If you want to represent nothing, try using an empty record: `{}`.
 
-── ! declaration has no value ──────────────────────────── fuzz_crash_082.md:1:1
+── ● declaration has no value ──────────────────────────── fuzz_crash_082.md:1:1
 
 This declaration has a type annotation but no implementation.
 
@@ -51,7 +51,7 @@ i:U
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ! declaration has no value ──────────────────────────── fuzz_crash_082.md:2:1
+── ● declaration has no value ──────────────────────────── fuzz_crash_082.md:2:1
 
 This declaration has a type annotation but no implementation.
 

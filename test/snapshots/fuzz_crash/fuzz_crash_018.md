@@ -56,7 +56,7 @@ The type `S` is not declared in this scope.
 
 (fuzz_crash_018.md:1:5):
 
-── ! declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
+── ● declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
 
 This declaration has a type annotation but no implementation.
 

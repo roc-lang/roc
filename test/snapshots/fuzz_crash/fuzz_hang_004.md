@@ -54,7 +54,7 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
 
 (fuzz_hang_004.md:1:27):
 
-── ! redundant pattern ──────────────────────────────────── fuzz_hang_004.md:1:4
+── ● redundant pattern ──────────────────────────────────── fuzz_hang_004.md:1:4
 
 The second branch of this `match` is redundant.
 

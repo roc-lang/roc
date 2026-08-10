@@ -162,13 +162,11 @@ const IconAndColor = struct {
 fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
     const red = if (palette.reset.len > 0) AnsiCodes.RED else "";
     const yellow = if (palette.reset.len > 0) AnsiCodes.YELLOW else "";
-    const cyan = if (palette.reset.len > 0) AnsiCodes.CYAN else "";
 
     if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = red, .width = 1 };
     return switch (severity) {
         .fatal, .runtime_error => .{ .icon = "✗", .color = red, .width = 1 },
-        .warning => .{ .icon = "!", .color = yellow, .width = 1 },
-        .info => .{ .icon = "[i]", .color = cyan, .width = 3 },
+        .warning => .{ .icon = "●", .color = yellow, .width = 1 },
     };
 }
 
@@ -964,7 +962,6 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
 pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
     const title_class = switch (report.severity) {
-        .info => "info",
         .fatal => "error",
         .runtime_error => "error",
         .warning => "warning",

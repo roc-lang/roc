@@ -70,7 +70,7 @@ For example:
 
 I found `_b` here. (underscore_in_regular_annotations.md:28:25):
 
-── ! unused variable ───────────────── underscore_in_regular_annotations.md:9:12
+── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
 
 Variable `list` is defined here and then never used:
 

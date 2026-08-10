@@ -22,7 +22,7 @@ NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
 NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 
-── ! duplicate definition ────────────────────────── external_decl_lookup.md:4:1
+── ● duplicate definition ────────────────────────── external_decl_lookup.md:4:1
 
 The name `Json` is being redeclared here:
 

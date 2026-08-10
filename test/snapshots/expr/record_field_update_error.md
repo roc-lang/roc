@@ -43,7 +43,7 @@ For example:
 
 I found `31` here. (record_field_update_error.md:1:17):
 
-── ! declaration has no value ──────────────── record_field_update_error.md:1:12
+── ● declaration has no value ──────────────── record_field_update_error.md:1:12
 
 This declaration has a type annotation but no implementation.
 

@@ -87,7 +87,7 @@ var t= ]
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ! duplicate definition ──────────────────────────────── fuzz_crash_024.md:5:5
+── ● duplicate definition ──────────────────────────────── fuzz_crash_024.md:5:5
 
 The name `t` is being redeclared here:
 

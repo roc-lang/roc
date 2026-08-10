@@ -15,7 +15,7 @@ UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
 `MAIN!` SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 # PROBLEMS
 
-── ! unused variable ─────────────────────────── default_app_wrong_arity.md:1:16
+── ● unused variable ─────────────────────────── default_app_wrong_arity.md:1:16
 
 Variable `arg2` is defined here and then never used:
 

@@ -93,7 +93,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it. (type_shadowing_across_scopes.md:10:1):
 
-── ! builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
+── ● builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
 
 The type `Try` shadows a builtin type.
 
@@ -104,7 +104,7 @@ This may make the builtin type inaccessible in this scope.
 
 The new declaration is here (type_shadowing_across_scopes.md:1:1):
 
-── ! unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
+── ● unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
 
 Variable `data` is defined here and then never used:
 

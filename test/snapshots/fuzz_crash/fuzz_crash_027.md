@@ -722,7 +722,7 @@ Nothing is named `ment` in this scope.
 
 Is it misspelled, or is there an import missing? (fuzz_crash_027.md:71:7):
 
-── ! unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
+── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -745,7 +745,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ! unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
+── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -755,7 +755,7 @@ Variable `rest` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_rest` to
 suppress this warning. (fuzz_crash_027.md:1:1):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_027.md:76:1
+── ● unused variable ──────────────────────────────────── fuzz_crash_027.md:76:1
 
 Variable `ist` is defined here and then never used:
 
@@ -787,7 +787,7 @@ Nothing is named `add` in this scope.
 
 Is it misspelled, or is there an import missing? (fuzz_crash_027.md:82:37):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_027.md:82:21
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:82:21
 
 Variable `rest` is defined here and then never used:
 
@@ -810,7 +810,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_027.md:62:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_027.md:62:2
 
 Variable `b` is defined here and then never used:
 
@@ -878,7 +878,7 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_027.md:104:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:104:2
 
 Variable `tag` is defined here and then never used:
 
@@ -888,7 +888,7 @@ tag = Blue
 If you don't need this variable, prefix it with an underscore like `_tag` to
 suppress this warning. (fuzz_crash_027.md:104:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_027.md:119:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:119:2
 
 Variable `tag_with` is defined here and then never used:
 
@@ -898,7 +898,7 @@ tag_with = Ok(number)
 If you don't need this variable, prefix it with an underscore like `_tag_with`
 to suppress this warning. (fuzz_crash_027.md:119:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_027.md:120:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:120:2
 
 Variable `ited` is defined here and then never used:
 
@@ -908,7 +908,7 @@ ited = "Hello, ${world}"
 If you don't need this variable, prefix it with an underscore like `_ited` to
 suppress this warning. (fuzz_crash_027.md:120:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_027.md:121:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:121:2
 
 Variable `list` is defined here and then never used:
 
@@ -927,7 +927,7 @@ List( #rg
 
 (fuzz_crash_027.md:21:3):
 
-── ! declaration has no value ─────────────────────────── fuzz_crash_027.md:28:1
+── ● declaration has no value ─────────────────────────── fuzz_crash_027.md:28:1
 
 This declaration has a type annotation but no implementation.
 

@@ -46,7 +46,7 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 
-── ! duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
+── ● duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
 
 The name `Json` is being redeclared here:
 
@@ -120,7 +120,7 @@ processRequest = |req| Http.Server.defaultResponse
 Is it misspelled, or is there an import missing?
 (can_import_unresolved_qualified.md:13:24):
 
-── ! unused variable ────────────────── can_import_unresolved_qualified.md:13:19
+── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
 
 Variable `req` is defined here and then never used:
 

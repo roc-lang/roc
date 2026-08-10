@@ -18,7 +18,7 @@ MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
 
-── ! unconditional condition ─────────────────────────── literal_patterns.md:1:7
+── ● unconditional condition ─────────────────────────── literal_patterns.md:1:7
 
 This match value is known at compile time, so this match will always inspect
 the same value.

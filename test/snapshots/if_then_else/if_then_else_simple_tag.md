@@ -11,7 +11,7 @@ if Bool.True Ok(0) else Err(1)
 UNCONDITIONAL CONDITION - if_then_else_simple_tag.md:1:4:1:13
 # PROBLEMS
 
-── ! unconditional condition ──────────────────── if_then_else_simple_tag.md:1:4
+── ● unconditional condition ──────────────────── if_then_else_simple_tag.md:1:4
 
 This if condition is known at compile time, so this conditional will always
 make the same choice.

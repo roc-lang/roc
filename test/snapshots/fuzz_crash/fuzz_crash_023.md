@@ -470,7 +470,7 @@ some_func() # After debug expr
 
 Is it misspelled, or is there an import missing? (fuzz_crash_023.md:72:4):
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_023.md:97:3
+── ● unused variable ──────────────────────────────────── fuzz_crash_023.md:97:3
 
 Variable `lower` is defined here and then never used:
 
@@ -480,7 +480,7 @@ lower # After pattern comment
 If you don't need this variable, prefix it with an underscore like `_lower` to
 suppress this warning. (fuzz_crash_023.md:97:3):
 
-── ! unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -503,7 +503,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ! unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -526,7 +526,7 @@ expression.
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ! unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
+── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
 
 Variable `rest` is defined here and then never used:
 
@@ -558,7 +558,7 @@ Nothing is named `add` in this scope.
 
 Is it misspelled, or is there an import missing? (fuzz_crash_023.md:121:37):
 
-── ! unused variable ────────────────────────────────── fuzz_crash_023.md:121:21
+── ● unused variable ────────────────────────────────── fuzz_crash_023.md:121:21
 
 Variable `rest` is defined here and then never used:
 
@@ -568,7 +568,7 @@ Variable `rest` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_rest` to
 suppress this warning. (fuzz_crash_023.md:121:21):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:127:4
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:127:4
 
 Variable `rest` is defined here and then never used:
 
@@ -604,7 +604,7 @@ bar: 2 | 7, # After last record field
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
-── ! unused variable ──────────────────────────────────── fuzz_crash_023.md:82:2
+── ● unused variable ──────────────────────────────────── fuzz_crash_023.md:82:2
 
 Variable `b` is defined here and then never used:
 
@@ -794,7 +794,7 @@ Num.toStr(number) # Comment after string interpolation expr
 
 (fuzz_crash_023.md:193:4):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:164:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:164:2
 
 Variable `tag_with_payload` is defined here and then never used:
 
@@ -804,7 +804,7 @@ tag_with_payload = Ok(number)
 If you don't need this variable, prefix it with an underscore like
 `_tag_with_payload` to suppress this warning. (fuzz_crash_023.md:164:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:178:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:178:2
 
 Variable `record` is defined here and then never used:
 
@@ -814,7 +814,7 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 If you don't need this variable, prefix it with an underscore like `_record` to
 suppress this warning. (fuzz_crash_023.md:178:2):
 
-── ! unused variable ────────────────────────────────── fuzz_crash_023.md:178:47
+── ● unused variable ────────────────────────────────── fuzz_crash_023.md:178:47
 
 Variable `qux` is defined here and then never used:
 
@@ -824,7 +824,7 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 If you don't need this variable, prefix it with an underscore like `_qux` to
 suppress this warning. (fuzz_crash_023.md:178:47):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:180:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:180:2
 
 Variable `multiline_tuple` is defined here and then never used:
 
@@ -834,7 +834,7 @@ multiline_tuple = (
 If you don't need this variable, prefix it with an underscore like
 `_multiline_tuple` to suppress this warning. (fuzz_crash_023.md:180:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:188:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:188:2
 
 Variable `bin_op_result` is defined here and then never used:
 
@@ -844,7 +844,7 @@ bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
 If you don't need this variable, prefix it with an underscore like
 `_bin_op_result` to suppress this warning. (fuzz_crash_023.md:188:2):
 
-── ! unused variable ─────────────────────────────────── fuzz_crash_023.md:189:2
+── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:189:2
 
 Variable `static_dispatch_style` is defined here and then never used:
 
@@ -982,7 +982,7 @@ But the expression between the `match` parenthesis has the type:
 
 These can never match! Either the pattern or expression has a problem.
 
-── ! declaration has no value ───────────────────────── fuzz_crash_023.md:178:47
+── ● declaration has no value ───────────────────────── fuzz_crash_023.md:178:47
 
 This declaration has a type annotation but no implementation.
 
@@ -1031,7 +1031,7 @@ But `add_one` needs the first argument to be:
 
     U64
 
-── ! declaration has no value ───────────────────────── fuzz_crash_023.md:178:47
+── ● declaration has no value ───────────────────────── fuzz_crash_023.md:178:47
 
 This declaration has a type annotation but no implementation.
 
@@ -1044,7 +1044,7 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ! declaration has no value ────────────────────────── fuzz_crash_023.md:201:1
+── ● declaration has no value ────────────────────────── fuzz_crash_023.md:201:1
 
 This declaration has a type annotation but no implementation.
 
