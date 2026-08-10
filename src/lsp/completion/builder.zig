@@ -992,12 +992,32 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
+            const insert_text = if (fieldPresenceIsOptional(type_store, field_presence))
+                std.fmt.allocPrint(self.allocator, "?{s}", .{field_name}) catch |err| {
+                    if (detail) |owned_detail| self.allocator.free(owned_detail);
+                    return err;
+                }
+            else
+                null;
+
             _ = try self.addItem(.{
                 .label = field_name,
                 .kind = @intFromEnum(CompletionItemKind.field),
                 .detail = detail,
+                .insertText = insert_text,
             });
         }
+    }
+
+    fn fieldPresenceIsOptional(type_store: *const types.Store, presence: types.RecordField.Presence) bool {
+        const presence_var = presence.presenceVar() orelse return false;
+        return switch (type_store.resolveVar(presence_var).desc.content) {
+            .field_presence => |kind| switch (kind) {
+                .optional => true,
+                .required, .defaulted => false,
+            },
+            .flex, .rigid, .alias, .structure, .err => false,
+        };
     }
 
     /// Find the type var for a specific field within a record.
