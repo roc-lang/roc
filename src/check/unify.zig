@@ -244,6 +244,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         env.construction_probe,
         opts.record_construction_var,
     );
+    unifier.root_operands = .{ a, b };
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -316,6 +317,10 @@ const Unifier = struct {
     enclosing_records: ?[2]Var,
     construction_probe: ?ConstructionProbe,
     record_construction_var: ?Var,
+    /// The operands this unification started from. They are the outermost
+    /// candidates for owning an absorbed omission, and keep the absorption gate
+    /// in step with how the checker later attributes it.
+    root_operands: ?[2]Var,
 
     /// Init unifier
     pub fn init(
@@ -342,6 +347,7 @@ const Unifier = struct {
             .enclosing_records = null,
             .construction_probe = construction_probe,
             .record_construction_var = record_construction_var,
+            .root_operands = null,
         };
     }
 
@@ -356,6 +362,9 @@ const Unifier = struct {
         }
         if (self.record_construction_var) |owner| {
             if (probe.matches(owner)) return true;
+        }
+        if (self.root_operands) |pair| {
+            if (probe.matches(pair[1]) or probe.matches(pair[0])) return true;
         }
         return false;
     }
