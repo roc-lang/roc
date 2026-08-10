@@ -3045,6 +3045,26 @@ const Certifier = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
         }
 
+        // A deferred take-claim cannot outlive its container's carry: a
+        // unit-less field-read value crossing this join while its container
+        // stays behind claims the stored unit now and crosses owned—the
+        // take moved the unit at the read, the deferral was bookkeeping. A
+        // genuine borrow in the same position keeps balance zero and fails
+        // the borrow-liveness rules exactly as before.
+        var settle_it = self.repr_scratch.iterator();
+        while (settle_it.next()) |entry| {
+            const value = entry.key_ptr.*;
+            if (state.balanceOf(value) != 0) continue;
+            if (value >= self.values.items.len) continue;
+            const container = self.values.items[value].payload_source;
+            if (container == no_value) continue;
+            if (state.balanceOf(container) < 1) continue;
+            if (self.repr_scratch.contains(container)) continue;
+            if (try self.tryClaim(state, value)) {
+                try state.addBalance(value, 1);
+            }
+        }
+
         for (self.proc_locals.items, 0..) |local, dense| {
             var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0 };
             if (self.relevant_scratch.isSet(dense)) {
@@ -3113,8 +3133,8 @@ const Certifier = struct {
                 self.diag.context_proc = self.current_proc;
                 self.diag.context_local = origin;
                 return self.fail(
-                    "ownership unit of value originating at local {d} not carried into join {d}",
-                    .{ @intFromEnum(origin), @intFromEnum(join_id) },
+                    "ownership unit of value originating at local {d} not carried into join {d} (balance={d} claims=0x{x} excluded=0x{x})",
+                    .{ @intFromEnum(origin), @intFromEnum(join_id), units, state.claimsOf(@intCast(value_index)), state.variantExcludedOf(@intCast(value_index)) },
                 );
             }
         }
