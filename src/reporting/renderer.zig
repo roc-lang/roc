@@ -625,7 +625,7 @@ fn renderBelowContent(
                     try writer.writeByte('\n');
                     started = true;
                 }
-                try renderEmbeddedBox(writer, palette, config, r.region_annotation, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, text, gpa);
+                try renderEmbeddedBox(writer, palette, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, text, gpa);
                 buf.clearRetainingCapacity();
             },
             .source_code_with_underlines => |d| {
@@ -641,7 +641,7 @@ fn renderBelowContent(
                     try writer.writeByte('\n');
                     started = true;
                 }
-                try renderEmbeddedBox(writer, palette, config, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text, text, gpa);
+                try renderEmbeddedBox(writer, palette, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text, text, gpa);
                 buf.clearRetainingCapacity();
             },
             .text,
@@ -691,8 +691,6 @@ fn flushBelowText(
 fn renderEmbeddedBox(
     writer: *std.Io.Writer,
     palette: ColorPalette,
-    config: ReportingConfig,
-    annotation: Annotation,
     filename: ?[]const u8,
     start_line: u32,
     start_column: u32,
@@ -702,9 +700,6 @@ fn renderEmbeddedBox(
     preceding_text: []const u8,
     gpa: Allocator,
 ) error{WriteFailed}!void {
-    _ = annotation;
-    _ = config;
-
     var body = std.mem.trim(u8, preceding_text, " \n\r\t");
     var ends_with_colon = false;
     var suffix: []const u8 = "";
