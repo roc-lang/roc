@@ -42,8 +42,9 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Disables stack-trace capture; see `shim_io.std_options_no_stack_tracing`.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+/// This object is linked into the programs roc produces, so it uses
+/// `shim_io.std_options_static_archive`.
+pub const std_options = shim_io.std_options_static_archive;
 
 /// The self-contained boxy sidecar buffer emitted by the object compiler into
 /// the linked program. `roc_boxy_sidecar_blob` is the table byte buffer,
