@@ -7,7 +7,7 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Document = @import("document.zig").Document;
 const Report = @import("report.zig").Report;
-const ColorPalette = @import("style.zig").ColorPalette;
+
 const reporting = @import("mod.zig");
 
 // Test cases for canonicalize error reports
@@ -93,40 +93,9 @@ fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
 // Test Helpers
 
 /// Should only print out the debug copy-paste ready string if the string comparison fails.
-fn expectMultilineEqual(expected: []const u8, actual: []const u8) !void {
+fn expectMultilineEqual(expected: []const u8, actual: []const u8) error{TestExpectedEqual}!void {
     if (!std.mem.eql(u8, expected, actual)) {
         std.debug.print("\n--- DEBUG EXPECTED vs ACTUAL ---\nEXPECTED:\n{s}\nACTUAL:\n{s}\n", .{ expected, actual });
     }
     try testing.expectEqualStrings(expected, actual);
-}
-
-fn printAsMultilineString(s: []const u8) void {
-    if (s.len == 0) {
-        std.debug.print("        \\\\\n", .{});
-        return;
-    }
-
-    var lines = std.mem.splitScalar(u8, s, '\n');
-    var first = true;
-    while (lines.next()) |line| {
-        if (first) {
-            first = false;
-            std.debug.print("        \\\\", .{});
-        } else {
-            std.debug.print("        \\\\", .{});
-        }
-
-        // Print each character with proper escaping
-        for (line) |c| {
-            switch (c) {
-                '\\' => std.debug.print("\\\\", .{}),
-                '"' => std.debug.print("\\\"", .{}),
-                '\'' => std.debug.print("\\'", .{}),
-                '\t' => std.debug.print("\\t", .{}),
-                '\r' => std.debug.print("\\r", .{}),
-                else => std.debug.print("{c}", .{c}),
-            }
-        }
-        std.debug.print("\n", .{});
-    }
 }

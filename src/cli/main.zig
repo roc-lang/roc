@@ -5569,7 +5569,7 @@ fn renderSummaryHeaderLine(
     use_color: bool,
     path: []const u8,
     config: reporting.ReportingConfig,
-) anyerror!void {
+) @TypeOf(writer).Error!void {
     const red = if (use_color) ansi_term.red else "";
     const yellow = if (use_color) ansi_term.yellow else "";
     const reset = if (use_color) ansi_term.reset else "";
