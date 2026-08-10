@@ -455,7 +455,7 @@ test "Monotype iterator result completion stays out of relation replay and reind
         "fn materializeEvidence(",
     );
     try expectContains(dispatch_result, "if (phase == .expression_lowering)");
-    try expectContains(dispatch_result, "completeIteratorMethodResultAtNode(");
+    try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
 
     const completion = sourceSliceBetween(
         lower_source,
@@ -463,6 +463,7 @@ test "Monotype iterator result completion stays out of relation replay and reind
         "fn constUseMonoType(",
     );
     try expectContains(completion, "registerTemplateSpecInterfaceLookups(");
+    try expectContains(completion, "unregisterTemplateSpecLookup(");
     try expectContains(completion, "completed_source.evidence_digest.bytes");
 }
 

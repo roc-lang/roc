@@ -200,6 +200,9 @@ pub const GraphDiagnostics = struct {
     mono_import_requests: u64 = 0,
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
+    iterator_interface_scans: u64 = 0,
+    iterator_interface_cache_hits: u64 = 0,
+    iterator_interface_nodes_visited: u64 = 0,
     generated_private_scans: u64 = 0,
     generated_private_cache_hits: u64 = 0,
     generated_private_nodes_visited: u64 = 0,
@@ -266,16 +269,16 @@ const NominalBackingInstance = struct {
     node: NodeId,
 };
 
-const GeneratedPrivateDependency = struct {
+const ContainmentDependency = struct {
     node: NodeId,
     root: NodeId,
     version: u32,
 };
 
-const GeneratedPrivateCacheEntry = struct {
+const ContainmentCacheEntry = struct {
     valid: bool = false,
     result: bool = false,
-    dependencies: std.ArrayList(GeneratedPrivateDependency) = .empty,
+    dependencies: std.ArrayList(ContainmentDependency) = .empty,
 };
 
 const RelationState = enum {
@@ -376,6 +379,9 @@ pub const InstGraph = struct {
     iterator_interface_pending: std.ArrayList(NodeId),
     iterator_interface_visit_epochs: std.ArrayList(u32),
     iterator_interface_visit_epoch: u32,
+    /// Exact iterator-interface containment answers, invalidated only when a
+    /// node read by the corresponding structural walk changes.
+    iterator_interface_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
     /// Allocation-free scratch for exact generated-private containment walks.
     /// Node ids are dense, so an epoch array replaces a fresh hash set on every
     /// query while preserving cycle detection exactly.
@@ -387,7 +393,7 @@ pub const InstGraph = struct {
     /// content versions read by its walk. Mutations outside that dependency
     /// set leave the answer reusable; a relevant redirect or content change
     /// invalidates it at the next query.
-    generated_private_cache: collections.DenseMap(NodeId, GeneratedPrivateCacheEntry),
+    generated_private_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -421,10 +427,11 @@ pub const InstGraph = struct {
             .iterator_interface_pending = .empty,
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
+            .iterator_interface_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
             .generated_private_pending = .empty,
             .generated_private_visit_epochs = .empty,
             .generated_private_visit_epoch = 0,
-            .generated_private_cache = collections.DenseMap(NodeId, GeneratedPrivateCacheEntry).init(allocator),
+            .generated_private_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
         };
         return graph;
     }
@@ -467,6 +474,11 @@ pub const InstGraph = struct {
         self.recursive_argument_slots.deinit(allocator);
         self.iterator_interface_pending.deinit(allocator);
         self.iterator_interface_visit_epochs.deinit(allocator);
+        var iterator_interface_entries = self.iterator_interface_cache.valueIterator();
+        while (iterator_interface_entries.next()) |entry| {
+            entry.dependencies.deinit(allocator);
+        }
+        self.iterator_interface_cache.deinit();
         self.generated_private_pending.deinit(allocator);
         self.generated_private_visit_epochs.deinit(allocator);
         var generated_private_entries = self.generated_private_cache.valueIterator();
@@ -1671,6 +1683,16 @@ pub const InstGraph = struct {
     /// carried by each named node; callers do not reconstruct iterator intent
     /// from a backing shape.
     pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("iterator_interface_scans");
+        const query_root = self.find(root);
+        const cache = try self.iterator_interface_cache.getOrPut(query_root);
+        if (!cache.found_existing) cache.value_ptr.* = .{};
+        if (cache.value_ptr.valid and self.containmentCacheEntryValid(cache.value_ptr)) {
+            self.countDiagnostic("iterator_interface_cache_hits");
+            return cache.value_ptr.result;
+        }
+        cache.value_ptr.valid = false;
+        cache.value_ptr.dependencies.clearRetainingCapacity();
         self.iterator_interface_pending.clearRetainingCapacity();
         defer self.iterator_interface_pending.clearRetainingCapacity();
         if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
@@ -1681,12 +1703,18 @@ pub const InstGraph = struct {
         }
         const visit_epoch = self.iterator_interface_visit_epoch;
 
-        try self.iterator_interface_pending.append(self.allocator, root);
+        try self.iterator_interface_pending.append(self.allocator, query_root);
         while (self.iterator_interface_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
             const node_index = @intFromEnum(node);
             if (self.iterator_interface_visit_epochs.items[node_index] == visit_epoch) continue;
             self.iterator_interface_visit_epochs.items[node_index] = visit_epoch;
+            try cache.value_ptr.dependencies.append(self.allocator, .{
+                .node = raw_node,
+                .root = node,
+                .version = self.versions.items[node_index],
+            });
+            self.countDiagnostic("iterator_interface_nodes_visited");
 
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
@@ -1707,7 +1735,11 @@ pub const InstGraph = struct {
                 },
                 .named => |named| {
                     if (named.builtin_owner) |owner| {
-                        if (static_dispatch.isIteratorOwner(owner)) return true;
+                        if (static_dispatch.isIteratorOwner(owner)) {
+                            cache.value_ptr.result = true;
+                            cache.value_ptr.valid = true;
+                            return true;
+                        }
                     }
                     if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.node);
                     try self.iterator_interface_pending.appendSlice(self.allocator, named.args);
@@ -1718,7 +1750,23 @@ pub const InstGraph = struct {
                 },
             }
         }
+        cache.value_ptr.result = false;
+        cache.value_ptr.valid = true;
         return false;
+    }
+
+    fn containmentCacheEntryValid(
+        self: *InstGraph,
+        entry: *const ContainmentCacheEntry,
+    ) bool {
+        for (entry.dependencies.items) |dependency| {
+            if (self.find(dependency.node) != dependency.root or
+                self.versions.items[@intFromEnum(dependency.root)] != dependency.version)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// Whether this exact graph type contains compiler-generated private
@@ -1728,20 +1776,9 @@ pub const InstGraph = struct {
         const query_root = self.find(root);
         const cache = try self.generated_private_cache.getOrPut(query_root);
         if (!cache.found_existing) cache.value_ptr.* = .{};
-        if (cache.value_ptr.valid) {
-            var dependencies_match = true;
-            for (cache.value_ptr.dependencies.items) |dependency| {
-                if (self.find(dependency.node) != dependency.root or
-                    self.versions.items[@intFromEnum(dependency.root)] != dependency.version)
-                {
-                    dependencies_match = false;
-                    break;
-                }
-            }
-            if (dependencies_match) {
-                self.countDiagnostic("generated_private_cache_hits");
-                return cache.value_ptr.result;
-            }
+        if (cache.value_ptr.valid and self.containmentCacheEntryValid(cache.value_ptr)) {
+            self.countDiagnostic("generated_private_cache_hits");
+            return cache.value_ptr.result;
         }
         cache.value_ptr.valid = false;
         cache.value_ptr.dependencies.clearRetainingCapacity();
@@ -5661,6 +5698,52 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
+}
+
+test "iterator-interface containment caches exact graph dependencies" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics: GraphDiagnostics = .{};
+    graph.setDiagnostics(&diagnostics);
+
+    const child = try graph.newNode(.{ .primitive = .u64 });
+    const root = try graph.newNode(.{ .box = child });
+    graph.iterator_interface_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.iterator_interface_visit_epochs.items, std.math.maxInt(u32));
+
+    try std.testing.expect(!try graph.containsIteratorInterface(root));
+    try std.testing.expectEqual(@as(u32, 1), graph.iterator_interface_visit_epoch);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
+
+    try std.testing.expect(!try graph.containsIteratorInterface(root));
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.iterator_interface_cache_hits);
+
+    const unrelated = try graph.newNode(.{ .primitive = .u64 });
+    try graph.setContent(unrelated, .{ .primitive = .str });
+    try std.testing.expect(!try graph.containsIteratorInterface(root));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_cache_hits);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x42} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    try graph.setContent(child, .{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(14) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = &.{},
+        .backing = null,
+    } });
+    try std.testing.expect(try graph.containsIteratorInterface(root));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_cache_hits);
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.iterator_interface_nodes_visited);
 }
 
 test "final type sealing remains allowed after instantiation relations freeze" {

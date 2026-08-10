@@ -3858,7 +3858,14 @@ const Builder = struct {
                 });
             }
             if (resolved_lookup_address) |address| {
-                try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
+                const active_spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                if (try self.program.types.typeEql(
+                    &self.program.names,
+                    active_spec_fn_ty,
+                    resolved_request_ty.?,
+                )) {
+                    try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
+                }
             }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
@@ -6699,9 +6706,10 @@ const Builder = struct {
     ) Allocator.Error!void {
         var spec_index: usize = 0;
         while (spec_index < body_draft.template_specs.items.len) : (spec_index += 1) {
-            const spec = &body_draft.template_specs.items[spec_index];
-            if (spec.state != .deferred) continue;
-            const fn_ty = try sealer.sealNode(spec.request_fn_node);
+            const state = body_draft.template_specs.items[spec_index].state;
+            if (state != .deferred) continue;
+            const request_fn_node = body_draft.template_specs.items[spec_index].request_fn_node;
+            const fn_ty = try sealer.sealNode(request_fn_node);
             try self.resolveDeferredTemplateSpecAtType(body_draft, spec_index, fn_ty);
         }
     }
@@ -9855,6 +9863,19 @@ fn registerTemplateSpecLookup(
     try entry.value_ptr.append(allocator, raw_spec);
 }
 
+fn unregisterTemplateSpecLookup(
+    draft: *BodyDraftStore,
+    address: DraftTemplateLookupAddress,
+    raw_spec: u32,
+) void {
+    const candidates = draft.template_spec_lookup.getPtr(address) orelse return;
+    for (candidates.items, 0..) |candidate, index| {
+        if (candidate != raw_spec) continue;
+        _ = candidates.orderedRemove(index);
+        return;
+    }
+}
+
 fn registerTemplateSpecInterfaceLookups(
     draft: *BodyDraftStore,
     allocator: Allocator,
@@ -9900,12 +9921,7 @@ fn unregisterTemplateSpecInterfaceLookups(
             .request_kind = 1,
             .request_fn_key = draftOpenRequestKey(interface_node),
         };
-        const candidates = draft.template_spec_lookup.getPtr(address) orelse continue;
-        for (candidates.items, 0..) |candidate, index| {
-            if (candidate != raw_spec) continue;
-            _ = candidates.orderedRemove(index);
-            break;
-        }
+        unregisterTemplateSpecLookup(draft, address, raw_spec);
     }
 }
 
@@ -20035,16 +20051,6 @@ const BodyContext = struct {
         };
     }
 
-    fn isIteratorInterfaceNode(self: *BodyContext, node: NodeId) bool {
-        return switch (self.graph.content(node)) {
-            .named => |named| if (named.builtin_owner) |owner|
-                static_dispatch.isIteratorOwner(owner)
-            else
-                false,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
-        };
-    }
-
     fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
             .named => |named| named.def.iterator_representation == .forced_dynamic,
@@ -27862,8 +27868,8 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const current_node = try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
         const current_fn = try self.graph.functionNodes(current_node);
-        if (try self.graph.containsGeneratedPrivate(current_fn.ret) or
-            !try self.graph.containsIteratorInterface(current_fn.ret))
+        if (!try self.graph.containsIteratorInterface(current_fn.ret) or
+            try self.graph.containsGeneratedPrivate(current_fn.ret))
         {
             return current_node;
         }
@@ -27913,18 +27919,27 @@ const BodyContext = struct {
         const completed_node = try self.activeNodeFromType(completed_ty);
         if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
 
+        const family = DraftTemplateFamilyAddress.init(
+            spec.template_ref,
+            spec.method_scope,
+            spec.source_fn_key,
+        );
+        const evidence_digest = self.draft.fns.items[@intFromEnum(draft_fn)].source.evidence_digest.bytes;
+        const raw_spec: u32 = @intCast(spec_index);
+        unregisterTemplateSpecLookup(self.draft, .{
+            .family = family,
+            .evidence_digest = evidence_digest,
+            .request_kind = 0,
+            .request_fn_key = self.builder.specializationTypeDigest(request_fn_ty).bytes,
+        }, raw_spec);
         try unregisterTemplateSpecInterfaceLookups(
             self.draft,
             self.allocator,
             self.graph,
-            DraftTemplateFamilyAddress.init(
-                spec.template_ref,
-                spec.method_scope,
-                spec.source_fn_key,
-            ),
-            self.draft.fns.items[@intFromEnum(draft_fn)].source.evidence_digest.bytes,
+            family,
+            evidence_digest,
             current_node,
-            @intCast(spec_index),
+            raw_spec,
         );
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
         self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
@@ -27944,6 +27959,16 @@ const BodyContext = struct {
             completed_node,
             @intCast(spec_index),
         );
+        try registerTemplateSpecLookup(self.draft, self.allocator, .{
+            .family = DraftTemplateFamilyAddress.init(
+                completed_spec.template_ref,
+                completed_spec.method_scope,
+                completed_spec.source_fn_key,
+            ),
+            .evidence_digest = completed_source.evidence_digest.bytes,
+            .request_kind = 0,
+            .request_fn_key = self.builder.specializationTypeDigest(completed_ty).bytes,
+        }, raw_spec);
         return completed_node;
     }
 
@@ -32199,6 +32224,26 @@ const BodyContext = struct {
         };
     }
 
+    /// Whether the checked dispatch plan already names the exact graph-lowered
+    /// procedure or local procedure that should receive the call request.
+    fn dispatchUsesDirectGraphCallee(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) bool {
+        const evidence = switch (plan.resolution) {
+            .direct_closed => |direct| direct.evidence,
+            .direct_parametric => |direct| direct.evidence,
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+            .evidence_dependent, .structural, .@"unreachable", .checked_error => return false,
+        };
+        const node = self.view.static_dispatch_plans.evidenceNode(evidence);
+        return switch (node.target.kind) {
+            .procedure => |procedure| procedure.runtime_target == .procedure,
+            .local_proc => true,
+            .structural => false,
+        };
+    }
+
     fn lowerDispatchExprAtType(
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
@@ -32211,7 +32256,7 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
-        var direct_graph_call = false;
+        const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
         switch (plan.resolution) {
             .direct_closed => |direct| {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
@@ -32232,7 +32277,7 @@ const BodyContext = struct {
                         ),
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => direct_graph_call = true,
+                    .local_proc => {},
                     .structural => {},
                 }
             },
@@ -32241,10 +32286,10 @@ const BodyContext = struct {
                 switch (node.target.kind) {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| direct_parametric_low_level = op,
-                        .procedure => direct_graph_call = true,
+                        .procedure => {},
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => direct_graph_call = true,
+                    .local_proc => {},
                     .structural => {},
                 }
             },
@@ -32296,7 +32341,7 @@ const BodyContext = struct {
                         callable_node = private_node;
                     }
                 }
-                callable_node = try self.completeIteratorMethodResultAtNode(
+                callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                     initial_lookup,
                     callable_node,
                     try self.evidenceForDispatchTarget(plan),
@@ -32654,11 +32699,11 @@ const BodyContext = struct {
             .args = lowered,
             .captures = try self.methodTargetCaptureSpan(lookup),
         } });
-        return try self.applyDispatchResultMode(
-            plan.result_mode,
-            call,
-            try self.activeTypeFromNode(completed_function.ret),
-        );
+        const result_ty = if (completed_ret_is_private)
+            try self.activeTypeFromNode(completed_function.ret)
+        else
+            function.ret;
+        return try self.applyDispatchResultMode(plan.result_mode, call, result_ty);
     }
 
     const ClosedDispatchOperands = union(enum) {
@@ -33587,14 +33632,11 @@ const BodyContext = struct {
                 }
                 if (phase == .expression_lowering) {
                     const target_evidence = try self.evidenceForDispatchTarget(plan);
-                    callable_node = try self.completeIteratorMethodResultAtNode(
+                    callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                         lookup,
                         callable_node,
                         target_evidence,
-                        switch (plan.resolution) {
-                            .evidence_dependent => false,
-                            else => true,
-                        },
+                        self.dispatchUsesDirectGraphCallee(plan),
                     );
                 }
             },
@@ -35087,10 +35129,11 @@ const BodyContext = struct {
         };
     }
 
-    /// Ask an ordinary procedure for its completed iterator result before a
-    /// caller chooses representation-sensitive lowering. This consumes only
-    /// the private witness emitted by that producer's own body.
-    fn completeIteratorMethodResultAtNode(
+    /// Lower or reuse an ordinary procedure specialization so its callee-authored
+    /// iterator result is available before the caller chooses
+    /// representation-sensitive lowering. This is an expression-lowering step,
+    /// not a read-only graph query: it may create a draft specialization.
+    fn lowerAndCompleteIteratorMethodResultAtNode(
         self: *BodyContext,
         lookup: MethodLookup,
         request_fn_node: NodeId,
@@ -35098,8 +35141,8 @@ const BodyContext = struct {
         direct: bool,
     ) Allocator.Error!NodeId {
         const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (try self.graph.containsGeneratedPrivate(request_fn.ret) or
-            !try self.graph.containsIteratorInterface(request_fn.ret))
+        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
+            try self.graph.containsGeneratedPrivate(request_fn.ret))
         {
             return request_fn_node;
         }
@@ -42304,6 +42347,7 @@ const BodyContext = struct {
         return switch (self.view.bodies.expr(checked_expr).data) {
             .call,
             .dispatch_call,
+            .field_access,
             .interpolation,
             .type_dispatch_call,
             .method_eq,

@@ -4151,6 +4151,28 @@ test "nested iterator results retain the callee-authored representation" {
         \\main : U64
         \\main = sum_it([1, 2, 3])
         },
+        .{ .name = "match field access", .source =
+        \\wrap : List(U64) -> { it : Try(Iter(U64), [Unavailable]) }
+        \\wrap = |items| { it: Ok(items.iter()) }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    match wrapped.it {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
         .{ .name = "closed direct Try method", .source =
         \\Rows := { items : List(U64) }.{
         \\    wrapped : Rows -> Try(Iter(U64), [Unavailable])

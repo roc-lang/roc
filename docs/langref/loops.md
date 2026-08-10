@@ -52,9 +52,10 @@ for n in [1, 2, 3, 4].iter_rev() {
 ```
 
 This reads the list backwards in place. Unlike `List.rev`, it does not build a
-reversed copy of the list first. `iter_rev` is specific to lists; to reverse
-the values from another iterator, first collect them with `List.from_iter`,
-then call `iter_rev` on that list.
+reversed copy of the list first. Dictionaries and sets also provide `iter_rev`
+to traverse their current iteration order backwards. To reverse values from
+another iterator source, first collect them with `List.from_iter`, then call
+`iter_rev` on that list.
 
 ### Pattern matching in `for`
 

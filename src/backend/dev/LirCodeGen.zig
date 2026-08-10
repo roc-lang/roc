@@ -22310,7 +22310,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // drains the pool in a function with enough of them.
                             self.codegen.freeGeneral(cond_reg);
                             const skip_patch = try self.emitJumpIfNotEqual();
-                            self.codegen.freeGeneral(cond_reg);
                             try self.emitRocExpectFailed();
                             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                             try work.append(wa, .{ .node = expect_stmt.next });

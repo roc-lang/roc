@@ -198,6 +198,40 @@ pub const IteratorProcedureId = enum(u8) {
             => true,
         };
     }
+
+    /// Whether the checker must leave a producer call's closed source expression
+    /// available as a separate hoist root.
+    ///
+    /// Only list-backed conversions need this so an inline collection remains
+    /// available for static-data hoisting. Adapter inputs are already iterator
+    /// expressions, while ranges and custom iterators have no eager source
+    /// expression to preserve.
+    pub fn preservesHoistableSourceInput(self: IteratorProcedureId) bool {
+        return switch (self) {
+            .list_iter, .list_iter_rev => true,
+            .iter_iter,
+            .iter_next,
+            .iter_custom,
+            .iter_single,
+            .str_iter_utf8,
+            .iter_map,
+            .iter_keep_if,
+            .iter_drop_if,
+            .iter_take_first,
+            .iter_drop_first,
+            .iter_concat,
+            .iter_append,
+            .iter_exclusive_range,
+            .iter_inclusive_range,
+            .numeric_range_exclusive,
+            .numeric_range_inclusive,
+            .numeric_to,
+            .numeric_until,
+            .iter_from_step,
+            .range_done,
+            => false,
+        };
+    }
 };
 
 const IteratorProcedureNameEntry = struct { []const u8, IteratorProcedureId };
@@ -246,32 +280,33 @@ const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).init
     break :blk &entries;
 });
 
-const iterator_producer_method_names = std.StaticStringMap(void).initComptime(.{
-    .{ "iter", {} },
-    .{ "custom", {} },
-    .{ "single", {} },
-    .{ "iter_rev", {} },
-    .{ "iter_utf8", {} },
-    .{ "map", {} },
-    .{ "keep_if", {} },
-    .{ "drop_if", {} },
-    .{ "take_first", {} },
-    .{ "drop_first", {} },
-    .{ "concat", {} },
-    .{ "append", {} },
-    .{ "exclusive_range", {} },
-    .{ "inclusive_range", {} },
-    .{ "range_exclusive", {} },
-    .{ "range_inclusive", {} },
-    .{ "to", {} },
-    .{ "until", {} },
+const iterator_source_method_count = blk: {
+    var count: usize = 0;
+    for (iterator_procedure_base_names) |entry| {
+        if (entry[1].preservesHoistableSourceInput()) count += 1;
+    }
+    break :blk count;
+};
+
+const iterator_source_method_names = std.StaticStringMap(void).initComptime(blk: {
+    var entries: [iterator_source_method_count]struct { []const u8, void } = undefined;
+    var index: usize = 0;
+    for (iterator_procedure_base_names) |entry| {
+        if (!entry[1].preservesHoistableSourceInput()) continue;
+
+        const dot_index = std.mem.lastIndexOfScalar(u8, entry[0], '.') orelse
+            @compileError("iterator procedure base names must be fully qualified");
+        entries[index] = .{ entry[0][dot_index + 1 ..], {} };
+        index += 1;
+    }
+    break :blk &entries;
 });
 
-/// Whether a surface method name can resolve to a registered iterator
-/// producer. Checking uses this explicit registry before the exact target has
-/// been selected, so producer calls do not swallow their hoistable inputs.
-pub fn methodNameMayProduceIterator(text: []const u8) bool {
-    return iterator_producer_method_names.has(text);
+/// Whether a surface method converts an eager collection to an iterator and
+/// therefore needs its closed source expression preserved as a separate hoist
+/// root until static dispatch resolves the exact procedure.
+pub fn methodNamePreservesIteratorSourceInput(text: []const u8) bool {
+    return iterator_source_method_names.has(text);
 }
 
 /// Return the compiler-owned iterator role assigned to a Builtin definition.

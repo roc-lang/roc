@@ -205,12 +205,7 @@ test "iterator producer calls leave their closed inputs available for hoisting" 
     var test_env = try TestEnv.init("Test",
         \\main = |runtime| {
         \\    reversed = [1.U64, 2, 3].iter_rev()
-        \\    inclusive = 0.U8.to(3)
-        \\    exclusive = 0.U8.until(3)
-        \\    List.len(List.from_iter(reversed)) +
-        \\        List.len(List.from_iter(inclusive)) +
-        \\        List.len(List.from_iter(exclusive)) +
-        \\        runtime
+        \\    List.len(List.from_iter(reversed)) + runtime
         \\}
     );
     defer test_env.deinit();
@@ -223,9 +218,72 @@ test "iterator producer calls leave their closed inputs available for hoisting" 
             .e_dispatch_call => |call| call.method_name,
             else => continue,
         };
-        try std.testing.expect(!static_dispatch.methodNameMayProduceIterator(
+        try std.testing.expect(!static_dispatch.methodNamePreservesIteratorSourceInput(
             test_env.module_env.getIdent(method_name),
         ));
+    }
+}
+
+test "non-iterator methods sharing iterator producer names remain hoistable" {
+    const cases = [_]struct {
+        source: []const u8,
+        method_name: []const u8,
+    }{
+        .{
+            .source =
+            \\main = |runtime| {
+            \\    values = [1.U64, 2.U64].append(3)
+            \\    if runtime == 0 { List.len(values) } else { runtime }
+            \\}
+            ,
+            .method_name = "append",
+        },
+        .{
+            .source =
+            \\main = |runtime| {
+            \\    values = [1.U64, 2.U64].take_first(1)
+            \\    if runtime == 0 { List.len(values) } else { runtime }
+            \\}
+            ,
+            .method_name = "take_first",
+        },
+        .{
+            .source =
+            \\main = |runtime| {
+            \\    value = "a".concat("b")
+            \\    if runtime == 0 { Str.count_utf8_bytes(value) } else { runtime }
+            \\}
+            ,
+            .method_name = "concat",
+        },
+    };
+
+    for (cases) |case| {
+        var test_env = try TestEnv.init("Test", case.source);
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        const roots = test_env.checker.selectedHoistedRoots();
+        try std.testing.expectEqual(@as(usize, 1), roots.len);
+        try std.testing.expect(roots[0].pattern != null);
+        switch (test_env.module_env.store.getExpr(roots[0].expr)) {
+            .e_method_call => |call| try std.testing.expectEqualStrings(
+                case.method_name,
+                test_env.module_env.getIdent(call.method_name),
+            ),
+            .e_dispatch_call => |call| try std.testing.expectEqualStrings(
+                case.method_name,
+                test_env.module_env.getIdent(call.method_name),
+            ),
+            else => try std.testing.expect(false),
+        }
+    }
+
+    for ([_][]const u8{
+        "append",     "map",        "concat", "single", "keep_if", "drop_if",
+        "take_first", "drop_first", "custom", "to",     "until",
+    }) |method_name| {
+        try std.testing.expect(!static_dispatch.methodNamePreservesIteratorSourceInput(method_name));
     }
 }
 
