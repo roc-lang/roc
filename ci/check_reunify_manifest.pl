@@ -136,8 +136,12 @@ my @categories = (
             # checked-to-request walk lost two the same way: a named pair with
             # no backing on one side has nothing finer to relate, so those exits
             # fall out to the walk's own terminal join instead of repeating it.
+            # One more went when the evidence target root stopped testing only
+            # the request side: its root is never a generated private
+            # representation, measured across the suite, so the shared relater's
+            # test of both sides answers identically.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 16, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 15, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,

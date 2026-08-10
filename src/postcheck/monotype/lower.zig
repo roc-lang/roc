@@ -35621,11 +35621,11 @@ const BodyContext = struct {
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
-            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
-        } else {
-            try self.graph.unify(root_node, request_fn_node);
-        }
+        // The target root is a checked interface, never a generated private
+        // representation — measured across the suite — so the shared relater's
+        // own test of both sides answers exactly as this site's test of the
+        // request alone did.
+        try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
     }
 
     fn methodTargetCalleeAtNode(
