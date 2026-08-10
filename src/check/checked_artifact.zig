@@ -951,6 +951,10 @@ pub const RootRequest = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
+    /// Exact checked root selected for this request. Compile-time roots can
+    /// share a source expression, so source and broad request kind are not an
+    /// identity.
+    compile_time_root: ?ComptimeRootId = null,
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
@@ -1023,12 +1027,14 @@ pub const RootRequestTable = struct {
                 compile_time_roots,
                 entry_wrappers,
                 root.source,
+                root.kind,
                 source_checked_type,
             );
             try appendRoot(&requests, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = root.kind,
                 .source = root.source,
+                .compile_time_root = backing.compile_time_root,
                 .checked_type = backing.checked_type,
                 .abi = root.abi,
                 .exposure = root.exposure,
@@ -1091,6 +1097,7 @@ pub const RootRequestTable = struct {
                     .expect => .test_expect,
                 },
                 .source = root.source,
+                .compile_time_root = root.id,
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
@@ -1165,19 +1172,29 @@ fn explicitRootMatchesCheckedRootKind(
         return root.kind != .compile_time_constant and root.kind != .compile_time_callable;
     }
 
-    const root_id = compile_time_roots.lookupIdBySource(root.source) orelse return false;
-    const compile_time_root = compile_time_roots.root(root_id);
-    return compileTimeRootKindMatchesRequest(compile_time_root.kind, root.kind);
+    return compileTimeRootIdForSourceAndRequestKind(compile_time_roots, root.source, root.kind) != null;
 }
 
 fn explicitCompileTimeRootRequestIsEligible(
     compile_time_roots: *const CompileTimeRootTable,
     root: ExplicitRootRequestInput,
 ) bool {
-    const root_id = compile_time_roots.lookupIdBySource(root.source) orelse return true;
+    const root_id = compileTimeRootIdForSourceAndRequestKind(compile_time_roots, root.source, root.kind) orelse return true;
     const compile_time_root = compile_time_roots.root(root_id);
-    if (!compileTimeRootKindMatchesRequest(compile_time_root.kind, root.kind)) return true;
     return compileTimeRootRequestIsEligible(compile_time_root);
+}
+
+fn compileTimeRootIdForSourceAndRequestKind(
+    compile_time_roots: *const CompileTimeRootTable,
+    source: RootSource,
+    request_kind: RootRequestKind,
+) ?ComptimeRootId {
+    for (compile_time_roots.roots) |root| {
+        if (!rootSourceMatches(root.source, source)) continue;
+        if (!compileTimeRootKindMatchesRequest(root.kind, request_kind)) continue;
+        return root.id;
+    }
+    return null;
 }
 
 fn collectRuntimeRootRequests(
@@ -1622,12 +1639,21 @@ fn compileTimeRootIdForRequest(
     compile_time_roots: *const CompileTimeRootTable,
     request: RootRequest,
 ) ComptimeRootId {
-    for (compile_time_roots.roots) |root| {
-        if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
-        if (!rootSourceMatches(root.source, request.source)) continue;
-        return root.id;
+    const root_id = request.compile_time_root orelse {
+        checkedArtifactInvariant("compile-time request had no exact compile-time root identity", .{});
+    };
+    const raw = @intFromEnum(root_id);
+    if (raw >= compile_time_roots.roots.len) {
+        checkedArtifactInvariant("compile-time request root identity was outside the checked root table", .{});
     }
-    checkedArtifactInvariant("compile-time request had no matching compile-time root", .{});
+    const root = compile_time_roots.roots[raw];
+    if (root.id != root_id or
+        !compileTimeRootKindMatchesRequest(root.kind, request.kind) or
+        !rootSourceMatches(root.source, request.source))
+    {
+        checkedArtifactInvariant("compile-time request identity did not match its checked root", .{});
+    }
+    return root_id;
 }
 
 fn verifyCompileTimeRequestsScheduled(
@@ -1882,9 +1908,7 @@ fn compileTimeRootHasRootRequest(
 ) bool {
     for (requests) |request| {
         if (request.abi != .compile_time) continue;
-        if (!compileTimeRootKindMatchesRequest(root.kind, request.kind)) continue;
-        if (!rootSourceMatches(root.source, request.source)) continue;
-        return true;
+        if (request.compile_time_root == root.id) return true;
     }
     return false;
 }
@@ -2378,6 +2402,7 @@ fn requiredProcedureTemplateForRootSource(
 const RootBackingProcedure = struct {
     checked_type: CheckedTypeId,
     template: canonical.ProcedureTemplateRef,
+    compile_time_root: ?ComptimeRootId,
 };
 
 fn explicitRootBackingProcedure(
@@ -2385,17 +2410,18 @@ fn explicitRootBackingProcedure(
     compile_time_roots: *const CompileTimeRootTable,
     entry_wrappers: *const EntryWrapperTable,
     source: RootSource,
+    request_kind: RootRequestKind,
     source_checked_type: CheckedTypeId,
 ) RootBackingProcedure {
     if (procedureTemplateForRootSource(procedure_templates, source)) |template| {
-        return .{ .checked_type = source_checked_type, .template = template };
+        return .{ .checked_type = source_checked_type, .template = template, .compile_time_root = null };
     }
 
-    const root_id = compile_time_roots.lookupIdBySource(source) orelse {
+    const root_id = compileTimeRootIdForSourceAndRequestKind(compile_time_roots, source, request_kind) orelse {
         checkedArtifactInvariant("explicit root has no checked procedure template or entry wrapper", .{});
     };
     const wrapper = entryWrapperForRoot(entry_wrappers, root_id);
-    return .{ .checked_type = wrapper.checked_fn_root, .template = wrapper.template };
+    return .{ .checked_type = wrapper.checked_fn_root, .template = wrapper.template, .compile_time_root = root_id };
 }
 
 fn checkedTypeIdForRootSource(
@@ -2455,6 +2481,7 @@ const RootRequestWithoutOrder = struct {
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
+    compile_time_root: ?ComptimeRootId = null,
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
@@ -2474,6 +2501,7 @@ fn appendRoot(
         .module_idx = request.module_idx,
         .kind = request.kind,
         .source = request.source,
+        .compile_time_root = request.compile_time_root,
         .checked_type = request.checked_type,
         .abi = request.abi,
         .exposure = request.exposure,
@@ -28133,7 +28161,8 @@ pub const CheckedModuleArtifact = struct {
     // upstream's version-57 artifact change.
     // Version 60 preserves generalized field-kind variable identities and
     // optional source-value types in stored const evidence.
-    const serialized_layout_version: u32 = 60;
+    // Version 61 gives every compile-time request its exact checked-root ID.
+    const serialized_layout_version: u32 = 61;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34122,8 +34151,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x53, 0x7C, 0x71, 0x6B, 0xC7, 0x47, 0xE0, 0x56, 0x10, 0xAE, 0x75, 0x81, 0x5D, 0x67, 0x85, 0x0C,
-        0xC0, 0x3B, 0xBB, 0xD0, 0x97, 0x7A, 0x50, 0x5B, 0x9B, 0x6A, 0x61, 0x15, 0x55, 0xB9, 0x70, 0xB7,
+        0xE2, 0xAA, 0x31, 0x26, 0x74, 0xA5, 0x9E, 0x9C, 0x96, 0xB1, 0x30, 0x08, 0xA3, 0x16, 0xEF, 0x8A,
+        0x2C, 0x94, 0xF1, 0x8B, 0x8E, 0xED, 0x56, 0x8B, 0xB7, 0x17, 0x7C, 0x69, 0x7A, 0x33, 0x9E, 0x35,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -2095,23 +2095,31 @@ fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
 ) checked.ComptimeRootId {
-    for (module.compile_time_roots.roots) |root| {
-        const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
-            .compile_time_callable => root.kind == .callable_binding,
-            .runtime_entrypoint,
-            .provided_export,
-            .platform_required_binding,
-            .hosted_export,
-            .test_expect,
-            .repl_expr,
-            .dev_expr,
-            => finalizationInvariant("non compile-time request reached compile-time root lookup"),
-        };
-        if (kind_matches and rootSourceEql(root.source, request.source)) return root.id;
+    const root_id = request.compile_time_root orelse {
+        finalizationInvariant("compile-time request had no exact checked root identity");
+    };
+    const raw = @intFromEnum(root_id);
+    if (raw >= module.compile_time_roots.roots.len) {
+        finalizationInvariant("compile-time request root identity was outside the checked root table");
+    }
+    const root = module.compile_time_roots.roots[raw];
+    const kind_matches = switch (request.kind) {
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
+        .compile_time_callable => root.kind == .callable_binding,
+        .runtime_entrypoint,
+        .provided_export,
+        .platform_required_binding,
+        .hosted_export,
+        .test_expect,
+        .repl_expr,
+        .dev_expr,
+        => finalizationInvariant("non compile-time request reached compile-time root lookup"),
+    };
+    if (root.id != root_id or !kind_matches or !rootSourceEql(root.source, request.source)) {
+        finalizationInvariant("compile-time request identity did not match its checked root");
     }
 
-    finalizationInvariant("compile-time root request did not match a checked root");
+    return root_id;
 }
 
 fn finishConstRoot(

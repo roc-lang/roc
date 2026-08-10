@@ -879,6 +879,42 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "-9" },
     },
+    .{
+        .name = "defaulted record field: custom from_numeral default materializes",
+        .source_kind = .module,
+        .source =
+        \\MyNum := [Value(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
+        \\}
+        \\
+        \\config : { size : MyNum ?? 5 }
+        \\config = {}
+        \\
+        \\main = match config.size {
+        \\    Value(size) => size
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "defaulted record field: custom from_quote default materializes",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
+        \\}
+        \\
+        \\config : { label : Tag ?? "hello" }
+        \\config = {}
+        \\
+        \\main = match config.label {
+        \\    Tag(label) => label
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
     // Frontend problems
     .{ .name = "problem: name not in scope", .source = "undefinedVar", .expected = .{ .problem = {} } },
     .{ .name = "problem: dec plus int type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },

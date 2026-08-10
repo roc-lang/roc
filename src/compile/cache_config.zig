@@ -132,7 +132,8 @@ pub const Constants = struct {
     ///     defaults (design.md "Field Kinds", "Defaulted Fields").
     /// 52: Generalized checked record fields retain presence-variable identity,
     ///     and const record evidence retains optional source-value types.
-    pub const CACHE_VERSION = 52;
+    /// 53: Compile-time root requests retain exact checked-root identity.
+    pub const CACHE_VERSION = 53;
 };
 
 /// Configuration for the Roc cache system.
