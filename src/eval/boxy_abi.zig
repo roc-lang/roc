@@ -586,22 +586,78 @@ fn abiCrash(g: *GlobalBoxyRuntime, comptime what: []const u8) noreturn {
     unreachable;
 }
 
+/// Fixed-buffer message builder for the crash paths below.
+///
+/// These messages carry ids and keys that are worth having in a crash report,
+/// but `std.fmt` instantiates a distinct formatter per argument tuple, and
+/// `{any}` over a slice of structs instantiates one per field shape. In an
+/// object whose only output is `RocOps.crash`, that links the entire `std.Io`
+/// writer stack. Appending decimal digits directly keeps the diagnostics and
+/// leaves the object free of the formatter. Writes past the buffer are dropped,
+/// so a long id list truncates rather than failing the crash report.
+const CrashMessage = struct {
+    buf: [256]u8 = undefined,
+    len: usize = 0,
+
+    fn str(self: *CrashMessage, chunk: []const u8) void {
+        const room = self.buf.len - self.len;
+        const n = @min(room, chunk.len);
+        @memcpy(self.buf[self.len..][0..n], chunk[0..n]);
+        self.len += n;
+    }
+
+    fn uint(self: *CrashMessage, value: u64) void {
+        var digits: [20]u8 = undefined;
+        var i: usize = digits.len;
+        var v = value;
+        while (true) {
+            i -= 1;
+            digits[i] = '0' + @as(u8, @intCast(v % 10));
+            v /= 10;
+            if (v == 0) break;
+        }
+        self.str(digits[i..]);
+    }
+
+    fn keyList(self: *CrashMessage, keys: []const LIR.ErasedArgDescKey) void {
+        self.str("[");
+        for (keys, 0..) |key, index| {
+            if (index != 0) self.str(", ");
+            self.str("(");
+            self.uint(key.arg_index);
+            self.str(", ");
+            self.uint(key.descriptor_index);
+            self.str(")");
+        }
+        self.str("]");
+    }
+
+    fn uintList(self: *CrashMessage, values: []const u32) void {
+        self.str("[");
+        for (values, 0..) |value, index| {
+            if (index != 0) self.str(", ");
+            self.uint(value);
+        }
+        self.str("]");
+    }
+
+    fn text(self: *const CrashMessage) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
 fn abiCrashMissingDescriptorCapture(
     g: *GlobalBoxyRuntime,
     local: LIR.LocalId,
     supplied_null: bool,
 ) noreturn {
-    var buffer: [256]u8 = undefined;
-    const message = std.fmt.bufPrint(
-        &buffer,
-        "boxy runtime descriptor capture local {d} was {s}; supplied capture ids={any}",
-        .{
-            @intFromEnum(local),
-            if (supplied_null) "null" else "missing",
-            g.capture_ids,
-        },
-    ) catch "boxy runtime descriptor capture binding failed";
-    g.runtime.roc_ops.crash(message);
+    var message: CrashMessage = .{};
+    message.str("boxy runtime descriptor capture local ");
+    message.uint(@intFromEnum(local));
+    message.str(if (supplied_null) " was null" else " was missing");
+    message.str("; supplied capture ids=");
+    message.uintList(g.capture_ids);
+    g.runtime.roc_ops.crash(message.text());
     unreachable;
 }
 
@@ -610,13 +666,15 @@ fn abiCrashNullErasedArgDescriptor(
     proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
-    var buffer: [192]u8 = undefined;
-    const message = std.fmt.bufPrint(
-        &buffer,
-        "boxy runtime erased call supplied a null descriptor to proc {d} for key ({d}, {d})",
-        .{ proc_id, key.arg_index, key.descriptor_index },
-    ) catch "boxy runtime erased call supplied a null argument descriptor";
-    g.runtime.roc_ops.crash(message);
+    var message: CrashMessage = .{};
+    message.str("boxy runtime erased call supplied a null descriptor to proc ");
+    message.uint(proc_id);
+    message.str(" for key (");
+    message.uint(key.arg_index);
+    message.str(", ");
+    message.uint(key.descriptor_index);
+    message.str(")");
+    g.runtime.roc_ops.crash(message.text());
     unreachable;
 }
 
@@ -626,13 +684,16 @@ fn abiCrashMissingErasedArgDescriptor(
     key: LIR.ErasedArgDescKey,
     supplied_keys: []const LIR.ErasedArgDescKey,
 ) noreturn {
-    var buffer: [256]u8 = undefined;
-    const message = std.fmt.bufPrint(
-        &buffer,
-        "boxy runtime erased proc {d} required descriptor key ({d}, {d}); supplied keys={any}",
-        .{ proc_id, key.arg_index, key.descriptor_index, supplied_keys },
-    ) catch "boxy runtime erased call omitted a required argument descriptor";
-    g.runtime.roc_ops.crash(message);
+    var message: CrashMessage = .{};
+    message.str("boxy runtime erased proc ");
+    message.uint(proc_id);
+    message.str(" required descriptor key (");
+    message.uint(key.arg_index);
+    message.str(", ");
+    message.uint(key.descriptor_index);
+    message.str("); supplied keys=");
+    message.keyList(supplied_keys);
+    g.runtime.roc_ops.crash(message.text());
     unreachable;
 }
 
@@ -641,13 +702,15 @@ fn abiCrashDuplicateErasedArgDescriptor(
     proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
-    var buffer: [192]u8 = undefined;
-    const message = std.fmt.bufPrint(
-        &buffer,
-        "boxy runtime erased call supplied duplicate descriptors to proc {d} for key ({d}, {d})",
-        .{ proc_id, key.arg_index, key.descriptor_index },
-    ) catch "boxy runtime erased call supplied duplicate argument descriptors";
-    g.runtime.roc_ops.crash(message);
+    var message: CrashMessage = .{};
+    message.str("boxy runtime erased call supplied duplicate descriptors to proc ");
+    message.uint(proc_id);
+    message.str(" for key (");
+    message.uint(key.arg_index);
+    message.str(", ");
+    message.uint(key.descriptor_index);
+    message.str(")");
+    g.runtime.roc_ops.crash(message.text());
     unreachable;
 }
 
