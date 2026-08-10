@@ -144,9 +144,13 @@ my @categories = (
             # body against its root, a produced value against its checked
             # position, and an expected node against a lowered expression type
             # each measured non-private on both sides every time, which is the
-            # case the shared relater answers with that same join.
+            # case the shared relater answers with that same join. One further
+            # relation was dead by construction rather than by measurement: the
+            # call-argument evidence chain threads an expected type whose only
+            # three roots all pass null, so the join it guarded could never
+            # execute and the parameter is gone from the whole chain.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 12, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 11, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -205,9 +209,11 @@ my @categories = (
             # Two $LOWER imports went away with the hand-spelled constraints
             # that performed them: routing those sites through
             # `constrainTypeToCell` means the cell decides how its sealed side
-            # reaches the graph, so the import happens inside the funnel.
+            # reaches the graph, so the import happens inside the funnel. A
+            # third was inside the always-null expected-type chain and left
+            # with it.
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 15, $LOWER => 20 } },
+              counts => { $SOLVE => 15, $LOWER => 19 } },
         ],
     },
     {

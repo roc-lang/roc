@@ -26432,7 +26432,7 @@ const BodyContext = struct {
             if (!self.sameType(expected, fn_data.ret)) return null;
         }
         for (checked_args) |checked_arg| {
-            if (try self.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+            if (try self.callArgumentEvidenceNode(checked_arg)) |evidence_node| {
                 if (try self.graph.containsGeneratedPrivate(evidence_node)) return null;
             }
         }
@@ -26603,7 +26603,7 @@ const BodyContext = struct {
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-            if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+            if (try caller.callArgumentEvidenceNode(checked_arg)) |evidence_node| {
                 if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                     const public_node = try caller.freshInstNode(arg_ty);
                     try self.graph.relateOpaqueInterface(public_node, evidence_node);
@@ -26930,7 +26930,6 @@ const BodyContext = struct {
     fn callArgumentEvidenceNode(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
-        expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return null;
         const expr = self.view.bodies.expr(checked_arg);
@@ -26942,7 +26941,7 @@ const BodyContext = struct {
                         expr.ty,
                         call,
                         source_fn_ty,
-                        if (expected_ty) |expected| try self.activeNodeFromType(expected) else null,
+                        null,
                     );
                     const fn_nodes = try self.graph.functionNodes(fn_node);
                     if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) return fn_nodes.ret;
@@ -26960,21 +26959,17 @@ const BodyContext = struct {
                     }
                     return fn_nodes.ret;
                 }
-                return try self.callResultTypeNode(expr.ty, call, expected_ty);
+                return try self.callResultTypeNode(expr.ty, call, null);
             },
-            .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
-            .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty),
-            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
-            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
-            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
+            .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, null),
+            .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, null),
+            .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, null),
+            .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, null),
+            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null),
+            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved),
+            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved),
+            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-        }
-        if (expected_ty) |ty| {
-            try self.constrainTypeToMono(expr.ty, ty);
-            return try self.activeNodeFromType(ty);
         }
         return null;
     }
@@ -26983,7 +26978,6 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         maybe_ref: ?checked.ResolvedValueId,
-        expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
@@ -27000,10 +26994,9 @@ const BodyContext = struct {
             // still carry unresolved leaves whose defaults apply at final
             // sealing, so it stays a graph node instead of forcing an eager
             // resolved view.
-            if (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) |node| return node;
-            return if (expected_ty) |ty| try self.activeNodeFromType(ty) else null;
+            return try self.localCallArgumentEvidenceNode(checked_ty, ref_id);
         }
-        return if (try self.lookupCallArgumentMonoType(checked_ty, maybe_ref, expected_ty)) |ty|
+        return if (try self.lookupCallArgumentMonoType(checked_ty, maybe_ref)) |ty|
             try self.activeNodeFromType(ty)
         else
             null;
@@ -27013,7 +27006,6 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         maybe_ref: ?checked.ResolvedValueId,
-        expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
@@ -27027,7 +27019,7 @@ const BodyContext = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
         }
         if ((try self.currentLocalForResolvedValue(ref_id)) != null) {
-            return try self.localCallArgumentEvidenceType(checked_ty, ref_id, expected_ty);
+            return try self.localCallArgumentEvidenceType(checked_ty, ref_id);
         }
         return switch (record.ref) {
             .top_level_const,
@@ -27048,21 +27040,18 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         ref_id: checked.ResolvedValueId,
-        expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const node = (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) orelse
-            return expected_ty;
+        const node = (try self.localCallArgumentEvidenceNode(checked_ty, ref_id)) orelse
+            return null;
         return try self.activeTypeFromNode(node);
     }
 
     /// Constrain a local call argument's cell and return its evidence node
-    /// when the local carries generated-private content; otherwise the
-    /// caller's expected type (if any) is the evidence.
+    /// when the local carries generated-private content.
     fn localCallArgumentEvidenceNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         ref_id: checked.ResolvedValueId,
-        expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse
             Common.invariant("local call argument evidence requested without a current local");
@@ -27072,9 +27061,6 @@ const BodyContext = struct {
             .sealed => |ty| try self.activeNodeFromType(ty),
         };
         try self.constrainCheckedInterfaceToCell(checked_ty, cell);
-        if (expected_ty) |expected| {
-            try self.graph.unify(node, try self.graph.importMono(expected));
-        }
         return if (try self.graph.containsGeneratedPrivate(node)) node else null;
     }
 
@@ -45413,7 +45399,7 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
                     try relateRequestComponent(self.graph, formal_node, public_node);
-                    if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+                    if (try caller.callArgumentEvidenceNode(checked_arg)) |evidence_node| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,
