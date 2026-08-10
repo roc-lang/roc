@@ -6230,7 +6230,10 @@ Builtin :: [].{
 			Items(list) => List.fold(list, init, step)
 		}
 
-		## Iterate over the set's values in insertion order.
+		## Iterate over the set's values in their current backing order.
+		## [Set.from_list] keeps the first insertion order, but inserting a value
+		## that is already present removes and re-appends it, which changes that
+		## value's position.
 		## ```roc
 		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -6239,9 +6242,10 @@ Builtin :: [].{
 			Items(list) => List.iter(list)
 		}
 
-		## Iterate over the set's values in reverse insertion order. Like
+		## Iterate over the set's values in reverse current backing order. Like
 		## [List.iter_rev], this reads the values in place rather than building a
-		## reversed copy.
+		## reversed copy. Inserting an already-present value can change this order,
+		## as described by [Set.iter].
 		## ```roc
 		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
 		## ```

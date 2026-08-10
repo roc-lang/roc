@@ -141,6 +141,30 @@ pub fn isIteratorOwner(owner: BuiltinOwner) bool {
     return owner == .iter or owner == .stream;
 }
 
+/// Producer-owned identity of an internal iterator representation. This is
+/// shared by Monotype and ConstStore so crossing that boundary never depends
+/// on the ordinal layout of two separately maintained enums.
+pub const IteratorKind = enum(u8) {
+    none,
+    custom,
+    list,
+    list_rev,
+    str,
+    single,
+    range_exclusive,
+    range_inclusive,
+    numeric_until,
+    numeric_to,
+    map,
+    keep_if,
+    drop_if,
+    take_first,
+    drop_first,
+    concat,
+    append,
+    forced_dynamic,
+};
+
 /// Semantic identity assigned to compiler-owned iterator procedures while
 /// checking still has the defining builtin declaration in hand.
 pub const IteratorProcedureId = enum(u8) {
@@ -259,19 +283,29 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.range_done", .range_done },
 };
 
-const iterator_numeric_type_names = [_][]const u8{
+const iterator_range_numeric_type_names = [_][]const u8{
+    "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64",
+};
+
+const iterator_to_until_numeric_type_names = [_][]const u8{
     "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
 };
 
 const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(blk: {
-    var entries: [iterator_procedure_base_names.len + iterator_numeric_type_names.len * 4]IteratorProcedureNameEntry = undefined;
+    var entries: [
+        iterator_procedure_base_names.len +
+            iterator_range_numeric_type_names.len * 2 +
+            iterator_to_until_numeric_type_names.len * 2
+    ]IteratorProcedureNameEntry = undefined;
     for (iterator_procedure_base_names, 0..) |entry, index| entries[index] = entry;
     var index = iterator_procedure_base_names.len;
-    for (iterator_numeric_type_names) |numeric| {
+    for (iterator_range_numeric_type_names) |numeric| {
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_exclusive", .numeric_range_exclusive };
         index += 1;
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_inclusive", .numeric_range_inclusive };
         index += 1;
+    }
+    for (iterator_to_until_numeric_type_names) |numeric| {
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".to", .numeric_to };
         index += 1;
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".until", .numeric_until };

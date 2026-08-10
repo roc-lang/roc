@@ -4003,6 +4003,89 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "10" },
     },
+    // A procedure that returns `Iter` hands its caller a callee-authored
+    // representation. Consuming that call directly as a `for` source must
+    // still dispatch against the caller's own iterator request.
+    .{
+        .name = "for loop over a procedure returning a list-backed iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning a range-backed iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : U64 -> Iter(U64)
+        \\mk = |n| 0..<n
+        \\
+        \\sum_it : U64 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in mk(n) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it(4)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning an adapted iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter().map(|x| x * 2)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| if flag { xs.iter() } else { 0..<n }
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
     .{
         .name = "inspect: wrapper iterator with distinct branch producers stays correct",
         .source_kind = .module,

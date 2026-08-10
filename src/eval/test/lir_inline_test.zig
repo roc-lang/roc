@@ -4114,12 +4114,107 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
     }
 }
 
+test "F32 and F64 range syntax fuses without Iter.next" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "F32", "F64" }) |numeric_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\all_last : {s} -> ({s}, {s})
+            \\all_last = |n| {{
+            \\    var $exclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..<n {{
+            \\        $exclusive = i
+            \\    }}
+            \\    var $inclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..=n {{
+            \\        $inclusive = i
+            \\    }}
+            \\    ($exclusive, $inclusive)
+            \\}}
+            \\
+            \\main : {s} -> ({s}, {s})
+            \\main = |n| all_last(n)
+        , .{
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type,
+        });
+        defer allocator.free(source);
+
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("floating-point range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
 test "nested iterator results retain the callee-authored representation" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, source: []const u8 }{
         .{ .name = "record", .source =
         \\wrap : List(U64) -> { it : Iter(U64) }
         \\wrap = |items| { it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "tuple", .source =
+        \\wrap : List(U64) -> (Iter(U64), U64)
+        \\wrap = |items| (items.iter(), 1)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.0 {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "list", .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |items| [items.iter()]
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    var $sum = 0
+        \\    for iter in wrap(items) {
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "nominal record", .source =
+        \\Wrapped := { it : Iter(U64) }
+        \\
+        \\wrap : List(U64) -> Wrapped
+        \\wrap = |items| Wrapped.{ it: items.iter() }
         \\
         \\sum_it : List(U64) -> U64
         \\sum_it = |items| {

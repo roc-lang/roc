@@ -22304,12 +22304,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             try self.emitCmpImm(cond_reg, 0);
-                            // The compare is the last use, and the failure path
-                            // below needs scratch registers of its own. Holding
-                            // this one leaks a register per `expect`, which
-                            // drains the pool in a function with enough of them.
-                            self.codegen.freeGeneral(cond_reg);
                             const skip_patch = try self.emitJumpIfNotEqual();
+                            self.codegen.freeGeneral(cond_reg);
                             try self.emitRocExpectFailed();
                             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                             try work.append(wa, .{ .node = expect_stmt.next });

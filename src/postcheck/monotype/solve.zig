@@ -2623,6 +2623,26 @@ pub const InstGraph = struct {
         };
     }
 
+    /// Rebuild a named value witness with an exact produced backing while
+    /// preserving the checked nominal identity and backing capabilities.
+    pub fn namedValueNodeWithBacking(
+        self: *InstGraph,
+        raw_named: NodeId,
+        backing_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const named_content = self.content(raw_named);
+        if (named_content != .named) Common.invariant("named value witness had a non-named checked node");
+        var named = named_content.named;
+        const backing = named.backing orelse
+            Common.invariant("named value witness had no checked backing");
+        named.backing = .{
+            .node = backing_node,
+            .use = backing.use,
+            .authority = backing.authority,
+        };
+        return self.newNode(.{ .named = named });
+    }
+
     /// Return the graph node for one field of a record-shaped node. Field
     /// access is a type relation, so callers use this node directly instead of
     /// selecting a field from a temporary Monotype view and losing later row
