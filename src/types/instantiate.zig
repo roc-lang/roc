@@ -84,23 +84,8 @@ pub fn instantiateNominalBacking(
         .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
     };
     const opened = try instantiator.instantiateVar(decl.backing);
-    if (instantiator.recursion_overflow) {
-        // Templates are acyclic (applications carry no backing), so this is
-        // only reachable through pathological static-dispatch constraints;
-        // yield err rather than a partial graph.
-        return try store.freshFromContentWithRank(.err, current_rank);
-    }
     return opened;
 }
-
-/// Hard ceiling on instantiation recursion depth. Finite types never approach
-/// this; a self-referential static-dispatch `where` constraint (e.g.
-/// `Vec(a) ... where [a.join : Vec(a), a -> a]` used nested) would otherwise
-/// recurse forever, minting fresh constrained vars at each level that the
-/// `var_map` memo cannot dedup. On hitting this ceiling the instantiator stops
-/// and flags `recursion_overflow`; the caller turns that into an infinite-type
-/// error rather than hanging.
-pub const max_instantiation_depth: u32 = 8192;
 
 /// Type to manage instantiation.
 ///
@@ -117,13 +102,6 @@ pub const Instantiator = struct {
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
-
-    /// Live recursion depth, guarded against non-terminating instantiation.
-    depth: u32 = 0,
-    /// Set once `depth` exceeds `max_instantiation_depth`. The entry point
-    /// (`Check.instantiateVarHelp`) turns this into an infinite-type error
-    /// instead of using the (partial, err-filled) result.
-    recursion_overflow: bool = false,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -178,16 +156,6 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
-
-        // Guard against non-terminating instantiation (e.g. a self-referential
-        // static-dispatch `where` constraint). Stop recursing and flag overflow;
-        // the caller reports an infinite-type error.
-        self.depth += 1;
-        defer self.depth -= 1;
-        if (self.depth > max_instantiation_depth) {
-            self.recursion_overflow = true;
-            return try self.store.freshFromContentWithRank(.err, self.current_rank);
-        }
 
         // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {

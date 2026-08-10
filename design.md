@@ -3901,14 +3901,45 @@ same-rank creation sites into schemes.
 
 Owner keys are stable raw source vars. An annotation or expected type may
 introduce a separate solved var without changing the owner key passed to the
-boundary, and a closure wrapper is explicitly registered as an alias of the
-inner lambda that owns its scheme. Active schemes are likewise indexed by
-their expression, pattern, and definition source vars rather than by a
+boundary. Every boundary takes `BoundaryRoot { owner, interface }` values so
+the stable owner and solved interface cannot be swapped as parallel slices.
+A closure wrapper is explicitly registered as an alias of the inner lambda
+that owns its scheme. Active schemes are likewise indexed by their expression,
+pattern, definition, and predeclared-annotation source vars rather than by a
 union-find representative, since unification may replace that representative.
+For a recursive SCC, capture happens after its members were checked, so the
+group boundary registers the pattern and definition aliases immediately after
+capture. Annotated members use their predeclared schemes for polymorphic
+recursive references while checking, but their RHS types still generalize
+together at that shared SCC boundary; a source-forward member can therefore
+publish body-inferred requirements before any member freezes. An annotated
+predeclared scheme var is registered when the checked
+body's scheme becomes available. A lookup made before that body is checked
+uses the declared annotation immediately, but its group retains the exact use
+var and lexical attribution. Before that caller generalizes, the boundary
+checks the target body and replays the use against the complete body scheme;
+when body checking published off-root dispatch requirements, the replay adds
+them under the caller's still-live substitution. The annotation pre-pass and
+body generation explicitly pair their canonical identity slots, including
+generation-internal open rows without CIR nodes; composing that pair table with
+the saved early-use substitution supplies the requirement copy without a
+second root unification or structural reconstruction. Structurally attached
+requirements were already present in the declared annotation and need no
+replay. If the annotation already emitted a checked-evidence use record, the
+complete replay replaces that record instead of publishing two specialization
+edges for one lookup. An annotated in-flight recursive reference remains an
+internal edge through the declared scheme; the enclosing body's own
+requirements cover that implementation cycle, so it is not replayed as a new
+external use. Together these rules cover forward and polymorphically recursive
+lookup paths without making an annotation erase obligations inferred from its
+body.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
-can never leave a TypeScheme pointing into rolled-back store data.
+can never leave a TypeScheme pointing into rolled-back store data. Rejected
+method-target attempts rewind the same candidate, ambiguity, derivation,
+deferred-constraint, and evidence tails, so facts from an implementation that
+failed compatibility cannot enter a later scheme.
 
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
@@ -3923,7 +3954,35 @@ generalization boundary grounds such a receiver, the copied relation is
 enqueued and validated before its callable variables generalize; final
 compatibility does the same for copies grounded at module finalization. Copies
 are never merged merely because they share a receiver, while ambiguity
-candidates for the same raw receiver and owner event are judged only once.
+candidates for the same raw receiver and owner event are judged only once. A
+duplicate ambiguity observation combines `requires_current_resolution` by
+logical OR, because a direct executable observation is stronger than an
+earlier delayed observation. Copied constraints preserve definition-site
+constraint provenance for evidence, while each scheme requirement separately
+records the use expression that created that copy; a failing use poisons that
+use, never the reusable definition that supplied it.
+
+Instantiated dispatch validation is one monotone worklist, not a bounded retry
+loop. Each entry transitions at most once through compatibility validation and
+at most once into the deferred-dispatch queue. Entries whose receivers remain
+flex stay waiting; any later unification that grounds one makes its enqueue
+transition available on the next scan. Processing an entry may append further
+entries, and the fixpoint ends only when no transition or append occurred.
+There is no numeric depth, round, or queue-length ceiling: every finite chain
+is checked to completion.
+
+Selected method-target instantiation explicitly records which parent dispatch
+edge produced each copied child constraint. Ordinary caller constraints that
+happen to become concrete during the same unification do not acquire that
+lineage. Before selecting a target for a derived child, the checker computes a
+canonical alpha-normalized digest of the receiver plus callable relation and
+compares it with the child's ancestor chain. Reaching the same digest, method
+name, owner environment, and exact method binding is the same semantic solver
+state and is rejected as recursive dispatch; a chain whose concrete type
+structure changes has a different digest and continues. Rejection settles
+only that cyclic obligation and processing continues with unrelated queued
+relations. This finite-state rule replaces the old 64-round, 16K-entry, and
+instantiation-recursion cutoffs.
 
 Only roots actually promoted to generalized rank can instantiate a side-table
 scheme. A mixed recursive group can provisionally capture requirements for a
@@ -3964,15 +4023,20 @@ Both sides are pinned in src/check/test/type_checking_integration.zig.
 Accepted pairs cover top-level and enclosing weak receivers, weak numerals,
 multi-hop and transitively copied chains, repeated transitive helper uses, and
 results carried through the definition's return type; every pair has two uses
-at different result item types and asserts identical inferred types. A
-retirement regression proves later uses do not replay a discharged missing
-method, and a shared pending requirement produces one diagnostic across
-multiple uses. The generated principality test checks the complete product of
-small typed weak literals, transitive helpers, and result wrappers exactly once,
-then checks the receiver, helper, and result annotation sites plus the rejection
-direction using error severity rather than raw warning-inclusive problem
-counts. The literal-constrained lambda parameter regression proves two
-concrete instantiations remain independent.
+at different result item types and asserts identical inferred types. Recursive
+SCC and source-forward annotated recursive definitions have the same two-use
+principality pins.
+A retirement regression proves later uses do not replay a discharged missing
+method, and a shared pending requirement produces exactly one diagnostic
+across multiple uses. The generated principality test checks the complete
+product of small typed weak literals, transitive helpers, and result wrappers
+exactly once, then checks the receiver, helper, and result annotation sites plus
+the rejection direction using error severity rather than raw warning-inclusive
+problem counts. The literal-constrained lambda parameter regression proves two
+concrete instantiations remain independent. Static-dispatch termination is
+pinned on both sides: an 80-layer nested requirement chain succeeds past the
+former round cap, while a repeated self-nested state reports one recursive
+dispatch error without abandoning unrelated queue entries.
 The cross-module weak-receiver regression proves that, after the receiver has
 settled, publication preserves the discharged root scheme's polymorphism
 without checker-local requirement state.
@@ -4046,6 +4110,12 @@ Other solved-graph mutations:
   mutation. Instantiation builds a fresh disjoint callable root, and every
   copied requirement is discharged only through ordinary unification in the
   deferred static-dispatch worklist; there is no rank rewrite or graph restamp.
+- `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
+  Type Schemes (above). The explicit derivation chain and canonical receiver +
+  callable digest prove that target selection has returned to the same semantic
+  state and exact binding. The accepted side (a changing finite chain) keeps
+  solving; only the repeated state is marked rejected and poisoned. The 80-layer
+  accepted chain and self-nested rejected chain pin both sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 

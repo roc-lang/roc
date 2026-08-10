@@ -7215,7 +7215,40 @@ test "static dispatch - userland recursive-constraint method cannot self-nest (n
     // Self-nested case: element type `Vec(Leaf)` would need a `join` of shape
     // `Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf)`, but the only `Vec.join` has shape
     // `Vec(a), a -> a`. No overload to select, no userland reroute -> type error.
-    try testing.expect(test_env.checker.problems.problems.items.len >= 1);
+    try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
+}
+
+test "static dispatch - finite nested requirement chain has no iteration ceiling" {
+    const allocator = testing.allocator;
+    var nested_type = try allocator.dupe(u8, "Base");
+    defer allocator.free(nested_type);
+    for (0..80) |_| {
+        const next = try std.fmt.allocPrint(allocator, "Nest({s})", .{nested_type});
+        allocator.free(nested_type);
+        nested_type = next;
+    }
+
+    // `{{` and `}}` are Zig formatting escapes; the generated Roc declarations
+    // use ordinary `{}` empty-record backings and `{ ... }` method blocks.
+    const source = try std.fmt.allocPrint(allocator,
+        \\Base := {{}}.{{
+        \\    combine : Base, Base -> Base
+        \\    combine = |_, other| other
+        \\}}
+        \\
+        \\Nest(a) := {{}}.{{
+        \\    combine : Nest(a), Nest(a) -> Nest(a) where [a.combine : a, a -> a]
+        \\    combine = |_, other| other
+        \\}}
+        \\
+        \\drive : {s}, {s} -> {s}
+        \\drive = |left, right| left.combine(right)
+    , .{ nested_type, nested_type, nested_type });
+    defer allocator.free(source);
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
 // DEF-ORDER INDEPENDENCE PINS for `finalizeLiteralDefaults` (src/check/Check.zig).
@@ -7612,6 +7645,43 @@ test "check type - principality - repeated transitive helper uses remain indepen
     });
 }
 
+test "check type - principality - recursive scheme copies pending requirement per use" {
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g, n|
+        \\    if n == 0
+        \\        weak.split_on(",").map(g)
+        \\    else
+        \\        f(g, n - 1)
+        \\lengths = f(|s| s.count_utf8_bytes(), 1)
+        \\selves = f(|s| s, 1)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "check type - principality - forward annotated scheme copies pending requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\forward : (Str -> b), U64 -> List(b)
+        \\forward = |g, n| f(g, n)
+        \\f : (Str -> b), U64 -> List(b)
+        \\f = |g, n|
+        \\    if n == 0
+        \\        weak.split_on(",").map(g)
+        \\    else
+        \\        forward(g, n - 1)
+        \\lengths = forward(|s| s.count_utf8_bytes(), 1)
+        \\selves = forward(|s| s, 1)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
 test "check type - discharged scheme requirement is not replayed by later uses" {
     const source =
         \\weak = "abc"
@@ -7632,7 +7702,10 @@ test "check type - shared pending scheme requirement reports once across uses" {
         \\second = f({})
         \\third = f({})
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
+    try test_env.assertFirstTypeError("Missing Method");
 }
 
 const principality_result_flow_defs = &[_]DefAndExpectation{
