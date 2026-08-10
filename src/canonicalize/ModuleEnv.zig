@@ -613,7 +613,7 @@ pub const ForLoopDispatchPlan = extern struct {
 /// Exact digit data for one numeric source node.
 ///
 /// The parser converts numeric text to base-256 byte lists. Canonicalization
-/// copies those bytes in so later stages can construct `Num.Numeral` values
+/// copies those bytes here so later stages can construct `Num.Numeral` values
 /// for custom `from_numeral` calls without parsing source text.
 pub const NumeralLiteral = extern struct {
     node_idx: u32,
@@ -703,7 +703,7 @@ pub const SchemeUsePair = extern struct {
 };
 
 /// One compiler-generated parser or encoder derivation validated by checking.
-/// The referenced vars remain checker-owned in; checked publication converts
+/// The referenced vars remain checker-owned here; checked publication converts
 /// them to stable checked type ids before post-check compilation.
 pub const GeneratedCodecDerivation = extern struct {
     kind: u32,
@@ -1188,7 +1188,7 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Replace the module's exact strict-demand relation with freshly produced
-/// canonical dependency data. Ownership of `dependencies` transfers in.
+/// canonical dependency data. Ownership of `dependencies` transfers here.
 pub fn setTopLevelDemandDependencies(
     self: *Self,
     dependencies: DependencyGraph.Dependency.SafeList,

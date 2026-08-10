@@ -1065,7 +1065,7 @@ const markdown_spans = std.enums.EnumArray(Annotation, Span).init(.{
     .keyword = .{ .open = "`", .close = "`" },
     .type_variable = .{ .open = "_", .close = "_" },
     .error_highlight = .{ .open = "**", .close = "**" },
-    .warning_highlight = .{ .open = "**⚠ ", .close = "**" },
+    .warning_highlight = .{ .open = "**● ", .close = "**" },
     .suggestion = .{ .open = "**", .close = "**" },
     .code_block = .{ .open = "```roc\n", .close = "\n```" },
     .inline_code = .{ .open = "`", .close = "`" },
