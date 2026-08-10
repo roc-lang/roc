@@ -15739,8 +15739,14 @@ const BodyContext = struct {
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 
-    /// Constrain a checked type to a draft cell, naming which relation the
-    /// constraint states and how directed translation reads the cell's side.
+    /// Constrain a checked type to a draft cell. On the first touch of the
+    /// checked type in this scope, the cell's node simply becomes the scoped
+    /// node: measured across the suite and the whole fx corpus, the cell
+    /// already states everything a fresh instantiation would at every
+    /// reachable position, so instantiating the checked side only to merge it
+    /// into the cell moved nothing. Later touches already share the cell's
+    /// class on every measured execution; the relation remains for the case
+    /// measurement cannot rule out, and states the constraint when it fires.
     fn constrainTypeToCell(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -15748,7 +15754,15 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
+        const scoped_ty = self.scopedCheckedType(checked_ty);
+        const cell_node = try cell.toGraphNode(self.graph);
+        if (self.scopedNode(scoped_ty)) |existing| {
+            if (!self.graph.sameClass(existing, cell_node)) {
+                try self.graph.unify(existing, cell_node);
+            }
+            return;
+        }
+        try self.putScopedNode(scoped_ty, cell_node);
     }
 
     /// Relate a checked public interface to an exact producer-owned value

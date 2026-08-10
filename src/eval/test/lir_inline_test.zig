@@ -1910,7 +1910,10 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         // never instantiated into the graph and there is nothing for the
         // backing cache to reuse.
         .nominal_backing_reuses = 0,
-        .nominal_backing_instantiations = 19,
+        // The checked-to-cell funnel no longer instantiates the checked side
+        // on first touch, so the backings behind those instantiations are
+        // never built either.
+        .nominal_backing_instantiations = 11,
     });
 }
 
@@ -2055,7 +2058,8 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         // See the same-type counterpart above: born-final requests never
         // instantiate the backing, so no reuse can be recorded.
         .nominal_backing_reuses = 0,
-        .nominal_backing_instantiations = 71,
+        // See the same-type counterpart above.
+        .nominal_backing_instantiations = 50,
     });
 }
 
