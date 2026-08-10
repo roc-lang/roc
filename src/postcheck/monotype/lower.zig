@@ -5929,7 +5929,6 @@ const Builder = struct {
                 }
             } else {
                 const spec_fn_node = try draftNestedSpecRequestNode(source_ctx.draft, source_ctx.graph, spec);
-                try source_ctx.graph.unify(spec_fn_node, request_fn_node);
                 if (!source_ctx.graph.sameFunctionInterface(spec_fn_node, request_fn_node)) {
                     Common.invariant("draft nested request did not join its complete function interface");
                 }
@@ -15772,22 +15771,6 @@ const BodyContext = struct {
         } else {
             try self.constrainTypeToCell(checked_ty, cell);
         }
-    }
-
-    /// Constrain two checked types from (possibly different) instantiation
-    /// contexts of the same specialization to denote one type.
-    fn constrainCheckedTypeRelations(
-        self: *BodyContext,
-        left_ty: checked.CheckedTypeId,
-        right_ctx: *BodyContext,
-        right_ty: checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        if (self.graph != right_ctx.graph) {
-            Common.invariant("checked type relation crossed specialization graphs");
-        }
-        try self.graph.unify(try self.instNode(left_ty), try right_ctx.instNode(right_ty));
     }
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
@@ -28716,7 +28699,6 @@ const BodyContext = struct {
             try body_ctx.instNode(entry_template.checked_fn_root),
             wrapper_fn_node,
         );
-        try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
         const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
@@ -41034,15 +41016,12 @@ const BodyContext = struct {
 
     fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!StructuralEqualityOperand {
         const lhs_checked_ty = self.view.bodies.expr(eq.lhs).ty;
-        const rhs_checked_ty = self.view.bodies.expr(eq.rhs).ty;
-
-        try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty);
 
         if (try self.structuralEqualityExprResultNode(eq.lhs)) |lhs_node| {
-            return try self.constrainStructuralEqualityOperandNode(lhs_node, eq.rhs, rhs_checked_ty);
+            return try self.constrainStructuralEqualityOperandNode(lhs_node, eq.rhs);
         }
         if (try self.structuralEqualityExprResultNode(eq.rhs)) |rhs_node| {
-            return try self.constrainStructuralEqualityOperandNode(rhs_node, eq.lhs, lhs_checked_ty);
+            return try self.constrainStructuralEqualityOperandNode(rhs_node, eq.lhs);
         }
 
         const operand_node = try self.instNode(lhs_checked_ty);
@@ -41155,12 +41134,11 @@ const BodyContext = struct {
         self: *BodyContext,
         operand_node: NodeId,
         other_expr_id: checked.CheckedExprId,
-        other_checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!StructuralEqualityOperand {
-        try self.graph.unify(operand_node, try self.instNode(other_checked_ty));
-        if (try self.structuralEqualityExprResultNode(other_expr_id)) |other_node| {
-            try self.graph.unify(operand_node, other_node);
-        }
+        // Reaching the other side's result still instantiates it, which is what
+        // gives both operands their shared type; the operand node no longer has
+        // to be related to it afterwards.
+        _ = try self.structuralEqualityExprResultNode(other_expr_id);
         return try self.structuralEqualityOperandFromNode(operand_node);
     }
 
@@ -45499,7 +45477,6 @@ const BodyContext = struct {
             .loop_iterator_state => blk: {
                 const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
                 const iterator_node = try iterator.ty.toGraphNode(self.graph);
-                try self.graph.unify(iterator_node, node);
                 if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
                 break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
             },
