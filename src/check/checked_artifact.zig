@@ -1218,6 +1218,21 @@ const CompileTimeRequestScheduleEntry = struct {
     original_order: u32,
 };
 
+fn collectScheduledFieldDefaultRoots(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    entries: []const CompileTimeRequestScheduleEntry,
+) Allocator.Error![]ComptimeRootId {
+    var roots = std.ArrayList(ComptimeRootId).empty;
+    errdefer roots.deinit(allocator);
+    for (entries) |entry| {
+        if (compile_time_roots.root(entry.root_id).kind == .field_default) {
+            try roots.append(allocator, entry.root_id);
+        }
+    }
+    return try roots.toOwnedSlice(allocator);
+}
+
 fn collectCompileTimeRootRequests(
     allocator: Allocator,
     requests: []const RootRequest,
@@ -1277,6 +1292,7 @@ const CompileTimeRequestScheduler = struct {
     callable_eval_templates: *const CallableEvalTemplateTable,
     hoisted_constants: *const HoistedConstTable,
     entries: []const CompileTimeRequestScheduleEntry,
+    field_default_roots: []const ComptimeRootId,
     root_to_request_index: []?usize,
     dependents: []std.ArrayList(usize),
     indegrees: []u32,
@@ -1301,6 +1317,9 @@ const CompileTimeRequestScheduler = struct {
         hoisted_constants: *const HoistedConstTable,
         entries: []const CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
+        const field_default_roots = try collectScheduledFieldDefaultRoots(allocator, compile_time_roots, entries);
+        errdefer allocator.free(field_default_roots);
+
         const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
         errdefer allocator.free(root_to_request_index);
         @memset(root_to_request_index, null);
@@ -1345,6 +1364,7 @@ const CompileTimeRequestScheduler = struct {
             .callable_eval_templates = callable_eval_templates,
             .hoisted_constants = hoisted_constants,
             .entries = entries,
+            .field_default_roots = field_default_roots,
             .root_to_request_index = root_to_request_index,
             .dependents = dependents,
             .indegrees = indegrees,
@@ -1362,6 +1382,7 @@ const CompileTimeRequestScheduler = struct {
         for (self.dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.dependents);
         self.allocator.free(self.root_to_request_index);
+        self.allocator.free(self.field_default_roots);
         self.* = undefined;
     }
 
@@ -1403,11 +1424,9 @@ const CompileTimeRequestScheduler = struct {
             self.current_request_index = i;
             self.current_root_id = entry.root_id;
 
-            if (self.compile_time_roots.root(entry.root_id).kind != .field_default) {
-                for (self.entries) |candidate| {
-                    if (self.compile_time_roots.root(candidate.root_id).kind == .field_default) {
-                        try self.addUnconditionalRootDependency(candidate.root_id);
-                    }
+            if (self.field_default_roots.len != 0 and self.compile_time_roots.root(entry.root_id).kind != .field_default) {
+                for (self.field_default_roots) |field_default_root| {
+                    try self.addUnconditionalRootDependency(field_default_root);
                 }
             }
 
@@ -33962,6 +33981,29 @@ test "module source input hash uses explicit file dependency state" {
     try std.testing.expect(missing_bits != unreadable_bits);
     try std.testing.expect(missing_bits != present_bits);
     try std.testing.expect(unreadable_bits != present_bits);
+}
+
+test "compile-time scheduler precollects only requested field-default roots" {
+    const root_0 = testIndexId(ComptimeRootId, 0);
+    const root_1: ComptimeRootId = @enumFromInt(1);
+    const root_2: ComptimeRootId = @enumFromInt(2);
+    const checked_expr = testIndexId(CheckedExprId, 0);
+    const checked_type = testIndexId(CheckedTypeId, 0);
+
+    var roots = [_]CompileTimeRoot{
+        .{ .id = root_0, .module_idx = 0, .kind = .constant, .source = .{ .expr = @enumFromInt(0) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+        .{ .id = root_1, .module_idx = 0, .kind = .field_default, .source = .{ .expr = @enumFromInt(1) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+        .{ .id = root_2, .module_idx = 0, .kind = .field_default, .source = .{ .expr = @enumFromInt(2) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+    };
+    const root_table = CompileTimeRootTable{ .roots = &roots };
+    const entries = [_]CompileTimeRequestScheduleEntry{
+        .{ .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = @enumFromInt(2) }, .compile_time_root = root_2, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_2, .original_order = 0 },
+        .{ .request = .{ .order = 1, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = @enumFromInt(0) }, .compile_time_root = root_0, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_0, .original_order = 1 },
+    };
+
+    const field_defaults = try collectScheduledFieldDefaultRoots(std.testing.allocator, &root_table, &entries);
+    defer std.testing.allocator.free(field_defaults);
+    try std.testing.expectEqualSlices(ComptimeRootId, &.{root_2}, field_defaults);
 }
 
 test "checked divergence publishes both inline-expect runtime modes" {
