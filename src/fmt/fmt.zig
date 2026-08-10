@@ -3150,6 +3150,15 @@ const Formatter = struct {
             },
         };
         const multiline = fmt.nodeWillBeMultiline(AST.AnnoRecordField.Idx, idx);
+        const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
+        const optional_mark_after_colon = if (field.optional_mark) |optional_mark| blk: {
+            const marker_precedes_colon = fmt.ast.tokens.tokenTag(optional_mark + 1) == .OpColon;
+            if (!marker_precedes_colon) {
+                std.debug.assert(optional_mark > 0);
+                std.debug.assert(fmt.ast.tokens.tokenTag(optional_mark - 1) == .OpColon);
+            }
+            break :blk !marker_precedes_colon;
+        } else false;
         try fmt.pushTokenText(field.name);
         if (multiline and try fmt.flushCommentsAfter(field.name)) {
             fmt.curr_indent += 1;
@@ -3162,13 +3171,13 @@ const Formatter = struct {
         // own token boundary so a comment between `?` and `:` is preserved.
         if (field.optional_mark) |optional_mark| {
             try fmt.push('?');
-            if (multiline and try fmt.flushCommentsAfter(optional_mark)) {
+            const preceding_token = if (optional_mark_after_colon) optional_mark - 1 else optional_mark;
+            if (multiline and try fmt.flushCommentsAfter(preceding_token)) {
                 fmt.curr_indent += 1;
                 try fmt.pushIndent();
             }
         }
         try fmt.push(':');
-        const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
         if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
             fmt.curr_indent += 1;
             try fmt.pushIndent();
@@ -4515,6 +4524,36 @@ test "legacy optional marker after the colon formats to the leading form" {
 
     try std.testing.expectEqualStrings(
         "value : { x : U32, y ?: U32, z ?: U32 }\n",
+        result,
+    );
+}
+
+test "legacy optional marker preserves a trailing comment once" {
+    const result = try moduleFmtsStableWithDiags(
+        std.testing.allocator,
+        "value : {\n    a :? # keep me\n        U8,\n}",
+        false,
+        1,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : {\n\ta ?: # keep me\n\t\tU8,\n}\n",
+        result,
+    );
+}
+
+test "legacy optional marker preserves a comment between colon and marker" {
+    const result = try moduleFmtsStableWithDiags(
+        std.testing.allocator,
+        "value : {\n    a : # keep me\n        ? U8,\n}",
+        false,
+        1,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : {\n\ta ? # keep me\n\t\t: U8,\n}\n",
         result,
     );
 }
