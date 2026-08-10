@@ -356,6 +356,18 @@ const StaticInitializerMachine = struct {
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 .store_struct,
                 .store_tag,
                 .debug,
@@ -411,6 +423,9 @@ const StaticInitializerMachine = struct {
             .str_literal => |str| return try self.evalStr(str, target_layout),
             .static_data => |id| return try self.cloneValueAs(try self.evaluateStatic(id), target_layout),
             .bytes_literal => |list| return try self.evalBytes(list, target_layout),
+            .boxy_dynamic_num_literal,
+            .boxy_dynamic_frac_literal,
+            => staticDataInvariant("descriptor-dependent Boxy literal reached target static initializer"),
             .null_ptr => {},
             .proc_ref => |proc| try value.relocations.append(self.allocator(), .{
                 .offset = 0,
@@ -860,6 +875,7 @@ const StaticInitializerMachine = struct {
                 });
             },
             .interpreter_context_drop => staticDataInvariant("interpreter erased callable reached target static initializer"),
+            .boxy_capture => staticDataInvariant("descriptor-dependent Boxy capture drop reached target static initializer"),
         }
         if (assign.capture) |capture_local| {
             const capture_layout = assign.capture_layout orelse

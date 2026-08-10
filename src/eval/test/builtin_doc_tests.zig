@@ -613,6 +613,7 @@ fn compileNative(
             .native,
             ppb,
             null,
+            .lss,
         );
     }
     return test_helpers.compileInspectedProgramForTarget(

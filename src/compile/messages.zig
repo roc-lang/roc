@@ -45,6 +45,8 @@ pub const CanonicalizeImport = struct {
     import_name: []const u8,
     /// The fully-ready semantic env for this import
     module_env: *const ModuleEnv,
+    /// Nested type selected by a package/platform public entry.
+    nested_type: ?[]const u8 = null,
 };
 
 /// Information about detected import cycles

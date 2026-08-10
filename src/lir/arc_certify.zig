@@ -97,6 +97,7 @@
 //! entry point panics in debug builds; release builds never run the certifier.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
@@ -104,6 +105,7 @@ const layout_mod = @import("layout");
 const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
+const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -159,11 +161,12 @@ pub fn certifyStore(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
 ) CertifyError!void {
-    return certifyStoreWithWorkStats(allocator, store, layouts, sigs, roots, diag, null);
+    return certifyStoreWithWorkStats(allocator, store, layouts, boxy_rc_descs, sigs, roots, diag, null);
 }
 
 /// Deterministic work counters used by certifier complexity regression tests.
@@ -177,6 +180,7 @@ fn certifyStoreWithWorkStats(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
@@ -184,12 +188,8 @@ fn certifyStoreWithWorkStats(
 ) CertifyError!void {
     try certifyProcAbiMetadata(allocator, store, layouts, diag);
 
-    var rc_local = try allocator.alloc(bool, store.localCount());
+    const rc_local = try arc_solve.computeLocalContainsRefcounted(allocator, store, layouts, boxy_rc_descs);
     defer allocator.free(rc_local);
-    for (0..store.localCount()) |index| {
-        const local = store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
-        rc_local[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
-    }
 
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
     try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
@@ -503,32 +503,29 @@ pub fn certifyStoreOrPanic(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
     sigs: arc_sig.SigTable,
     roots: []const LIR.LirProcSpecId,
 ) Allocator.Error!void {
     var diag = Diagnostic{};
-    certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
+    certifyStore(allocator, store, layouts, boxy_rc_descs, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.Certification => {
+        error.Certification => if (comptime builtin.target.os.tag == .freestanding) {
+            @panic("ARC certification failed");
+        } else {
             var context = FailureContext{};
-            for (diag.chain[0..diag.chain_len]) |link| {
-                context.append("\n  value {d}: origin_local={d} balance={d} holder={d} always_live={} lenders={d}", .{
-                    link.value,
-                    @intFromEnum(link.origin),
-                    link.balance,
-                    link.holder,
-                    link.always_live,
-                    link.lender_count,
-                });
-            }
             if (diag.context_proc) |proc_id| {
                 var extra_locals: [8]LIR.LocalId = undefined;
                 for (diag.chain[0..diag.chain_len], 0..) |link, index| {
                     extra_locals[index] = link.origin;
                 }
-                writeFailureContext(&context, store, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                writeFailureContext(&context, store, layouts, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                var buffer: std.Io.Writer.Allocating = .init(allocator);
+                defer buffer.deinit();
+                debug_print.writeProc(allocator, store, layouts, proc_id, &buffer.writer) catch {};
+                std.debug.print("\n{s}\n", .{buffer.written()});
             }
-            std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
+            std.debug.panic("ARC: {s}{s}", .{ diag.message(), context.text() });
         },
     };
 }
@@ -536,7 +533,7 @@ pub fn certifyStoreOrPanic(
 /// Bounded, allocation-free text buffer for panic context. Output past the
 /// capacity is truncated.
 const FailureContext = struct {
-    buffer: [8192]u8 = undefined,
+    buffer: [65536]u8 = undefined,
     len: usize = 0,
 
     fn text(self: *const FailureContext) []const u8 {
@@ -555,6 +552,7 @@ const FailureContext = struct {
 fn writeFailureContext(
     context: *FailureContext,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
     proc_id: LIR.LirProcSpecId,
     stmt_id: ?LIR.CFStmtId,
@@ -606,6 +604,10 @@ fn writeFailureContext(
                     walk.append(store.allocator, s.on_match) catch return;
                     walk.append(store.allocator, s.on_miss) catch return;
                 },
+                .boxy_tag_match => |s| {
+                    walk.append(store.allocator, s.on_match) catch return;
+                    walk.append(store.allocator, s.on_miss) catch return;
+                },
                 .str_match_set => |s| {
                     const arms = store.getStrMatchArms(s.arms);
                     for (0..GuardedList.borrowLen(arms)) |arm_index| {
@@ -622,7 +624,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -644,12 +646,11 @@ fn writeFailureContext(
         for (extra_locals) |extra| {
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
-        const structural = stmt == .join or stmt == .jump or stmt == .incref or
-            stmt == .decref or stmt == .decref_if_initialized or stmt == .free;
+        const structural = false;
         const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
-            index - @intFromEnum(focus_stmt) <= 12
+            index - @intFromEnum(focus_stmt) <= 50
         else
-            @intFromEnum(focus_stmt) - index <= 12 else false;
+            @intFromEnum(focus_stmt) - index <= 50 else false;
         if (!mentions and !structural and !nearby) continue;
         context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
@@ -693,12 +694,38 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
+            .assign_call_erased => |a| {
+                context.append(" target={d} closure={d} args=", .{ @intFromEnum(a.target), @intFromEnum(a.closure) });
+                appendLocalSpan(context, store, a.args);
+                if (a.result_desc) |result_desc| {
+                    context.append(" result_desc=", .{});
+                    appendBoxyDescRef(context, result_desc);
+                }
+                if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@intFromEnum(out_desc)});
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .assign_low_level => |a| {
                 context.append(" target={d} op={s} args=", .{ @intFromEnum(a.target), @tagName(a.op) });
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
+            .assign_call_dict => |a| {
+                context.append(" target={d} method={d} slot={d} args=", .{ @intFromEnum(a.target), @intFromEnum(a.method), a.method_slot });
+                appendLocalSpan(context, store, a.args);
+                context.append(" arg_descs=", .{});
+                appendLocalSpan(context, store, a.arg_descs);
+                context.append(" hidden=", .{});
+                appendLocalSpan(context, store, a.hidden_args);
+                if (a.result_desc) |result_desc| {
+                    context.append(" result_desc=", .{});
+                    appendBoxyDescRef(context, result_desc);
+                }
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
+                @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
+            }),
+            .boxy_tag_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
             }),
             .str_match_set => |a| context.append(" source={d} arms={d} miss={d}", .{
@@ -731,7 +758,86 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.fields);
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
-            inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            .assign_boxy_tag => |a| {
+                const target_layout_idx = store.getLocal(a.target).layout_idx;
+                const target_layout = layouts.getLayout(target_layout_idx);
+                context.append(" target={d} target_layout={d}:{s}:rc={}", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(target_layout_idx),
+                    @tagName(target_layout.tag),
+                    layouts.layoutContainsRefcounted(target_layout),
+                });
+                if (a.payload) |payload| context.append(" payload={d} payload_layout={d} mode={s}", .{
+                    @intFromEnum(payload),
+                    @intFromEnum(store.getLocal(payload).layout_idx),
+                    @tagName(a.payload_mode),
+                });
+                if (a.payload_desc) |desc| {
+                    context.append(" payload_desc=", .{});
+                    appendBoxyDescRef(context, desc);
+                }
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_boxy_box => |a| {
+                context.append(" target={d} payload={d} payload_layout={d} mode={s}", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(a.payload),
+                    @intFromEnum(a.payload_layout),
+                    @tagName(a.payload_mode),
+                });
+                if (a.payload_desc) |desc| {
+                    context.append(" payload_desc=", .{});
+                    appendBoxyDescRef(context, desc);
+                }
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_tag => |a| {
+                const target_layout_idx = store.getLocal(a.target).layout_idx;
+                const target_layout = layouts.getLayout(target_layout_idx);
+                context.append(" target={d} target_layout={d}:{s}:rc={}", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(target_layout_idx),
+                    @tagName(target_layout.tag),
+                    layouts.layoutContainsRefcounted(target_layout),
+                });
+                if (a.payload) |payload| context.append(" payload={d} payload_layout={d}", .{
+                    @intFromEnum(payload),
+                    @intFromEnum(store.getLocal(payload).layout_idx),
+                });
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_boxy_unbox => |a| {
+                context.append(" target={d} source={d} mode={s}", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(a.source),
+                    @tagName(a.source_mode),
+                });
+                if (a.target_desc) |desc| {
+                    context.append(" target_desc=", .{});
+                    appendBoxyDescRef(context, desc);
+                }
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_boxy_tag_payload => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
+                @intFromEnum(a.target),
+                @intFromEnum(a.source),
+                @tagName(a.source_mode),
+                @intFromEnum(a.next),
+            }),
+            .assign_boxy_inspect => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
+                @intFromEnum(a.target),
+                @intFromEnum(a.source),
+                @tagName(a.source_mode),
+                @intFromEnum(a.next),
+            }),
+            .assign_boxy_eq => |a| context.append(" target={d} lhs={d} rhs={d} mode={s} next={d}", .{
+                @intFromEnum(a.target),
+                @intFromEnum(a.lhs),
+                @intFromEnum(a.rhs),
+                @tagName(a.source_mode),
+                @intFromEnum(a.next),
+            }),
+            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             .store_struct,
             .store_tag,
             .debug,
@@ -746,6 +852,27 @@ fn writeFailureContext(
             => {},
         }
         context.append("\n", .{});
+    }
+}
+
+fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
+    switch (desc) {
+        .static => |id| context.append("static:{d}", .{@intFromEnum(id)}),
+        .local => |local| context.append("local:{d}", .{@intFromEnum(local)}),
+        .runtime => |id| context.append("runtime:{d}", .{id}),
+        .dict_method_arg => |projection| context.append("dict-arg:{d}:{d}:{d}:{d}", .{
+            @intFromEnum(projection.dict),
+            @intFromEnum(projection.method),
+            projection.method_slot,
+            projection.arg_index,
+        }),
+        .dict_method_hidden => |projection| context.append("dict-hidden:{d}:{d}:{d}:{d}:{s}", .{
+            @intFromEnum(projection.dict),
+            @intFromEnum(projection.method),
+            projection.method_slot,
+            projection.hidden_index,
+            @tagName(projection.shape),
+        }),
     }
 }
 
@@ -788,10 +915,36 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.reuse_source != null and a.reuse_source.? == needle) or spanHasLocal(store, a.args, needle),
         .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
+        .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle) or
+            (a.tag_residual_for != null and boxyDescRefReadsLocal(a.tag_residual_for.?, needle)) or
+            spanHasLocal(store, a.captures, needle),
+        .assign_boxy_dict_ref => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle),
+        .assign_boxy_box => |a| a.target == needle or a.payload == needle or
+            (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
+            (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
+        .assign_boxy_reuse_box => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.desc, needle),
+        .assign_boxy_unbox => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle) or
+            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
+        .assign_boxy_adapt => |a| a.target == needle or a.source == needle or
+            (a.source_desc != null and boxyDescRefReadsLocal(a.source_desc.?, needle)) or
+            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
+        .assign_boxy_inspect => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
+        .assign_boxy_eq => |a| a.target == needle or a.lhs == needle or a.rhs == needle or boxyDescRefReadsLocal(a.source_desc, needle),
+        .assign_boxy_tag => |a| a.target == needle or boxyDescRefReadsLocal(a.target_desc, needle) or
+            (a.payload != null and a.payload.? == needle) or
+            (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
+        .assign_boxy_tag_payload => |a| a.target == needle or (a.target_desc != null and a.target_desc.? == needle) or
+            a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
+        .assign_call_dict => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or
+            spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.arg_descs, needle) or
+            spanHasLocal(store, a.hidden_args, needle) or
+            (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
-        .assign_tag => |a| a.target == needle or (a.payload != null and a.payload.? == needle),
+        .assign_tag => |a| a.target == needle or
+            (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)) or
+            (a.payload != null and a.payload.? == needle),
         .store_struct => |a| a.dest == needle or spanHasLocal(store, a.fields, needle),
         .store_tag => |a| a.dest == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
@@ -833,6 +986,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             }
             break :blk false;
         },
+        .boxy_tag_match => |s| s.source == needle or boxyDescRefReadsLocal(s.source_desc, needle),
         .ret => |r| r.value == needle,
         .crash => |s| if (s.msg.localId()) |message| message == needle else false,
         .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
@@ -846,6 +1000,14 @@ fn spanHasLocal(store: *const LirStore, span: LIR.LocalSpan, needle: LIR.LocalId
         if (local == needle) return true;
     }
     return false;
+}
+
+fn boxyDescRefReadsLocal(desc: LIR.BoxyDescRef, needle: LIR.LocalId) bool {
+    return if (desc.localOrNull()) |local| local == needle else false;
+}
+
+fn boxyDictRefReadsLocal(dict: LIR.BoxyDictRef, needle: LIR.LocalId) bool {
+    return if (dict.localOrNull()) |local| local == needle else false;
 }
 
 const ValueId = u32;
@@ -1262,6 +1424,7 @@ const Certifier = struct {
             @intFromEnum(self.current_proc),
             @intFromEnum(self.current_stmt),
         } ++ args;
+        self.diag.context_proc = self.current_proc;
         self.diag.context_stmt = self.current_stmt;
         self.diag.context_proc = self.current_proc;
         self.diag.set("proc={d} stmt={d}: " ++ fmt, full_args);
@@ -1306,8 +1469,30 @@ const Certifier = struct {
         units: i32,
         lenders: []const ValueId,
     ) CertifyError!ValueId {
-        const value = try self.newValue(local, lenders, false);
+        return self.bindFreshWithLifetime(state, local, units, lenders, false);
+    }
+
+    fn bindFreshWithLifetime(
+        self: *Certifier,
+        state: *State,
+        local: LIR.LocalId,
+        units: i32,
+        lenders: []const ValueId,
+        always_live: bool,
+    ) CertifyError!ValueId {
+        const value = try self.newValue(local, lenders, always_live);
         try state.addBalance(value, units);
+        state.bindValue(local, value);
+        return value;
+    }
+
+    fn bindBorrowedFromImplicitLive(
+        self: *Certifier,
+        state: *State,
+        local: LIR.LocalId,
+    ) CertifyError!ValueId {
+        const value = try self.newValue(local, &.{}, true);
+        try state.growToValue(value);
         state.bindValue(local, value);
         return value;
     }
@@ -1599,6 +1784,7 @@ const Certifier = struct {
                     };
                     self.addPayloadOriginToSummary(state, value, &summary);
                 }
+                summary.abi_live = self.values.items[value].always_live;
             }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
@@ -2206,7 +2392,88 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     try self.noteErasedOwnerDefinition(assign.target, null);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    }
                     if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try self.noteProcLocalSpan(assign.captures);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_box => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_unbox => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_adapt => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_inspect => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_eq => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign.lhs);
+                    try self.noteProcLocal(assign.rhs);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.target_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.payload) |payload| try self.noteProcLocal(payload);
+                    if (assign.payload_desc) |desc| {
+                        if (desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    }
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.target_desc) |target_desc| try self.noteProcLocal(target_desc);
+                    try self.noteProcLocal(assign.source);
+                    if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, assign.next);
+                },
+                .assign_call_dict => |assign| {
+                    try self.noteProcLocal(assign.target);
+                    if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    }
+                    try self.noteProcLocalSpan(assign.args);
+                    try self.noteProcLocalSpan(assign.arg_descs);
+                    try self.noteProcLocalSpan(assign.hidden_args);
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
@@ -2309,6 +2576,12 @@ const Certifier = struct {
                     try stack.append(self.allocator, str_match.on_match);
                     try stack.append(self.allocator, str_match.on_miss);
                 },
+                .boxy_tag_match => |tag_match| {
+                    try self.noteProcLocal(tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    try stack.append(self.allocator, tag_match.on_match);
+                    try stack.append(self.allocator, tag_match.on_miss);
+                },
                 .str_match_set => |str_match_set| {
                     try self.noteProcLocal(str_match_set.source);
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
@@ -2398,6 +2671,17 @@ const Certifier = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -2431,6 +2715,10 @@ const Certifier = struct {
                 .str_match => |str_match| {
                     try Walk.add(predecessor_counts, &stack, self.allocator, str_match.on_match);
                     try Walk.add(predecessor_counts, &stack, self.allocator, str_match.on_miss);
+                },
+                .boxy_tag_match => |tag_match| {
+                    try Walk.add(predecessor_counts, &stack, self.allocator, tag_match.on_match);
+                    try Walk.add(predecessor_counts, &stack, self.allocator, tag_match.on_miss);
                 },
                 .str_match_set => |str_match_set| {
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
@@ -2628,12 +2916,106 @@ const Certifier = struct {
                     self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.closure);
                     if (assign.reuse_source) |reuse_source| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     if (assign.reuse) |reuse| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, reuse);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    const captures = self.store.getLocalSpan(assign.captures);
+                    for (0..GuardedList.borrowLen(captures)) |index| {
+                        const local = GuardedList.at(captures, index);
+                        self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_box => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_unbox => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_adapt => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_inspect => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_eq => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.lhs);
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.rhs);
+                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload) |payload| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, payload);
+                    if (assign.payload_desc) |desc| {
+                        if (desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .boxy_tag_match => |tag_match| {
+                    self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -2653,6 +3035,9 @@ const Certifier = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     if (assign.payload) |payload| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, payload);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -2990,6 +3375,7 @@ const Certifier = struct {
                             };
                             self.addPayloadOriginToSummary(state, value, &summary);
                         }
+                        summary.abi_live = self.values.items[value].always_live;
                     }
                 }
             }
@@ -3140,10 +3526,7 @@ const Certifier = struct {
                     switch (assign.op) {
                         .local => |source| {
                             if (assign.target != source) {
-                                _ = try self.requireLive(&state, source);
-                                if (self.isRc(assign.target)) {
-                                    state.bindValue(assign.target, state.valueOf(source));
-                                }
+                                try self.bindSameValue(&state, assign.target, source);
                             }
                         },
                         .discriminant => |op| _ = try self.requireLive(&state, op.source),
@@ -3168,6 +3551,7 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
+                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);
                     cursor = assign.next;
                 },
@@ -3185,6 +3569,7 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
+                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     const capture_value = if (assign.capture) |capture|
                         try self.requireLive(&state, capture)
                     else
@@ -3211,6 +3596,119 @@ const Certifier = struct {
                     }
                     cursor = assign.next;
                 },
+                .assign_boxy_desc_ref => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.desc);
+                    const captures = self.store.getLocalSpan(assign.captures);
+                    for (0..GuardedList.borrowLen(captures)) |index| {
+                        const local = GuardedList.at(captures, index);
+                        _ = try self.requireLive(&state, local);
+                    }
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    cursor = assign.next;
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    try self.requireBoxyDictRef(&state, assign.dict);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    cursor = assign.next;
+                },
+                .assign_boxy_box => |assign| {
+                    if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    try self.consumeBoxyTransferIntoHolder(&state, assign.payload, assign.payload_mode, target_value);
+                    cursor = assign.next;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.desc);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.requireBoxyTransferSource(&state, assign.source, .move);
+                    cursor = assign.next;
+                },
+                .assign_boxy_unbox => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.source_desc);
+                    if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
+                    const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
+                    if (self.isRc(assign.target)) {
+                        switch (assign.source_mode) {
+                            .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                            .borrow => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
+                            .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                        }
+                    }
+                    cursor = assign.next;
+                },
+                .assign_boxy_adapt => |assign| {
+                    if (assign.source_desc) |desc| try self.requireBoxyDescRef(&state, desc);
+                    if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
+                    cursor = assign.next;
+                },
+                .assign_boxy_inspect => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.source_desc);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
+                    cursor = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.source_desc);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.requireBoxyTransferSource(&state, assign.lhs, assign.source_mode);
+                    _ = try self.requireBoxyTransferSource(&state, assign.rhs, assign.source_mode);
+                    cursor = assign.next;
+                },
+                .assign_boxy_tag => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.target_desc);
+                    if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    if (assign.payload) |payload| {
+                        try self.consumeBoxyTransferIntoHolder(&state, payload, assign.payload_mode, target_value);
+                    }
+                    cursor = assign.next;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    try self.requireBoxyDescRef(&state, assign.source_desc);
+                    const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
+                    if (self.isRc(assign.target)) {
+                        switch (assign.source_mode) {
+                            .borrow => {
+                                if (source_value == no_value) {
+                                    _ = try self.bindBorrowedFromImplicitLive(&state, assign.target);
+                                } else {
+                                    _ = try self.bindFresh(&state, assign.target, 0, &.{source_value});
+                                }
+                            },
+                            .copy, .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                        }
+                    }
+                    cursor = assign.next;
+                },
+                .boxy_tag_match => |tag_match| {
+                    _ = try self.requireLive(&state, tag_match.source);
+                    try self.requireBoxyDescRef(&state, tag_match.source_desc);
+                    var match_state = try state.clone();
+                    errdefer match_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_match, .state = match_state, .origin_join = segment.origin_join } });
+
+                    var miss_state = try state.clone();
+                    errdefer miss_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .assign_call_dict => |assign| {
+                    try self.requireBoxyDictRef(&state, assign.dict);
+                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
+                    try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    const arg_descs = self.store.getLocalSpan(assign.arg_descs);
+                    for (0..GuardedList.borrowLen(arg_descs)) |index| {
+                        _ = try self.requireLive(&state, GuardedList.at(arg_descs, index));
+                    }
+                    const hidden_args = self.store.getLocalSpan(assign.hidden_args);
+                    for (0..GuardedList.borrowLen(hidden_args)) |index| {
+                        const hidden = GuardedList.at(hidden_args, index);
+                        _ = try self.requireLive(&state, hidden);
+                    }
+                    cursor = assign.next;
+                },
                 .assign_low_level => |assign| {
                     try self.applyLowLevel(&state, assign);
                     cursor = assign.next;
@@ -3224,6 +3722,7 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| try self.requireBoxyDescRef(&state, target_desc);
                     if (assign.payload) |payload| {
                         const operands = [_]LIR.LocalId{payload};
                         try self.applyAggregate(&state, assign.target, &operands);
@@ -3485,13 +3984,10 @@ const Certifier = struct {
     fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
-        if (source_value == no_value) {
-            return self.fail(
-                "payload read into refcounted local {d} from non-refcounted source {d}",
-                .{ @intFromEnum(target), @intFromEnum(source) },
-            );
-        }
-        const value = try self.bindFresh(state, target, 0, &.{source_value});
+        const value = if (source_value == no_value)
+            try self.bindBorrowedFromImplicitLive(state, target)
+        else
+            try self.bindFresh(state, target, 0, &.{source_value});
         if (field_idx) |field| {
             const info = &self.values.items[value];
             info.payload_source = source_value;
@@ -3503,6 +3999,9 @@ const Certifier = struct {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         if (source_value == no_value) {
+            self.diag.context_local = source;
+            self.diag.context_proc = self.current_proc;
+            self.diag.context_stmt = self.current_stmt;
             return self.fail(
                 "reinterpret into refcounted local {d} from non-refcounted source {d}",
                 .{ @intFromEnum(target), @intFromEnum(source) },
@@ -3660,6 +4159,49 @@ const Certifier = struct {
         }
     }
 
+    fn requireBoxyDescRef(self: *Certifier, state: *State, desc: LIR.BoxyDescRef) CertifyError!void {
+        if (desc.localOrNull()) |local| {
+            _ = try self.requireLive(state, local);
+        }
+    }
+
+    fn requireBoxyDictRef(self: *Certifier, state: *State, dict: LIR.BoxyDictRef) CertifyError!void {
+        if (dict.localOrNull()) |local| {
+            _ = try self.requireLive(state, local);
+        }
+    }
+
+    fn requireBoxyTransferSource(
+        self: *Certifier,
+        state: *State,
+        local: LIR.LocalId,
+        mode: LIR.BoxyTransferMode,
+    ) CertifyError!ValueId {
+        const value = try self.requireLive(state, local);
+        if (mode == .move) {
+            try self.consumeUnit(state, value, local);
+        }
+        return value;
+    }
+
+    fn consumeBoxyTransferIntoHolder(
+        self: *Certifier,
+        state: *State,
+        local: LIR.LocalId,
+        mode: LIR.BoxyTransferMode,
+        holder_value: ValueId,
+    ) CertifyError!void {
+        const value = try self.requireLive(state, local);
+        if (mode == .move) {
+            try self.consumeIntoHolder(state, value, holder_value);
+        }
+    }
+
+    fn bindBoxyOwnedTarget(self: *Certifier, state: *State, target: LIR.LocalId) CertifyError!ValueId {
+        if (!self.isRc(target)) return no_value;
+        return try self.bindFresh(state, target, 1, &.{});
+    }
+
     fn applyAggregate(
         self: *Certifier,
         state: *State,
@@ -3792,8 +4334,8 @@ const CertifyTest = struct {
         return id;
     }
 
-    fn rcHelper(op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
-        return .{ .op = op, .layout_idx = layout_idx };
+    fn rcHelper(op: layout_mod.RcOp, layout_idx: layout_mod.Idx) LIR.RcHelper {
+        return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = layout_idx });
     }
 
     fn assignStr(self: *CertifyTest, target: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -3857,17 +4399,17 @@ const CertifyTest = struct {
     }
 
     fn certify(self: *CertifyTest) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, &.{}, arc_sig.SigTable.all_owned, &.{}, &self.diag);
     }
 
     fn certifyAndMeasureWork(self: *CertifyTest) CertifyError!CertifierWorkStats {
         var stats = CertifierWorkStats{};
-        try certifyStoreWithWorkStats(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag, &stats);
+        try certifyStoreWithWorkStats(self.allocator, &self.store, &self.layouts, &.{}, arc_sig.SigTable.all_owned, &.{}, &self.diag, &stats);
         return stats;
     }
 
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, &.{}, sigs, &.{}, &self.diag);
     }
 
     fn certifyUniqueArgsOnly(self: *CertifyTest) CertifyError!void {
@@ -4406,6 +4948,55 @@ test "certify accepts a payload borrow used while the owner is live" {
     try f.certify();
 }
 
+test "certify accepts a retained Boxy field borrowed from implicit capture storage" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = erased_box },
+    });
+    const capture = try f.local(capture_layout);
+    const field = try f.local(erased_box);
+    const result = try f.local(.i64);
+    const desc_local = try f.local(.opaque_ptr);
+    const desc = LIR.BoxyDescRef{ .local = desc_local };
+    f.store.setLocalBoxyDesc(field, desc);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release = try f.store.addCFStmt(.{ .decref = .{
+        .value = field,
+        .rc = .{ .boxy = desc },
+        .next = result_assign,
+    } });
+    const retain = try f.store.addCFStmt(.{ .incref = .{
+        .value = field,
+        .rc = .{ .boxy = desc },
+        .next = release,
+    } });
+    const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = field,
+        .op = .{ .field = .{ .source = capture, .field_idx = 0 } },
+        .next = retain,
+    } });
+    _ = try f.addProc(&.{ capture, desc_local }, field_read, .i64);
+
+    const boxy_descs = try f.allocator.alloc(?LIR.BoxyDescRef, f.store.localCount());
+    defer f.allocator.free(boxy_descs);
+    @memset(boxy_descs, null);
+    boxy_descs[@intFromEnum(field)] = desc;
+    try certifyStore(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        boxy_descs,
+        arc_sig.SigTable.all_owned,
+        &.{},
+        &f.diag,
+    );
+}
+
 test "certify flags a payload borrow used after the owner dies" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -4558,6 +5149,43 @@ test "certify accepts a borrowed parameter used without RC statements" {
         .next = result_assign,
     } });
     _ = try f.addProc(&.{param}, use_param, .i64);
+
+    const sigs = [_]arc_sig.RcSig{arc_sig.RcSig.all_owned.withBorrowedParam(0)};
+    try f.certifyWith(.{ .sigs = &sigs });
+}
+
+test "certify preserves borrowed parameter lifetime through an owned alias join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_replacement = try f.decrefStmt(alias, .str, result_assign);
+    const use_param = try f.store.addCFStmt(.{ .expect = .{
+        .condition = param,
+        .next = release_replacement,
+    } });
+    const replace_alias = try f.assignStr(alias, use_param);
+    const release_old_alias = try f.decrefStmt(alias, .str, replace_alias);
+
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_old_alias,
+        .remainder = jump,
+    } });
+    const retain_alias = try f.increfStmt(alias, .str, join_stmt);
+    const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = param },
+        .next = retain_alias,
+    } });
+    _ = try f.addProc(&.{param}, bind_alias, .i64);
 
     const sigs = [_]arc_sig.RcSig{arc_sig.RcSig.all_owned.withBorrowedParam(0)};
     try f.certifyWith(.{ .sigs = &sigs });

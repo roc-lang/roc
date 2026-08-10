@@ -34,6 +34,12 @@ const env_imports = struct {
     extern "env" fn roc_dead_private_helper_canary_41d2cb(value: i64) void;
 };
 
+pub const panic = std.debug.FullPanic(panicImpl);
+
+fn panicImpl(msg: []const u8, _: ?usize) noreturn {
+    env_imports.roc_panic(msg.ptr, msg.len);
+}
+
 // Use Zig's standard WASM allocator for proper memory management
 const wasm_allocator = std.heap.wasm_allocator;
 

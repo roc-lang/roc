@@ -847,6 +847,50 @@ const Pass = struct {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
+                .assign_boxy_desc_ref => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_dict_ref => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_box => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_reuse_box => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_unbox => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_adapt => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_inspect => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_eq => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_tag => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_boxy_tag_payload => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
+                .assign_call_dict => |s| {
+                    try self.bumpAssign(s.target);
+                    try self.edgeTo(s.next);
+                },
                 .store_struct => |s| {
                     try self.bumpAssign(s.dest);
                     try self.edgeTo(s.next);
@@ -881,6 +925,10 @@ const Pass = struct {
                     try self.edgeTo(s.uninitialized_branch);
                 },
                 .str_match => |s| {
+                    try self.edgeTo(s.on_match);
+                    try self.edgeTo(s.on_miss);
+                },
+                .boxy_tag_match => |s| {
                     try self.edgeTo(s.on_match);
                     try self.edgeTo(s.on_miss);
                 },
@@ -1727,6 +1775,18 @@ const Pass = struct {
                 .jump,
                 .ret,
                 .crash,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 => continue,
             };
             const params = self.store.getLocalSpan(join.params);
@@ -1769,6 +1829,18 @@ const Pass = struct {
                 .jump,
                 .ret,
                 .crash,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 => continue,
             };
             if (body_switch.cond != param) continue;
@@ -1844,6 +1916,18 @@ const Pass = struct {
                     .join,
                     .ret,
                     .crash,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
                     => continue,
                 }
                 const true_jump = try self.store.addCFStmt(.{ .jump = .{ .target = true_id } });
@@ -2081,6 +2165,61 @@ const Pass = struct {
                         try self.bindFresh(s.target);
                         current = s.next;
                     },
+                    .assign_boxy_desc_ref => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_dict_ref => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_reuse_box => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_unbox => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_adapt => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_inspect => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_eq => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_tag => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_boxy_tag_payload => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
+                    .assign_call_dict => |s| {
+                        try self.visited.put(current, {});
+                        try self.bindFresh(s.target);
+                        current = s.next;
+                    },
                     .assign_list => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
@@ -2146,6 +2285,12 @@ const Pass = struct {
                         break :walk;
                     },
                     .str_match => |s| {
+                        try self.visited.put(current, {});
+                        try self.pushFrame(s.on_match, null);
+                        try self.pushFrame(s.on_miss, null);
+                        break :walk;
+                    },
+                    .boxy_tag_match => |s| {
                         try self.visited.put(current, {});
                         try self.pushFrame(s.on_match, null);
                         try self.pushFrame(s.on_miss, null);
@@ -2291,7 +2436,7 @@ const Pass = struct {
         const literal: ?i128 = switch (value) {
             .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
             .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
             if (trackedIntMax(self.localLayout(target)) != null) {
@@ -2329,6 +2474,11 @@ const Pass = struct {
                         }
                     }
                 }
+                try self.bindFresh(s.target);
+            },
+            .list_capacity => {
+                // A list's capacity is a non-negative count with no tighter
+                // statically known bound.
                 try self.bindFresh(s.target);
             },
             .list_set, .list_set_in_place_unsafe => {
@@ -3157,6 +3307,17 @@ const RangeProveCertify = struct {
                 .assign_list => |t| try list.append(allocator, t.next),
                 .assign_struct => |t| try list.append(allocator, t.next),
                 .assign_tag => |t| try list.append(allocator, t.next),
+                .assign_boxy_desc_ref => |t| try list.append(allocator, t.next),
+                .assign_boxy_dict_ref => |t| try list.append(allocator, t.next),
+                .assign_boxy_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_reuse_box => |t| try list.append(allocator, t.next),
+                .assign_boxy_unbox => |t| try list.append(allocator, t.next),
+                .assign_boxy_adapt => |t| try list.append(allocator, t.next),
+                .assign_boxy_inspect => |t| try list.append(allocator, t.next),
+                .assign_boxy_eq => |t| try list.append(allocator, t.next),
+                .assign_boxy_tag => |t| try list.append(allocator, t.next),
+                .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
+                .assign_call_dict => |t| try list.append(allocator, t.next),
                 .store_struct => |t| try list.append(allocator, t.next),
                 .store_tag => |t| try list.append(allocator, t.next),
                 .set_local => |t| try list.append(allocator, t.next),
@@ -3179,6 +3340,10 @@ const RangeProveCertify = struct {
                     try list.append(allocator, t.uninitialized_branch);
                 },
                 .str_match => |t| {
+                    try list.append(allocator, t.on_match);
+                    try list.append(allocator, t.on_miss);
+                },
+                .boxy_tag_match => |t| {
                     try list.append(allocator, t.on_match);
                     try list.append(allocator, t.on_miss);
                 },

@@ -3671,7 +3671,9 @@ fn processDocsSnapshot(
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
+        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
+            .exposed_names = mod.docs_exposed_names,
+        }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
@@ -4196,6 +4198,8 @@ fn processDevObjectSnapshot(
                 entrypoints,
                 static_data_exports,
                 lowered.lir_result.store.getProcSpecs(),
+                lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+                lowered.lir_result.boxy_erased_arg_desc_params.items,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});

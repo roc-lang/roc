@@ -20,6 +20,9 @@ const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
 const EvalDynLib = @import("dynlib.zig").DynLib;
+const boxy_abi = @import("boxy_abi.zig");
+const boxy_runtime = @import("boxy_runtime.zig");
+const BoxyNativeFnTable = boxy_abi.BoxyNativeFnTable;
 const InspectedRun = @import("inspected_run.zig");
 
 const Allocator = std.mem.Allocator;
@@ -374,6 +377,7 @@ pub const LirImageProgram = struct {
     }
 
     pub fn deinit(self: *LirImageProgram, allocator: Allocator) void {
+        self.view.deinit();
         self.shm.deinit(allocator);
     }
 };
@@ -393,6 +397,7 @@ pub const BoolRoot = struct {
 pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
 };
 
@@ -1021,7 +1026,7 @@ pub fn compileInspectedProgramForTarget(
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null, null);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, null, null, .lss);
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
@@ -1036,8 +1041,9 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     target_usize: base.target.TargetUsize,
     pre_published_builtin: PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
 ) TestHelperError!CompiledTargetProgram {
-    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin, roc_ctx);
+    return compileInspectedProgramForTargetImpl(allocator, io, source_kind, source, imports, target_usize, pre_published_builtin, roc_ctx, specialization_strategy);
 }
 
 fn compileInspectedProgramForTargetImpl(
@@ -1049,6 +1055,7 @@ fn compileInspectedProgramForTargetImpl(
     target_usize: base.target.TargetUsize,
     pre_published_builtin: ?PrePublishedBuiltin,
     roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
 ) TestHelperError!CompiledTargetProgram {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
@@ -1066,7 +1073,9 @@ fn compileInspectedProgramForTargetImpl(
         return error.TypeCheckError;
     }
 
-    const lowered = try lowerParsedProgramToLir(allocator, io, &resources, target_usize);
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, target_usize, .{
+        .specialization_strategy = specialization_strategy,
+    });
     errdefer {
         var owned = lowered;
         owned.deinit(allocator);
@@ -1635,6 +1644,7 @@ fn lowerParsedProgramToLir(
 }
 
 const LowerToLirOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     tag_reachability: bool = false,
     prove_ranges: bool = false,
@@ -1724,6 +1734,7 @@ fn lowerCheckedRootWithViews(
         .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .specialization_strategy = options.specialization_strategy,
             .inline_mode = options.inline_mode,
             .list_in_place_map = options.list_in_place_map,
             .monotype_cache = options.monotype_cache,
@@ -2371,14 +2382,41 @@ fn runExecutableBoolRoot(
     };
 }
 
+/// Native addresses of the Boxy runtime wrappers consumed by generated code.
+fn boxyNativeFnTable() BoxyNativeFnTable {
+    return boxy_abi.nativeFnTable();
+}
+
+/// Install the process-global boxy runtime from live stores so in-process dev
+/// code can call the boxy wrappers. A no-op when the program has no boxy tables.
+/// Returns whether the global was installed and must be torn down.
+fn installBoxyGlobal(
+    allocator: Allocator,
+    store: *const lir.LirStore,
+    layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
+    roc_ops: *builtins.host_abi.RocOps,
+) Allocator.Error!bool {
+    if (!tables.needsRuntimeForStore(store)) return false;
+    // Clear any runtime an earlier program left installed after longjmping past
+    // its teardown on a crash.
+    boxy_abi.deinitGlobal();
+    boxy_abi.initGlobal(allocator, store, layouts, tables, roc_ops) catch |err| switch (err) {
+        error.AlreadyInitialized => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return true;
+}
+
 /// JIT-compile and run bool-returning test roots via the dev backend.
 pub fn devEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
 ) TestHelperError![]BoolRootEvalResult {
-    return devEvalBoolRootsWithTiming(allocator, store, layouts, roots, null);
+    return devEvalBoolRootsWithTiming(allocator, store, layouts, tables, roots, null);
 }
 
 /// JIT-compile and run boolean roots while accumulating detailed dev-backend timings.
@@ -2386,6 +2424,7 @@ pub fn devEvalBoolRootsWithTiming(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
     timing: ?*DevBoolRootTiming,
 ) TestHelperError![]BoolRootEvalResult {
@@ -2402,8 +2441,19 @@ pub fn devEvalBoolRootsWithTiming(
         if (timing) |timings| timings.finish(static_strings_started_ns, .static_strings);
 
         const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries, .preserve, roc_target.host_cpu.level());
+        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+            allocator,
+            store,
+            layouts,
+            static_strings.entries,
+            tables.erased_arg_desc_offsets,
+            tables.erased_arg_desc_params,
+            .preserve,
+            roc_target.host_cpu.level(),
+        );
         defer codegen.deinit();
+        var native_fns = boxyNativeFnTable();
+        codegen.boxy_native_fns = &native_fns;
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
@@ -2412,6 +2462,9 @@ pub fn devEvalBoolRootsWithTiming(
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
+
+        const boxy_installed = try installBoxyGlobal(allocator, store, layouts, tables, runtime_env.get_ops());
+        defer if (boxy_installed) boxy_abi.deinitGlobal();
 
         const results = try allocator.alloc(BoolRootEvalResult, roots.len);
         var result_len: usize = 0;
@@ -2501,7 +2554,9 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
 fn callLlvmBoolRoot(
     allocator: Allocator,
     layouts: *const LayoutStore,
-    entry: *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void,
+    store: *const lir.LirStore,
+    tables: boxy_runtime.BoxyTables,
+    entry: LlvmBoolRootEntryFn,
     root: BoolRoot,
     longjmp_on_crash: bool,
     call_index: usize,
@@ -2524,6 +2579,18 @@ fn callLlvmBoolRoot(
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
     var test_context: TestInvocationContext = .{};
+    const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
+        try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
+    else
+        null;
+    defer if (boxy_runtime_instance) |instance| boxy_abi.deinitRuntime(instance);
+    const previous_boxy_runtime = if (boxy_runtime_instance) |instance|
+        boxy_abi.swapActiveRuntime(instance)
+    else
+        null;
+    defer {
+        if (boxy_runtime_instance != null) _ = boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    }
 
     const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -2535,11 +2602,13 @@ fn callLlvmBoolRoot(
     defer crash_boundary.deinit();
     const sj = crash_boundary.set();
     if (sj == 0) {
+        const boxy_fns = boxyNativeFnTable();
         entry(
             runtime_env.get_ops(),
             &test_context,
             ret_buf.ptr,
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+            &boxy_fns,
         );
     }
 
@@ -2564,10 +2633,12 @@ fn callLlvmBoolRoot(
     };
 }
 
-const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque) callconv(.c) void;
+const LlvmBoolRootEntryFn = *const fn (*builtins.host_abi.RocOps, *TestInvocationContext, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
 
 const LlvmBoolRootCall = struct {
+    store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     entry: LlvmBoolRootEntryFn,
     root: BoolRoot,
 };
@@ -2592,6 +2663,8 @@ fn llvmBoolRootWorker(state: *LlvmBoolRootWorkerState) void {
         state.results[index] = callLlvmBoolRoot(
             state.allocator,
             call.layouts,
+            call.store,
+            call.tables,
             call.entry,
             call.root,
             state.longjmp_on_crash,
@@ -2691,12 +2764,14 @@ pub fn llvmEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
     opt: LlvmTestOpt,
 ) TestHelperError![]BoolRootEvalResult {
     const modules = [_]BoolRootModule{.{
         .store = store,
         .layouts = layouts,
+        .tables = tables,
         .roots = roots,
     }};
     return llvmEvalBoolRootModules(allocator, modules[0..], opt);
@@ -2770,7 +2845,12 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
     }
 
     for (modules, 0..) |module, module_index| {
-        var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, module.store);
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(
+            allocator,
+            module.store,
+            module.tables.erased_arg_desc_offsets,
+            module.tables.erased_arg_desc_params,
+        );
         codegen.layout_store = module.layouts;
         defer codegen.deinit();
 
@@ -2815,12 +2895,13 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
 
     const calls = try allocator.alloc(LlvmBoolRootCall, total_roots);
     defer allocator.free(calls);
-
     var call_index: usize = 0;
     for (modules) |module| {
         for (module.roots) |root| {
             calls[call_index] = .{
+                .store = module.store,
                 .layouts = module.layouts,
+                .tables = module.tables,
                 .entry = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable,
                 .root = root,
             };
@@ -2835,6 +2916,9 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
     const result = try InspectedRun.run(allocator, backend_kind, .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
+        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
     });
     return switch (result.outcome) {
@@ -2901,10 +2985,11 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interp = try Interpreter.init(
+    var interp = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
+        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         runtime_env.get_ops(),
         .preserve,
     );

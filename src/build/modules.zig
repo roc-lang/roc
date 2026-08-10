@@ -40,6 +40,7 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .ipc => &.{"ipc tests"},
         .fmt => &.{"fmt tests"},
         .lsp_unit => &.{"lsp unit tests"},
+        .glue => &.{"glue tests"},
         .roc_src,
         .types,
         .reporting,
@@ -62,7 +63,6 @@ fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
         .echo_platform,
         .docs,
         .bump,
-        .glue,
         .host_alloc,
         => &.{},
     };
@@ -453,7 +453,7 @@ pub const ModuleType = enum {
             .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
-            .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core },
+            .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types },
             .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck, .builtins },
             .symbol => &.{.base},
             .roc_target => &.{.base},
@@ -524,6 +524,13 @@ pub const RocModules = struct {
     // `builtins.shim_symbols`.
     shim_symbols: *Module,
 
+    // Anonymous page mapping (`src/raw_pages.zig`) for the objects linked into
+    // standalone Roc programs: the default-platform runtimes and the boxy
+    // runtime. Shared rather than restated per consumer because a NetBSD
+    // program links two of them and the assembly thunk its `mmap` ABI needs may
+    // only be defined once.
+    raw_pages: *Module,
+
     // The size-tracking host allocator (`src/host_alloc/mod.zig`) shared by
     // the test platform hosts. Part of the module dependency graph so its
     // tests run with the other module tests, but consumed only by hosts, never
@@ -591,6 +598,7 @@ pub const RocModules = struct {
             .compiler_platform_sources = createCompilerPlatformSourcesModule(b),
             .roc_str_view = b.addModule("roc_str_view", .{ .root_source_file = b.path("src/default_platform/roc_str_view.zig") }),
             .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
+            .raw_pages = b.addModule("raw_pages", .{ .root_source_file = b.path("src/raw_pages.zig") }),
             .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
@@ -900,6 +908,7 @@ pub const RocModules = struct {
             .echo_platform,
             .docs,
             .bump,
+            .glue,
             .host_alloc,
         };
 

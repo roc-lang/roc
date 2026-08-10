@@ -1691,6 +1691,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_anno_only;
             return CIR.Expr{ .e_anno_only = .{
                 .ident = @bitCast(p.ident),
+                .kind = @enumFromInt(p.kind),
             } };
         },
         .expr_derived_method => {
@@ -3214,6 +3215,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_anno_only;
             node.setPayload(.{ .expr_anno_only = .{
                 .ident = @bitCast(anno.ident),
+                .kind = @intFromEnum(anno.kind),
             } });
         },
         .e_derived_method => |derived| {

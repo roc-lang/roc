@@ -102,9 +102,18 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: u32, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
+
+    pub fn runWasmStrWithStatsAtHeapBase(_: std.mem.Allocator, _: []const u8, _: bool, _: u32) EvalError!RunWasmStrResult {
+        return error.WasmExecFailed;
+    }
 } else @import("wasm_runner.zig");
 /// Shared eval test helpers routed through checked artifacts.
 pub const test_helpers = @import("test_helpers.zig");
+/// Descriptor-guided boxy value operations shared by the interpreter and
+/// machine-code backends.
+pub const boxy_runtime = @import("boxy_runtime.zig");
+/// C-ABI wrappers over the boxy runtime for machine-code backends.
+pub const boxy_abi = @import("boxy_abi.zig");
 /// Debug-only conformance check between `RcEffect` rows and builtin behavior.
 pub const rc_conformance = @import("rc_conformance.zig");
 
