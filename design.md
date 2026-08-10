@@ -3969,7 +3969,12 @@ flex stay waiting; any later unification that grounds one makes its enqueue
 transition available on the next scan. Processing an entry may append further
 entries, and the fixpoint ends only when no transition or append occurred.
 There is no numeric depth, round, or queue-length ceiling: every finite chain
-is checked to completion.
+is checked to completion. A generalization boundary captures its owned
+requirements before literal defaulting, runs grounded copied requirements to
+that exact fixpoint, and then captures once more. The second capture consumes
+requirements created while selecting method targets in the worklist; capture
+itself creates no solver work, so returning from that sequence leaves the
+boundary owner quiescent rather than stranding post-capture candidates.
 
 Selected method-target instantiation explicitly records which parent dispatch
 edge produced each copied child constraint. Ordinary caller constraints that
@@ -3982,7 +3987,9 @@ state and is rejected as recursive dispatch; a chain whose concrete type
 structure changes has a different digest and continues. Rejection settles
 only that cyclic obligation and processing continues with unrelated queued
 relations. This finite-state rule replaces the old 64-round, 16K-entry, and
-instantiation-recursion cutoffs.
+instantiation-recursion cutoffs. A repeated observation of the same raw edge
+first reuses its recorded target and state key; canonical type traversal and
+digest construction occur only when selecting a target for a new edge.
 
 Only roots actually promoted to generalized rank can instantiate a side-table
 scheme. A mixed recursive group can provisionally capture requirements for a

@@ -20919,8 +20919,14 @@ fn captureSchemeDispatchRequirements(
             };
             if (!needs_explicit_requirement) continue;
 
-            const scheme_idx = try self.ensureTypeScheme(root.owner);
-            if (self.typeSchemeHasRequirement(scheme_idx, candidate.receiver_var, candidate.constraint)) continue;
+            // Do not materialize a scheme merely to discover that this exact
+            // requirement was already captured through another alias/copy.
+            // Empty schemes have no semantic meaning and only add hot-path
+            // lookup state.
+            const scheme_idx = if (self.typeSchemeIndexForRoot(root.owner)) |existing_scheme_idx| blk: {
+                if (self.typeSchemeHasRequirement(existing_scheme_idx, candidate.receiver_var, candidate.constraint)) continue;
+                break :blk existing_scheme_idx;
+            } else try self.ensureTypeScheme(root.owner);
             try self.type_schemes.items[scheme_idx].dispatch_requirements.append(self.gpa, .{
                 .receiver_var = candidate.receiver_var,
                 .constraint = candidate.constraint,
@@ -20940,6 +20946,13 @@ fn addSchemeDispatchRequirementsToBoundaryReachability(
 ) Allocator.Error!void {
     for (roots) |root| {
         try self.addSchemeRequirementRelationsToReachableSet(root.owner, &self.boundary_reachable_vars);
+    }
+}
+
+fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const BoundaryRoot) void {
+    if (builtin.mode != .Debug) return;
+    for (roots) |root| {
+        std.debug.assert(!self.scheme_requirement_candidate_indices_by_owner.contains(root.owner));
     }
 }
 
@@ -20978,6 +20991,11 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     }
     if (!has_candidate) {
         try self.checkGroundedSchemeRequirementsAtBoundary(env);
+        // Grounded dispatch may instantiate a method target whose own scheme
+        // contributes a requirement to this still-active owner. Capture that
+        // monotone output after the worklist reaches its exact fixpoint.
+        try self.captureSchemeDispatchRequirements(roots, rank);
+        self.assertSchemeRequirementBoundaryQuiescent(roots);
         return;
     }
 
@@ -21038,6 +21056,12 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         .pool_len = pool_vars.len,
     } });
     try self.checkGroundedSchemeRequirementsAtBoundary(env);
+    // Target selection inside the grounded-requirement fixpoint can copy a
+    // transitive requirement under this boundary's active owner. This final
+    // capture is the lifecycle counterpart to the capture before defaulting:
+    // no solver work follows it, so the owner is quiescent when we return.
+    try self.captureSchemeDispatchRequirements(roots, rank);
+    self.assertSchemeRequirementBoundaryQuiescent(roots);
 }
 
 /// A copied explicit requirement stays out of the hot deferred queue while its
@@ -22101,6 +22125,21 @@ fn dispatchStateRepeatsAncestor(
     hasher.update(&callable_key.bytes);
     state_type_key.* = hasher.finalResult();
 
+    return self.dispatchStateKeyRepeatsAncestor(
+        constraint,
+        parent_constraint_fn_var,
+        method_lookup,
+        state_type_key.*,
+    );
+}
+
+fn dispatchStateKeyRepeatsAncestor(
+    self: *const Self,
+    constraint: StaticDispatchConstraint,
+    parent_constraint_fn_var: ?Var,
+    method_lookup: StaticDispatchMethodBinding,
+    state_type_key: [32]u8,
+) bool {
     var ancestor_fn = parent_constraint_fn_var;
     while (ancestor_fn) |fn_var| {
         const ancestor_idx = self.dispatch_target_instantiation_by_fn_var.get(fn_var) orelse return false;
@@ -22108,13 +22147,33 @@ fn dispatchStateRepeatsAncestor(
         if (ancestor.target_env == method_lookup.env and
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
             ancestor.method_name.eql(constraint.fn_name) and
-            std.meta.eql(state_type_key.*, ancestor.state_type_key))
+            std.meta.eql(state_type_key, ancestor.state_type_key))
         {
             return true;
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
     }
     return false;
+}
+
+/// Return an already-selected target for this raw dispatch edge. The stored
+/// target includes the canonical state key computed on the first observation,
+/// so a fixpoint revisit must consult this cache before rebuilding canonical
+/// receiver/callable keys.
+fn cachedDispatchTargetInstantiationIndex(
+    self: *const Self,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+) ?u32 {
+    const raw_index = self.dispatch_target_instantiation_by_fn_var.get(constraint.fn_var) orelse return null;
+    const existing = self.dispatch_target_instantiations.items[raw_index];
+    if (existing.target_env != method_lookup.env or
+        !std.meta.eql(existing.target_binding, method_lookup.binding) or
+        !existing.method_name.eql(constraint.fn_name))
+    {
+        std.debug.panic("one static-dispatch edge selected two different method bindings", .{});
+    }
+    return raw_index;
 }
 
 fn rejectRecursiveStaticDispatch(
@@ -22137,12 +22196,10 @@ fn rejectRecursiveStaticDispatch(
     try self.markErroneous(dispatcher_var);
 }
 
-/// Return the one local method var selected for this raw dispatch edge.
-/// Deferred-constraint fixpoints may observe an edge more than once; the first
-/// observation performs the target copy/instantiation and records its nested
-/// evidence, while later observations reuse that exact var. A different binding
-/// for the same raw edge would make checked dispatch provenance contradictory.
-fn dispatchTargetMethodVar(
+/// Copy the selected method target for a new raw dispatch edge and record its
+/// nested evidence plus canonical state. The cache-aware resolver guarantees
+/// this is called exactly once per edge.
+fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
@@ -22154,16 +22211,7 @@ fn dispatchTargetMethodVar(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    if (self.dispatch_target_instantiation_by_fn_var.get(constraint.fn_var)) |raw_index| {
-        const existing = self.dispatch_target_instantiations.items[raw_index];
-        if (existing.target_env != method_lookup.env or
-            !std.meta.eql(existing.target_binding, method_lookup.binding) or
-            !existing.method_name.eql(constraint.fn_name))
-        {
-            std.debug.panic("one static-dispatch edge selected two different method bindings", .{});
-        }
-        return existing.method_var;
-    }
+    std.debug.assert(self.dispatch_target_instantiation_by_fn_var.get(constraint.fn_var) == null);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
@@ -22227,6 +22275,61 @@ fn dispatchTargetMethodVar(
     });
     self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
     return method_var;
+}
+
+/// Resolve one selected dispatch target. Revisiting an edge is the common
+/// fixpoint case, so cache lookup comes first. Only a genuinely new edge pays
+/// for canonical state construction and ancestor-cycle comparison.
+fn resolveDispatchTargetMethodVar(
+    self: *Self,
+    dispatcher_var: Var,
+    parent_constraint_fn_var: ?Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    cycle_method_expr_var: ?Var,
+    predeclared_scheme_for_method: ?Var,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?Var {
+    if (self.cachedDispatchTargetInstantiationIndex(constraint, method_lookup)) |raw_index| {
+        const existing = self.dispatch_target_instantiations.items[raw_index];
+        std.debug.assert(existing.parent_constraint_fn_var == parent_constraint_fn_var);
+        if (self.dispatchStateKeyRepeatsAncestor(
+            constraint,
+            parent_constraint_fn_var,
+            method_lookup,
+            existing.state_type_key,
+        )) {
+            try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr);
+            return null;
+        }
+        return existing.method_var;
+    }
+
+    var state_type_key: [32]u8 = undefined;
+    if (try self.dispatchStateRepeatsAncestor(
+        dispatcher_var,
+        constraint,
+        parent_constraint_fn_var,
+        method_lookup,
+        &state_type_key,
+    )) {
+        try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr);
+        return null;
+    }
+
+    return try self.instantiateDispatchTargetMethodVar(
+        dispatcher_var,
+        parent_constraint_fn_var,
+        state_type_key,
+        constraint,
+        method_lookup,
+        cycle_method_expr_var,
+        predeclared_scheme_for_method,
+        env,
+        region,
+    );
 }
 
 fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchMethodBinding) bool {
@@ -22668,29 +22771,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    var state_type_key: [32]u8 = undefined;
-                    if (try self.dispatchStateRepeatsAncestor(
-                        deferred_constraint.var_,
-                        constraint,
-                        deferred_constraint.parent_constraint_fn_var,
-                        method_lookup,
-                        &state_type_key,
-                    )) {
-                        try self.rejectRecursiveStaticDispatch(deferred_constraint.var_, constraint, env, failure_expr);
-                        continue;
-                    }
-
-                    const method_var = try self.dispatchTargetMethodVar(
+                    const method_var = (try self.resolveDispatchTargetMethodVar(
                         deferred_constraint.var_,
                         deferred_constraint.parent_constraint_fn_var,
-                        state_type_key,
                         constraint,
                         method_lookup,
                         cycle_method_expr_var,
                         predeclared_scheme_for_method,
                         env,
                         region,
-                    );
+                        failure_expr,
+                    )) orelse continue;
 
                     // Unwrap the constraint type
                     if (constraint_fn_resolved.unwrapFunc() == null) {
@@ -22989,29 +23080,17 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    var state_type_key: [32]u8 = undefined;
-                    if (try self.dispatchStateRepeatsAncestor(
-                        deferred_constraint.var_,
-                        constraint,
-                        deferred_constraint.parent_constraint_fn_var,
-                        method_lookup,
-                        &state_type_key,
-                    )) {
-                        try self.rejectRecursiveStaticDispatch(deferred_constraint.var_, constraint, env, failure_expr);
-                        continue;
-                    }
-
-                    const method_var = try self.dispatchTargetMethodVar(
+                    const method_var = (try self.resolveDispatchTargetMethodVar(
                         deferred_constraint.var_,
                         deferred_constraint.parent_constraint_fn_var,
-                        state_type_key,
                         constraint,
                         method_lookup,
                         cycle_method_expr_var,
                         predeclared_scheme_for_method,
                         env,
                         region,
-                    );
+                        failure_expr,
+                    )) orelse continue;
 
                     if (constraint_fn_resolved.unwrapFunc() == null) {
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
