@@ -16046,7 +16046,7 @@ const BodyContext = struct {
         // scope memoizes and the content it unifies with. A read can land on
         // either representative, so marking only one understates how many
         // reads name a checked position (reunify.md 13.2 step 2a).
-        try self.graph.unify(placeholder, built);
+        try self.graph.fillReservedNode(placeholder, built);
         return placeholder;
     }
 
@@ -16284,7 +16284,7 @@ const BodyContext = struct {
             }
             break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         };
-        try self.graph.unify(placeholder, backing);
+        try self.graph.fillReservedNode(placeholder, backing);
         return placeholder;
     }
 

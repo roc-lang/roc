@@ -75,6 +75,12 @@ my @categories = (
               counts => { $SOLVE => 39, $LOWER => 18 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
               counts => { $SOLVE => 16, $LOWER => 3 } },
+            # Reserve-then-fill construction: the fill installs a just-built
+            # class over a placeholder that is still an unresolved variable,
+            # which the API asserts, so no information flows from the reserved
+            # side and the operation is construction rather than a relation.
+            { label => 'fillReservedNode', re => qr/\bfillReservedNode\b/,
+              counts => { $SOLVE => 1, $LOWER => 2 } },
         ],
     },
     {
@@ -148,9 +154,15 @@ my @categories = (
             # relation was dead by construction rather than by measurement: the
             # call-argument evidence chain threads an expected type whose only
             # three roots all pass null, so the join it guarded could never
-            # execute and the parameter is gone from the whole chain.
+            # execute and the parameter is gone from the whole chain. The two
+            # recursive-construction knots are no longer relations at all: on
+            # every execution across the suite and the fx corpus, the reserved
+            # placeholder was still an unresolved variable when its built
+            # content arrived, so the tie is the second half of
+            # reserve-then-fill construction. `fillReservedNode` states that as
+            # an invariant instead of an observation, and the knots call it.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 11, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 9, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,

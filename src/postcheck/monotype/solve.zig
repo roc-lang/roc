@@ -2706,6 +2706,20 @@ pub const InstGraph = struct {
         self.invalidateActiveSnapshots(root);
     }
 
+    /// Fill a reserved placeholder with its just-built content class. This is
+    /// the second half of reserve-then-fill construction, not a relation: the
+    /// reserved side must still be an unresolved placeholder, so no
+    /// information can flow from it, and the fill only installs the built
+    /// class over it. Recursive references created while building reach the
+    /// placeholder as children, which never resolves it; the invariant makes
+    /// that a contract rather than an observation.
+    pub fn fillReservedNode(self: *InstGraph, reserved: NodeId, built: NodeId) Allocator.Error!void {
+        if (self.content(reserved) != .unresolved) {
+            Common.invariant("reserved node was resolved before its construction completed");
+        }
+        try self.unifyRootsTransitively(reserved, built, false);
+    }
+
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
         var clock_start: ?i64 = null;
         const clock = self.cost_clock;
