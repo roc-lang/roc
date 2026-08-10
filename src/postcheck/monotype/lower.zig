@@ -35926,7 +35926,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural equality callable graph node must have two operands");
         }
-        try self.graph.unify(fn_nodes.args[0], fn_nodes.args[1]);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
         const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
@@ -35982,7 +35981,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural hash callable graph node must have two operands");
         }
-        try self.graph.unify(fn_nodes.args[1], fn_nodes.ret);
 
         const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
         const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(

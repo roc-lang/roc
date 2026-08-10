@@ -104,8 +104,14 @@ my @categories = (
             # $LOWER site already named. They delete with the unifier.
             # $PCMOD's single hit is a structural test asserting that the
             # string does NOT appear in the process source, not a call.
+            # Two of $LOWER's went away without a replacement relation: the
+            # structural equality and hash dispatch plans were re-stating that
+            # their operands share one instantiation, which the callable's own
+            # checked signature already says, so instantiating it produces one
+            # node for both occurrences. Measured across the whole suite before
+            # deletion: the class check never once found them apart.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 39, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 37, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
