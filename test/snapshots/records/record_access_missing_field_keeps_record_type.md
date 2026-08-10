@@ -16,21 +16,19 @@ missing = record.gamma
 TYPE MISMATCH - record_access_missing_field_keeps_record_type.md:6:17:6:23
 # PROBLEMS
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This record does not have a `gamma` field. ────────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  missing = record.gamma                                                    │
- │                  ‾‾‾‾‾‾                                                    │
- └───────────────────── record_access_missing_field_keeps_record_type.md:6:17 ┘
+── ✗ type mismatch ─────── record_access_missing_field_keeps_record_type.md:6:17
 
-    This is often due to a typo. The most similar fields are:
+This record does not have a `gamma` field.
 
-        - `beta`
-        - `alpha`
+missing = record.gamma
+                ^^^^^^
 
-    So maybe `gamma` should be `beta`?
+This is often due to a typo. The most similar fields are:
 
+    - `beta`
+    - `alpha`
+
+So maybe `gamma` should be `beta`?
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,
