@@ -2331,7 +2331,7 @@ fn docFieldKind(
     types: *const TypeStore,
     presence: types_mod.RecordField.Presence,
 ) DocType.Field.Kind {
-    return switch (presence) {
+    return switch (presence.decode()) {
         .required => .required,
         .unknown => |unknown| switch (types.resolveVar(unknown.presence).desc.content) {
             .field_presence => |fp| switch (fp) {

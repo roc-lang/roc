@@ -245,7 +245,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordFieldFromIdent(ident_idx: Ident.Idx, var_: Var) RecordField {
-        return RecordField{ .name = ident_idx, .presence = .{ .required = var_ } };
+        return RecordField{ .name = ident_idx, .presence = .required(var_) };
     }
 
     /// A field whose presence is still undetermined: `presence_var` is a
@@ -253,7 +253,7 @@ const TestEnv = struct {
     /// `type_var` is the field's type on the second axis.
     fn mkUnknownRecordField(self: *Self, name: []const u8, presence_var: Var, type_var: Var) std.mem.Allocator.Error!RecordField {
         const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
-        return RecordField{ .name = ident_idx, .presence = .{ .unknown = .{ .presence = presence_var, .var_ = type_var } } };
+        return RecordField{ .name = ident_idx, .presence = .unknown(presence_var, type_var) };
     }
 
     const RecordInfo = struct { record: Record, content: Content };
@@ -1560,7 +1560,7 @@ test "unify - shared field presence - present ~ present" {
     );
 
     try std.testing.expectEqual(.ok, res.result);
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).required, std.meta.activeTag(try env.onlyFieldPresence(res.b)));
+    try std.testing.expectEqual(null, (try env.onlyFieldPresence(res.b)).presenceVar());
     // The two field types were unified.
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(ta).desc_idx,
@@ -1583,13 +1583,13 @@ test "unify - shared field presence - present ~ unknown forces present" {
     );
 
     try std.testing.expectEqual(.ok, res.result);
-    // The merged field keeps the `.unknown` wrapper so it still references the
-    // presence var (load-bearing for annotation sealing); the fact lives in π.
+    // The merged field keeps referencing the presence var (load-bearing for
+    // annotation sealing); the fact lives in π.
     const merged = try env.onlyFieldPresence(res.b);
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).unknown, std.meta.activeTag(merged));
+    try std.testing.expect(merged.presenceVar() != null);
     // The undetermined presence var was forced to `present` and propagates.
     try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
-    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(merged.unknown.presence).desc.content);
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(merged.presenceVar().?).desc.content);
     // The types were unified.
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(ta).desc_idx,
@@ -1613,7 +1613,7 @@ test "unify - shared field presence - unknown ~ present forces present" {
 
     try std.testing.expectEqual(.ok, res.result);
     // Mirrors `present ~ unknown`: the wrapper is kept, the fact lives in π.
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).unknown, std.meta.activeTag(try env.onlyFieldPresence(res.b)));
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
     try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
 }
 
@@ -1633,7 +1633,7 @@ test "unify - shared field presence - unknown ~ unknown stays undetermined" {
     );
 
     try std.testing.expectEqual(.ok, res.result);
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).unknown, std.meta.activeTag(try env.onlyFieldPresence(res.b)));
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
     // Neither side forced a fact, so the two presence vars unified and stay flex.
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(pa).desc_idx,

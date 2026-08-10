@@ -4474,8 +4474,8 @@ test "record inhabitedness retains its field-var scratch buffer" {
     var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const gpa = counting.allocator();
     const presences = [_]types.RecordField.Presence{
-        .{ .required = @enumFromInt(1) },
-        .{ .required = @enumFromInt(2) },
+        .required(@enumFromInt(1)),
+        .required(@enumFromInt(2)),
     };
     var work_list: std.ArrayList(WorkItem) = .empty;
     defer work_list.deinit(gpa);

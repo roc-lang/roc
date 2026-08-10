@@ -134,7 +134,8 @@ pub const Constants = struct {
     ///     and const record evidence retains optional source-value types.
     /// 53: Compile-time root requests retain exact checked-root identity.
     /// 54: Record constructors retain exact checker-selected omitted defaults.
-    pub const CACHE_VERSION = 54;
+    /// 55: Record field presence uses an explicit sentinel representation.
+    pub const CACHE_VERSION = 55;
 };
 
 /// Configuration for the Roc cache system.

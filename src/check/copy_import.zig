@@ -323,12 +323,12 @@ fn copyFieldPresence(
     ctx: *const CopyContext,
     presence: types_mod.RecordField.Presence,
 ) std.mem.Allocator.Error!types_mod.RecordField.Presence {
-    return switch (presence) {
-        .required => |type_var| .{ .required = try copyVarCtx(ctx, type_var) },
-        .unknown => |unknown| .{ .unknown = .{
-            .presence = try copyVarCtx(ctx, unknown.presence),
-            .var_ = try copyVarCtx(ctx, unknown.var_),
-        } },
+    return switch (presence.decode()) {
+        .required => |type_var| .required(try copyVarCtx(ctx, type_var)),
+        .unknown => |unknown| .unknown(
+            try copyVarCtx(ctx, unknown.presence),
+            try copyVarCtx(ctx, unknown.var_),
+        ),
     };
 }
 

@@ -2490,8 +2490,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     const field2_var = try original.fresh();
     const field2_presence = try original.fresh();
     const record_fields = try original.appendRecordFields(&[_]RecordField{
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .presence = .{ .required = field1_var } },
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .presence = .{ .unknown = .{ .presence = field2_presence, .var_ = field2_var } } },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .presence = .required(field1_var) },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .presence = .unknown(field2_presence, field2_var) },
     });
     const record_ext = try original.fresh();
     const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
@@ -2563,9 +2563,10 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
     try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
     try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
-    try std.testing.expectEqual(field1_var, fields_slice.items(.presence)[0].required);
-    try std.testing.expectEqual(field2_var, fields_slice.items(.presence)[1].unknown.var_);
-    try std.testing.expectEqual(field2_presence, fields_slice.items(.presence)[1].unknown.presence);
+    try std.testing.expectEqual(field1_var, fields_slice.items(.presence)[0].typeVar());
+    try std.testing.expectEqual(null, fields_slice.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field2_var, fields_slice.items(.presence)[1].typeVar());
+    try std.testing.expectEqual(field2_presence, fields_slice.items(.presence)[1].presenceVar());
     try std.testing.expectEqual(record_ext, record.ext);
 
     const deser_tag_union = deserialized.resolveVar(tag_union_var);
@@ -2730,11 +2731,11 @@ test "Store.Serialized roundtrip" {
     const record_fields = try store.appendRecordFields(&.{
         .{
             .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 },
-            .presence = .{ .required = flex },
+            .presence = .required(flex),
         },
         .{
             .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 },
-            .presence = .{ .unknown = .{ .presence = field_presence, .var_ = str_var } },
+            .presence = .unknown(field_presence, str_var),
         },
     });
     const class_a = try store.fresh();
@@ -2797,16 +2798,16 @@ test "Store.Serialized roundtrip" {
 
     const deserialized_fields = deserialized.getRecordFieldsSlice(record_fields);
     try std.testing.expectEqual(@as(usize, 2), deserialized_fields.len);
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).required, std.meta.activeTag(deserialized_fields.items(.presence)[0]));
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).unknown, std.meta.activeTag(deserialized_fields.items(.presence)[1]));
+    try std.testing.expectEqual(null, deserialized_fields.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field_presence, deserialized_fields.items(.presence)[1].presenceVar());
 
     var copied = try deser_ptr.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
     defer copied.deinit();
 
     const copied_fields = copied.getRecordFieldsSlice(record_fields);
     try std.testing.expectEqual(@as(usize, 2), copied_fields.len);
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).required, std.meta.activeTag(copied_fields.items(.presence)[0]));
-    try std.testing.expectEqual(std.meta.Tag(RecordField.Presence).unknown, std.meta.activeTag(copied_fields.items(.presence)[1]));
+    try std.testing.expectEqual(null, copied_fields.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field_presence, copied_fields.items(.presence)[1].presenceVar());
 }
 
 test "Store multiple instances CompactWriter roundtrip" {

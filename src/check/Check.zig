@@ -4856,8 +4856,8 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
     const rest_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
     const record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const record_fields = [_]types_mod.RecordField{
-        .{ .name = item_ident, .presence = .{ .required = item_var } },
-        .{ .name = rest_ident, .presence = .{ .required = iter_var } },
+        .{ .name = item_ident, .presence = .required(item_var) },
+        .{ .name = rest_ident, .presence = .required(iter_var) },
     };
     const record_fields_range = try self.types.appendRecordFields(&record_fields);
     const payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
@@ -4867,7 +4867,7 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
 
     const skip_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, Region.zero());
     const skip_record_fields = [_]types_mod.RecordField{
-        .{ .name = rest_ident, .presence = .{ .required = iter_var } },
+        .{ .name = rest_ident, .presence = .required(iter_var) },
     };
     const skip_record_fields_range = try self.types.appendRecordFields(&skip_record_fields);
     const skip_payload_record = try self.freshFromContent(.{ .structure = .{ .record = .{
@@ -11893,7 +11893,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         env,
                         anno_region,
                     );
-                    break :blk .{ .unknown = .{ .presence = presence_var, .var_ = record_field_var } };
+                    break :blk .unknown(presence_var, record_field_var);
                 } else if (rec_field.default_value) |default_expr_idx| blk: {
                     // A DEFAULTED field (design.md "Defaulted Fields"): pin
                     // the kind to `defaulted` carrying the default's stable
@@ -11921,8 +11921,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         env,
                         anno_region,
                     );
-                    break :blk .{ .unknown = .{ .presence = presence_var, .var_ = record_field_var } };
-                } else .{ .required = record_field_var };
+                    break :blk .unknown(presence_var, record_field_var);
+                } else .required(record_field_var);
                 try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = rec_field.name,
                     .presence = presence,
@@ -12815,10 +12815,7 @@ fn checkPatternHelp(
                 // Append it to the scratch records array
                 try self.scratch_record_fields.append(types_mod.RecordField{
                     .name = destruct.label,
-                    .presence = .{ .unknown = .{
-                        .presence = presence_var,
-                        .var_ = payload_var,
-                    } },
+                    .presence = .unknown(presence_var, payload_var),
                 });
             }
 
@@ -13849,10 +13846,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .structure = .{
                             .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
                                 .name = field.name,
-                                .presence = .{ .unknown = .{
-                                    .presence = field_kind_var,
-                                    .var_ = field_value.var_,
-                                } },
+                                .presence = .unknown(field_kind_var, field_value.var_),
                             }}),
                         },
                     }, env, expr_region);
@@ -13899,10 +13893,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Append it to the scratch records array
                     try self.scratch_record_fields.append(types_mod.RecordField{
                         .name = field.name,
-                        .presence = .{ .unknown = .{
-                            .presence = field_kind_var,
-                            .var_ = field_value.var_,
-                        } },
+                        .presence = .unknown(field_kind_var, field_value.var_),
                     });
                 }
 
@@ -14858,7 +14849,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .name = access.name,
                     .presence = blk: {
                         switch (access.mode) {
-                            .required => break :blk .{ .required = access_var },
+                            .required => break :blk .required(access_var),
                             .optional => {
                                 // The row constrains the FIELD's value type
                                 // (`name ?: τ` with a fresh flex kind—a
@@ -14881,10 +14872,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .region = access_region,
                                 });
                                 saw_optional = true;
-                                break :blk .{ .unknown = .{
-                                    .presence = presence_var,
-                                    .var_ = access_var,
-                                } };
+                                break :blk .unknown(presence_var, access_var);
                             },
                         }
                     },
@@ -25605,8 +25593,8 @@ fn freshParseResultOkVar(
     const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
     const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
     const fields = [_]types_mod.RecordField{
-        .{ .name = rest_name, .presence = .{ .required = rest_var } },
-        .{ .name = value_name, .presence = .{ .required = value_var } },
+        .{ .name = rest_name, .presence = .required(rest_var) },
+        .{ .name = value_name, .presence = .required(value_var) },
     };
     const fields_range = try self.types.appendRecordFields(&fields);
     const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
@@ -25635,8 +25623,8 @@ fn freshParseRecordFieldEventVar(
     const field_handle_var = try self.mkFieldVar(shape_var, env, region);
     const field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const field_record_fields = [_]types_mod.RecordField{
-        .{ .name = field_name, .presence = .{ .required = field_handle_var } },
-        .{ .name = rest_name, .presence = .{ .required = state_var } },
+        .{ .name = field_name, .presence = .required(field_handle_var) },
+        .{ .name = rest_name, .presence = .required(state_var) },
     };
     const field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&field_record_fields),
@@ -25645,8 +25633,8 @@ fn freshParseRecordFieldEventVar(
 
     const try_field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const try_field_record_fields = [_]types_mod.RecordField{
-        .{ .name = name_name, .presence = .{ .required = str_var } },
-        .{ .name = rest_name, .presence = .{ .required = state_var } },
+        .{ .name = name_name, .presence = .required(str_var) },
+        .{ .name = rest_name, .presence = .required(state_var) },
     };
     const try_field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&try_field_record_fields),
@@ -25685,8 +25673,8 @@ fn freshParseCountedStartEventVar(
     const len_var = try self.freshU64(env, region);
     const counted_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     const counted_record_fields = [_]types_mod.RecordField{
-        .{ .name = len_name, .presence = .{ .required = len_var } },
-        .{ .name = rest_name, .presence = .{ .required = state_var } },
+        .{ .name = len_name, .presence = .required(len_var) },
+        .{ .name = rest_name, .presence = .required(state_var) },
     };
     const counted_record = try self.freshFromContent(.{ .structure = .{ .record = .{
         .fields = try self.types.appendRecordFields(&counted_record_fields),

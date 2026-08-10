@@ -700,7 +700,7 @@ const Builder = struct {
         // checked `field_default` tag + the declaring module's content hash
         // + the default's expr node + the type; an `optional` kind writes
         // the `presence_optional_field` tag + the type.
-        switch (presence) {
+        switch (presence.decode()) {
             .required => |type_var| {
                 self.writeBool(false);
                 try self.writeVar(type_var);
@@ -904,11 +904,11 @@ test "record field presence participates in canonical type keys" {
     const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
     const required_fields = try store.appendRecordFields(&.{.{
         .name = field_name,
-        .presence = .{ .required = field_var },
+        .presence = .required(field_var),
     }});
     const optional_fields = try store.appendRecordFields(&.{.{
         .name = field_name,
-        .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = field_var } },
+        .presence = .unknown(optional_presence, field_var),
     }});
     const required_record = try store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = required_fields,
@@ -944,8 +944,8 @@ test "record field presence is stable across normalized row extensions" {
     const empty_ext = try store.freshFromContent(.{ .structure = .empty_record });
     const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
     const flat_fields = try store.appendRecordFields(&.{
-        .{ .name = first_name, .presence = .{ .required = field_var } },
-        .{ .name = second_name, .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = field_var } } },
+        .{ .name = first_name, .presence = .required(field_var) },
+        .{ .name = second_name, .presence = .unknown(optional_presence, field_var) },
     });
     const flat_record = try store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = flat_fields,
@@ -954,7 +954,7 @@ test "record field presence is stable across normalized row extensions" {
 
     const tail_fields = try store.appendRecordFields(&.{.{
         .name = second_name,
-        .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = field_var } },
+        .presence = .unknown(optional_presence, field_var),
     }});
     const tail_record = try store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = tail_fields,
@@ -962,7 +962,7 @@ test "record field presence is stable across normalized row extensions" {
     } } });
     const head_fields = try store.appendRecordFields(&.{.{
         .name = first_name,
-        .presence = .{ .required = field_var },
+        .presence = .required(field_var),
     }});
     const extended_record = try store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = head_fields,

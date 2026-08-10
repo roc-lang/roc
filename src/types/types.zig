@@ -770,15 +770,41 @@ pub const RecordField = struct {
     /// Whether a record field's kind is concretely required or still carried
     /// on a presence var (design.md "Field Kinds (All-Dynamic Optional
     /// Fields)").
-    pub const Presence = union(enum) {
-        /// A required field with no kind var: always present, plain slot.
-        required: Var,
-        /// A field whose KIND lives on its presence var (undetermined,
-        /// `optional`, or `defaulted`), alongside its value type.
-        unknown: struct {
-            presence: Var,
-            var_: Var,
-        },
+    pub const Presence = struct {
+        /// Every field has a value type variable.
+        var_: Var,
+        /// A field-kind variable, or `no_presence_var` for a required field.
+        presence_var: Var,
+
+        const no_presence_var: Var = @enumFromInt(std.math.maxInt(u32));
+
+        pub const Decoded = union(enum) {
+            required: Var,
+            unknown: struct {
+                presence: Var,
+                var_: Var,
+            },
+        };
+
+        /// Construct a required field with no kind variable.
+        pub fn required(var_: Var) @This() {
+            return .{ .var_ = var_, .presence_var = no_presence_var };
+        }
+
+        /// Construct a field whose kind is carried by `presence`.
+        pub fn unknown(presence: Var, var_: Var) @This() {
+            std.debug.assert(presence != no_presence_var);
+            return .{ .var_ = var_, .presence_var = presence };
+        }
+
+        /// Recover the semantic field-kind representation.
+        pub fn decode(self: @This()) Decoded {
+            if (self.presence_var == no_presence_var) {
+                return .{ .required = self.var_ };
+            }
+
+            return .{ .unknown = .{ .presence = self.presence_var, .var_ = self.var_ } };
+        }
 
         /// The field's value type variable. Every field carries one (unknown
         /// fields on the second axis, independent of the solved kind). Graph
@@ -786,23 +812,17 @@ pub const RecordField = struct {
         /// most consumers) use this; walks that must visit every reachable
         /// variable also visit `presenceVar`.
         pub fn typeVar(self: @This()) Var {
-            return switch (self) {
-                .required => |v| v,
-                .unknown => |u| u.var_,
-            };
+            return self.var_;
         }
 
         /// The presence-axis variable of a kind-carrying field.
         ///
-        /// Only `unknown` fields carry one; a concrete `present` field has no
-        /// presence variable. This variable resolves to a
+        /// Only fields with a dynamic kind carry one; a concrete `required`
+        /// field has no presence variable. This variable resolves to a
         /// `Content.field_presence` (or stays flex) exactly like a type
         /// variable resolves to a structure.
         pub fn presenceVar(self: @This()) ?Var {
-            return switch (self) {
-                .required => null,
-                .unknown => |u| u.presence,
-            };
+            return if (self.presence_var == no_presence_var) null else self.presence_var;
         }
     };
 
@@ -824,6 +844,11 @@ pub const TwoRecordFields = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+test "record fields avoid tagged presence padding" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(RecordField.Presence));
+    try std.testing.expectEqual(@as(usize, 12), @sizeOf(RecordField));
+}
 
 // tag unions //
 

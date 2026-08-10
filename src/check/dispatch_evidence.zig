@@ -363,8 +363,8 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
 /// `record` and `record_unbound` branches of both walkers so the two row kinds
 /// cannot diverge.
 ///
-/// Only the field's VALUE-axis var is walked. An undetermined-kind field
-/// (`RecordField.Presence.unknown`) also carries a presence-axis var, but a
+/// Only the field's VALUE-axis var is walked. A field with a dynamic kind also
+/// carries a presence-axis var, but a
 /// presence var is an evidence leaf exactly like the `.field_presence` arms
 /// above: static-dispatch constraints attach to expression receivers, a
 /// presence var is never addressable from an expression, and unification only

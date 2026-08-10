@@ -697,7 +697,7 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
 /// default's source snippet when the injected resolver can render it, else
 /// `…` (design.md "Defaulted Fields").
 fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
-    const unknown = switch (presence) {
+    const unknown = switch (presence.decode()) {
         .unknown => |u| u,
         .required => return,
     };
@@ -727,7 +727,7 @@ fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: Reco
 /// kind defaulting), and rendering it required-equivalent matches the
 /// committed default an instantiation would take if nothing pinned it.
 fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
-    try writer.writeAll(switch (presence) {
+    try writer.writeAll(switch (presence.decode()) {
         .required => ": ",
         .unknown => |unknown| switch (self.types.resolveVar(unknown.presence).desc.content) {
             .field_presence => |fp| switch (fp) {
@@ -1340,8 +1340,8 @@ fn testRecordFields(
 
     const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
     return store.appendRecordFields(&.{
-        .{ .name = required_name, .presence = .{ .required = value_var } },
-        .{ .name = optional_name, .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = value_var } } },
+        .{ .name = required_name, .presence = .required(value_var) },
+        .{ .name = optional_name, .presence = .unknown(optional_presence, value_var) },
     });
 }
 

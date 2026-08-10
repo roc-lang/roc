@@ -7473,7 +7473,7 @@ const SourceTypeGraphFactsContext = struct {
                 },
                 .record => |record| {
                     for (types_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
-                        switch (presence) {
+                        switch (presence.decode()) {
                             .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
                             .unknown => |unknown| {
                                 try self.mergeVar(traversal, &facts, unknown.presence);
@@ -7485,7 +7485,7 @@ const SourceTypeGraphFactsContext = struct {
                 },
                 .record_unbound => |fields| {
                     for (types_store.getRecordFieldsSlice(fields).items(.presence)) |presence| {
-                        switch (presence) {
+                        switch (presence.decode()) {
                             .required => |type_var| try self.mergeVar(traversal, &facts, type_var),
                             .unknown => |unknown| {
                                 try self.mergeVar(traversal, &facts, unknown.presence);
@@ -8055,7 +8055,7 @@ fn copyCheckedRecordFields(
         // tagged slot (its LOWERING remains the deliberate boundary, carried
         // by the monotype/layout consumers). `absent` is no longer produced.
         var kind: CheckedFieldKind = .required;
-        const ty: CheckedTypeId = switch (field_presence) {
+        const ty: CheckedTypeId = switch (field_presence.decode()) {
             .required => |type_var| try appendCheckedTypeRoot(allocator, module, names, imports, store, active, type_var),
             .unknown => |unknown| switch (module.typeStoreConst().resolveVar(unknown.presence).desc.content) {
                 .field_presence => |fp| blk: {
@@ -8413,7 +8413,7 @@ test "required record canonical keys agree across solver and checked representat
     const ext_var = try source_store.freshFromContent(.{ .structure = .empty_record });
     const source_tail_fields = try source_store.appendRecordFields(&.{.{
         .name = tail_name,
-        .presence = .{ .required = field_var },
+        .presence = .required(field_var),
     }});
     const source_tail = try source_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = source_tail_fields,
@@ -8421,15 +8421,15 @@ test "required record canonical keys agree across solver and checked representat
     } } });
     const source_head_fields = try source_store.appendRecordFields(&.{.{
         .name = head_name,
-        .presence = .{ .required = field_var },
+        .presence = .required(field_var),
     }});
     const source_record = try source_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = source_head_fields,
         .ext = source_tail,
     } } });
     const source_unbound_fields = try source_store.appendRecordFields(&.{
-        .{ .name = head_name, .presence = .{ .required = field_var } },
-        .{ .name = tail_name, .presence = .{ .required = field_var } },
+        .{ .name = head_name, .presence = .required(field_var) },
+        .{ .name = tail_name, .presence = .required(field_var) },
     });
     const source_unbound = try source_store.freshFromContent(.{ .structure = .{ .record_unbound = source_unbound_fields } });
     const source_record_key = try canonical_type_keys.fromVar(allocator, &source_store, &env, source_record);
@@ -8482,7 +8482,7 @@ test "defaulted record canonical keys agree across solver and checked representa
     const presence_var = try source_store.freshFromContent(.{ .field_presence = .{ .defaulted = default_id } });
     const source_fields = try source_store.appendRecordFields(&.{.{
         .name = count_name,
-        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = field_var } },
+        .presence = .unknown(presence_var, field_var),
     }});
     const source_record = try source_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = source_fields,
@@ -8552,7 +8552,7 @@ test "optional record canonical keys agree across solver and checked representat
     const presence_var = try source_store.freshFromContent(.{ .field_presence = .optional });
     const source_fields = try source_store.appendRecordFields(&.{.{
         .name = world_name,
-        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = field_var } },
+        .presence = .unknown(presence_var, field_var),
     }});
     const source_record = try source_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = source_fields,
@@ -8657,7 +8657,7 @@ test "poisoned record field presence preserves its value type and canonical key"
     const ext_var = try test_env.module_env.types.freshFromContent(.{ .structure = .empty_record });
     const source_fields = try test_env.module_env.types.appendRecordFields(&.{.{
         .name = field_name,
-        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = value_var } },
+        .presence = .unknown(presence_var, value_var),
     }});
     const record_var = try test_env.module_env.types.freshFromContent(.{ .structure = .{ .record = .{
         .fields = source_fields,

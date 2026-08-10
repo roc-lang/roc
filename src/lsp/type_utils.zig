@@ -219,9 +219,9 @@ test "RecordFieldsIterator" {
     const ext_var = try type_store.freshFromContent(.{ .structure = .empty_record });
     const opt_presence = try type_store.fresh();
     const fields = try type_store.appendRecordFields(&.{
-        .{ .name = names[0], .presence = .{ .required = first_var } },
-        .{ .name = names[1], .presence = .{ .unknown = .{ .presence = opt_presence, .var_ = second_var } } },
-        .{ .name = names[2], .presence = .{ .required = third_var } },
+        .{ .name = names[0], .presence = .required(first_var) },
+        .{ .name = names[1], .presence = .unknown(opt_presence, second_var) },
+        .{ .name = names[2], .presence = .required(third_var) },
     });
 
     var iter = getRecordFieldsIterator(&type_store, .{ .fields = fields, .ext = ext_var });
@@ -233,19 +233,19 @@ test "RecordFieldsIterator" {
     const field1 = iter.next().?;
     try testing.expectEqual(@as(u29, 1), field1.name.idx);
     try testing.expectEqual(first_var, field1.type_var);
-    try testing.expectEqual(std.meta.Tag(Presence).required, std.meta.activeTag(field1.presence));
+    try testing.expectEqual(null, field1.presence.presenceVar());
 
     // Second field
     const field2 = iter.next().?;
     try testing.expectEqual(@as(u29, 2), field2.name.idx);
     try testing.expectEqual(second_var, field2.type_var);
-    try testing.expectEqual(std.meta.Tag(Presence).unknown, std.meta.activeTag(field2.presence));
+    try testing.expectEqual(opt_presence, field2.presence.presenceVar());
 
     // Third field
     const field3 = iter.next().?;
     try testing.expectEqual(@as(u29, 3), field3.name.idx);
     try testing.expectEqual(third_var, field3.type_var);
-    try testing.expectEqual(std.meta.Tag(Presence).required, std.meta.activeTag(field3.presence));
+    try testing.expectEqual(null, field3.presence.presenceVar());
 
     // No more fields
     try testing.expect(iter.next() == null);

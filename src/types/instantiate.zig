@@ -479,12 +479,12 @@ pub const Instantiator = struct {
     /// kind (`present`/`optional`) copies as the same concrete kind; only an
     /// undetermined kind yields a fresh flex presence per instantiation.
     fn instantiateFieldPresence(self: *Self, presence: RecordField.Presence) std.mem.Allocator.Error!RecordField.Presence {
-        return switch (presence) {
-            .required => |type_var| RecordField.Presence{ .required = try self.instantiateVar(type_var) },
-            .unknown => |unknown| RecordField.Presence{ .unknown = .{
-                .presence = try self.instantiateVar(unknown.presence),
-                .var_ = try self.instantiateVar(unknown.var_),
-            } },
+        return switch (presence.decode()) {
+            .required => |type_var| .required(try self.instantiateVar(type_var)),
+            .unknown => |unknown| .unknown(
+                try self.instantiateVar(unknown.presence),
+                try self.instantiateVar(unknown.var_),
+            ),
         };
     }
 

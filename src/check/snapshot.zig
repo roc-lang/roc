@@ -582,19 +582,18 @@ pub const Store = struct {
     }
 
     /// Snapshot a field's presence axis: deep-copy the field's type (present and
-    /// undetermined fields carry one; an absent field has none, so a placeholder
-    /// `err` content stands in), and map the union tag to `SnapshotFieldPresence`.
+    /// undetermined fields carry one), and map its kind to
+    /// `SnapshotFieldPresence`.
     fn deepCopyFieldPresence(
         self: *Self,
         store: *const TypesStore,
         type_writer: *TypeWriter,
         presence: types.RecordField.Presence,
     ) std.mem.Allocator.Error!struct { content: SnapshotContentIdx, presence: SnapshotFieldPresence } {
-        const snapshot_presence: SnapshotFieldPresence = switch (presence) {
+        const snapshot_presence: SnapshotFieldPresence = switch (presence.decode()) {
             .required => .required,
-            // Resolve the presence var so reports see the committed kind, not
-            // the wrapper tag: an undetermined-looking field whose kind
-            // solved `present` IS a required field, and only a kind that
+            // Resolve the presence var so reports see the committed kind: a
+            // field whose kind solved `present` IS required; only a kind that
             // solved `optional` may be reported as optional.
             .unknown => |unknown| switch (store.resolveVar(unknown.presence).desc.content) {
                 .field_presence => |fp| switch (fp) {
@@ -901,13 +900,13 @@ test "snapshot record field presence survives deep copy and gather" {
 
     const tail_fields = try type_store.appendRecordFields(&.{.{
         .name = tail_name,
-        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = field_var } },
+        .presence = .unknown(presence_var, field_var),
     }});
     const tail_var = try type_store.freshFromContent(.{ .structure = .{ .record_unbound = tail_fields } });
 
     const middle_fields = try type_store.appendRecordFields(&.{.{
         .name = middle_name,
-        .presence = .{ .unknown = .{ .presence = presence_var, .var_ = field_var } },
+        .presence = .unknown(presence_var, field_var),
     }});
     const middle_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = middle_fields,
@@ -916,7 +915,7 @@ test "snapshot record field presence survives deep copy and gather" {
 
     const top_fields = try type_store.appendRecordFields(&.{.{
         .name = top_name,
-        .presence = .{ .required = field_var },
+        .presence = .required(field_var),
     }});
     const top_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
         .fields = top_fields,

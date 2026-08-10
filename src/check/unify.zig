@@ -1983,7 +1983,7 @@ const Unifier = struct {
     ) Error!void {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
-            switch (field.presence) {
+            switch (field.presence.decode()) {
                 .required => return error.TypeMismatch,
                 .unknown => |unknown| switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                     .field_presence => |presence| switch (presence) {
@@ -2003,7 +2003,7 @@ const Unifier = struct {
     ) std.mem.Allocator.Error!void {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
-            const unknown = switch (field.presence) {
+            const unknown = switch (field.presence.decode()) {
                 .required => unreachable,
                 .unknown => |unknown| unknown,
             };
@@ -2639,9 +2639,9 @@ const Unifier = struct {
     /// required, and unknown/unknown keeps the wrapper whose kind pair is joined.
     fn unifySharedFieldPresence(self: *Self, vars: *const ResolvedVarDescs, a_presence: RecordFieldPresence, b_presence: RecordFieldPresence, did_field_error_flag: u32) Error!RecordFieldPresence {
         const mismatch_handler: MismatchHandling = .{ .set_flag = did_field_error_flag };
-        switch (a_presence) {
+        switch (a_presence.decode()) {
             .required => |a_var| {
-                switch (b_presence) {
+                switch (b_presence.decode()) {
                     .required => |b_var| {
                         try self.scheduleGuardedPair(a_var, b_var, mismatch_handler);
                         return b_presence;
@@ -2664,12 +2664,12 @@ const Unifier = struct {
                         // against an `optional` kind), and the merged row keeps
                         // referencing it so every consumer reads the kind from
                         // one place (design.md "Field Kinds").
-                        return .{ .unknown = .{ .presence = b_unknown.presence, .var_ = a_var } };
+                        return .unknown(b_unknown.presence, a_var);
                     },
                 }
             },
             .unknown => |a_unknown| {
-                switch (b_presence) {
+                switch (b_presence.decode()) {
                     .required => |b_var| {
                         try self.scheduleGuardedPair(a_unknown.var_, b_var, mismatch_handler);
                         if (self.field_presence_relation == .required_access) {
@@ -2684,7 +2684,7 @@ const Unifier = struct {
                         const b_pres_var = try self.fresh(vars, .{ .field_presence = .required });
                         try self.scheduleGuardedPair(a_unknown.presence, b_pres_var, mismatch_handler);
                         // Keep the wrapper (see the mirrored branch above).
-                        return .{ .unknown = .{ .presence = a_unknown.presence, .var_ = b_var } };
+                        return .unknown(a_unknown.presence, b_var);
                     },
                     .unknown => |b_unknown| {
                         try self.scheduleGuardedPair(a_unknown.var_, b_unknown.var_, mismatch_handler);

@@ -2588,7 +2588,7 @@ fn getDefaultedTypeStringWithSeen(
                         // plain field; only a solved `optional` renders `?:`
                         // (a still-flex kind defaults to required at read
                         // boundaries—design.md "Field Kinds").
-                        try result.appendSlice(switch (field_presence) {
+                        try result.appendSlice(switch (field_presence.decode()) {
                             .required => " : ",
                             .unknown => |unknown| switch (can_ir.types.resolveVar(unknown.presence).desc.content) {
                                 .field_presence => |fp| switch (fp) {
@@ -5762,8 +5762,8 @@ test "snapshot tool formats optional record fields" {
     const ext_var = try module_env.types.freshFromContent(.{ .structure = .empty_record });
     const optional_presence = try module_env.types.freshFromContent(.{ .field_presence = .optional });
     const fields = try module_env.types.appendRecordFields(&.{
-        .{ .name = required_name, .presence = .{ .required = field_var } },
-        .{ .name = optional_name, .presence = .{ .unknown = .{ .presence = optional_presence, .var_ = field_var } } },
+        .{ .name = required_name, .presence = .required(field_var) },
+        .{ .name = optional_name, .presence = .unknown(optional_presence, field_var) },
     });
     const record_var = try module_env.types.freshFromContent(.{ .structure = .{ .record = .{
         .fields = fields,
