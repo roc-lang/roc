@@ -60,7 +60,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. let_polymorphism_lists.md:12:26:
+I found `+` here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:12:28
 
@@ -77,7 +77,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. let_polymorphism_lists.md:12:28:
+depending on the surrounding syntax.
 
 ── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:13:26
 
@@ -92,7 +92,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. let_polymorphism_lists.md:13:26:
+I found `+` here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:13:28
 
@@ -109,7 +109,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. let_polymorphism_lists.md:13:28:
+depending on the surrounding syntax.
 
 ── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:14:30
 
@@ -124,7 +124,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. let_polymorphism_lists.md:14:30:
+I found `+` here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:14:32
 
@@ -141,7 +141,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. let_polymorphism_lists.md:14:32:
+depending on the surrounding syntax.
 
 ── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:12:16
 

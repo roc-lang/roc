@@ -32,7 +32,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. fuzz_crash_041.md:1:20:
+I found `|` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:21
 
@@ -47,7 +47,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_041.md:1:21:
+I found `(` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:22
 
@@ -62,7 +62,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. fuzz_crash_041.md:1:22:
+I found `0` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:23
 
@@ -79,7 +79,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_041.md:1:23:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:24
 
@@ -96,7 +95,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_041.md:1:24:
+item before it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:25
 
@@ -111,7 +110,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. fuzz_crash_041.md:1:25:
+I found `|` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:26
 
@@ -126,7 +125,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. fuzz_crash_041.md:1:26:
+I found `|` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:27
 
@@ -141,7 +140,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. fuzz_crash_041.md:1:27:
+I found `|` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_041.md:1:28
 
@@ -156,7 +155,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. fuzz_crash_041.md:1:28:
+I found `0` here.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpBar,NoSpaceOpenRound,Int,Comma,CloseRound,OpBar,OpBar,OpBar,Int,

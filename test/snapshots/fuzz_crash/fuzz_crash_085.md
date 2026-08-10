@@ -35,7 +35,6 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
              ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_085.md:1:14:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:16
 
@@ -45,7 +44,6 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_085.md:1:16:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:23
 
@@ -55,7 +53,6 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                       ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_085.md:1:23:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:27
 
@@ -65,7 +62,6 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                           ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_085.md:1:27:
 
 ── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_085.md:1:32
 

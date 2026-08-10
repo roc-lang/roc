@@ -30,7 +30,7 @@ Foo : Str
 ^^^^^^^^^
 
 
-The redeclaration is in type_scope_integration.md:5:1:
+The redeclaration is in:
 
 But Foo was already declared in type_scope_integration.md:2:1:
 

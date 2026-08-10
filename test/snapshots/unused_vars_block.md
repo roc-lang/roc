@@ -40,7 +40,7 @@ unused_var = 42
 ^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_unused_var` to suppress this warning. unused_vars_block.md:5:5:
+`_unused_var` to suppress this warning.
 
 ── ● unused variable ───────────────────────────────── unused_vars_block.md:11:5
 
@@ -50,7 +50,7 @@ another_unused = "hello"
 ^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_another_unused` to suppress this warning. unused_vars_block.md:11:5:
+`_another_unused` to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

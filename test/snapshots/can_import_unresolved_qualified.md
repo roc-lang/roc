@@ -67,7 +67,6 @@ main = Json.NonExistent.method
        ^^^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:5:8:
 
 ── ✗ mod not found ────────────────── can_import_unresolved_qualified.md:8:17
 
@@ -85,7 +84,6 @@ parseData = |data| Json.stringify(data)
                    ^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:9:20:
 
 ── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:29
 
@@ -113,7 +111,6 @@ processRequest = |req| Http.Server.defaultResponse
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:13:24:
 
 ── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
 
@@ -123,7 +120,7 @@ processRequest = |req| Http.Server.defaultResponse
                   ^^^
 
 If you don't need this variable, prefix it with an underscore like `_req` to
-suppress this warning. can_import_unresolved_qualified.md:13:19:
+suppress this warning.
 
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:16:10
 
@@ -133,7 +130,6 @@ result = Json.prase("test")
          ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:16:10:
 
 ── ✗ does not exist ─────────────────── can_import_unresolved_qualified.md:19:10
 
@@ -151,7 +147,6 @@ client = Http.invalidMethod
          ^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:22:10:
 
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:25:10
 
@@ -161,7 +156,6 @@ parser = Json.Parser.Advanced.NonExistent.create
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_unresolved_qualified.md:25:10:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

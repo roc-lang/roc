@@ -19,7 +19,6 @@ a=0->b .c()
      ^
 
 Is it misspelled, or is there an import missing?
-formatter_idempotence_issue_8851_comment3.md:1:6:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,DotLowerIdent,NoSpaceOpenRound,CloseRound,

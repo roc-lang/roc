@@ -27,7 +27,7 @@ var xs = []
 ^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_xs` to
-suppress this warning. var_polymorphic_annotation_rejected.md:5:5:
+suppress this warning.
 
 ── ✗ polymorphic var ──────────────── var_polymorphic_annotation_rejected.md:4:5
 

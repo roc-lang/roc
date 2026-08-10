@@ -23,7 +23,7 @@ You cannot define a `where` clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in fuzz_crash_083.md:1:1:
+You're attempting do this in:
 
 ── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
 
@@ -35,7 +35,7 @@ C(b, b) : (a, b)
 
 Type parameters must have unique names within their scope.
 
-The conflicting parameter is in fuzz_crash_083.md:2:6:
+The conflicting parameter is in:
 
 But `b` was already declared in fuzz_crash_083.md:2:3:
 
@@ -50,7 +50,6 @@ C(b, b) : (a, b)
            ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_083.md:2:12:
 
 ── ✗ too many args ────────────────────────────────────── fuzz_crash_083.md:3:11
 

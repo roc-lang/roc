@@ -28,7 +28,6 @@ For example:
     List(U8)
 
 I reached the end of the file before this construct was complete.
-type_annotation_missing_parens.md:2:1:
 
 ── ✗ too few args ──────────────────────── type_annotation_missing_parens.md:1:8
 

@@ -29,7 +29,6 @@ a=()->b()()()
       ^
 
 Is it misspelled, or is there an import missing?
-formatter_idempotence_issue_8851_comment2.md:1:7:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,CloseRound,OpArrow,LowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,NoSpaceOpenRound,CloseRound,

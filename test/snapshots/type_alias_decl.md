@@ -64,7 +64,7 @@ Try(ok, err) : [Ok(ok), Err(err)]
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in type_alias_decl.md:7:1:
+The new declaration is in:
 
 ── ✗ open ext not allowed in type declaration ───────── type_alias_decl.md:22:18
 
@@ -83,7 +83,7 @@ person = { name: "Alice", age: 30 }
 ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_person` to
-suppress this warning. type_alias_decl.md:36:5:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── type_alias_decl.md:39:5
 
@@ -93,7 +93,7 @@ color = Red
 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_color` to
-suppress this warning. type_alias_decl.md:39:5:
+suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

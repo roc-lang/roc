@@ -44,7 +44,7 @@ result1 = testEllipsis(42)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result1`
-to suppress this warning. crash_and_ellipsis_test.md:20:5:
+to suppress this warning.
 
 ── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:21:5
 
@@ -54,7 +54,7 @@ result2 = testCrash(42)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result2`
-to suppress this warning. crash_and_ellipsis_test.md:21:5:
+to suppress this warning.
 
 ── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:22:5
 
@@ -64,7 +64,7 @@ result3 = testCrashSimple(42)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result3`
-to suppress this warning. crash_and_ellipsis_test.md:22:5:
+to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -41,7 +41,7 @@ For example:
 
 I found `Try` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. type_shadowing_across_scopes.md:9:5:
+mod names in Roc.
 
 ── ✗ expected record type separator ─────── type_shadowing_across_scopes.md:9:21
 
@@ -57,7 +57,7 @@ For example:
 
 I found `Failure` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. type_shadowing_across_scopes.md:9:21:
+mod names in Roc.
 
 ── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:9:28
 
@@ -74,7 +74,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. type_shadowing_across_scopes.md:9:28:
+item before it.
 
 ── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:10:1
 
@@ -91,7 +91,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. type_shadowing_across_scopes.md:10:1:
+item before it.
 
 ── ● builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
 
@@ -102,7 +102,7 @@ Try(a, b) : [Ok(a), Err(b)]
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in type_shadowing_across_scopes.md:1:1:
+The new declaration is in:
 
 ── ● unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
 
@@ -112,7 +112,7 @@ processData = |data|
                ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_data` to
-suppress this warning. type_shadowing_across_scopes.md:4:16:
+suppress this warning.
 
 ── ✗ malformed type ─────────────────────── type_shadowing_across_scopes.md:9:21
 

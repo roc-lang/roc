@@ -111,7 +111,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:1:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:2
 
@@ -126,7 +126,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:2:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:3
 
@@ -141,7 +141,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:3:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:4
 
@@ -156,7 +156,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:4:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:5
 
@@ -171,7 +171,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:5:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:6
 
@@ -186,7 +186,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:6:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:7
 
@@ -201,7 +201,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:7:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:8
 
@@ -216,7 +216,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:8:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:9
 
@@ -231,7 +231,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:9:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:10
 
@@ -246,7 +246,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:10:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:11
 
@@ -261,7 +261,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:11:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:12
 
@@ -276,7 +276,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:12:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:13
 
@@ -291,7 +291,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:13:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:14
 
@@ -306,7 +306,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:14:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:15
 
@@ -321,7 +321,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:15:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:16
 
@@ -336,7 +336,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:16:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:17
 
@@ -351,7 +351,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:17:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:18
 
@@ -366,7 +366,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:18:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:19
 
@@ -381,7 +381,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:19:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:20
 
@@ -396,7 +396,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:20:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:21
 
@@ -411,7 +411,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:21:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:22
 
@@ -426,7 +426,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:22:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:23
 
@@ -441,7 +441,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:23:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:24
 
@@ -456,7 +456,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:24:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:25
 
@@ -471,7 +471,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:25:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:26
 
@@ -486,7 +486,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:26:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:27
 
@@ -501,7 +501,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:27:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:28
 
@@ -516,7 +516,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:28:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:29
 
@@ -531,7 +531,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:29:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:30
 
@@ -546,7 +546,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:30:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:31
 
@@ -561,7 +561,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:31:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:32
 
@@ -576,7 +576,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:32:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:33
 
@@ -591,7 +591,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:33:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:34
 
@@ -606,7 +606,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:34:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:35
 
@@ -621,7 +621,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:35:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:36
 
@@ -636,7 +636,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:36:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:37
 
@@ -651,7 +651,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:37:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:38
 
@@ -666,7 +666,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:38:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:39
 
@@ -681,7 +681,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:39:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:40
 
@@ -696,7 +696,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:40:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:41
 
@@ -711,7 +711,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:41:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:42
 
@@ -726,7 +726,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:42:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:43
 
@@ -741,7 +741,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:43:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:44
 
@@ -756,7 +756,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:44:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:45
 
@@ -771,7 +771,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:45:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:46
 
@@ -786,7 +786,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:46:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:47
 
@@ -801,7 +801,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:47:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:48
 
@@ -816,7 +816,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:48:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:49
 
@@ -831,7 +831,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:49:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:50
 
@@ -846,7 +846,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:50:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:51
 
@@ -861,7 +861,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:51:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:52
 
@@ -876,7 +876,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:52:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:53
 
@@ -891,7 +891,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:53:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:54
 
@@ -906,7 +906,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:54:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:55
 
@@ -921,7 +921,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:55:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:56
 
@@ -936,7 +936,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:56:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:57
 
@@ -951,7 +951,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:57:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:58
 
@@ -966,7 +966,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:58:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:59
 
@@ -981,7 +981,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:59:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:60
 
@@ -996,7 +996,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:60:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:61
 
@@ -1011,7 +1011,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:61:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:62
 
@@ -1026,7 +1026,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:62:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:63
 
@@ -1041,7 +1041,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:63:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:64
 
@@ -1056,7 +1056,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:64:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:65
 
@@ -1071,7 +1071,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:65:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:66
 
@@ -1086,7 +1086,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:66:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:67
 
@@ -1101,7 +1101,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:67:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:68
 
@@ -1116,7 +1116,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:68:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:69
 
@@ -1131,7 +1131,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:69:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:70
 
@@ -1146,7 +1146,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:70:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:71
 
@@ -1161,7 +1161,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:71:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:72
 
@@ -1176,7 +1176,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:72:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:73
 
@@ -1191,7 +1191,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:73:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:74
 
@@ -1206,7 +1206,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:74:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:75
 
@@ -1221,7 +1221,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:75:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:76
 
@@ -1236,7 +1236,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:76:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:77
 
@@ -1251,7 +1251,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:77:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:78
 
@@ -1266,7 +1266,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:78:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:79
 
@@ -1281,7 +1281,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:79:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:80
 
@@ -1296,7 +1296,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:80:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:81
 
@@ -1311,7 +1311,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:81:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:82
 
@@ -1326,7 +1326,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:82:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:83
 
@@ -1341,7 +1341,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:83:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:84
 
@@ -1356,7 +1356,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:84:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:85
 
@@ -1371,7 +1371,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:85:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:86
 
@@ -1386,7 +1386,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:86:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:87
 
@@ -1401,7 +1401,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:87:
+I found `{` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:88
 
@@ -1416,7 +1416,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_hang_002.md:1:88:
+I found `{` here.
 # TOKENS
 ~~~zig
 OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,

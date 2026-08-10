@@ -85,7 +85,7 @@ result3 = combine(result1, result2)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result3`
-to suppress this warning. type_var_name_avoids_collision.md:59:5:
+to suppress this warning.
 
 ── ● unused variable ──────────────────── type_var_name_avoids_collision.md:60:5
 
@@ -95,7 +95,7 @@ result4 = yetAnotherIdentity(True)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result4`
-to suppress this warning. type_var_name_avoids_collision.md:60:5:
+to suppress this warning.
 
 ── ● unused variable ──────────────────── type_var_name_avoids_collision.md:61:5
 
@@ -105,7 +105,7 @@ result5 = finalIdentity(3.14)
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result5`
-to suppress this warning. type_var_name_avoids_collision.md:61:5:
+to suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

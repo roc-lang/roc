@@ -42,7 +42,7 @@ not `List U8`.
 For example:
     List(U8)
 
-I found `/` here. fuzz_crash_021.md:1:4:
+I found `/` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_021.md:1:5
 
@@ -59,7 +59,7 @@ For example:
 
 I found `main` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_021.md:1:5:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_021.md:1:9
 
@@ -76,7 +76,7 @@ For example:
 
 I found `.roc` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_021.md:1:9:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:13
 
@@ -91,7 +91,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. fuzz_crash_021.md:1:13:
+I found `"` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:14
 
@@ -106,7 +106,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found ` }` here. fuzz_crash_021.md:1:14:
+I found ` }` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:16
 
@@ -122,7 +122,6 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_021.md:1:16:
 
 ── ✗ expected type separator ───────────────────────────── fuzz_crash_021.md:3:1
 
@@ -138,7 +137,7 @@ For example:
 
 I found `Pair` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_021.md:3:1:
+mod names in Roc.
 # TOKENS
 ~~~zig
 UpperIdent,OpSlash,LowerIdent,NoSpaceDotLowerIdent,StringStart,StringPart,StringEnd,

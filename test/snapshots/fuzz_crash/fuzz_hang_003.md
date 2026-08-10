@@ -31,7 +31,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.70000c` here. fuzz_hang_003.md:4:4:
+I found `.70000c` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_003.md:4:11
 
@@ -46,7 +46,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_hang_003.md:4:11:
+I found `:` here.
 
 ── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:1:3
 

@@ -28,7 +28,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. stmt_import.md:1:18:
+I found `[` here.
 
 ── ✗ unexpected statement ────────────────────────────────── stmt_import.md:1:19
 
@@ -45,7 +45,7 @@ For example:
 
 I found `foo` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. stmt_import.md:1:19:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ────────────────────────────────── stmt_import.md:1:22
 
@@ -62,7 +62,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-stmt_import.md:1:22:
 
 ── ✗ type application needs parentheses ──────────────────── stmt_import.md:1:27
 
@@ -80,7 +79,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. stmt_import.md:1:27:
+item before it.
 
 ── ● duplicate definition ─────────────────────────────────── stmt_import.md:1:1
 

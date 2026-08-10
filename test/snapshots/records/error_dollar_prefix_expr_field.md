@@ -20,7 +20,6 @@ Record field names cannot start with a dollar sign.
 
 Names that start with `$` are reassignable variables declared with the `var`
 keyword, so they cannot be used as record field names.
-error_dollar_prefix_expr_field.md:1:3:
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

@@ -31,7 +31,7 @@ Close the parenthesized type after the final type expression.
 For example:
     (Str -> U64)
 
-I found `(` here. type_function_multi_arg.md:3:27:
+I found `(` here.
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:40
 
@@ -46,7 +46,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_c` here. type_function_multi_arg.md:3:40:
+I found `_c` here.
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:42
 
@@ -63,7 +63,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. type_function_multi_arg.md:3:42:
+item before it.
 
 ── ✗ malformed type ──────────────────────────── type_function_multi_arg.md:3:27
 

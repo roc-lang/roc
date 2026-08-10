@@ -45,7 +45,6 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-nominal_mixed_scope.md:7:5:
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
 

@@ -25,7 +25,6 @@ callsGhost = ghostName
              ^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-canon_revamp_undefined_in_assoc_error.md:3:18:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

@@ -28,7 +28,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. fuzz_crash_018.md:1:1:
+I found `0` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
 
@@ -45,7 +45,7 @@ For example:
 
 I found `.R` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_018.md:2:1:
+mod names in Roc.
 
 ── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
 

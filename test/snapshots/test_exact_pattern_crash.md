@@ -45,7 +45,7 @@ p1 = swap_pair((1, 2))
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_p1` to
-suppress this warning. test_exact_pattern_crash.md:19:5:
+suppress this warning.
 
 ── ✗ too many args ─────────────────────────── test_exact_pattern_crash.md:23:10
 

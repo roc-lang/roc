@@ -58,7 +58,7 @@ For example:
 
 I found `d` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_025.md:9:1:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:3
 
@@ -73,7 +73,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here. fuzz_crash_025.md:9:3:
+I found `=` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
 
@@ -88,7 +88,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `18446744073709551615` here. fuzz_crash_025.md:9:5:
+I found `18446744073709551615` here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
 
@@ -103,7 +103,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_025.md:12:48:
+I found `:` here.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
 
@@ -121,7 +121,7 @@ For example:
 
 I found `f` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_025.md:13:1:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:3
 
@@ -136,7 +136,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here. fuzz_crash_025.md:13:3:
+I found `=` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
 
@@ -151,7 +151,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `8` here. fuzz_crash_025.md:13:4:
+I found `8` here.
 
 ── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
 

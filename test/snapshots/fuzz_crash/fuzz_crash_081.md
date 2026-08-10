@@ -27,7 +27,7 @@ For example:
     person.name
     pair.0
 
-I found `.` here. fuzz_crash_081.md:1:6:
+I found `.` here.
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_081.md:1:5
 

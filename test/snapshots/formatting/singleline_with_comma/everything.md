@@ -60,7 +60,7 @@ You cannot define a `where` clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a,) -> Str, a.a2 : (a, a,) -> Str,]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in everything.md:6:1:
+You're attempting do this in:
 
 ── ✗ where clause not allowed in type declaration ──────────── everything.md:7:1
 
@@ -69,7 +69,7 @@ You cannot define a `where` clause inside a type declaration.
 B(b) : b where [b.b1 : (b, b,) -> Str, b.b2 : (b, b,) -> Str,]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in everything.md:7:1:
+You're attempting do this in:
 
 ── ● unused variable ─────────────────────────────────────── everything.md:24:10
 
@@ -79,7 +79,7 @@ Z1((a, b,)) => a
        ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:24:10:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:25:9
 
@@ -89,7 +89,7 @@ Z2(a, b,) => a
       ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:25:9:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:26:11
 
@@ -99,7 +99,7 @@ Z3({ a, b, }) => a
         ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:26:11:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:27:10
 
@@ -109,7 +109,7 @@ Z4([a, b,]) => a
        ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:27:10:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:17:2
 
@@ -119,7 +119,7 @@ h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h1` to
-suppress this warning. everything.md:17:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:18:2
 
@@ -129,7 +129,7 @@ h2 = h(x, y,)
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h2` to
-suppress this warning. everything.md:18:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:19:2
 
@@ -139,7 +139,7 @@ h3 = A(x, y,)
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h3` to
-suppress this warning. everything.md:19:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:20:2
 
@@ -149,7 +149,7 @@ h4 = [x, y,]
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h4` to
-suppress this warning. everything.md:20:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:21:2
 
@@ -159,7 +159,7 @@ h5 = (x, y,)
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h5` to
-suppress this warning. everything.md:21:2:
+suppress this warning.
 
 ── ✗ not a where alias ───────────────────────────────────── everything.md:14:20
 

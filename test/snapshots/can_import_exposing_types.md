@@ -128,7 +128,6 @@ parseJson = |input| Json.parse(input)
                     ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:7:21:
 
 ── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:10:17
 
@@ -154,7 +153,6 @@ result = Json.decode(req.body)
          ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:12:14:
 
 ── ✗ name not in scope ────────────────────── can_import_exposing_types.md:14:22
 
@@ -164,7 +162,6 @@ Ok(value) => Http.ok(value)
              ^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:14:22:
 
 ── ✗ name not in scope ────────────────────── can_import_exposing_types.md:15:23
 
@@ -174,7 +171,6 @@ Err(error) => Http.badRequest(error)
               ^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:15:23:
 
 ── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:20:15
 
@@ -216,7 +212,6 @@ List.mapTry(
 ^^^^^^^^^^^
 
 `List` is in scope, but it has no associated `mapTry`.
-can_import_exposing_types.md:22:5:
 
 ── ✗ name not in scope ────────────────────── can_import_exposing_types.md:24:13
 
@@ -226,7 +221,6 @@ Nothing is named `validateWith` in this scope.
     ^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:24:13:
 
 ── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:29:18
 
@@ -276,7 +270,6 @@ createClient = |config| Http.clientWith(config)
                         ^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:36:25:
 
 ── ✗ undeclared type ──────────────────────── can_import_exposing_types.md:39:18
 
@@ -294,7 +287,6 @@ Ok(status) => Http.statusToString(status)
               ^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:42:23:
 
 ── ✗ does not exist ───────────────────────── can_import_exposing_types.md:43:23
 
@@ -352,7 +344,6 @@ Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
                         ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_exposing_types.md:50:33:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

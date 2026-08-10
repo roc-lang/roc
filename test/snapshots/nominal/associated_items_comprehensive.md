@@ -458,7 +458,6 @@ errModUnqualified = value  # ERROR: 'value' not in scope at mod level
                     ^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:350:21:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:361:17
 
@@ -468,7 +467,6 @@ badAccess = innerItem  # ERROR: 'innerItem' not in scope here
             ^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:361:17:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:372:28
 
@@ -478,7 +476,6 @@ badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
                    ^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:372:28:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:387:31
 
@@ -488,7 +485,6 @@ badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
                   ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:387:31:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:401:27
 
@@ -498,7 +494,6 @@ badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
                       ^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:401:27:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:423:25
 
@@ -508,7 +503,6 @@ badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
                 ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:423:25:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:428:15
 
@@ -518,7 +512,6 @@ errTryOuter = outerItem      # ERROR: not in scope
               ^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:428:15:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:429:14
 
@@ -528,7 +521,6 @@ errTrySibA = sibAVal         # ERROR: not in scope
              ^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:429:14:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:430:14
 
@@ -538,7 +530,6 @@ errTryLeaf = leaf1Val        # ERROR: not in scope
              ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:430:14:
 
 ── ✗ name not in scope ──────────────── associated_items_comprehensive.md:431:15
 
@@ -548,7 +539,6 @@ errTryGrand = grandchildVal  # ERROR: not in scope
               ^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_comprehensive.md:431:15:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

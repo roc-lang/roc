@@ -48,7 +48,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. record_different_fields_reserved_error.md:2:7:
+I found `:` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:2:22
 
@@ -65,7 +65,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:2:22:
 
 ── ✗ unexpected type syntax ───── record_different_fields_reserved_error.md:3:11
 
@@ -80,7 +79,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here. record_different_fields_reserved_error.md:3:11:
+I found `"` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:12
 
@@ -95,7 +94,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `pattern match` here. record_different_fields_reserved_error.md:3:12:
+I found `pattern match` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:25
 
@@ -110,7 +109,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here. record_different_fields_reserved_error.md:3:25:
+I found `"` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:26
 
@@ -127,7 +126,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:3:26:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:11
 
@@ -142,7 +140,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. record_different_fields_reserved_error.md:4:11:
+I found `:` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:29
 
@@ -159,7 +157,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:4:29:
 
 ── ✗ import must be top level ──── record_different_fields_reserved_error.md:5:5
 
@@ -178,7 +175,6 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-record_different_fields_reserved_error.md:5:5:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:11
 
@@ -193,7 +189,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. record_different_fields_reserved_error.md:5:11:
+I found `:` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:23
 
@@ -210,7 +206,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:5:23:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:5
 
@@ -225,7 +220,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `and` here. record_different_fields_reserved_error.md:6:5:
+I found `and` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:19
 
@@ -242,7 +237,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:6:19:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:5
 
@@ -257,7 +251,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `or` here. record_different_fields_reserved_error.md:7:5:
+I found `or` here.
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:19
 
@@ -274,7 +268,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-record_different_fields_reserved_error.md:7:19:
 
 ── ● declaration has no value ──── record_different_fields_reserved_error.md:3:5
 

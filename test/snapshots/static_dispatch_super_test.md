@@ -25,7 +25,6 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ^^^^^^^
 
 Is it misspelled, or is there an import missing?
-static_dispatch_super_test.md:1:1:
 
 ── ✗ name not in scope ─────────────────────── static_dispatch_super_test.md:1:9
 
@@ -35,7 +34,6 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
         ^^^^
 
 Is it misspelled, or is there an import missing?
-static_dispatch_super_test.md:1:9:
 
 ── ✗ try operator outside function ─────────── static_dispatch_super_test.md:1:1
 

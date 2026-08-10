@@ -48,7 +48,6 @@ For example:
 
 I found `app` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_022.md:1:1:
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_022.md:1:19
 
@@ -65,7 +64,6 @@ For example:
 
 I found `platform` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_022.md:1:19:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:28
 
@@ -80,7 +78,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. fuzz_crash_022.md:1:28:
+I found `"` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:29
 
@@ -95,7 +93,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `c` here. fuzz_crash_022.md:1:29:
+I found `c` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:30
 
@@ -110,7 +108,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. fuzz_crash_022.md:1:30:
+I found `"` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:32
 
@@ -127,7 +125,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_022.md:1:32:
+item before it.
 
 ── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_022.md:6:27
 
@@ -144,7 +142,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_022.md:6:27:
+item before it.
 
 ── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_022.md:6:35
 
@@ -161,7 +159,6 @@ For example:
 
 I found `else` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_022.md:6:35:
 
 ── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_022.md:8:7
 
@@ -176,7 +173,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_022.md:8:7:
+I found `=` here.
 
 ── ✗ expected tuple separator ──────────────────────────── fuzz_crash_022.md:9:1
 
@@ -192,7 +189,6 @@ For example:
     (x, y)
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_022.md:9:1:
 
 ── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_022.md:9:1
 
@@ -208,7 +204,6 @@ For example:
     add(1, 2)
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_022.md:9:1:
 
 ── ✗ malformed type ───────────────────────────────────── fuzz_crash_022.md:1:19
 
@@ -230,7 +225,7 @@ getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
 If you don't need this variable, prefix it with an underscore like `_id` to
-suppress this warning. fuzz_crash_022.md:6:12:
+suppress this warning.
 
 ── ● declaration has no value ─────────────────────────── fuzz_crash_022.md:1:16
 

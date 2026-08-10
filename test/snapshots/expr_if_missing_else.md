@@ -19,7 +19,7 @@ Nothing is named `tru` in this scope.
 foo = if tru 0
          ^^^
 
-Is it misspelled, or is there an import missing? expr_if_missing_else.md:1:10:
+Is it misspelled, or is there an import missing?
 
 ── ✗ missing method ─────────────────────────────── expr_if_missing_else.md:1:14
 

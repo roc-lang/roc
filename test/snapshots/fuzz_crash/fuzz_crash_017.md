@@ -27,7 +27,7 @@ embedded expression.
 For example:
     "Hello, ${name}!"
 
-I found `"` here. fuzz_crash_017.md:2:7:
+I found `"` here.
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_017.md:2:7
 

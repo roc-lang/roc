@@ -39,7 +39,7 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
                         ^^
 
 If you don't need this variable, prefix it with an underscore like `_x3` to
-suppress this warning. lambda_multi_arg_mismatch.md:3:25:
+suppress this warning.
 
 ── ● unused variable ───────────────────────── lambda_multi_arg_mismatch.md:3:33
 
@@ -49,7 +49,7 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
                                 ^^
 
 If you don't need this variable, prefix it with an underscore like `_x5` to
-suppress this warning. lambda_multi_arg_mismatch.md:3:33:
+suppress this warning.
 
 ── ● unused variable ───────────────────────── lambda_multi_arg_mismatch.md:3:41
 
@@ -59,7 +59,7 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
                                         ^^
 
 If you don't need this variable, prefix it with an underscore like `_x7` to
-suppress this warning. lambda_multi_arg_mismatch.md:3:41:
+suppress this warning.
 
 ── ✗ missing method ────────────────────────── lambda_multi_arg_mismatch.md:13:5
 

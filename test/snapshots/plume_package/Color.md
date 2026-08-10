@@ -92,7 +92,7 @@ is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or
 ^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_is_char_in_hex_range` to suppress this warning. Color.md:21:5:
+`_is_char_in_hex_range` to suppress this warning.
 
 ── ✗ does not exist ───────────────────────────────────────────── Color.md:41:34
 

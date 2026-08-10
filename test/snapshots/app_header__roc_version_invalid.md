@@ -22,7 +22,7 @@ The `roc` entry pins the version of the Roc compiler this file is written for.
 It must be a string holding either a nightly tag or a release version.
 
 For example:
-    roc: "nightly-2026-08-05-24f0b47" app_header__roc_version_invalid.md:1:43:
+    roc: "nightly-2026-08-05-24f0b47"
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

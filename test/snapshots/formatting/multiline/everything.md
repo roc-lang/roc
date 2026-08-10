@@ -158,7 +158,7 @@ A(a) : a
         ) -> Str,
     ]
 
-You're attempting do this in everything.md:12:1:
+You're attempting do this in:
 
 ── ✗ where clause not allowed in type declaration ─────────── everything.md:24:1
 
@@ -176,7 +176,7 @@ B(b) : b
         ) -> Str,
     ]
 
-You're attempting do this in everything.md:24:1:
+You're attempting do this in:
 
 ── ● unused variable ──────────────────────────────────────── everything.md:98:5
 
@@ -186,7 +186,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:98:5:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:103:4
 
@@ -196,7 +196,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:103:4:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:108:5
 
@@ -206,7 +206,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:108:5:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:114:5
 
@@ -216,7 +216,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. everything.md:114:5:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:69:2
 
@@ -226,7 +226,7 @@ h1 = {
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h1` to
-suppress this warning. everything.md:69:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:77:2
 
@@ -236,7 +236,7 @@ h2 = h(
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h2` to
-suppress this warning. everything.md:77:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:81:2
 
@@ -246,7 +246,7 @@ h3 = A(
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h3` to
-suppress this warning. everything.md:81:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:85:2
 
@@ -256,7 +256,7 @@ h4 = [
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h4` to
-suppress this warning. everything.md:85:2:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:89:2
 
@@ -266,7 +266,7 @@ h5 = (
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_h5` to
-suppress this warning. everything.md:89:2:
+suppress this warning.
 
 ── ✗ not a where alias ────────────────────────────────────── everything.md:64:4
 

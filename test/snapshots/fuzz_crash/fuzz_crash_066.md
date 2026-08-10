@@ -25,7 +25,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here. fuzz_crash_066.md:1:4:
+I found `0` here.
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_066.md:1:4
 

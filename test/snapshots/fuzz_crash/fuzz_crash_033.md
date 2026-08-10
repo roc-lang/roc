@@ -26,7 +26,7 @@ For example:
 
 I found `Complete` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_033.md:1:6:
+mod names in Roc.
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,Comma,UpperIdent,CloseSquare,

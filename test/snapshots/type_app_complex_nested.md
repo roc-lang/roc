@@ -59,7 +59,7 @@ Ok(maybeList) => []
    ^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_maybeList`
-to suppress this warning. type_app_complex_nested.md:7:12:
+to suppress this warning.
 
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:12:14
 

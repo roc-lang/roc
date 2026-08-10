@@ -45,7 +45,7 @@ processValue = |value| {
                 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_value` to
-suppress this warning. type_undeclared_usage.md:4:17:
+suppress this warning.
 
 ── ✗ mod not imported ───────────────────────── type_undeclared_usage.md:8:15
 

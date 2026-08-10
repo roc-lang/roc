@@ -36,7 +36,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.*` here. nominal_import_wildcard.md:1:13:
+I found `.*` here.
 
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:3:7
 

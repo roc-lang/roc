@@ -40,7 +40,7 @@ unused_regular = |x| 42
                   ^
 
 If you don't need this variable, prefix it with an underscore like `_x` to
-suppress this warning. unused_vars_simple.md:4:19:
+suppress this warning.
 
 ── ● underscore variable used ─────────────────────── unused_vars_simple.md:7:28
 
@@ -50,7 +50,7 @@ used_underscore = |_value| _value
                            ^^^^^^
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore
-prefix: `value`. unused_vars_simple.md:7:28:
+prefix: `value`.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

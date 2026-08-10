@@ -101,7 +101,6 @@ processRequest = |req| Http.defaultResponse
                        ^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:6:24:
 
 ── ● unused variable ─────────────────────── can_import_type_annotations.md:6:19
 
@@ -111,7 +110,7 @@ processRequest = |req| Http.defaultResponse
                   ^^^
 
 If you don't need this variable, prefix it with an underscore like `_req` to
-suppress this warning. can_import_type_annotations.md:6:19:
+suppress this warning.
 
 ── ✗ mod not found ────────────────────── can_import_type_annotations.md:8:24
 
@@ -129,7 +128,6 @@ parseJson = |input| Json.parse(input)
                     ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:9:21:
 
 ── ✗ mod not found ───────────────────── can_import_type_annotations.md:11:17
 
@@ -163,7 +161,6 @@ result = Json.decode(request.body)
          ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:13:14:
 
 ── ✗ name not in scope ──────────────────── can_import_type_annotations.md:15:24
 
@@ -173,7 +170,6 @@ Ok(data) => Ok(Http.success(data))
                ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:15:24:
 
 ── ✗ mod not found ───────────────────── can_import_type_annotations.md:20:14
 
@@ -191,7 +187,6 @@ config = Json.defaultConfig
          ^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:21:10:
 
 ── ✗ mod not found ───────────────────── can_import_type_annotations.md:24:29
 
@@ -226,7 +221,6 @@ advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input
                                        ^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_type_annotations.md:25:40:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

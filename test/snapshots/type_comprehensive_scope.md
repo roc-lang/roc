@@ -59,7 +59,7 @@ Try(ok, err) : [Ok(ok), Err(err)]
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in type_comprehensive_scope.md:10:1:
+The new declaration is in:
 
 ── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:13:1
 
@@ -71,7 +71,7 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared in type_comprehensive_scope.md:13:1:
+This type is declared in:
 
 And it references Node declared in type_comprehensive_scope.md:16:1:
 
@@ -88,7 +88,7 @@ Node(a) : { value: a, children: List(Tree(a)) }
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared in type_comprehensive_scope.md:16:1:
+This type is declared in:
 
 And it references Tree declared in type_comprehensive_scope.md:13:1:
 
@@ -103,7 +103,7 @@ Person : U64
 ^^^^^^^^^^^^
 
 
-The redeclaration is in type_comprehensive_scope.md:22:1:
+The redeclaration is in:
 
 But Person was already declared in type_comprehensive_scope.md:7:1:
 

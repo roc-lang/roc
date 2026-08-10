@@ -30,7 +30,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!("Hello, world!")
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? hello_world_with_block.md:11:2:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────── hello_world_with_block.md:9:2
 
@@ -40,7 +40,7 @@ world = "World"
 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_world` to
-suppress this warning. hello_world_with_block.md:9:2:
+suppress this warning.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

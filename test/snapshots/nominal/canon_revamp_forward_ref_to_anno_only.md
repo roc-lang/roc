@@ -25,7 +25,6 @@ callMe = absent
          ^^^^^^
 
 Is it misspelled, or is there an import missing?
-canon_revamp_forward_ref_to_anno_only.md:3:14:
 
 ── ● declaration has no value ───── canon_revamp_forward_ref_to_anno_only.md:5:5
 

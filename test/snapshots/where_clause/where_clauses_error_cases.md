@@ -47,7 +47,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. where_clauses_error_cases.md:3:10:
+depending on the surrounding syntax.
 
 ── ✗ expected where clause end ──────────────── where_clauses_error_cases.md:3:3
 
@@ -63,7 +63,6 @@ For example:
 
 I found `where [a.method ->` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-where_clauses_error_cases.md:3:3:
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:22
 
@@ -80,7 +79,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. where_clauses_error_cases.md:3:22:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:23
 
@@ -97,7 +96,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. where_clauses_error_cases.md:3:23:
+item before it.
 
 ── ✗ expected where constraint ──────────────── where_clauses_error_cases.md:7:3
 
@@ -113,7 +112,6 @@ For example:
 
 I found `where [` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-where_clauses_error_cases.md:7:3:
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:7:10
 
@@ -130,7 +128,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. where_clauses_error_cases.md:7:10:
+item before it.
 
 ── ✗ malformed where clause ────────────────── where_clauses_error_cases.md:3:10
 

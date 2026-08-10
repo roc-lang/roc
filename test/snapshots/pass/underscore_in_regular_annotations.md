@@ -53,7 +53,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c underscore_in_regular_annotations.md:28:22:
+    (a -> b) -> c
 
 ── ✗ unexpected statement ─────────── underscore_in_regular_annotations.md:28:25
 
@@ -68,7 +68,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_b` here. underscore_in_regular_annotations.md:28:25:
+I found `_b` here.
 
 ── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
 
@@ -78,7 +78,7 @@ process = |list| "processed"
            ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_list` to
-suppress this warning. underscore_in_regular_annotations.md:9:12:
+suppress this warning.
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

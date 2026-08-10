@@ -31,7 +31,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `@2` here. malformed_nominal.md:1:1:
+I found `@2` here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:4
 
@@ -46,7 +46,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. malformed_nominal.md:1:4:
+I found `:=` here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:7
 
@@ -61,7 +61,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. malformed_nominal.md:1:7:
+I found `{` here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:8
 
@@ -78,7 +78,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. malformed_nominal.md:1:8:
+item before it.
 # TOKENS
 ~~~zig
 OpaqueName,OpColonEqual,OpenCurly,CloseCurly,

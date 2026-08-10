@@ -44,7 +44,7 @@ Try : [Success(Str), Error(Str), Warning(Str, I32)]
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in type_tag_union_complex.md:7:1:
+The new declaration is in:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

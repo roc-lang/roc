@@ -26,7 +26,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `42` here. error_malformed_syntax_2.md:1:8:
+I found `42` here.
 
 ── ✗ unexpected expression syntax ───────────── error_malformed_syntax_2.md:1:10
 
@@ -43,7 +43,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-error_malformed_syntax_2.md:1:10:
 
 ── ● declaration has no value ────────────────── error_malformed_syntax_2.md:1:3
 

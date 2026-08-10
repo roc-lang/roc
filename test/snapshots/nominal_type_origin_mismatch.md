@@ -35,7 +35,7 @@ expectsPerson = |p| "Got a person"
                  ^
 
 If you don't need this variable, prefix it with an underscore like `_p` to
-suppress this warning. nominal_type_origin_mismatch.md:4:18:
+suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

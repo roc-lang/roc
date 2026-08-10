@@ -173,7 +173,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u'` here. unicode_single_quotes.md:5:5:
+I found `'\u'` here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:6:5
 
@@ -188,7 +188,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u)'` here. unicode_single_quotes.md:6:5:
+I found `'\u)'` here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:7:5
 
@@ -203,7 +203,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u('` here. unicode_single_quotes.md:7:5:
+I found `'\u('` here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:8:5
 
@@ -218,7 +218,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u()'` here. unicode_single_quotes.md:8:5:
+I found `'\u()'` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:10:5
 
@@ -233,7 +233,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(EDA0B5)'` here. unicode_single_quotes.md:10:5:
+I found `'\u(EDA0B5)'` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:11:5
 
@@ -248,7 +248,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(K)'` here. unicode_single_quotes.md:11:5:
+I found `'\u(K)'` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:14:5
 
@@ -263,7 +263,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `''` here. unicode_single_quotes.md:14:5:
+I found `''` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:15:5
 
@@ -278,7 +278,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'long'` here. unicode_single_quotes.md:15:5:
+I found `'long'` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:16:5
 
@@ -293,7 +293,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\',` here. unicode_single_quotes.md:16:5:
+I found `'\',` here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:19:5
 
@@ -308,7 +308,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'u` here. unicode_single_quotes.md:19:5:
+I found `'u` here.
 
 ── ✗ unexpected statement ──────────────────────── unicode_single_quotes.md:22:1
 
@@ -323,7 +323,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `'\` here. unicode_single_quotes.md:22:1:
+I found `'\` here.
 INVALID TUPLE ELEMENT
 
 This tuple element is malformed or contains invalid syntax.

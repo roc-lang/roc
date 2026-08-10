@@ -26,7 +26,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                        ^
 
 
-This field is duplicated in fuzz_crash_099.md:3:28:
+This field is duplicated in:
 
 The field `a` was first defined in fuzz_crash_099.md:3:22:
 
@@ -43,7 +43,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
          ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_insert` to
-suppress this warning. fuzz_crash_099.md:3:14:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
@@ -53,7 +53,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                                 ^^
 
 If you don't need this variable, prefix it with an underscore like `_nt` to
-suppress this warning. fuzz_crash_099.md:3:37:
+suppress this warning.
 
 ── ● unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
@@ -63,7 +63,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_fn1` to
-suppress this warning. fuzz_crash_099.md:3:5:
+suppress this warning.
 
 ── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
 

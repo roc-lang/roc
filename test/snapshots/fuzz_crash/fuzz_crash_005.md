@@ -26,7 +26,7 @@ For example:
 
 I found `modu` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_005.md:1:1:
+depending on the surrounding syntax.
 # TOKENS
 ~~~zig
 LowerIdent,

@@ -20,7 +20,6 @@ R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
                         ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_110.md:1:25:
 
 ── ✗ missing method ───────────────────────────────────── fuzz_crash_110.md:1:61
 

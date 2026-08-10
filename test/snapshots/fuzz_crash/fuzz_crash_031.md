@@ -43,7 +43,7 @@ For example:
 
 I found `mule` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_031.md:1:1:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:6
 
@@ -58,7 +58,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. fuzz_crash_031.md:1:6:
+I found `[` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:7
 
@@ -75,7 +75,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_031.md:1:7:
+item before it.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:4:1
 
@@ -92,7 +92,7 @@ For example:
 
 I found `vavar` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_031.md:4:1:
+depending on the surrounding syntax.
 
 ── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_031.md:4:10
 
@@ -107,7 +107,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'` here. fuzz_crash_031.md:4:10:
+I found `'` here.
 
 ── ✗ unrecognized syntax ──────────────────────────────── fuzz_crash_031.md:4:10
 

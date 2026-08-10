@@ -23,7 +23,7 @@ A : B
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared in canon_revamp_mutual_type_aliases.md:1:1:
+This type is declared in:
 
 And it references B declared in canon_revamp_mutual_type_aliases.md:2:1:
 
@@ -40,7 +40,7 @@ B : A
 
 Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
 
-This type is declared in canon_revamp_mutual_type_aliases.md:2:1:
+This type is declared in:
 
 And it references A declared in canon_revamp_mutual_type_aliases.md:1:1:
 

@@ -24,7 +24,6 @@ match person {
       ^^^^^^
 
 Is it misspelled, or is there an import missing?
-pattern_destructure_with_rest.md:1:7:
 
 ── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:33
 
@@ -34,7 +33,6 @@ pattern_destructure_with_rest.md:1:7:
                             ^^^^^^^
 
 `Str` is in scope, but it has no associated `len`.
-pattern_destructure_with_rest.md:2:33:
 
 ── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:55
 
@@ -44,7 +42,6 @@ pattern_destructure_with_rest.md:2:33:
                                                   ^^^^^^^
 
 `Str` is in scope, but it has no associated `len`.
-pattern_destructure_with_rest.md:2:55:
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

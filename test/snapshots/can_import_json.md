@@ -34,7 +34,7 @@ Nothing is named `utf8` in this scope.
 main = Json.utf8
        ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? can_import_json.md:3:8:
+Is it misspelled, or is there an import missing?
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

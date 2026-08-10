@@ -44,7 +44,7 @@ add = |unused| 42
        ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_unused` to
-suppress this warning. lambda_parameter_unused.md:5:8:
+suppress this warning.
 
 ── ● underscore variable used ────────────────── lambda_parameter_unused.md:9:22
 
@@ -54,7 +54,7 @@ multiply = |_factor| _factor * 2
                      ^^^^^^^
 
 Variables prefixed with `_` are intended to be unused. Remove the underscore
-prefix: `factor`. lambda_parameter_unused.md:9:22:
+prefix: `factor`.
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -21,7 +21,7 @@ Maybe(a) : [Ok(a), Err]
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 
-The redeclaration is in type_redeclaration_same_scope.md:3:1:
+The redeclaration is in:
 
 But Maybe was already declared in type_redeclaration_same_scope.md:1:1:
 

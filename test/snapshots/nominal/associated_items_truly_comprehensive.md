@@ -494,7 +494,6 @@ val3 = val4 + 1                                 # Unqualified
        ^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_truly_comprehensive.md:382:20:
 
 ── ✗ name not in scope ────────── associated_items_truly_comprehensive.md:388:12
 
@@ -504,7 +503,6 @@ val1 = val2 + 1                                         # Unqualified
        ^^^^
 
 Is it misspelled, or is there an import missing?
-associated_items_truly_comprehensive.md:388:12:
 
 ── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:13
 
@@ -516,7 +514,6 @@ val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualifie
 
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
-associated_items_truly_comprehensive.md:167:13:
 
 ── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:20
 
@@ -528,7 +525,6 @@ val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualifie
 
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
-associated_items_truly_comprehensive.md:167:20:
 
 ── ✗ circular value definition ── associated_items_truly_comprehensive.md:167:27
 
@@ -540,7 +536,6 @@ val3 = val2 + val1                  # Forward refs to L2 and L1 vals (unqualifie
 
 Only functions can be recursive. Non-function top-level values must be fully
 computable without depending on themselves through other values.
-associated_items_truly_comprehensive.md:167:27:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

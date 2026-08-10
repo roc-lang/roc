@@ -29,7 +29,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. fuzz_crash_040.md:1:20:
+I found `{` here.
 
 ── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_040.md:2:3
 
@@ -44,7 +44,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here. fuzz_crash_040.md:2:3:
+I found `0` here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_040.md:2:4
 
@@ -61,7 +61,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_040.md:2:4:
+item before it.
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_040.md:2:3
 

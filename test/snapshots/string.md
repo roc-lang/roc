@@ -101,7 +101,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. string.md:13:1:
+I found `"` here.
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:2
 
@@ -120,7 +120,6 @@ I found `\` here.
 
 Tip: Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1,
 arg2| body`, and double backslash (`\\`) begins a line in a multiline string.
-string.md:13:2:
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:3
 
@@ -136,7 +135,6 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
-string.md:13:3:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

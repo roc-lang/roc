@@ -47,7 +47,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here. fuzz_crash_032.md:1:24:
+I found `=` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_032.md:1:26
 
@@ -62,7 +62,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. fuzz_crash_032.md:1:26:
+I found `[` here.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_032.md:1:34
 
@@ -80,7 +80,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_032.md:1:34:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_032.md:1:44
 
@@ -98,7 +97,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_032.md:1:44:
+item before it.
 
 ── ✗ import must be top level ─────────────────────────── fuzz_crash_032.md:4:18
 
@@ -117,7 +116,6 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_032.md:4:18:
 
 ── ✗ unexpected pattern syntax ────────────────────────── fuzz_crash_032.md:7:21
 
@@ -132,7 +130,7 @@ underscores, or nested patterns.
 For example:
     { name, age }
 
-I found `-` here. fuzz_crash_032.md:7:21:
+I found `-` here.
 
 ── ✗ missing match arrow ──────────────────────────────── fuzz_crash_032.md:7:22
 
@@ -147,7 +145,6 @@ For example:
     Err(msg) => crash msg
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_032.md:7:22:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_032.md:1:14
 
@@ -157,7 +154,6 @@ LocalStatus :lue => Loc= [Pending, Complete]
              ^^^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_032.md:1:14:
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_032.md:1:21
 

@@ -54,7 +54,7 @@ MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
                        ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_code` to
-suppress this warning. nominal_external_fully_qualified.md:7:32:
+suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

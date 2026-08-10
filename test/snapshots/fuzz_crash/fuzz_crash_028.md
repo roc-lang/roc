@@ -304,7 +304,6 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_028.md:10:1:
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:12:12
 
@@ -322,7 +321,6 @@ For example:
 
 I found `as` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_028.md:12:12:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:13:1
 
@@ -340,7 +338,6 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_028.md:13:1:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:15:1
 
@@ -358,7 +355,7 @@ For example:
 
 I found `Map` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_028.md:15:1:
+mod names in Roc.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:4
 
@@ -373,7 +370,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_028.md:15:4:
+I found `(` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:5
 
@@ -390,7 +387,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:15:5:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:6
 
@@ -407,7 +404,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:15:6:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:8
 
@@ -424,7 +420,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:15:8:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:15:9
 
@@ -441,7 +437,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:15:9:
+item before it.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:11
 
@@ -456,7 +452,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_028.md:15:11:
+I found `:` here.
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:15:20
 
@@ -474,7 +470,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:15:20:
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:22
 
@@ -489,7 +484,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_028.md:15:22:
+I found `(` here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:23
 
@@ -506,7 +501,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:15:23:
+depending on the surrounding syntax.
 
 ── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:15:25
 
@@ -520,7 +515,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c fuzz_crash_028.md:15:25:
+    (a -> b) -> c
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:28
 
@@ -537,7 +532,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:15:28:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:15:29
 
@@ -554,7 +549,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:15:29:
+item before it.
 
 ── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:15:31
 
@@ -568,7 +563,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c fuzz_crash_028.md:15:31:
+    (a -> b) -> c
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:16:1
 
@@ -586,7 +581,7 @@ For example:
 
 I found `MapML` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_028.md:16:1:
+mod names in Roc.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:16:6
 
@@ -601,7 +596,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_028.md:16:6:
+I found `(` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:17:2
 
@@ -618,7 +613,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:17:2:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:17:3
 
@@ -635,7 +630,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:17:3:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:18:2
 
@@ -652,7 +646,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:18:2:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:18:3
 
@@ -669,7 +663,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:18:3:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:19:1
 
@@ -686,7 +679,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:19:1:
+item before it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:20:2
 
@@ -701,7 +694,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_028.md:20:2:
+I found `:` here.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:22:4
 
@@ -719,7 +712,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:22:4:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:3
 
@@ -734,7 +726,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_028.md:23:3:
+I found `(` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:4
 
@@ -751,7 +743,7 @@ For example:
 
 I found `a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:23:4:
+depending on the surrounding syntax.
 
 ── ✗ ambiguous function type ──────────────────────────── fuzz_crash_028.md:23:6
 
@@ -765,7 +757,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c fuzz_crash_028.md:23:6:
+    (a -> b) -> c
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:23:9
 
@@ -782,7 +774,7 @@ For example:
 
 I found `b` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:23:9:
+depending on the surrounding syntax.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_028.md:23:10
 
@@ -799,7 +791,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:23:10:
+item before it.
 
 ── ✗ ambiguous function type ─────────────────────────── fuzz_crash_028.md:23:12
 
@@ -813,7 +805,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c fuzz_crash_028.md:23:12:
+    (a -> b) -> c
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:26:1
 
@@ -831,7 +823,7 @@ For example:
 
 I found `Foo` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. fuzz_crash_028.md:26:1:
+mod names in Roc.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:26:5
 
@@ -846,7 +838,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_028.md:26:5:
+I found `:` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:26:7
 
@@ -861,7 +853,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. fuzz_crash_028.md:26:7:
+I found `(` here.
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:26:11
 
@@ -879,7 +871,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_028.md:26:11:
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_028.md:26:16
 
@@ -897,7 +888,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:26:16:
+item before it.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_028.md:40:5
 
@@ -915,7 +906,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:40:5:
+item before it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:40:7
 
@@ -930,7 +921,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_028.md:40:7:
+I found `:` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:40:9
 
@@ -945,7 +936,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. fuzz_crash_028.md:40:9:
+I found `[` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:41:1
 
@@ -962,7 +953,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_028.md:41:1:
+item before it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_028.md:48:1
 
@@ -979,7 +970,7 @@ For example:
 
 I found `add_` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. fuzz_crash_028.md:48:1:
+depending on the surrounding syntax.
 
 ── ✗ expected record accessor ────────────────────────── fuzz_crash_028.md:103:2
 
@@ -996,7 +987,7 @@ For example:
     person.name
     pair.0
 
-I found `...` here. fuzz_crash_028.md:103:2:
+I found `...` here.
 
 ── ✗ mod not found ──────────────────────────────────── fuzz_crash_028.md:6:1
 
@@ -1039,7 +1030,6 @@ Some(a) : { foo : Ok(a), bar : g }
                                ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_028.md:32:32:
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_028.md:34:8
 
@@ -1089,7 +1079,7 @@ Nothing is named `x` in this scope.
 x x
 ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:65:4:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:65:6
 
@@ -1098,7 +1088,7 @@ Nothing is named `x` in this scope.
 x x
   ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:65:6:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:71:7
 
@@ -1107,7 +1097,7 @@ Nothing is named `ment` in this scope.
 => ment
    ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:71:7:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────────────── fuzz_crash_028.md:1:1
 
@@ -1117,7 +1107,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_028.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ──────────────────────────────────── fuzz_crash_028.md:72:7
 
@@ -1138,7 +1128,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_028.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ──────────────────────────────────── fuzz_crash_028.md:77:7
 
@@ -1158,7 +1148,7 @@ Nothing is named `add` in this scope.
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                                   ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:78:37:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:78:21
 
@@ -1168,7 +1158,7 @@ Variable `rest` is defined here and then never used:
                   ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_028.md:78:21:
+suppress this warning.
 
 ── ✗ not implemented ─────────────────────────────────── fuzz_crash_028.md:85:18
 
@@ -1189,7 +1179,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. fuzz_crash_028.md:62:2:
+suppress this warning.
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_028.md:93:2
 
@@ -1198,7 +1188,7 @@ Nothing is named `blah` in this scope.
 blah == 1 # nt
 ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:93:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:95:10
 
@@ -1223,7 +1213,7 @@ Nothing is named `blah` in this scope.
 expect blah == 1
        ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:99:9:
+Is it misspelled, or is there an import missing?
 
 ── ✗ unrecognized syntax ─────────────────────────────── fuzz_crash_028.md:103:2
 
@@ -1241,7 +1231,7 @@ Nothing is named `nc` in this scope.
 nc(
 ^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:107:1:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:116:1
 
@@ -1250,7 +1240,7 @@ Nothing is named `er` in this scope.
 er, # afarg
 ^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:116:1:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:119:11
 
@@ -1259,7 +1249,7 @@ Nothing is named `list` in this scope.
 for n in list {
          ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:119:11:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:120:2
 
@@ -1268,7 +1258,7 @@ Nothing is named `line!` in this scope.
 line!("Ag ${n} to ${er}")
 ^^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:120:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:120:22
 
@@ -1277,7 +1267,7 @@ Nothing is named `er` in this scope.
 line!("Ag ${n} to ${er}")
                     ^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:120:22:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:123:54
 
@@ -1286,7 +1276,7 @@ Nothing is named `ned` in this scope.
 rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
                                                     ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:123:54:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:124:42
 
@@ -1295,7 +1285,7 @@ Nothing is named `nd` in this scope.
 tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])
                                         ^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:124:42:
+Is it misspelled, or is there an import missing?
 
 ── ✗ invalid assignment to itself ───────────────────── fuzz_crash_028.md:124:46
 
@@ -1307,7 +1297,7 @@ tuple = (123, "World", tag, Ok(world), (nd, tuple), [1, 2, 3])
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. fuzz_crash_028.md:124:46:
+value being assigned.
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:127:11
 
@@ -1316,7 +1306,7 @@ Nothing is named `ag1` in this scope.
 "World",ag1,
         ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:127:11:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_028.md:132:10
 
@@ -1325,7 +1315,7 @@ Nothing is named `foo` in this scope.
 b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
         ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:132:10:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:133:6
 
@@ -1334,7 +1324,7 @@ Nothing is named `arg1` in this scope.
 le =(arg1)?.od()?.ned()?.recd?
      ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:133:6:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:134:2
 
@@ -1343,7 +1333,7 @@ Nothing is named `line!` in this scope.
 line!(
 ^^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:134:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:136:4
 
@@ -1352,7 +1342,7 @@ Nothing is named `r` in this scope.
 r(number) # xpr
 ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:136:4:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:112:2
 
@@ -1362,7 +1352,7 @@ tag_ = Ok(number)
 ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_tag_` to
-suppress this warning. fuzz_crash_028.md:112:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:113:2
 
@@ -1372,7 +1362,7 @@ i= "H, ${world}"
 ^
 
 If you don't need this variable, prefix it with an underscore like `_i` to
-suppress this warning. fuzz_crash_028.md:113:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:114:1
 
@@ -1382,7 +1372,7 @@ t = [
 ^
 
 If you don't need this variable, prefix it with an underscore like `_t` to
-suppress this warning. fuzz_crash_028.md:114:1:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:123:2
 
@@ -1392,7 +1382,7 @@ rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_rd` to
-suppress this warning. fuzz_crash_028.md:123:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:125:2
 
@@ -1402,7 +1392,7 @@ mle = (
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_mle` to
-suppress this warning. fuzz_crash_028.md:125:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:132:2
 
@@ -1412,7 +1402,7 @@ b = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. fuzz_crash_028.md:132:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:133:1
 
@@ -1422,7 +1412,7 @@ le =(arg1)?.od()?.ned()?.recd?
 ^^
 
 If you don't need this variable, prefix it with an underscore like `_le` to
-suppress this warning. fuzz_crash_028.md:133:1:
+suppress this warning.
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_028.md:144:5
 
@@ -1439,7 +1429,7 @@ Nothing is named `h` in this scope.
 h == foo
 ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:148:1:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_028.md:148:6
 
@@ -1448,7 +1438,7 @@ Nothing is named `foo` in this scope.
 h == foo
      ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_028.md:148:6:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_028.md:147:2
 
@@ -1458,7 +1448,7 @@ f= 1
 ^
 
 If you don't need this variable, prefix it with an underscore like `_f` to
-suppress this warning. fuzz_crash_028.md:147:2:
+suppress this warning.
 
 ── ✗ exposed but not defined ───────────────────────────── fuzz_crash_028.md:2:6
 

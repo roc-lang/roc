@@ -20,7 +20,6 @@ Person : { $name : Str }
 
 Names that start with `$` are reassignable variables declared with the `var`
 keyword, so they cannot be used as record field names.
-error_dollar_prefix_type_field.md:1:12:
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,

@@ -24,7 +24,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `?` here. suffixed_question.md:1:14:
+I found `?` here.
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,OpDoubleQuestion,NoSpaceOpQuestion,

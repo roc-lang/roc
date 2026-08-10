@@ -290,7 +290,7 @@ For example:
     person.name
     pair.0
 
-I found `...` here. syntax_grab_bag.md:154:2:
+I found `...` here.
 
 ── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:16:1
 
@@ -397,7 +397,7 @@ Nothing is named `some_func` in this scope.
 some_func() # After debug expr
 ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:72:4:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:97:3
 
@@ -407,7 +407,7 @@ lower # After pattern comment
 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_lower` to
-suppress this warning. syntax_grab_bag.md:97:3:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
@@ -417,7 +417,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. syntax_grab_bag.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:108:7
 
@@ -438,7 +438,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. syntax_grab_bag.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:111:4
 
@@ -459,7 +459,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. syntax_grab_bag.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:120:7
 
@@ -479,7 +479,7 @@ Nothing is named `add` in this scope.
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                                   ^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:121:37:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────────── syntax_grab_bag.md:121:21
 
@@ -489,7 +489,7 @@ Variable `rest` is defined here and then never used:
                   ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. syntax_grab_bag.md:121:21:
+suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:127:4
 
@@ -499,7 +499,7 @@ Variable `rest` is defined here and then never used:
     rest, # After last field
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. syntax_grab_bag.md:127:4:
+suppress this warning.
 
 ── ✗ not implemented ───────────────────────────────── syntax_grab_bag.md:130:18
 
@@ -531,7 +531,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. syntax_grab_bag.md:82:2:
+suppress this warning.
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:141:2
 
@@ -540,7 +540,7 @@ Nothing is named `blah` in this scope.
 blah == 1 # Comment after expect statement
 ^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:141:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ undeclared type ───────────────────────────────── syntax_grab_bag.md:143:14
 
@@ -557,7 +557,7 @@ Nothing is named `blah` in this scope.
 expect blah == 1
        ^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:147:9:
+Is it misspelled, or is there an import missing?
 
 ── ✗ unrecognized syntax ────────────────────────────── syntax_grab_bag.md:154:2
 
@@ -575,7 +575,7 @@ Nothing is named `some_func` in this scope.
 some_func(
 ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:158:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:175:3
 
@@ -584,7 +584,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!("Adding ${n} to ${number}")
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:175:3:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:178:63
 
@@ -593,7 +593,7 @@ Nothing is named `punned` in this scope.
 record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
                                                              ^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:178:63:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:179:42
 
@@ -602,7 +602,7 @@ Nothing is named `nested` in this scope.
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
                                         ^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:179:42:
+Is it misspelled, or is there an import missing?
 
 ── ✗ invalid assignment to itself ──────────────────── syntax_grab_bag.md:179:50
 
@@ -614,7 +614,7 @@ tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. syntax_grab_bag.md:179:50:
+value being assigned.
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:183:3
 
@@ -623,7 +623,7 @@ Nothing is named `tag1` in this scope.
 tag1,
 ^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:183:3:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:185:4
 
@@ -632,7 +632,7 @@ Nothing is named `nested` in this scope.
 (nested, tuple),
  ^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:185:4:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:188:22
 
@@ -641,7 +641,7 @@ Nothing is named `foo` in this scope.
 bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
                     ^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:188:22:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:26
 
@@ -650,7 +650,7 @@ Nothing is named `some_fn` in this scope.
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                         ^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:189:26:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:34
 
@@ -659,7 +659,7 @@ Nothing is named `arg1` in this scope.
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                                 ^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:189:34:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:190:2
 
@@ -668,7 +668,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!(interpolated)?
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:190:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:191:2
 
@@ -677,7 +677,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!(
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? syntax_grab_bag.md:191:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ does not exist ─────────────────────────────────── syntax_grab_bag.md:193:4
 
@@ -695,7 +695,7 @@ tag_with_payload = Ok(number)
 ^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_tag_with_payload` to suppress this warning. syntax_grab_bag.md:164:2:
+`_tag_with_payload` to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:178:2
 
@@ -705,7 +705,7 @@ record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_record` to
-suppress this warning. syntax_grab_bag.md:178:2:
+suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:180:2
 
@@ -715,7 +715,7 @@ multiline_tuple = (
 ^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_multiline_tuple` to suppress this warning. syntax_grab_bag.md:180:2:
+`_multiline_tuple` to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:188:2
 
@@ -725,7 +725,7 @@ bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
 ^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_bin_op_result` to suppress this warning. syntax_grab_bag.md:188:2:
+`_bin_op_result` to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:189:2
 
@@ -735,7 +735,7 @@ static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dis
 ^^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_static_dispatch_style` to suppress this warning. syntax_grab_bag.md:189:2:
+`_static_dispatch_style` to suppress this warning.
 
 ── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:201:9
 

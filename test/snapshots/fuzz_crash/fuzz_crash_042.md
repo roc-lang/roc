@@ -28,7 +28,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_042.md:1:11:
+item before it.
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_042.md:1:20
 

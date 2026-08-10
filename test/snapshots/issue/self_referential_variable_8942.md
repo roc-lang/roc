@@ -21,7 +21,7 @@ a = a
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. self_referential_variable_8942.md:1:5:
+value being assigned.
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,

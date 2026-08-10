@@ -62,7 +62,6 @@ parseConfig = |settings| Config.toString(settings)
                          ^^^^^^^^^^^^^^^
 
 `Config` is in scope, but it has no associated `toString`.
-can_import_nested_mods.md:7:26:
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:10:28
 
@@ -80,7 +79,6 @@ authenticate = |user, pass| HttpAuth.login(user, pass)
                             ^^^^^^^^^^^^^^
 
 `HttpAuth` is in scope, but it has no associated `login`.
-can_import_nested_mods.md:11:29:
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:15
 
@@ -106,7 +104,6 @@ Config.Parser.Advanced.parseWith(advancedConfig, input)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 `Config.Parser.Advanced` is in scope, but it has no associated `parseWith`.
-can_import_nested_mods.md:16:5:
 
 ── ✗ name not in scope ────────────────────── can_import_nested_mods.md:20:23
 
@@ -116,7 +113,6 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                       ^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_nested_mods.md:20:23:
 
 ── ✗ does not exist ───────────────────────── can_import_nested_mods.md:20:37
 
@@ -126,7 +122,6 @@ formatOutput = |text| padLeft(text, Config.defaultPadding)
                                     ^^^^^^^^^^^^^^^^^^^^^
 
 `Config` is in scope, but it has no associated `defaultPadding`.
-can_import_nested_mods.md:20:37:
 
 ── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:16
 
@@ -160,7 +155,6 @@ validateAuth = |creds| HttpAuth.validate(creds)
                        ^^^^^^^^^^^^^^^^^
 
 `HttpAuth` is in scope, but it has no associated `validate`.
-can_import_nested_mods.md:24:24:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,

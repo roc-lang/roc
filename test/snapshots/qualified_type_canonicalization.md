@@ -202,7 +202,7 @@ processColor = |color|
                 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_color` to
-suppress this warning. qualified_type_canonicalization.md:28:17:
+suppress this warning.
 
 ── ✗ missing nested type ────────────── qualified_type_canonicalization.md:32:13
 
@@ -260,7 +260,7 @@ Try.Err(err) => TypeC.default
         ^^^
 
 If you don't need this variable, prefix it with an underscore like `_err` to
-suppress this warning. qualified_type_canonicalization.md:36:17:
+suppress this warning.
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,NoSpaceDotUpperIdent,

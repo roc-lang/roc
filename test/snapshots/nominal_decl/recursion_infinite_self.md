@@ -25,7 +25,7 @@ t = T.((t, 1))
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. recursion_infinite_self.md:4:9:
+value being assigned.
 
 ── ✗ invalid recursive type ───────────────────── recursion_infinite_self.md:1:1
 

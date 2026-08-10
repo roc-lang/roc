@@ -262,7 +262,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_027.md:40:5:
+item before it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:40:7
 
@@ -277,7 +277,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here. fuzz_crash_027.md:40:7:
+I found `:` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:40:9
 
@@ -292,7 +292,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. fuzz_crash_027.md:40:9:
+I found `[` here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:41:1
 
@@ -309,7 +309,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_027.md:41:1:
+item before it.
 
 ── ✗ expected record accessor ────────────────────────── fuzz_crash_027.md:110:2
 
@@ -326,7 +326,7 @@ For example:
     person.name
     pair.0
 
-I found `...` here. fuzz_crash_027.md:110:2:
+I found `...` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:124:3
 
@@ -343,7 +343,6 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-fuzz_crash_027.md:124:3:
 
 ── ✗ expected list separator ─────────────────────────── fuzz_crash_027.md:125:3
 
@@ -359,7 +358,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_027.md:125:3:
+item before it.
 
 ── ✗ expected call argument end ──────────────────────── fuzz_crash_027.md:126:2
 
@@ -375,7 +374,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_027.md:126:2:
+item before it.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:131:9
 
@@ -390,7 +389,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:131:9:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:132:8
 
@@ -405,7 +404,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:132:8:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ───────────────────── fuzz_crash_027.md:133:10
 
@@ -420,7 +419,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:133:10:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:141:8
 
@@ -435,7 +434,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:141:8:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:142:8
 
@@ -450,7 +449,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:142:8:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:148:1
 
@@ -467,7 +466,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. fuzz_crash_027.md:148:1:
+item before it.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:150:7
 
@@ -482,7 +481,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. fuzz_crash_027.md:150:7:
+I found `:` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:151:7
 
@@ -497,7 +496,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here. fuzz_crash_027.md:151:7:
+I found `=` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:153:7
 
@@ -512,7 +511,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. fuzz_crash_027.md:153:7:
+I found `:` here.
 
 ── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:155:1
 
@@ -529,7 +528,6 @@ For example:
 
 I found `expect` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-fuzz_crash_027.md:155:1:
 
 ── ✗ expected list separator ─────────────────────────── fuzz_crash_027.md:160:1
 
@@ -544,7 +542,6 @@ For example:
     [1, 2, 3]
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_027.md:160:1:
 
 ── ✗ expected closing brace ──────────────────────────── fuzz_crash_027.md:160:1
 
@@ -562,7 +559,6 @@ For example:
     }
 
 I reached the end of the file before this construct was complete.
-fuzz_crash_027.md:160:1:
 
 ── ✗ mod not found ──────────────────────────────────── fuzz_crash_027.md:6:1
 
@@ -637,7 +633,6 @@ Some(a) : { foo : Ok(a), bar : g }
                                ^
 
 Type variables must be introduced in a type annotation before they can be used.
-fuzz_crash_027.md:32:32:
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:34:8
 
@@ -687,7 +682,7 @@ Nothing is named `x` in this scope.
 x x
 ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:65:4:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:65:6
 
@@ -696,7 +691,7 @@ Nothing is named `x` in this scope.
 x x
   ^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:65:6:
+Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:71:7
 
@@ -705,7 +700,7 @@ Nothing is named `ment` in this scope.
 => ment
    ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:71:7:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
 
@@ -715,7 +710,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_027.md:1:1:
+suppress this warning.
 
 ── ✗ not implemented ──────────────────────────────────── fuzz_crash_027.md:74:7
 
@@ -736,7 +731,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_027.md:1:1:
+suppress this warning.
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_027.md:76:1
 
@@ -746,7 +741,7 @@ ist
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_ist` to
-suppress this warning. fuzz_crash_027.md:76:1:
+suppress this warning.
 
 ── ✗ not implemented ──────────────────────────────────── fuzz_crash_027.md:81:7
 
@@ -766,7 +761,7 @@ Nothing is named `add` in this scope.
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                                   ^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:82:37:
+Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:82:21
 
@@ -776,7 +771,7 @@ Variable `rest` is defined here and then never used:
                   ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. fuzz_crash_027.md:82:21:
+suppress this warning.
 
 ── ✗ not implemented ─────────────────────────────────── fuzz_crash_027.md:89:18
 
@@ -797,7 +792,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. fuzz_crash_027.md:62:2:
+suppress this warning.
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:97:2
 
@@ -806,7 +801,7 @@ Nothing is named `blah` in this scope.
 blah == 1 # Commnt
 ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:97:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:99:14
 
@@ -823,7 +818,7 @@ Nothing is named `blah` in this scope.
 expect blah == 1
        ^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:103:9:
+Is it misspelled, or is there an import missing?
 
 ── ✗ unrecognized syntax ─────────────────────────────── fuzz_crash_027.md:110:2
 
@@ -841,7 +836,7 @@ Nothing is named `some_func` in this scope.
 some_func(
 ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? fuzz_crash_027.md:114:2:
+Is it misspelled, or is there an import missing?
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_027.md:1:1
 
@@ -860,7 +855,7 @@ tag = Blue
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_tag` to
-suppress this warning. fuzz_crash_027.md:104:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:119:2
 
@@ -870,7 +865,7 @@ tag_with = Ok(number)
 ^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_tag_with`
-to suppress this warning. fuzz_crash_027.md:119:2:
+to suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:120:2
 
@@ -880,7 +875,7 @@ ited = "Hello, ${world}"
 ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_ited` to
-suppress this warning. fuzz_crash_027.md:120:2:
+suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:121:2
 
@@ -890,7 +885,7 @@ list = [
 ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_list` to
-suppress this warning. fuzz_crash_027.md:121:2:
+suppress this warning.
 
 ── ✗ too few args ─────────────────────────────────────── fuzz_crash_027.md:21:3
 

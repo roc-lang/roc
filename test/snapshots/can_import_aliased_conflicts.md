@@ -39,7 +39,6 @@ x = MyMod.parse
     ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-can_import_aliased_conflicts.md:5:9:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,
