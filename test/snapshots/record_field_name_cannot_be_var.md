@@ -28,7 +28,7 @@ my_record = { $field: "value", ok: 1 }
 
 Names that start with `$` are reassignable variables declared with the `var`
 keyword, so they cannot be used as record field names.
-(record_field_name_cannot_be_var.md:1:15):
+record_field_name_cannot_be_var.md:1:15:
 
 ── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:3:8
 
@@ -39,7 +39,7 @@ f = |{ $a }| "y"
 
 Names that start with `$` are reassignable variables declared with the `var`
 keyword, so they cannot be used as record field names.
-(record_field_name_cannot_be_var.md:3:8):
+record_field_name_cannot_be_var.md:3:8:
 
 ── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:5:7
 
@@ -50,7 +50,7 @@ g : { $b : Str } -> Str
 
 Names that start with `$` are reassignable variables declared with the `var`
 keyword, so they cannot be used as record field names.
-(record_field_name_cannot_be_var.md:5:7):
+record_field_name_cannot_be_var.md:5:7:
 
 ── ● unused variable ──────────────────── record_field_name_cannot_be_var.md:3:8
 
@@ -60,7 +60,7 @@ f = |{ $a }| "y"
        ^^
 
 If you don't need this variable, prefix it with an underscore like `_$a` to
-suppress this warning. (record_field_name_cannot_be_var.md:3:8):
+suppress this warning. record_field_name_cannot_be_var.md:3:8:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,CloseCurly,

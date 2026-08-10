@@ -60,7 +60,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. (let_polymorphism_lists.md:12:26):
+I found `+` here. let_polymorphism_lists.md:12:26:
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:12:28
 
@@ -77,7 +77,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (let_polymorphism_lists.md:12:28):
+depending on the surrounding syntax. let_polymorphism_lists.md:12:28:
 
 ── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:13:26
 
@@ -92,7 +92,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. (let_polymorphism_lists.md:13:26):
+I found `+` here. let_polymorphism_lists.md:13:26:
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:13:28
 
@@ -109,7 +109,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (let_polymorphism_lists.md:13:28):
+depending on the surrounding syntax. let_polymorphism_lists.md:13:28:
 
 ── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:14:30
 
@@ -124,7 +124,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. (let_polymorphism_lists.md:14:30):
+I found `+` here. let_polymorphism_lists.md:14:30:
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:14:32
 
@@ -141,7 +141,7 @@ For example:
 
 I found `my_empty_list` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (let_polymorphism_lists.md:14:32):
+depending on the surrounding syntax. let_polymorphism_lists.md:14:32:
 
 ── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:12:16
 
@@ -149,8 +149,6 @@ I don't recognize this syntax.
 
 all_int_list = int_list ++ my_empty_list
                ^^^^^^^^^^^
-
-(let_polymorphism_lists.md:12:16):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -161,8 +159,6 @@ I don't recognize this syntax.
 all_str_list = str_list ++ my_empty_list
                ^^^^^^^^^^^
 
-(let_polymorphism_lists.md:13:16):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:14:18
@@ -171,8 +167,6 @@ I don't recognize this syntax.
 
 all_float_list = float_list ++ my_empty_list
                  ^^^^^^^^^^^^^
-
-(let_polymorphism_lists.md:14:18):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

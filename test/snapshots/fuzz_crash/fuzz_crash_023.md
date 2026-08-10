@@ -298,7 +298,7 @@ For example:
     person.name
     pair.0
 
-I found `...` here. (fuzz_crash_023.md:154:2):
+I found `...` here. fuzz_crash_023.md:154:2:
 
 ── ✗ expected record field ──────────────────────────── fuzz_crash_023.md:178:37
 
@@ -315,7 +315,7 @@ For example:
 
 I found `;` here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
-(fuzz_crash_023.md:178:37):
+fuzz_crash_023.md:178:37:
 
 ── ✗ unexpected expression syntax ───────────────────── fuzz_crash_023.md:178:45
 
@@ -332,7 +332,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(fuzz_crash_023.md:178:45):
+fuzz_crash_023.md:178:45:
 
 ── ✗ expected function arrow ────────────────────────── fuzz_crash_023.md:178:52
 
@@ -349,7 +349,7 @@ For example:
 
 I found `Ok` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (fuzz_crash_023.md:178:52):
+mod names in Roc. fuzz_crash_023.md:178:52:
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_023.md:16:1
 
@@ -358,7 +358,6 @@ The mod `BadName` was not found in this Roc project.
 import BadName as GoodName
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(fuzz_crash_023.md:16:1):
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_023.md:17:1
 
@@ -369,7 +368,6 @@ import
         as
         GoodNameMultiline
 
-(fuzz_crash_023.md:17:1):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:36:8
 
@@ -378,7 +376,6 @@ The type `Bar` is not declared in this scope.
 Foo : (Bar, Baz)
        ^^^
 
-(fuzz_crash_023.md:36:8):
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_023.md:36:13
 
@@ -387,7 +384,6 @@ The type `Baz` is not declared in this scope.
 Foo : (Bar, Baz)
             ^^^
 
-(fuzz_crash_023.md:36:13):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:39:2
 
@@ -396,7 +392,6 @@ The type `Bar` is not declared in this scope.
 Bar, # Comment after pattern tuple item
 ^^^
 
-(fuzz_crash_023.md:39:2):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:40:2
 
@@ -405,7 +400,6 @@ The type `Baz` is not declared in this scope.
 Baz, # Another after pattern tuple item
 ^^^
 
-(fuzz_crash_023.md:40:2):
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_023.md:43:19
 
@@ -414,7 +408,6 @@ The type `Ok` is not declared in this scope.
 Some(a) : { foo : Ok(a), bar : Something }
                   ^^
 
-(fuzz_crash_023.md:43:19):
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_023.md:43:32
 
@@ -423,7 +416,6 @@ The type `Something` is not declared in this scope.
 Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
-(fuzz_crash_023.md:43:32):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:45:8
 
@@ -432,7 +424,6 @@ The type `Ok` is not declared in this scope.
 foo : Ok(a), # After field
       ^^
 
-(fuzz_crash_023.md:45:8):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:46:8
 
@@ -441,7 +432,6 @@ The type `Something` is not declared in this scope.
 bar : Something, # After last field
       ^^^^^^^^^
 
-(fuzz_crash_023.md:46:8):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:52:4
 
@@ -450,7 +440,6 @@ The type `Ok` is not declared in this scope.
 Ok(a), # Comment after pattern record field
 ^^
 
-(fuzz_crash_023.md:52:4):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_023.md:53:8
 
@@ -459,7 +448,6 @@ The type `Something` is not declared in this scope.
 bar : Something, # Another after pattern record field
       ^^^^^^^^^
 
-(fuzz_crash_023.md:53:8):
 
 ── ✗ name not in scope ────────────────────────────────── fuzz_crash_023.md:72:4
 
@@ -468,7 +456,7 @@ Nothing is named `some_func` in this scope.
 some_func() # After debug expr
 ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:72:4):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:72:4:
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_023.md:97:3
 
@@ -478,7 +466,7 @@ lower # After pattern comment
 ^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_lower` to
-suppress this warning. (fuzz_crash_023.md:97:3):
+suppress this warning. fuzz_crash_023.md:97:3:
 
 ── ● unused variable ───────────────────────────────────── fuzz_crash_023.md:1:1
 
@@ -488,7 +476,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. (fuzz_crash_023.md:1:1):
+suppress this warning. fuzz_crash_023.md:1:1:
 
 ── ✗ not implemented ─────────────────────────────────── fuzz_crash_023.md:108:7
 
@@ -498,8 +486,6 @@ expression.
 [1, 2 | 5, 3, .. as rest] => 123
     ^^^^^
 
-(fuzz_crash_023.md:108:7):
-
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
@@ -511,7 +497,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. (fuzz_crash_023.md:1:1):
+suppress this warning. fuzz_crash_023.md:1:1:
 
 ── ✗ not implemented ─────────────────────────────────── fuzz_crash_023.md:111:4
 
@@ -521,8 +507,6 @@ expression.
 2 | 5,
 ^^^^^
 
-(fuzz_crash_023.md:111:4):
-
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
@@ -534,7 +518,7 @@ Variable `rest` is defined here and then never used:
 ^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. (fuzz_crash_023.md:1:1):
+suppress this warning. fuzz_crash_023.md:1:1:
 
 ── ✗ not implemented ─────────────────────────────────── fuzz_crash_023.md:120:7
 
@@ -543,8 +527,6 @@ expression.
 
 (1, 2 | 5, 3) => 123
     ^^^^^
-
-(fuzz_crash_023.md:120:7):
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
@@ -556,7 +538,7 @@ Nothing is named `add` in this scope.
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                                   ^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:121:37):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:121:37:
 
 ── ● unused variable ────────────────────────────────── fuzz_crash_023.md:121:21
 
@@ -566,7 +548,7 @@ Variable `rest` is defined here and then never used:
                   ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. (fuzz_crash_023.md:121:21):
+suppress this warning. fuzz_crash_023.md:121:21:
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:127:4
 
@@ -576,7 +558,7 @@ Variable `rest` is defined here and then never used:
     rest, # After last field
 
 If you don't need this variable, prefix it with an underscore like `_rest` to
-suppress this warning. (fuzz_crash_023.md:127:4):
+suppress this warning. fuzz_crash_023.md:127:4:
 
 ── ✗ not implemented ────────────────────────────────── fuzz_crash_023.md:130:18
 
@@ -585,8 +567,6 @@ expression.
 
 { foo: 1, bar: 2 | 7 } => 12
                ^^^^^
-
-(fuzz_crash_023.md:130:18):
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
@@ -599,8 +579,6 @@ expression.
 bar: 2 | 7, # After last record field
      ^^^^^
 
-(fuzz_crash_023.md:133:9):
-
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 
@@ -612,7 +590,7 @@ b,
 ^
 
 If you don't need this variable, prefix it with an underscore like `_b` to
-suppress this warning. (fuzz_crash_023.md:82:2):
+suppress this warning. fuzz_crash_023.md:82:2:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:141:2
 
@@ -621,7 +599,7 @@ Nothing is named `blah` in this scope.
 blah == 1 # Comment after expect statement
 ^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:141:2):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:141:2:
 
 ── ✗ undeclared type ────────────────────────────────── fuzz_crash_023.md:143:14
 
@@ -630,7 +608,6 @@ The type `String` is not declared in this scope.
 main! : List(String) -> Try({}, _)
              ^^^^^^
 
-(fuzz_crash_023.md:143:14):
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:147:9
 
@@ -639,7 +616,7 @@ Nothing is named `blah` in this scope.
 expect blah == 1
        ^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:147:9):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:147:9:
 
 ── ✗ unrecognized syntax ─────────────────────────────── fuzz_crash_023.md:154:2
 
@@ -647,8 +624,6 @@ I don't recognize this syntax.
 
 ...
 ^^^
-
-(fuzz_crash_023.md:154:2):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -659,7 +634,7 @@ Nothing is named `some_func` in this scope.
 some_func(
 ^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:158:2):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:158:2:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:175:3
 
@@ -668,7 +643,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!("Adding ${n} to ${number}")
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:175:3):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:175:3:
 
 ── ✗ unrecognized syntax ────────────────────────────── fuzz_crash_023.md:178:11
 
@@ -676,8 +651,6 @@ I don't recognize this syntax.
 
 record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(fuzz_crash_023.md:178:11):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -688,8 +661,6 @@ I don't recognize this syntax.
 record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
                                            ^
 
-(fuzz_crash_023.md:178:45):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ malformed type ─────────────────────────────────── fuzz_crash_023.md:178:52
@@ -699,7 +670,6 @@ This type annotation is malformed or contains invalid syntax.
 record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
                                                   ^^^^^^^^^^^^^^^^^^^
 
-(fuzz_crash_023.md:178:52):
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_023.md:179:42
 
@@ -708,7 +678,7 @@ Nothing is named `nested` in this scope.
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
                                         ^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:179:42):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:179:42:
 
 ── ✗ invalid assignment to itself ───────────────────── fuzz_crash_023.md:179:50
 
@@ -720,7 +690,7 @@ tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. (fuzz_crash_023.md:179:50):
+value being assigned. fuzz_crash_023.md:179:50:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:183:3
 
@@ -729,7 +699,7 @@ Nothing is named `tag1` in this scope.
 tag1,
 ^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:183:3):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:183:3:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:185:4
 
@@ -738,7 +708,7 @@ Nothing is named `nested` in this scope.
 (nested, tuple),
  ^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:185:4):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:185:4:
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_023.md:188:22
 
@@ -747,7 +717,7 @@ Nothing is named `foo` in this scope.
 bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
                     ^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:188:22):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:188:22:
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_023.md:189:26
 
@@ -756,7 +726,7 @@ Nothing is named `some_fn` in this scope.
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                         ^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:189:26):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:189:26:
 
 ── ✗ name not in scope ──────────────────────────────── fuzz_crash_023.md:189:34
 
@@ -765,7 +735,7 @@ Nothing is named `arg1` in this scope.
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                                 ^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:189:34):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:189:34:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:190:2
 
@@ -774,7 +744,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!(interpolated)?
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:190:2):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:190:2:
 
 ── ✗ name not in scope ───────────────────────────────── fuzz_crash_023.md:191:2
 
@@ -783,7 +753,7 @@ Nothing is named `line!` in this scope.
 Stdout.line!(
 ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (fuzz_crash_023.md:191:2):
+Is it misspelled, or is there an import missing? fuzz_crash_023.md:191:2:
 
 ── ✗ does not exist ──────────────────────────────────── fuzz_crash_023.md:193:4
 
@@ -792,7 +762,6 @@ Is it misspelled, or is there an import missing? (fuzz_crash_023.md:191:2):
 Num.toStr(number) # Comment after string interpolation expr
 ^^^^^^^^^
 
-(fuzz_crash_023.md:193:4):
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:164:2
 
@@ -802,7 +771,7 @@ tag_with_payload = Ok(number)
 ^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_tag_with_payload` to suppress this warning. (fuzz_crash_023.md:164:2):
+`_tag_with_payload` to suppress this warning. fuzz_crash_023.md:164:2:
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:178:2
 
@@ -812,7 +781,7 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_record` to
-suppress this warning. (fuzz_crash_023.md:178:2):
+suppress this warning. fuzz_crash_023.md:178:2:
 
 ── ● unused variable ────────────────────────────────── fuzz_crash_023.md:178:47
 
@@ -822,7 +791,7 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
                                              ^^^^^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_qux` to
-suppress this warning. (fuzz_crash_023.md:178:47):
+suppress this warning. fuzz_crash_023.md:178:47:
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:180:2
 
@@ -832,7 +801,7 @@ multiline_tuple = (
 ^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_multiline_tuple` to suppress this warning. (fuzz_crash_023.md:180:2):
+`_multiline_tuple` to suppress this warning. fuzz_crash_023.md:180:2:
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:188:2
 
@@ -842,7 +811,7 @@ bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3
 ^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_bin_op_result` to suppress this warning. (fuzz_crash_023.md:188:2):
+`_bin_op_result` to suppress this warning. fuzz_crash_023.md:188:2:
 
 ── ● unused variable ─────────────────────────────────── fuzz_crash_023.md:189:2
 
@@ -852,7 +821,7 @@ static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dis
 ^^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_static_dispatch_style` to suppress this warning. (fuzz_crash_023.md:189:2):
+`_static_dispatch_style` to suppress this warning. fuzz_crash_023.md:189:2:
 
 ── ✗ undeclared type ─────────────────────────────────── fuzz_crash_023.md:201:9
 
@@ -861,7 +830,6 @@ The type `Value` is not declared in this scope.
 tuple : Value((a, b, c))
         ^^^^^
 
-(fuzz_crash_023.md:201:9):
 
 ── ✗ type mismatch ────────────────────────────────────── fuzz_crash_023.md:70:5
 
@@ -869,8 +837,6 @@ This `if` condition must evaluate to a `Bool` – either `True` or `False`.
 
 if num {
    ^^^
-
-(fuzz_crash_023.md:70:5):
 
 It is:
 
@@ -886,8 +852,6 @@ that method.
 "foo" => # After arrow comment
 ^^^^^
 
-(fuzz_crash_023.md:99:3):
-
 The value's type, which does not have a method named `from_quote`, is:
 
     [Blue, Green, Red, ..]
@@ -899,8 +863,6 @@ that method.
 
 "foo" | "bar" => 200
 ^^^^^
-
-(fuzz_crash_023.md:101:3):
 
 The value's type, which does not have a method named `from_quote`, is:
 
@@ -966,8 +928,6 @@ match a {
     TwoArgs("hello", Some("world")) => 1000
 }
 
-(fuzz_crash_023.md:84:2):
-
 This sixth branch is trying to match:
 
     List(d)
@@ -989,9 +949,6 @@ This declaration has a type annotation but no implementation.
 record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
                                              ^^^^^^^^^^^^^^^^^^^^^^^^
 
-(fuzz_crash_023.md:178:47):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -1002,8 +959,6 @@ The `match_time` function expects 2 arguments, but it got 1 instead.
 match_time(
     ..., # Single args with comment
 )
-
-(fuzz_crash_023.md:155:2):
 
 The `match_time` function has the type:
 
@@ -1021,8 +976,6 @@ add_one(
         number, # after dbg expr as arg
 ), # Comment one
 
-(fuzz_crash_023.md:167:3):
-
 This argument has the type:
 
     {}
@@ -1038,9 +991,6 @@ This declaration has a type annotation but no implementation.
 record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
                                              ^^^^^^^^^^^^^^^^^^^^^^^^
 
-(fuzz_crash_023.md:178:47):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -1050,9 +1000,6 @@ This declaration has a type annotation but no implementation.
 
 tuple : Value((a, b, c))
 ^^^^^^^^^^^^^^^^^^^^^^^^
-
-(fuzz_crash_023.md:201:1):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -1065,8 +1012,6 @@ unresolved type variable, but unresolved type variables have no methods.
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                         ^^^^^^^^^^^^^^
 
-(fuzz_crash_023.md:189:26):
-
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
@@ -1078,8 +1023,6 @@ unresolved type variable, but unresolved type variables have no methods.
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(fuzz_crash_023.md:189:26):
 
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a

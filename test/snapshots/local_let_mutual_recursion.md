@@ -26,8 +26,7 @@ is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)
 
 Local definitions are evaluated in order and can only refer to themselves or to
 earlier definitions. Move these mutually recursive definitions to the top
-level, where mutual recursion is supported.
-(local_let_mutual_recursion.md:2:46):
+level, where mutual recursion is supported. local_let_mutual_recursion.md:2:46:
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

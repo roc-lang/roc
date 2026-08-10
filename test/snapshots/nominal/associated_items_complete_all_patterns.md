@@ -823,7 +823,7 @@ For example:
 I found `d1_forward` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:2:1):
+associated_items_complete_all_patterns.md:2:1:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:12
 
@@ -838,7 +838,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:2:12):
+I found `:=` here. associated_items_complete_all_patterns.md:2:12:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:15
 
@@ -853,7 +853,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:2:15):
+I found `[` here. associated_items_complete_all_patterns.md:2:15:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:2:17
 
@@ -871,7 +871,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:2:17):
+item before it. associated_items_complete_all_patterns.md:2:17:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:18
 
@@ -886,7 +886,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:2:18):
+I found `.` here. associated_items_complete_all_patterns.md:2:18:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:19
 
@@ -901,7 +901,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:2:19):
+I found `{` here. associated_items_complete_all_patterns.md:2:19:
 
 ── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:5:1
 
@@ -918,7 +918,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:5:1):
+item before it. associated_items_complete_all_patterns.md:5:1:
 
 ── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:8:1
 
@@ -936,7 +936,7 @@ For example:
 I found `d1_scope` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:8:1):
+associated_items_complete_all_patterns.md:8:1:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:10
 
@@ -951,7 +951,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:8:10):
+I found `:=` here. associated_items_complete_all_patterns.md:8:10:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:13
 
@@ -966,7 +966,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:8:13):
+I found `[` here. associated_items_complete_all_patterns.md:8:13:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:8:15
 
@@ -984,7 +984,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:8:15):
+item before it. associated_items_complete_all_patterns.md:8:15:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:16
 
@@ -999,7 +999,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:8:16):
+I found `.` here. associated_items_complete_all_patterns.md:8:16:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:17
 
@@ -1014,7 +1014,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:8:17):
+I found `{` here. associated_items_complete_all_patterns.md:8:17:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:10:1
 
@@ -1031,7 +1031,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:10:1):
+item before it. associated_items_complete_all_patterns.md:10:1:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:13:1
 
@@ -1049,7 +1049,7 @@ For example:
 I found `d2_inner_first` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:13:1):
+associated_items_complete_all_patterns.md:13:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:16
 
@@ -1064,7 +1064,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:13:16):
+I found `:=` here. associated_items_complete_all_patterns.md:13:16:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:19
 
@@ -1079,7 +1079,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:13:19):
+I found `[` here. associated_items_complete_all_patterns.md:13:19:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:13:21
 
@@ -1097,7 +1097,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:13:21):
+item before it. associated_items_complete_all_patterns.md:13:21:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:22
 
@@ -1112,7 +1112,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:13:22):
+I found `.` here. associated_items_complete_all_patterns.md:13:22:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:23
 
@@ -1127,7 +1127,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:13:23):
+I found `{` here. associated_items_complete_all_patterns.md:13:23:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:19:1
 
@@ -1144,7 +1144,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:19:1):
+item before it. associated_items_complete_all_patterns.md:19:1:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:21:22
 
@@ -1163,7 +1163,7 @@ For example:
 
 I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:21:22):
+mod names in Roc. associated_items_complete_all_patterns.md:21:22:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:23:1
 
@@ -1181,7 +1181,7 @@ For example:
 I found `d2_outer_val_middle` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:23:1):
+associated_items_complete_all_patterns.md:23:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:21
 
@@ -1196,7 +1196,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:23:21):
+I found `:=` here. associated_items_complete_all_patterns.md:23:21:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:24
 
@@ -1211,7 +1211,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:23:24):
+I found `[` here. associated_items_complete_all_patterns.md:23:24:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:23:26
 
@@ -1229,7 +1229,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:23:26):
+item before it. associated_items_complete_all_patterns.md:23:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:27
 
@@ -1244,7 +1244,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:23:27):
+I found `.` here. associated_items_complete_all_patterns.md:23:27:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:28
 
@@ -1259,7 +1259,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:23:28):
+I found `{` here. associated_items_complete_all_patterns.md:23:28:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:29:1
 
@@ -1276,7 +1276,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:29:1):
+item before it. associated_items_complete_all_patterns.md:29:1:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:30:27
 
@@ -1295,7 +1295,7 @@ For example:
 
 I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:30:27):
+mod names in Roc. associated_items_complete_all_patterns.md:30:27:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:32:1
 
@@ -1313,7 +1313,7 @@ For example:
 I found `d2_outer_refs_inner` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:32:1):
+associated_items_complete_all_patterns.md:32:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:21
 
@@ -1328,7 +1328,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:32:21):
+I found `:=` here. associated_items_complete_all_patterns.md:32:21:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:24
 
@@ -1343,7 +1343,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:32:24):
+I found `[` here. associated_items_complete_all_patterns.md:32:24:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:32:26
 
@@ -1361,7 +1361,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:32:26):
+item before it. associated_items_complete_all_patterns.md:32:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:27
 
@@ -1376,7 +1376,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:32:27):
+I found `.` here. associated_items_complete_all_patterns.md:32:27:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:28
 
@@ -1391,7 +1391,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:32:28):
+I found `{` here. associated_items_complete_all_patterns.md:32:28:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:33:36
 
@@ -1410,7 +1410,7 @@ For example:
 
 I found `.Inner` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:33:36):
+mod names in Roc. associated_items_complete_all_patterns.md:33:36:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:38:1
 
@@ -1427,7 +1427,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:38:1):
+item before it. associated_items_complete_all_patterns.md:38:1:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:41:1
 
@@ -1445,7 +1445,7 @@ For example:
 I found `d2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:41:1):
+associated_items_complete_all_patterns.md:41:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:20
 
@@ -1460,7 +1460,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:41:20):
+I found `:=` here. associated_items_complete_all_patterns.md:41:20:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:23
 
@@ -1475,7 +1475,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:41:23):
+I found `[` here. associated_items_complete_all_patterns.md:41:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:41:25
 
@@ -1493,7 +1493,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:41:25):
+item before it. associated_items_complete_all_patterns.md:41:25:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:26
 
@@ -1508,7 +1508,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:41:26):
+I found `.` here. associated_items_complete_all_patterns.md:41:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:27
 
@@ -1523,7 +1523,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:41:27):
+I found `{` here. associated_items_complete_all_patterns.md:41:27:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:47:1
 
@@ -1540,7 +1540,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:47:1):
+item before it. associated_items_complete_all_patterns.md:47:1:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:49:1
 
@@ -1558,7 +1558,7 @@ For example:
 I found `d2_siblings` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:49:1):
+associated_items_complete_all_patterns.md:49:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:13
 
@@ -1573,7 +1573,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:49:13):
+I found `:=` here. associated_items_complete_all_patterns.md:49:13:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:16
 
@@ -1588,7 +1588,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:49:16):
+I found `[` here. associated_items_complete_all_patterns.md:49:16:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:49:18
 
@@ -1606,7 +1606,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:49:18):
+item before it. associated_items_complete_all_patterns.md:49:18:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:19
 
@@ -1621,7 +1621,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:49:19):
+I found `.` here. associated_items_complete_all_patterns.md:49:19:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:20
 
@@ -1636,7 +1636,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:49:20):
+I found `{` here. associated_items_complete_all_patterns.md:49:20:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:51:27
 
@@ -1655,7 +1655,7 @@ For example:
 
 I found `.InnerB` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:51:27):
+mod names in Roc. associated_items_complete_all_patterns.md:51:27:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:57:1
 
@@ -1672,7 +1672,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:57:1):
+item before it. associated_items_complete_all_patterns.md:57:1:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:58:19
 
@@ -1691,7 +1691,7 @@ For example:
 
 I found `.InnerA` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:58:19):
+mod names in Roc. associated_items_complete_all_patterns.md:58:19:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:60:1
 
@@ -1709,7 +1709,7 @@ For example:
 I found `d3_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:60:1):
+associated_items_complete_all_patterns.md:60:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:20
 
@@ -1724,7 +1724,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:60:20):
+I found `:=` here. associated_items_complete_all_patterns.md:60:20:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:23
 
@@ -1739,7 +1739,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:60:23):
+I found `[` here. associated_items_complete_all_patterns.md:60:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:60:25
 
@@ -1757,7 +1757,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:60:25):
+item before it. associated_items_complete_all_patterns.md:60:25:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:26
 
@@ -1772,7 +1772,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:60:26):
+I found `.` here. associated_items_complete_all_patterns.md:60:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:27
 
@@ -1787,7 +1787,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:60:27):
+I found `{` here. associated_items_complete_all_patterns.md:60:27:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:70:1
 
@@ -1804,7 +1804,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:70:1):
+item before it. associated_items_complete_all_patterns.md:70:1:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:72:26
 
@@ -1823,7 +1823,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:72:26):
+mod names in Roc. associated_items_complete_all_patterns.md:72:26:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:73:26
 
@@ -1842,7 +1842,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:73:26):
+mod names in Roc. associated_items_complete_all_patterns.md:73:26:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:73:29
 
@@ -1861,7 +1861,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:73:29):
+mod names in Roc. associated_items_complete_all_patterns.md:73:29:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:75:1
 
@@ -1879,7 +1879,7 @@ For example:
 I found `d3_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:75:1):
+associated_items_complete_all_patterns.md:75:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:20
 
@@ -1894,7 +1894,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:75:20):
+I found `:=` here. associated_items_complete_all_patterns.md:75:20:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:23
 
@@ -1909,7 +1909,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:75:23):
+I found `[` here. associated_items_complete_all_patterns.md:75:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:75:25
 
@@ -1927,7 +1927,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:75:25):
+item before it. associated_items_complete_all_patterns.md:75:25:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:26
 
@@ -1942,7 +1942,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:75:26):
+I found `.` here. associated_items_complete_all_patterns.md:75:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:27
 
@@ -1957,7 +1957,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:75:27):
+I found `{` here. associated_items_complete_all_patterns.md:75:27:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:85:1
 
@@ -1974,7 +1974,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:85:1):
+item before it. associated_items_complete_all_patterns.md:85:1:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:87:26
 
@@ -1993,7 +1993,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:87:26):
+mod names in Roc. associated_items_complete_all_patterns.md:87:26:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:88:26
 
@@ -2012,7 +2012,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:88:26):
+mod names in Roc. associated_items_complete_all_patterns.md:88:26:
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:88:29
 
@@ -2031,7 +2031,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:88:29):
+mod names in Roc. associated_items_complete_all_patterns.md:88:29:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:90:1
 
@@ -2049,7 +2049,7 @@ For example:
 I found `d3_l1_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:90:1):
+associated_items_complete_all_patterns.md:90:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:23
 
@@ -2064,7 +2064,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:90:23):
+I found `:=` here. associated_items_complete_all_patterns.md:90:23:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:26
 
@@ -2079,7 +2079,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:90:26):
+I found `[` here. associated_items_complete_all_patterns.md:90:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:90:28
 
@@ -2097,7 +2097,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:90:28):
+item before it. associated_items_complete_all_patterns.md:90:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:29
 
@@ -2112,7 +2112,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:90:29):
+I found `.` here. associated_items_complete_all_patterns.md:90:29:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:30
 
@@ -2127,7 +2127,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:90:30):
+I found `{` here. associated_items_complete_all_patterns.md:90:30:
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:98:1
 
@@ -2144,7 +2144,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:98:1):
+item before it. associated_items_complete_all_patterns.md:98:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:100:1
 
@@ -2162,7 +2162,7 @@ For example:
 I found `d3_l2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:100:1):
+associated_items_complete_all_patterns.md:100:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:23
 
@@ -2177,7 +2177,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:100:23):
+I found `:=` here. associated_items_complete_all_patterns.md:100:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:26
 
@@ -2192,7 +2192,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:100:26):
+I found `[` here. associated_items_complete_all_patterns.md:100:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:100:28
 
@@ -2210,7 +2210,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:100:28):
+item before it. associated_items_complete_all_patterns.md:100:28:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:29
 
@@ -2225,7 +2225,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:100:29):
+I found `.` here. associated_items_complete_all_patterns.md:100:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:30
 
@@ -2240,7 +2240,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:100:30):
+I found `{` here. associated_items_complete_all_patterns.md:100:30:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:108:1
 
@@ -2257,7 +2257,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:108:1):
+item before it. associated_items_complete_all_patterns.md:108:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:110:1
 
@@ -2275,7 +2275,7 @@ For example:
 I found `d3_val_after_nested` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:110:1):
+associated_items_complete_all_patterns.md:110:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:21
 
@@ -2290,7 +2290,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:110:21):
+I found `:=` here. associated_items_complete_all_patterns.md:110:21:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:24
 
@@ -2305,7 +2305,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:110:24):
+I found `[` here. associated_items_complete_all_patterns.md:110:24:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:110:27
 
@@ -2323,7 +2323,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:110:27):
+item before it. associated_items_complete_all_patterns.md:110:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:28
 
@@ -2338,7 +2338,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:110:28):
+I found `.` here. associated_items_complete_all_patterns.md:110:28:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:29
 
@@ -2353,7 +2353,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:110:29):
+I found `{` here. associated_items_complete_all_patterns.md:110:29:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:120:1
 
@@ -2370,7 +2370,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:120:1):
+item before it. associated_items_complete_all_patterns.md:120:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:122:27
 
@@ -2389,7 +2389,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:122:27):
+mod names in Roc. associated_items_complete_all_patterns.md:122:27:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:123:27
 
@@ -2408,7 +2408,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:123:27):
+mod names in Roc. associated_items_complete_all_patterns.md:123:27:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:123:30
 
@@ -2427,7 +2427,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:123:30):
+mod names in Roc. associated_items_complete_all_patterns.md:123:30:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:125:1
 
@@ -2445,7 +2445,7 @@ For example:
 I found `d4_all_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:125:1):
+associated_items_complete_all_patterns.md:125:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:24
 
@@ -2460,7 +2460,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:125:24):
+I found `:=` here. associated_items_complete_all_patterns.md:125:24:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:27
 
@@ -2475,7 +2475,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:125:27):
+I found `[` here. associated_items_complete_all_patterns.md:125:27:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:125:30
 
@@ -2493,7 +2493,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:125:30):
+item before it. associated_items_complete_all_patterns.md:125:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:31
 
@@ -2508,7 +2508,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:125:31):
+I found `.` here. associated_items_complete_all_patterns.md:125:31:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:32
 
@@ -2523,7 +2523,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:125:32):
+I found `{` here. associated_items_complete_all_patterns.md:125:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:139:1
 
@@ -2540,7 +2540,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:139:1):
+item before it. associated_items_complete_all_patterns.md:139:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:30
 
@@ -2559,7 +2559,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:140:30):
+mod names in Roc. associated_items_complete_all_patterns.md:140:30:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:33
 
@@ -2578,7 +2578,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:140:33):
+mod names in Roc. associated_items_complete_all_patterns.md:140:33:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:140:36
 
@@ -2597,7 +2597,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:140:36):
+mod names in Roc. associated_items_complete_all_patterns.md:140:36:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:142:1
 
@@ -2615,7 +2615,7 @@ For example:
 I found `d4_all_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:142:1):
+associated_items_complete_all_patterns.md:142:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:24
 
@@ -2630,7 +2630,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:142:24):
+I found `:=` here. associated_items_complete_all_patterns.md:142:24:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:27
 
@@ -2645,7 +2645,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:142:27):
+I found `[` here. associated_items_complete_all_patterns.md:142:27:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:142:30
 
@@ -2663,7 +2663,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:142:30):
+item before it. associated_items_complete_all_patterns.md:142:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:31
 
@@ -2678,7 +2678,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:142:31):
+I found `.` here. associated_items_complete_all_patterns.md:142:31:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:32
 
@@ -2693,7 +2693,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:142:32):
+I found `{` here. associated_items_complete_all_patterns.md:142:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:156:1
 
@@ -2710,7 +2710,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:156:1):
+item before it. associated_items_complete_all_patterns.md:156:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:30
 
@@ -2729,7 +2729,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:157:30):
+mod names in Roc. associated_items_complete_all_patterns.md:157:30:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:33
 
@@ -2748,7 +2748,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:157:33):
+mod names in Roc. associated_items_complete_all_patterns.md:157:33:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:157:36
 
@@ -2767,7 +2767,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:157:36):
+mod names in Roc. associated_items_complete_all_patterns.md:157:36:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:159:1
 
@@ -2785,7 +2785,7 @@ For example:
 I found `d4_reverse_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:159:1):
+associated_items_complete_all_patterns.md:159:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:18
 
@@ -2800,7 +2800,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:159:18):
+I found `:=` here. associated_items_complete_all_patterns.md:159:18:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:21
 
@@ -2815,7 +2815,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:159:21):
+I found `[` here. associated_items_complete_all_patterns.md:159:21:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:159:24
 
@@ -2833,7 +2833,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:159:24):
+item before it. associated_items_complete_all_patterns.md:159:24:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:25
 
@@ -2848,7 +2848,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:159:25):
+I found `.` here. associated_items_complete_all_patterns.md:159:25:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:26
 
@@ -2863,7 +2863,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:159:26):
+I found `{` here. associated_items_complete_all_patterns.md:159:26:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:173:1
 
@@ -2880,7 +2880,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:173:1):
+item before it. associated_items_complete_all_patterns.md:173:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:24
 
@@ -2899,7 +2899,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:174:24):
+mod names in Roc. associated_items_complete_all_patterns.md:174:24:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:27
 
@@ -2918,7 +2918,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:174:27):
+mod names in Roc. associated_items_complete_all_patterns.md:174:27:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:174:30
 
@@ -2937,7 +2937,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:174:30):
+mod names in Roc. associated_items_complete_all_patterns.md:174:30:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:176:1
 
@@ -2955,7 +2955,7 @@ For example:
 I found `d4_interleaved` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:176:1):
+associated_items_complete_all_patterns.md:176:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:16
 
@@ -2970,7 +2970,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:176:16):
+I found `:=` here. associated_items_complete_all_patterns.md:176:16:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:19
 
@@ -2985,7 +2985,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:176:19):
+I found `[` here. associated_items_complete_all_patterns.md:176:19:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:176:22
 
@@ -3003,7 +3003,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:176:22):
+item before it. associated_items_complete_all_patterns.md:176:22:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:23
 
@@ -3018,7 +3018,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:176:23):
+I found `.` here. associated_items_complete_all_patterns.md:176:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:24
 
@@ -3033,7 +3033,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:176:24):
+I found `{` here. associated_items_complete_all_patterns.md:176:24:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:190:1
 
@@ -3050,7 +3050,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:190:1):
+item before it. associated_items_complete_all_patterns.md:190:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:22
 
@@ -3069,7 +3069,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:191:22):
+mod names in Roc. associated_items_complete_all_patterns.md:191:22:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:25
 
@@ -3088,7 +3088,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:191:25):
+mod names in Roc. associated_items_complete_all_patterns.md:191:25:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:191:28
 
@@ -3107,7 +3107,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:191:28):
+mod names in Roc. associated_items_complete_all_patterns.md:191:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:193:1
 
@@ -3125,7 +3125,7 @@ For example:
 I found `d4_l3_val_after_l4` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:193:1):
+associated_items_complete_all_patterns.md:193:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:20
 
@@ -3140,7 +3140,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:193:20):
+I found `:=` here. associated_items_complete_all_patterns.md:193:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:23
 
@@ -3155,7 +3155,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:193:23):
+I found `[` here. associated_items_complete_all_patterns.md:193:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:193:26
 
@@ -3173,7 +3173,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:193:26):
+item before it. associated_items_complete_all_patterns.md:193:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:27
 
@@ -3188,7 +3188,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:193:27):
+I found `.` here. associated_items_complete_all_patterns.md:193:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:28
 
@@ -3203,7 +3203,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:193:28):
+I found `{` here. associated_items_complete_all_patterns.md:193:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:202:1
 
@@ -3220,7 +3220,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:202:1):
+item before it. associated_items_complete_all_patterns.md:202:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:26
 
@@ -3239,7 +3239,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:203:26):
+mod names in Roc. associated_items_complete_all_patterns.md:203:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:29
 
@@ -3258,7 +3258,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:203:29):
+mod names in Roc. associated_items_complete_all_patterns.md:203:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:203:32
 
@@ -3277,7 +3277,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:203:32):
+mod names in Roc. associated_items_complete_all_patterns.md:203:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:205:1
 
@@ -3295,7 +3295,7 @@ For example:
 I found `d4_l2_val_after_l3` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:205:1):
+associated_items_complete_all_patterns.md:205:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:20
 
@@ -3310,7 +3310,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:205:20):
+I found `:=` here. associated_items_complete_all_patterns.md:205:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:23
 
@@ -3325,7 +3325,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:205:23):
+I found `[` here. associated_items_complete_all_patterns.md:205:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:205:26
 
@@ -3343,7 +3343,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:205:26):
+item before it. associated_items_complete_all_patterns.md:205:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:27
 
@@ -3358,7 +3358,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:205:27):
+I found `.` here. associated_items_complete_all_patterns.md:205:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:28
 
@@ -3373,7 +3373,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:205:28):
+I found `{` here. associated_items_complete_all_patterns.md:205:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:217:1
 
@@ -3390,7 +3390,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:217:1):
+item before it. associated_items_complete_all_patterns.md:217:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:26
 
@@ -3409,7 +3409,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:218:26):
+mod names in Roc. associated_items_complete_all_patterns.md:218:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:29
 
@@ -3428,7 +3428,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:218:29):
+mod names in Roc. associated_items_complete_all_patterns.md:218:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:218:32
 
@@ -3447,7 +3447,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:218:32):
+mod names in Roc. associated_items_complete_all_patterns.md:218:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:220:1
 
@@ -3465,7 +3465,7 @@ For example:
 I found `d4_l1_val_after_l2` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:220:1):
+associated_items_complete_all_patterns.md:220:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:20
 
@@ -3480,7 +3480,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:220:20):
+I found `:=` here. associated_items_complete_all_patterns.md:220:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:23
 
@@ -3495,7 +3495,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:220:23):
+I found `[` here. associated_items_complete_all_patterns.md:220:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:220:26
 
@@ -3513,7 +3513,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:220:26):
+item before it. associated_items_complete_all_patterns.md:220:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:27
 
@@ -3528,7 +3528,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:220:27):
+I found `.` here. associated_items_complete_all_patterns.md:220:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:28
 
@@ -3543,7 +3543,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:220:28):
+I found `{` here. associated_items_complete_all_patterns.md:220:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:234:1
 
@@ -3560,7 +3560,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:234:1):
+item before it. associated_items_complete_all_patterns.md:234:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:26
 
@@ -3579,7 +3579,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:235:26):
+mod names in Roc. associated_items_complete_all_patterns.md:235:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:29
 
@@ -3598,7 +3598,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:235:29):
+mod names in Roc. associated_items_complete_all_patterns.md:235:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:235:32
 
@@ -3617,7 +3617,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:235:32):
+mod names in Roc. associated_items_complete_all_patterns.md:235:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:237:1
 
@@ -3635,7 +3635,7 @@ For example:
 I found `d4_l1_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:237:1):
+associated_items_complete_all_patterns.md:237:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:23
 
@@ -3650,7 +3650,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:237:23):
+I found `:=` here. associated_items_complete_all_patterns.md:237:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:26
 
@@ -3665,7 +3665,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:237:26):
+I found `[` here. associated_items_complete_all_patterns.md:237:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:237:29
 
@@ -3683,7 +3683,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:237:29):
+item before it. associated_items_complete_all_patterns.md:237:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:30
 
@@ -3698,7 +3698,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:237:30):
+I found `.` here. associated_items_complete_all_patterns.md:237:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:31
 
@@ -3713,7 +3713,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:237:31):
+I found `{` here. associated_items_complete_all_patterns.md:237:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:247:1
 
@@ -3730,7 +3730,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:247:1):
+item before it. associated_items_complete_all_patterns.md:247:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:249:1
 
@@ -3748,7 +3748,7 @@ For example:
 I found `d4_l2_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:249:1):
+associated_items_complete_all_patterns.md:249:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:23
 
@@ -3763,7 +3763,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:249:23):
+I found `:=` here. associated_items_complete_all_patterns.md:249:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:26
 
@@ -3778,7 +3778,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:249:26):
+I found `[` here. associated_items_complete_all_patterns.md:249:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:249:29
 
@@ -3796,7 +3796,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:249:29):
+item before it. associated_items_complete_all_patterns.md:249:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:30
 
@@ -3811,7 +3811,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:249:30):
+I found `.` here. associated_items_complete_all_patterns.md:249:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:31
 
@@ -3826,7 +3826,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:249:31):
+I found `{` here. associated_items_complete_all_patterns.md:249:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:259:1
 
@@ -3843,7 +3843,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:259:1):
+item before it. associated_items_complete_all_patterns.md:259:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:261:1
 
@@ -3861,7 +3861,7 @@ For example:
 I found `d4_l3_scope_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:261:1):
+associated_items_complete_all_patterns.md:261:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:23
 
@@ -3876,7 +3876,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:261:23):
+I found `:=` here. associated_items_complete_all_patterns.md:261:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:26
 
@@ -3891,7 +3891,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:261:26):
+I found `[` here. associated_items_complete_all_patterns.md:261:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:261:29
 
@@ -3909,7 +3909,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:261:29):
+item before it. associated_items_complete_all_patterns.md:261:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:30
 
@@ -3924,7 +3924,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:261:30):
+I found `.` here. associated_items_complete_all_patterns.md:261:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:31
 
@@ -3939,7 +3939,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:261:31):
+I found `{` here. associated_items_complete_all_patterns.md:261:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:271:1
 
@@ -3956,7 +3956,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:271:1):
+item before it. associated_items_complete_all_patterns.md:271:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:273:1
 
@@ -3974,7 +3974,7 @@ For example:
 I found `d5_all_types_then_vals` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:273:1):
+associated_items_complete_all_patterns.md:273:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:24
 
@@ -3989,7 +3989,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:273:24):
+I found `:=` here. associated_items_complete_all_patterns.md:273:24:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:27
 
@@ -4004,7 +4004,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:273:27):
+I found `[` here. associated_items_complete_all_patterns.md:273:27:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:273:30
 
@@ -4022,7 +4022,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:273:30):
+item before it. associated_items_complete_all_patterns.md:273:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:31
 
@@ -4037,7 +4037,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:273:31):
+I found `.` here. associated_items_complete_all_patterns.md:273:31:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:32
 
@@ -4052,7 +4052,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:273:32):
+I found `{` here. associated_items_complete_all_patterns.md:273:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:291:1
 
@@ -4069,7 +4069,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:291:1):
+item before it. associated_items_complete_all_patterns.md:291:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:30
 
@@ -4088,7 +4088,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:292:30):
+mod names in Roc. associated_items_complete_all_patterns.md:292:30:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:33
 
@@ -4107,7 +4107,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:292:33):
+mod names in Roc. associated_items_complete_all_patterns.md:292:33:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:36
 
@@ -4126,7 +4126,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:292:36):
+mod names in Roc. associated_items_complete_all_patterns.md:292:36:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:292:39
 
@@ -4145,7 +4145,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:292:39):
+mod names in Roc. associated_items_complete_all_patterns.md:292:39:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:294:1
 
@@ -4163,7 +4163,7 @@ For example:
 I found `d5_all_vals_then_types` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:294:1):
+associated_items_complete_all_patterns.md:294:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:24
 
@@ -4178,7 +4178,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:294:24):
+I found `:=` here. associated_items_complete_all_patterns.md:294:24:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:27
 
@@ -4193,7 +4193,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:294:27):
+I found `[` here. associated_items_complete_all_patterns.md:294:27:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:294:30
 
@@ -4211,7 +4211,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:294:30):
+item before it. associated_items_complete_all_patterns.md:294:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:31
 
@@ -4226,7 +4226,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:294:31):
+I found `.` here. associated_items_complete_all_patterns.md:294:31:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:32
 
@@ -4241,7 +4241,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:294:32):
+I found `{` here. associated_items_complete_all_patterns.md:294:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:312:1
 
@@ -4258,7 +4258,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:312:1):
+item before it. associated_items_complete_all_patterns.md:312:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:30
 
@@ -4277,7 +4277,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:313:30):
+mod names in Roc. associated_items_complete_all_patterns.md:313:30:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:33
 
@@ -4296,7 +4296,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:313:33):
+mod names in Roc. associated_items_complete_all_patterns.md:313:33:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:36
 
@@ -4315,7 +4315,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:313:36):
+mod names in Roc. associated_items_complete_all_patterns.md:313:36:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:313:39
 
@@ -4334,7 +4334,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:313:39):
+mod names in Roc. associated_items_complete_all_patterns.md:313:39:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:315:1
 
@@ -4352,7 +4352,7 @@ For example:
 I found `d5_deep_interleave` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:315:1):
+associated_items_complete_all_patterns.md:315:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:20
 
@@ -4367,7 +4367,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:315:20):
+I found `:=` here. associated_items_complete_all_patterns.md:315:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:23
 
@@ -4382,7 +4382,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:315:23):
+I found `[` here. associated_items_complete_all_patterns.md:315:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:315:26
 
@@ -4400,7 +4400,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:315:26):
+item before it. associated_items_complete_all_patterns.md:315:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:27
 
@@ -4415,7 +4415,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:315:27):
+I found `.` here. associated_items_complete_all_patterns.md:315:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:28
 
@@ -4430,7 +4430,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:315:28):
+I found `{` here. associated_items_complete_all_patterns.md:315:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:333:1
 
@@ -4447,7 +4447,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:333:1):
+item before it. associated_items_complete_all_patterns.md:333:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:26
 
@@ -4466,7 +4466,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:334:26):
+mod names in Roc. associated_items_complete_all_patterns.md:334:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:29
 
@@ -4485,7 +4485,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:334:29):
+mod names in Roc. associated_items_complete_all_patterns.md:334:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:32
 
@@ -4504,7 +4504,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:334:32):
+mod names in Roc. associated_items_complete_all_patterns.md:334:32:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:334:35
 
@@ -4523,7 +4523,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:334:35):
+mod names in Roc. associated_items_complete_all_patterns.md:334:35:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:336:1
 
@@ -4541,7 +4541,7 @@ For example:
 I found `d5_l4_val_after_l5` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:336:1):
+associated_items_complete_all_patterns.md:336:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:20
 
@@ -4556,7 +4556,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:336:20):
+I found `:=` here. associated_items_complete_all_patterns.md:336:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:23
 
@@ -4571,7 +4571,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:336:23):
+I found `[` here. associated_items_complete_all_patterns.md:336:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:336:26
 
@@ -4589,7 +4589,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:336:26):
+item before it. associated_items_complete_all_patterns.md:336:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:27
 
@@ -4604,7 +4604,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:336:27):
+I found `.` here. associated_items_complete_all_patterns.md:336:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:28
 
@@ -4619,7 +4619,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:336:28):
+I found `{` here. associated_items_complete_all_patterns.md:336:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:348:1
 
@@ -4636,7 +4636,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:348:1):
+item before it. associated_items_complete_all_patterns.md:348:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:26
 
@@ -4655,7 +4655,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:349:26):
+mod names in Roc. associated_items_complete_all_patterns.md:349:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:29
 
@@ -4674,7 +4674,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:349:29):
+mod names in Roc. associated_items_complete_all_patterns.md:349:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:32
 
@@ -4693,7 +4693,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:349:32):
+mod names in Roc. associated_items_complete_all_patterns.md:349:32:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:349:35
 
@@ -4712,7 +4712,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:349:35):
+mod names in Roc. associated_items_complete_all_patterns.md:349:35:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:351:1
 
@@ -4730,7 +4730,7 @@ For example:
 I found `d5_l3_val_after_l4` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:351:1):
+associated_items_complete_all_patterns.md:351:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:20
 
@@ -4745,7 +4745,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:351:20):
+I found `:=` here. associated_items_complete_all_patterns.md:351:20:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:23
 
@@ -4760,7 +4760,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:351:23):
+I found `[` here. associated_items_complete_all_patterns.md:351:23:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:351:26
 
@@ -4778,7 +4778,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:351:26):
+item before it. associated_items_complete_all_patterns.md:351:26:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:27
 
@@ -4793,7 +4793,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:351:27):
+I found `.` here. associated_items_complete_all_patterns.md:351:27:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:28
 
@@ -4808,7 +4808,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:351:28):
+I found `{` here. associated_items_complete_all_patterns.md:351:28:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:365:1
 
@@ -4825,7 +4825,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:365:1):
+item before it. associated_items_complete_all_patterns.md:365:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:26
 
@@ -4844,7 +4844,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:366:26):
+mod names in Roc. associated_items_complete_all_patterns.md:366:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:29
 
@@ -4863,7 +4863,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:366:29):
+mod names in Roc. associated_items_complete_all_patterns.md:366:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:32
 
@@ -4882,7 +4882,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:366:32):
+mod names in Roc. associated_items_complete_all_patterns.md:366:32:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:366:35
 
@@ -4901,7 +4901,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:366:35):
+mod names in Roc. associated_items_complete_all_patterns.md:366:35:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:368:1
 
@@ -4919,7 +4919,7 @@ For example:
 I found `d5_l1_val_last` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:368:1):
+associated_items_complete_all_patterns.md:368:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:16
 
@@ -4934,7 +4934,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:368:16):
+I found `:=` here. associated_items_complete_all_patterns.md:368:16:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:19
 
@@ -4949,7 +4949,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:368:19):
+I found `[` here. associated_items_complete_all_patterns.md:368:19:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:368:22
 
@@ -4967,7 +4967,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:368:22):
+item before it. associated_items_complete_all_patterns.md:368:22:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:23
 
@@ -4982,7 +4982,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:368:23):
+I found `.` here. associated_items_complete_all_patterns.md:368:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:24
 
@@ -4997,7 +4997,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:368:24):
+I found `{` here. associated_items_complete_all_patterns.md:368:24:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:386:1
 
@@ -5014,7 +5014,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:386:1):
+item before it. associated_items_complete_all_patterns.md:386:1:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:388:22
 
@@ -5033,7 +5033,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:388:22):
+mod names in Roc. associated_items_complete_all_patterns.md:388:22:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:389:22
 
@@ -5052,7 +5052,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:389:22):
+mod names in Roc. associated_items_complete_all_patterns.md:389:22:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:389:25
 
@@ -5071,7 +5071,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:389:25):
+mod names in Roc. associated_items_complete_all_patterns.md:389:25:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:22
 
@@ -5090,7 +5090,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:390:22):
+mod names in Roc. associated_items_complete_all_patterns.md:390:22:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:25
 
@@ -5109,7 +5109,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:390:25):
+mod names in Roc. associated_items_complete_all_patterns.md:390:25:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:390:28
 
@@ -5128,7 +5128,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:390:28):
+mod names in Roc. associated_items_complete_all_patterns.md:390:28:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:23
 
@@ -5147,7 +5147,7 @@ For example:
 
 I found `.L2` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:391:23):
+mod names in Roc. associated_items_complete_all_patterns.md:391:23:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:26
 
@@ -5166,7 +5166,7 @@ For example:
 
 I found `.L3` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:391:26):
+mod names in Roc. associated_items_complete_all_patterns.md:391:26:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:29
 
@@ -5185,7 +5185,7 @@ For example:
 
 I found `.L4` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:391:29):
+mod names in Roc. associated_items_complete_all_patterns.md:391:29:
 
 ── ✗ expected record accessor ─ associated_items_complete_all_patterns.md:391:32
 
@@ -5204,7 +5204,7 @@ For example:
 
 I found `.L5` here.
 Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc. (associated_items_complete_all_patterns.md:391:32):
+mod names in Roc. associated_items_complete_all_patterns.md:391:32:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:393:1
 
@@ -5222,7 +5222,7 @@ For example:
 I found `d5_l1_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:393:1):
+associated_items_complete_all_patterns.md:393:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:23
 
@@ -5237,7 +5237,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:393:23):
+I found `:=` here. associated_items_complete_all_patterns.md:393:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:26
 
@@ -5252,7 +5252,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:393:26):
+I found `[` here. associated_items_complete_all_patterns.md:393:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:393:29
 
@@ -5270,7 +5270,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:393:29):
+item before it. associated_items_complete_all_patterns.md:393:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:30
 
@@ -5285,7 +5285,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:393:30):
+I found `.` here. associated_items_complete_all_patterns.md:393:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:31
 
@@ -5300,7 +5300,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:393:31):
+I found `{` here. associated_items_complete_all_patterns.md:393:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:405:1
 
@@ -5317,7 +5317,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:405:1):
+item before it. associated_items_complete_all_patterns.md:405:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:407:1
 
@@ -5335,7 +5335,7 @@ For example:
 I found `d5_l3_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:407:1):
+associated_items_complete_all_patterns.md:407:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:23
 
@@ -5350,7 +5350,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:407:23):
+I found `:=` here. associated_items_complete_all_patterns.md:407:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:26
 
@@ -5365,7 +5365,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:407:26):
+I found `[` here. associated_items_complete_all_patterns.md:407:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:407:29
 
@@ -5383,7 +5383,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:407:29):
+item before it. associated_items_complete_all_patterns.md:407:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:30
 
@@ -5398,7 +5398,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:407:30):
+I found `.` here. associated_items_complete_all_patterns.md:407:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:31
 
@@ -5413,7 +5413,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:407:31):
+I found `{` here. associated_items_complete_all_patterns.md:407:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:419:1
 
@@ -5430,7 +5430,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:419:1):
+item before it. associated_items_complete_all_patterns.md:419:1:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:421:1
 
@@ -5448,7 +5448,7 @@ For example:
 I found `d5_l4_to_l5_violation` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
-(associated_items_complete_all_patterns.md:421:1):
+associated_items_complete_all_patterns.md:421:1:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:23
 
@@ -5463,7 +5463,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here. (associated_items_complete_all_patterns.md:421:23):
+I found `:=` here. associated_items_complete_all_patterns.md:421:23:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:26
 
@@ -5478,7 +5478,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (associated_items_complete_all_patterns.md:421:26):
+I found `[` here. associated_items_complete_all_patterns.md:421:26:
 
 ── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:421:29
 
@@ -5496,7 +5496,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:421:29):
+item before it. associated_items_complete_all_patterns.md:421:29:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:30
 
@@ -5511,7 +5511,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here. (associated_items_complete_all_patterns.md:421:30):
+I found `.` here. associated_items_complete_all_patterns.md:421:30:
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:31
 
@@ -5526,7 +5526,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (associated_items_complete_all_patterns.md:421:31):
+I found `{` here. associated_items_complete_all_patterns.md:421:31:
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:433:1
 
@@ -5543,7 +5543,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (associated_items_complete_all_patterns.md:433:1):
+item before it. associated_items_complete_all_patterns.md:433:1:
 
 ── ✗ name not in scope ─────────── associated_items_complete_all_patterns.md:6:8
 
@@ -5553,7 +5553,7 @@ d1_1 = d1_forward.first
        ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:6:8):
+associated_items_complete_all_patterns.md:6:8:
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:11:8
 
@@ -5563,7 +5563,7 @@ d1_2 = d1_scope.inner
        ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:11:8):
+associated_items_complete_all_patterns.md:11:8:
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:20:8
 
@@ -5573,7 +5573,7 @@ d2_1 = d2_inner_first.outer_val
        ^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:20:8):
+associated_items_complete_all_patterns.md:20:8:
 
 ── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:21:8
 
@@ -5581,8 +5581,6 @@ I don't recognize this syntax.
 
 d2_2 = d2_inner_first.Inner.inner_val
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:21:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5595,9 +5593,9 @@ Inner := [H].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:24:5):
+The redeclaration is in associated_items_complete_all_patterns.md:24:5:
 
-But Inner was already declared here (associated_items_complete_all_patterns.md:14:5) (associated_items_complete_all_patterns.md:14:5):
+But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
 Inner := [D].{
     inner_val = outer_val
@@ -5611,9 +5609,7 @@ outer_val = 500
 ^^^^^^^^^
 
 
-(associated_items_complete_all_patterns.md:28:5):
-
-In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:15:21) (associated_items_complete_all_patterns.md:15:21):
+In this scope, `outer_val` was already defined in associated_items_complete_all_patterns.md:15:21:
 
 inner_val = outer_val
             ^^^^^^^^^
@@ -5625,8 +5621,6 @@ I don't recognize this syntax.
 d2_3 = d2_outer_val_middle.Inner.inner_val
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:30:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ─────── associated_items_complete_all_patterns.md:33:5
@@ -5637,9 +5631,7 @@ outer_val = d2_outer_refs_inner.Inner.inner_val
 ^^^^^^^^^
 
 
-(associated_items_complete_all_patterns.md:33:5):
-
-In this scope, `outer_val` was already defined here (associated_items_complete_all_patterns.md:28:5) (associated_items_complete_all_patterns.md:28:5):
+In this scope, `outer_val` was already defined in associated_items_complete_all_patterns.md:28:5:
 
 outer_val = 500
 ^^^^^^^^^
@@ -5650,8 +5642,6 @@ I don't recognize this syntax.
 
 outer_val = d2_outer_refs_inner.Inner.inner_val
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:33:17):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5664,9 +5654,9 @@ Inner := [J].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:35:5):
+The redeclaration is in associated_items_complete_all_patterns.md:35:5:
 
-But Inner was already declared here (associated_items_complete_all_patterns.md:14:5) (associated_items_complete_all_patterns.md:14:5):
+But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
 Inner := [D].{
     inner_val = outer_val
@@ -5680,7 +5670,7 @@ d2_4 = d2_outer_refs_inner.outer_val
        ^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:39:8):
+associated_items_complete_all_patterns.md:39:8:
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:42:5
 
@@ -5691,9 +5681,9 @@ Inner := [L].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:42:5):
+The redeclaration is in associated_items_complete_all_patterns.md:42:5:
 
-But Inner was already declared here (associated_items_complete_all_patterns.md:14:5) (associated_items_complete_all_patterns.md:14:5):
+But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
 Inner := [D].{
     inner_val = outer_val
@@ -5707,7 +5697,7 @@ outer_trying_inner = inner_private
                      ^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:46:26):
+associated_items_complete_all_patterns.md:46:26:
 
 ── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:51:16
 
@@ -5715,8 +5705,6 @@ I don't recognize this syntax.
 
 valA = d2_siblings.InnerB.valB + 1
        ^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:51:16):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5726,8 +5714,6 @@ I don't recognize this syntax.
 
 d2_5 = d2_siblings.InnerA.valA
        ^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:58:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5739,7 +5725,7 @@ d3_1 = d3_types_then_vals.val1
        ^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:71:8):
+associated_items_complete_all_patterns.md:71:8:
 
 ── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:72:8
 
@@ -5747,8 +5733,6 @@ I don't recognize this syntax.
 
 d3_2 = d3_types_then_vals.L2.val2
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:72:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5758,8 +5742,6 @@ I don't recognize this syntax.
 
 d3_3 = d3_types_then_vals.L2.L3.val3
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:73:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5771,9 +5753,7 @@ val1 = 30
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:76:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:63:20) (associated_items_complete_all_patterns.md:63:20):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:63:20:
 
 val3 = val1 + val2
        ^^^^
@@ -5791,9 +5771,9 @@ L2 := [T].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:78:5):
+The redeclaration is in associated_items_complete_all_patterns.md:78:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -5811,7 +5791,7 @@ d3_4 = d3_vals_then_types.val1
        ^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:86:8):
+associated_items_complete_all_patterns.md:86:8:
 
 ── ✗ unrecognized syntax ──────── associated_items_complete_all_patterns.md:87:8
 
@@ -5819,8 +5799,6 @@ I don't recognize this syntax.
 
 d3_5 = d3_vals_then_types.L2.val2
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:87:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5830,8 +5808,6 @@ I don't recognize this syntax.
 
 d3_6 = d3_vals_then_types.L2.L3.val3
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:88:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5846,9 +5822,9 @@ L2 := [W].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:91:5):
+The redeclaration is in associated_items_complete_all_patterns.md:91:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -5866,7 +5842,7 @@ bad_l1 = l3_private
          ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:97:14):
+associated_items_complete_all_patterns.md:97:14:
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:101:5
 
@@ -5881,9 +5857,9 @@ L2 := [Z].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:101:5):
+The redeclaration is in associated_items_complete_all_patterns.md:101:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -5906,9 +5882,9 @@ L2 := [AC].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:111:5):
+The redeclaration is in associated_items_complete_all_patterns.md:111:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -5926,9 +5902,7 @@ val1 = 5
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:119:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:76:5) (associated_items_complete_all_patterns.md:76:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:76:5:
 
 val1 = 30
 ^^^^
@@ -5941,7 +5915,7 @@ d3_7 = d3_val_after_nested.val1
        ^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:121:8):
+associated_items_complete_all_patterns.md:121:8:
 
 ── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:122:8
 
@@ -5949,8 +5923,6 @@ I don't recognize this syntax.
 
 d3_8 = d3_val_after_nested.L2.val2
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:122:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5960,8 +5932,6 @@ I don't recognize this syntax.
 
 d3_9 = d3_val_after_nested.L2.L3.val3
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:123:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -5982,9 +5952,9 @@ L2 := [AF].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:126:5):
+The redeclaration is in associated_items_complete_all_patterns.md:126:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6002,9 +5972,7 @@ val1 = 1
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:138:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:119:5) (associated_items_complete_all_patterns.md:119:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:119:5:
 
 val1 = 5
 ^^^^
@@ -6016,8 +5984,6 @@ I don't recognize this syntax.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:140:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:143:5
@@ -6028,9 +5994,7 @@ val1 = 10
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:143:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:138:5) (associated_items_complete_all_patterns.md:138:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:138:5:
 
 val1 = 1
 ^^^^
@@ -6052,9 +6016,9 @@ L2 := [AJ].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:145:5):
+The redeclaration is in associated_items_complete_all_patterns.md:145:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6070,8 +6034,6 @@ I don't recognize this syntax.
 
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:157:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6092,9 +6054,9 @@ L2 := [AN].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:160:5):
+The redeclaration is in associated_items_complete_all_patterns.md:160:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6112,9 +6074,7 @@ val1 = 7
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:172:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:143:5) (associated_items_complete_all_patterns.md:143:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:143:5:
 
 val1 = 10
 ^^^^
@@ -6126,8 +6086,6 @@ I don't recognize this syntax.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:174:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:177:5
@@ -6138,9 +6096,7 @@ val1 = 15
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:177:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:172:5) (associated_items_complete_all_patterns.md:172:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:172:5:
 
 val1 = 7
 ^^^^
@@ -6162,9 +6118,9 @@ L2 := [AR].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:179:5):
+The redeclaration is in associated_items_complete_all_patterns.md:179:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6180,8 +6136,6 @@ I don't recognize this syntax.
 
 d4_4 = d4_interleaved.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:191:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6199,9 +6153,9 @@ L2 := [BB].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:194:5):
+The redeclaration is in associated_items_complete_all_patterns.md:194:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6217,8 +6171,6 @@ I don't recognize this syntax.
 
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:203:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6239,9 +6191,9 @@ L2 := [BF].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:206:5):
+The redeclaration is in associated_items_complete_all_patterns.md:206:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6257,8 +6209,6 @@ I don't recognize this syntax.
 
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:218:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6279,9 +6229,9 @@ L2 := [BJ].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:221:5):
+The redeclaration is in associated_items_complete_all_patterns.md:221:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6299,9 +6249,7 @@ val1 = 3
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:233:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:177:5) (associated_items_complete_all_patterns.md:177:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:177:5:
 
 val1 = 15
 ^^^^
@@ -6312,8 +6260,6 @@ I don't recognize this syntax.
 
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:235:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6330,9 +6276,9 @@ L2 := [BN].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:238:5):
+The redeclaration is in associated_items_complete_all_patterns.md:238:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6350,7 +6296,7 @@ bad = l4_val
       ^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:246:11):
+associated_items_complete_all_patterns.md:246:11:
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:250:5
 
@@ -6367,9 +6313,9 @@ L2 := [BR].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:250:5):
+The redeclaration is in associated_items_complete_all_patterns.md:250:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6394,9 +6340,9 @@ L2 := [BV].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:262:5):
+The redeclaration is in associated_items_complete_all_patterns.md:262:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6427,9 +6373,9 @@ L2 := [BZ].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:274:5):
+The redeclaration is in associated_items_complete_all_patterns.md:274:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6447,9 +6393,7 @@ val1 = 1
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:290:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:233:5) (associated_items_complete_all_patterns.md:233:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:233:5:
 
 val1 = 3
 ^^^^
@@ -6461,8 +6405,6 @@ I don't recognize this syntax.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:292:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:295:5
@@ -6473,9 +6415,7 @@ val1 = 100
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:295:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:290:5) (associated_items_complete_all_patterns.md:290:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:290:5:
 
 val1 = 1
 ^^^^
@@ -6501,9 +6441,9 @@ L2 := [CE].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:297:5):
+The redeclaration is in associated_items_complete_all_patterns.md:297:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6520,8 +6460,6 @@ I don't recognize this syntax.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:313:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:316:5
@@ -6532,9 +6470,7 @@ val1 = 2
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:316:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:295:5) (associated_items_complete_all_patterns.md:295:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:295:5:
 
 val1 = 100
 ^^^^
@@ -6560,9 +6496,9 @@ L2 := [CJ].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:318:5):
+The redeclaration is in associated_items_complete_all_patterns.md:318:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6578,8 +6514,6 @@ I don't recognize this syntax.
 
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:334:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6600,9 +6534,9 @@ L2 := [CO].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:337:5):
+The redeclaration is in associated_items_complete_all_patterns.md:337:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6618,8 +6552,6 @@ I don't recognize this syntax.
 
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:349:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6642,9 +6574,9 @@ L2 := [CT].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:352:5):
+The redeclaration is in associated_items_complete_all_patterns.md:352:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6660,8 +6592,6 @@ I don't recognize this syntax.
 
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:366:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6686,9 +6616,9 @@ L2 := [DD].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:369:5):
+The redeclaration is in associated_items_complete_all_patterns.md:369:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6706,9 +6636,7 @@ val1 = 5
 ^^^^
 
 
-(associated_items_complete_all_patterns.md:385:5):
-
-In this scope, `val1` was already defined here (associated_items_complete_all_patterns.md:316:5) (associated_items_complete_all_patterns.md:316:5):
+In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:316:5:
 
 val1 = 2
 ^^^^
@@ -6721,7 +6649,7 @@ d5_6 = d5_l1_val_last.val1
        ^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:387:8):
+associated_items_complete_all_patterns.md:387:8:
 
 ── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:388:8
 
@@ -6729,8 +6657,6 @@ I don't recognize this syntax.
 
 d5_7 = d5_l1_val_last.L2.val2
        ^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:388:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6741,8 +6667,6 @@ I don't recognize this syntax.
 d5_8 = d5_l1_val_last.L2.L3.val3
        ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:389:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:390:8
@@ -6752,8 +6676,6 @@ I don't recognize this syntax.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(associated_items_complete_all_patterns.md:390:8):
-
 This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ unrecognized syntax ─────── associated_items_complete_all_patterns.md:391:9
@@ -6762,8 +6684,6 @@ I don't recognize this syntax.
 
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:391:9):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -6782,9 +6702,9 @@ L2 := [DI].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:394:5):
+The redeclaration is in associated_items_complete_all_patterns.md:394:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6802,9 +6722,7 @@ bad = deep_secret
 ^^^
 
 
-(associated_items_complete_all_patterns.md:404:5):
-
-In this scope, `bad` was already defined here (associated_items_complete_all_patterns.md:246:5) (associated_items_complete_all_patterns.md:246:5):
+In this scope, `bad` was already defined in associated_items_complete_all_patterns.md:246:5:
 
 bad = l4_val
 ^^^
@@ -6817,7 +6735,7 @@ bad = deep_secret
       ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(associated_items_complete_all_patterns.md:404:11):
+associated_items_complete_all_patterns.md:404:11:
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:408:5
 
@@ -6836,9 +6754,9 @@ L2 := [DN].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:408:5):
+The redeclaration is in associated_items_complete_all_patterns.md:408:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -6865,9 +6783,9 @@ L2 := [DS].{
 }
 
 
-The redeclaration is here (associated_items_complete_all_patterns.md:422:5):
+The redeclaration is in associated_items_complete_all_patterns.md:422:5:
 
-But L2 was already declared here (associated_items_complete_all_patterns.md:61:5) (associated_items_complete_all_patterns.md:61:5):
+But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
     L3 := [R].{
@@ -7321,7 +7239,7 @@ Add a nominal type like:
 `Test := ...`
 or:
 `Test :: ...` (opaque nominal type)
-(associated_items_complete_all_patterns.md:2:1):
+associated_items_complete_all_patterns.md:2:1:
 
 ── ✗ polymorphic value ────────── associated_items_complete_all_patterns.md:51:9
 
@@ -7329,9 +7247,6 @@ This top-level value still has an unresolved polymorphic type.
 
 valA = d2_siblings.InnerB.valB + 1
 ^^^^
-
-(associated_items_complete_all_patterns.md:51:9):
-
 
 Its type is:
 a where [a.plus : a, Dec -> a]
@@ -7344,8 +7259,6 @@ type variable, which has no methods.
 
 valA = d2_siblings.InnerB.valB + 1
        ^^^^^^^^^^^^^^^^^^^^^^^
-
-(associated_items_complete_all_patterns.md:51:16):
 
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a

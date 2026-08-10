@@ -34,7 +34,7 @@ For example:
 
 I found `dapkage` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_094.md:1:1):
+depending on the surrounding syntax. fuzz_crash_094.md:1:1:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:8
 
@@ -49,7 +49,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (fuzz_crash_094.md:1:8):
+I found `[` here. fuzz_crash_094.md:1:8:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:9
 
@@ -66,7 +66,7 @@ For example:
 
 I found `e` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_094.md:1:9):
+depending on the surrounding syntax. fuzz_crash_094.md:1:9:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:10
 
@@ -83,7 +83,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(fuzz_crash_094.md:1:10):
+fuzz_crash_094.md:1:10:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_094.md:1:12
 
@@ -101,7 +101,7 @@ For example:
 
 I found `.a` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_094.md:1:12):
+depending on the surrounding syntax. fuzz_crash_094.md:1:12:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:14
 
@@ -116,7 +116,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.*` here. (fuzz_crash_094.md:1:14):
+I found `.*` here. fuzz_crash_094.md:1:14:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:16
 
@@ -133,7 +133,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_094.md:1:16):
+item before it. fuzz_crash_094.md:1:16:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:17
 
@@ -148,7 +148,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (fuzz_crash_094.md:1:17):
+I found `{` here. fuzz_crash_094.md:1:17:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:18
 
@@ -165,7 +165,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_094.md:1:18):
+item before it. fuzz_crash_094.md:1:18:
 # TOKENS
 ~~~zig
 LowerIdent,OpenSquare,LowerIdent,Comma,UpperIdent,NoSpaceDotLowerIdent,DotStar,CloseSquare,OpenCurly,CloseCurly,

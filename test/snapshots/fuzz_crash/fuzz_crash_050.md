@@ -27,7 +27,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_050.md:1:1):
+item before it. fuzz_crash_050.md:1:1:
 # TOKENS
 ~~~zig
 CloseRound,

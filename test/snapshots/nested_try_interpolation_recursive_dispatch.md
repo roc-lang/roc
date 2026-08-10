@@ -29,8 +29,6 @@ type.
 url = "https://${domain}.com"
       ^^^^^^^^^^^^^^^^^^^^^^^
 
-(nested_try_interpolation_recursive_dispatch.md:9:11):
-
 The dispatcher type is:
 
     Try(Url, [InvalidUrl])

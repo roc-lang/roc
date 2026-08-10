@@ -24,7 +24,6 @@ The type `L` is not declared in this scope.
 c : L
     ^
 
-(fuzz_crash_080.md:1:5):
 
 ── ✗ unbound where receiver ───────────────────────────── fuzz_crash_080.md:3:17
 
@@ -34,8 +33,6 @@ it.
 
 o
 .h : a,
-
-(fuzz_crash_080.md:3:17):
 
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
@@ -50,9 +47,6 @@ c : L
                 o
                 .h : a,
         ]
-
-(fuzz_crash_080.md:1:1):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

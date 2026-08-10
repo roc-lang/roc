@@ -22,7 +22,7 @@ dbg "foo"
 ^^^^^^^^^
 
 Only definitions, type annotations, and imports are allowed at the top level.
-(dbg_stmt_not_permitted_top_level.md:2:1):
+dbg_stmt_not_permitted_top_level.md:2:1:
 # TOKENS
 ~~~zig
 KwDbg,StringStart,StringPart,StringEnd,

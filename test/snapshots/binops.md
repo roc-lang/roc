@@ -34,8 +34,6 @@ The first pattern in this `match` is incompatible.
 None ?? 0,
 ^^^^^^^^^
 
-(binops.md:16:5):
-
 The first pattern is trying to match:
 
     Try(ok, err)

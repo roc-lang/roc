@@ -19,7 +19,7 @@ f=||{var c:[]}
      ^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_c` to
-suppress this warning. (fmt_var_in_record_field.md:1:6):
+suppress this warning. fmt_var_in_record_field.md:1:6:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwVar,LowerIdent,OpColon,OpenSquare,CloseSquare,CloseCurly,

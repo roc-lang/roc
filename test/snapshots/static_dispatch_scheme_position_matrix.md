@@ -55,8 +55,6 @@ to it.
 parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
                                ^^^^^^^^^^^^^^^^^^
 
-(static_dispatch_scheme_position_matrix.md:24:32):
-
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `a` to the annotation, or remove this constraint.
@@ -70,8 +68,6 @@ to it.
 parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
                                                    ^^^^^^^^^^^^^^^^^
 
-(static_dispatch_scheme_position_matrix.md:24:52):
-
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `a` to the annotation, or remove this constraint.
@@ -82,9 +78,6 @@ This top-level value still has an unresolved polymorphic type.
 
 unpinned_ret = gen({})
 ^^^^^^^^^^^^
-
-(static_dispatch_scheme_position_matrix.md:22:1):
-
 
 Its type is:
 a where [a.gen : {} -> a]
@@ -98,8 +91,6 @@ but unresolved type variables have no methods.
 A.gen({})
 ^^^^^^^^^
 
-(static_dispatch_scheme_position_matrix.md:19:5):
-
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
@@ -111,8 +102,6 @@ variable, but unresolved type variables have no methods.
 
 v = A.parse(s)
     ^^^^^^^^^^
-
-(static_dispatch_scheme_position_matrix.md:28:9):
 
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a

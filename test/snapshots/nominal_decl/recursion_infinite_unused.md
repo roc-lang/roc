@@ -20,8 +20,6 @@ The nominal type T refers to itself in a way that would make it infinite.
 T := (T, U64)
 ^^^^^^^^^^^^^
 
-(recursion_infinite_unused.md:1:1):
-
 Its definition is:
 
     (T, U64)

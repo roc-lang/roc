@@ -22,7 +22,6 @@ This string is missing a closing quote.
 platform"
         ^
 
-(fuzz_crash_061.md:1:9):
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_061.md:2:14
 
@@ -37,7 +36,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here. (fuzz_crash_061.md:2:14):
+I found `0` here. fuzz_crash_061.md:2:14:
 
 ── ✗ expected closing brace ────────────────────────────── fuzz_crash_061.md:1:1
 
@@ -53,7 +52,7 @@ For example:
 
 I found `platform` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_061.md:1:1):
+fuzz_crash_061.md:1:1:
 
 ── ✗ expected closing bracket ─────────────────────────── fuzz_crash_061.md:2:16
 
@@ -69,7 +68,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_061.md:2:16):
+fuzz_crash_061.md:2:16:
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

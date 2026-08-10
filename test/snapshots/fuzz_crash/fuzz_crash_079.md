@@ -19,9 +19,6 @@ This declaration has a type annotation but no implementation.
 b:r
 ^^^
 
-(fuzz_crash_079.md:2:1):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 # TOKENS

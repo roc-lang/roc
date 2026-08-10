@@ -20,7 +20,7 @@ a=0->b
      ^
 
 Is it misspelled, or is there an import missing?
-(formatter_idempotence_issue_8851_comment1.md:1:6):
+formatter_idempotence_issue_8851_comment1.md:1:6:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpArrow,LowerIdent,

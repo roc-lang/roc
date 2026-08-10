@@ -21,9 +21,6 @@ This function performs an effect, so its name must end in `!`.
 topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
 ^^^^^^^^
 
-(fuzz_crash_103.md:1:1):
-
-
 Add a trailing `!` to this function name.
 
 ── ● effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
@@ -33,9 +30,6 @@ This function performs an effect, so its name must end in `!`.
 topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
                               ^^^^^
 
-(fuzz_crash_103.md:1:31):
-
-
 Add a trailing `!` to this function name.
 
 ── ✗ invalid number ────────────────────────────────────── fuzz_crash_103.md:2:4
@@ -44,8 +38,6 @@ This number literal does not fit in the inferred type.
 
 ({}1E483647)}
    ^^^^^^^^
-
-(fuzz_crash_103.md:2:4):
 
 The inferred type is:
 

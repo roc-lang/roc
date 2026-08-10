@@ -19,7 +19,7 @@ Nothing is named `tru` in this scope.
 foo = if tru 0
          ^^^
 
-Is it misspelled, or is there an import missing? (expr_if_missing_else.md:1:10):
+Is it misspelled, or is there an import missing? expr_if_missing_else.md:1:10:
 
 ── ✗ missing method ─────────────────────────────── expr_if_missing_else.md:1:14
 
@@ -28,8 +28,6 @@ that method.
 
 foo = if tru 0
              ^
-
-(expr_if_missing_else.md:1:14):
 
 The value's type, which does not have a method named `from_numeral`, is:
 

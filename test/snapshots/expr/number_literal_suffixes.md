@@ -55,8 +55,6 @@ This number literal does not fit in the inferred type.
 u8Neg:   -123.U8,
          ^^^^^^^
 
-(number_literal_suffixes.md:13:12):
-
 The inferred type is:
 
     U8
@@ -67,8 +65,6 @@ This number literal does not fit in the inferred type.
 
 u16Neg:  -123.U16,
          ^^^^^^^^
-
-(number_literal_suffixes.md:14:12):
 
 The inferred type is:
 
@@ -81,8 +77,6 @@ This number literal does not fit in the inferred type.
 u32Neg:  -123.U32,
          ^^^^^^^^
 
-(number_literal_suffixes.md:15:12):
-
 The inferred type is:
 
     U32
@@ -94,8 +88,6 @@ This number literal does not fit in the inferred type.
 u64Neg:  -123.U64,
          ^^^^^^^^
 
-(number_literal_suffixes.md:16:12):
-
 The inferred type is:
 
     U64
@@ -106,8 +98,6 @@ This number literal does not fit in the inferred type.
 
 u128Neg: -123.U128,
          ^^^^^^^^^
-
-(number_literal_suffixes.md:17:12):
 
 The inferred type is:
 

@@ -25,8 +25,6 @@ that method.
 a=(0\r.e)
    ^
 
-(fuzz_crash_098.md:1:4):
-
 The value's type, which does not have a method named `from_numeral`, is:
 
     { e: _field, .. }

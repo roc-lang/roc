@@ -26,9 +26,7 @@ import http.Client as MyMod
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-(can_import_aliased_conflicts.md:2:1):
-
-In this scope, `MyMod` was already defined here (can_import_aliased_conflicts.md:1:1) (can_import_aliased_conflicts.md:1:1):
+In this scope, `MyMod` was already defined in can_import_aliased_conflicts.md:1:1:
 
 import json.Json as MyMod
 ^
@@ -41,7 +39,7 @@ x = MyMod.parse
     ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_aliased_conflicts.md:5:9):
+can_import_aliased_conflicts.md:5:9:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

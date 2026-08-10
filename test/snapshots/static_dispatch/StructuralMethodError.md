@@ -30,8 +30,6 @@ method.
 x.greet()
   ^^^^^
 
-(StructuralMethodError.md:11:7):
-
 The value's type, which does not have a method named `greet`, is:
 
     {}

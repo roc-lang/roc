@@ -31,7 +31,7 @@ Container : a -> [Container(a)]
             ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(nominal_associated_in_tuples.md:9:13):
+nominal_associated_in_tuples.md:9:13:
 
 ── ✗ undeclared type variable ───────────── nominal_associated_in_tuples.md:9:29
 
@@ -41,7 +41,7 @@ Container : a -> [Container(a)]
                             ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(nominal_associated_in_tuples.md:9:29):
+nominal_associated_in_tuples.md:9:29:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

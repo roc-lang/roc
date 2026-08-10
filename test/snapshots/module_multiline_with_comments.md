@@ -31,7 +31,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (mod_multiline_with_comments.md:1:2):
+I found `[` here. mod_multiline_with_comments.md:1:2:
 
 ── ✗ unexpected statement ──────────────── mod_multiline_with_comments.md:2:3
 
@@ -48,7 +48,7 @@ For example:
 
 I found `something` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (mod_multiline_with_comments.md:2:3):
+depending on the surrounding syntax. mod_multiline_with_comments.md:2:3:
 
 ── ✗ unexpected statement ─────────────── mod_multiline_with_comments.md:2:12
 
@@ -65,7 +65,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(mod_multiline_with_comments.md:2:12):
+mod_multiline_with_comments.md:2:12:
 
 ── ✗ type application needs parentheses ─ mod_multiline_with_comments.md:3:11
 
@@ -83,7 +83,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(mod_multiline_with_comments.md:3:11):
+mod_multiline_with_comments.md:3:11:
 
 ── ✗ unexpected statement ──────────────── mod_multiline_with_comments.md:4:2
 
@@ -100,7 +100,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (mod_multiline_with_comments.md:4:2):
+item before it. mod_multiline_with_comments.md:4:2:
 # TOKENS
 ~~~zig
 OpenSquare,

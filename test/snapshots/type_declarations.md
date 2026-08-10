@@ -34,7 +34,6 @@ The type `Bar` is not declared in this scope.
 Foo : (Bar, Baz)
        ^^^
 
-(type_declarations.md:3:8):
 
 ── ✗ undeclared type ───────────────────────────────── type_declarations.md:3:13
 
@@ -43,7 +42,6 @@ The type `Baz` is not declared in this scope.
 Foo : (Bar, Baz)
             ^^^
 
-(type_declarations.md:3:13):
 
 ── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:19
 
@@ -52,7 +50,6 @@ The type `Ok` is not declared in this scope.
 Some(a) : { foo : Ok(a), bar : Something }
                   ^^
 
-(type_declarations.md:5:19):
 
 ── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:32
 
@@ -61,7 +58,6 @@ The type `Something` is not declared in this scope.
 Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
-(type_declarations.md:5:32):
 
 ── ✗ mod not imported ──────────────────────────── type_declarations.md:13:11
 
@@ -70,7 +66,6 @@ There is no mod with the name `Mod` imported into this Roc file.
 MyType2 : Mod.Thingy
           ^^^^^^^^^^
 
-(type_declarations.md:13:11):
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,

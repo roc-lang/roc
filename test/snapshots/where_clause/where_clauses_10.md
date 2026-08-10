@@ -25,7 +25,6 @@ The type `Decode` is not declared in this scope.
 [a.Decode]
   ^^^^^^^
 
-(where_clauses_10.md:7:7):
 
 ── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
@@ -36,9 +35,6 @@ decode_things # After member name
         List(List(U8)) -> List(a) # After anno
             where # after where
                 [a.Decode]
-
-(where_clauses_10.md:3:1):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

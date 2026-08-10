@@ -20,8 +20,6 @@ The nominal type T.A refers to itself in a way that would make it infinite.
 A ::T.A
 ^^^^^^^
 
-(fuzz_crash_100.md:2:2):
-
 Its definition is:
 
     T.A

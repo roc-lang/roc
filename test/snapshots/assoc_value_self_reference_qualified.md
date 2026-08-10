@@ -23,7 +23,7 @@ with_uri = QualSelf.with_uri
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. (assoc_value_self_reference_qualified.md:2:16):
+value being assigned. assoc_value_self_reference_qualified.md:2:16:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

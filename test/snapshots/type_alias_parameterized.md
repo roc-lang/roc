@@ -25,8 +25,6 @@ The `swapPair` function expects 1 argument, but it got 2 instead.
 main! = |_| swapPair(1, 2)
             ^^^^^^^^^^^^^^
 
-(type_alias_parameterized.md:8:13):
-
 The `swapPair` function has the type:
 
     Pair(a, b) -> Pair(b, a)

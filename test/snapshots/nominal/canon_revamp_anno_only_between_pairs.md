@@ -26,9 +26,6 @@ This declaration has a type annotation but no implementation.
 middle : Foo
 ^^^^^^^^^^^^
 
-(canon_revamp_anno_only_between_pairs.md:5:5):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 # TOKENS

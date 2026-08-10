@@ -22,7 +22,7 @@ You cannot define a `where` clause inside a type declaration.
 Hash(a, hasher) : a
     where [a.hash : hasher -> hasher, hasher.Hasher]
 
-You're attempting do this here (where_clauses_1.md:1:1):
+You're attempting do this in where_clauses_1.md:1:1:
 
 ── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:4:1
 
@@ -31,7 +31,7 @@ You cannot define a `where` clause inside a type declaration.
 Decode(a) : a where [a.decode : List(U8) -> a]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this here (where_clauses_1.md:4:1):
+You're attempting do this in where_clauses_1.md:4:1:
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,

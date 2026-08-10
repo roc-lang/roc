@@ -18,7 +18,6 @@ DOES NOT EXIST - builtins.md:1:13:1:21
 main! = |_| True.not()
             ^^^^^^^^
 
-(builtins.md:1:13):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,

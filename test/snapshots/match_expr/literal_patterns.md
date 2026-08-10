@@ -26,7 +26,6 @@ the same value.
 match Answer {
       ^^^^^^
 
-(literal_patterns.md:1:7):
 
 ── ✗ missing method ──────────────────────────────────── literal_patterns.md:5:5
 
@@ -35,8 +34,6 @@ that method.
 
 10 => 4
 ^^
-
-(literal_patterns.md:5:5):
 
 The value's type, which does not have a method named `from_numeral`, is:
 
@@ -48,8 +45,6 @@ This string literal is being used where a non-string type is needed.
 
 Zero => "hello"
         ^^^^^^^
-
-(literal_patterns.md:3:13):
 
 The type was determined to be:
 

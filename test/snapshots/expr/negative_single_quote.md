@@ -24,7 +24,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `-` here. (negative_single_quote.md:1:1):
+I found `-` here. negative_single_quote.md:1:1:
 # TOKENS
 ~~~zig
 OpBinaryMinus,SingleQuote,

@@ -18,8 +18,6 @@ This string literal is being used where a non-string type is needed.
 [1, 2, "hello"]
        ^^^^^^^
 
-(list_type_err.md:1:8):
-
 The type was determined to be:
 
     Dec

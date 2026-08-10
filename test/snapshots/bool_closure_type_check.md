@@ -19,8 +19,6 @@ method.
 (|x| !x)(True)
      ^^
 
-(bool_closure_type_check.md:1:6):
-
 The value's type, which does not have a method named `not`, is:
 
     [True, ..]

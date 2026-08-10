@@ -26,8 +26,6 @@ The first argument being passed to this function has the wrong type.
 needs_string = |f| f(["hello"])
                      ^^^^^^^^^
 
-(test_instantiated_return_crash.md:6:24):
-
 This argument has the type:
 
     List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]

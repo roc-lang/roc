@@ -21,7 +21,7 @@ main = Mod.something
        ^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_mod_not_found.md:3:8):
+can_import_mod_not_found.md:3:8:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

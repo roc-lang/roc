@@ -25,8 +25,6 @@ The value before this `+` operator has a type that doesn't have a `plus` method.
 string_function = |x| x + 42
                       ^^^^^^
 
-(lambda_annotation_mismatch_error.md:3:23):
-
 The value's type, which does not have a method named `plus`, is:
 
     Str
@@ -40,8 +38,6 @@ This number literal does not fit in the inferred type.
 
 wrong_type_function = |x| x * 3.14
                               ^^^^
-
-(lambda_annotation_mismatch_error.md:7:31):
 
 The inferred type is:
 

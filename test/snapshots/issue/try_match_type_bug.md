@@ -25,7 +25,6 @@ the same value.
 match 0.U64 {
       ^^^^^
 
-(try_match_type_bug.md:3:11):
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,Underscore,CloseRound,

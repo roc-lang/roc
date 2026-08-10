@@ -24,7 +24,6 @@ This string is missing a closing quote.
 0"
  ^
 
-(fuzz_crash_060.md:1:2):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:1
 
@@ -39,7 +38,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. (fuzz_crash_060.md:1:1):
+I found `0` here. fuzz_crash_060.md:1:1:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:2
 
@@ -54,7 +53,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. (fuzz_crash_060.md:1:2):
+I found `"` here. fuzz_crash_060.md:1:2:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:3
 
@@ -70,7 +69,7 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_060.md:1:3):
+fuzz_crash_060.md:1:3:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:3
 
@@ -86,7 +85,7 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_060.md:1:3):
+fuzz_crash_060.md:1:3:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:2:1
 
@@ -103,7 +102,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_060.md:2:1):
+item before it. fuzz_crash_060.md:2:1:
 # TOKENS
 ~~~zig
 Int,StringStart,StringPart,StringEnd,

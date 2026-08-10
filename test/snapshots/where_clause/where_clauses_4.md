@@ -22,7 +22,6 @@ The type `Decode` is not declared in this scope.
 where [a.Decode]
         ^^^^^^^
 
-(where_clauses_4.md:4:10):
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

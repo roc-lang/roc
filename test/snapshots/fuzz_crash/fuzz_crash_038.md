@@ -25,7 +25,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `*` here. (fuzz_crash_038.md:1:1):
+I found `*` here. fuzz_crash_038.md:1:1:
 
 ── ✗ expected import alias ─────────────────────────────── fuzz_crash_038.md:1:2
 
@@ -41,7 +41,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_038.md:1:2):
+fuzz_crash_038.md:1:2:
 # TOKENS
 ~~~zig
 OpStar,KwImport,UpperIdent,KwAs,

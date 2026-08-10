@@ -26,7 +26,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `&` here. (record_field_update_error.md:1:10):
+I found `&` here. record_field_update_error.md:1:10:
 
 ── ✗ unexpected type syntax ────────────────── record_field_update_error.md:1:17
 
@@ -41,7 +41,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `31` here. (record_field_update_error.md:1:17):
+I found `31` here. record_field_update_error.md:1:17:
 
 ── ● declaration has no value ──────────────── record_field_update_error.md:1:12
 
@@ -49,9 +49,6 @@ This declaration has a type annotation but no implementation.
 
 { person & age: 31 }
            ^^^^^^^
-
-(record_field_update_error.md:1:12):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

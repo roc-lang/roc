@@ -51,8 +51,6 @@ Underscores are not allowed in type alias declarations.
 BadType := _
 ^
 
-(underscore_error_type.md:1:1):
-
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
@@ -63,8 +61,6 @@ Underscores are not allowed in type alias declarations.
 
 BadList := List(_)
                 ^
-
-(underscore_error_type.md:6:17):
 
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
@@ -77,7 +73,16 @@ Underscores are not allowed in type alias declarations.
 BadList := List(_)
            ^^^^
 
-(underscore_error_type.md:6:12):
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
+
+── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
+
+Underscores are not allowed in type alias declarations.
+
+BadType := _
+^
 
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
@@ -90,8 +95,6 @@ Underscores are not allowed in type alias declarations.
 BadType := _
 ^
 
-(underscore_error_type.md:1:1):
-
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
@@ -102,21 +105,6 @@ Underscores are not allowed in type alias declarations.
 
 BadType := _
 ^
-
-(underscore_error_type.md:1:1):
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-(underscore_error_type.md:1:1):
 
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
@@ -129,8 +117,6 @@ Underscores are not allowed in type alias declarations.
 BadTuple := (_, U32)
              ^
 
-(underscore_error_type.md:21:14):
-
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
@@ -142,8 +128,6 @@ This number is being used where a non-number type is needed.
 foo = 42
       ^^
 
-(underscore_error_type.md:4:7):
-
 Other code expects this to have the type:
 
     BadType
@@ -154,8 +138,6 @@ This expression is used in an unexpected way.
 
 bar = [1, 2, 3]
       ^^^^^^^^^
-
-(underscore_error_type.md:9:7):
 
 It has the type:
 
@@ -172,8 +154,6 @@ This expression is used in an unexpected way.
 qux = |x| x
       ^^^^^
 
-(underscore_error_type.md:19:7):
-
 It has the type:
 
     a -> a
@@ -188,8 +168,6 @@ This expression is used in an unexpected way.
 
 quux = ("hello", 42)
        ^^^^^^^^^^^^^
-
-(underscore_error_type.md:24:8):
 
 It has the type:
 

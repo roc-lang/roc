@@ -23,8 +23,6 @@ variable, but unresolved type variables have no methods.
 _ = Iter.collect(Iter.custom(0.U64, Unknown, f))
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-(static_dispatch_discarded_iter_issue_9815.md:3:9):
-
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.

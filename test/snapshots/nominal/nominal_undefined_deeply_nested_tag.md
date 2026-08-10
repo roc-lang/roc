@@ -22,7 +22,6 @@ The type `Foo.Bar.Baz` is not declared in this scope.
 x = Foo.Bar.Baz.X
            ^^^^
 
-(nominal_undefined_deeply_nested_tag.md:5:12):
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

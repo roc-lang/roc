@@ -23,7 +23,7 @@ Host symbol mappings are written as record-like entries inside braces.
 For example:
     provides { "roc_main": main }
 
-I found `[` here. (fuzz_crash_045.md:1:50):
+I found `[` here. fuzz_crash_045.md:1:50:
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenSquare,

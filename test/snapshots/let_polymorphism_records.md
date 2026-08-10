@@ -70,8 +70,6 @@ I'm having trouble with this bool operation.
 1 + update_data
     ^^^^^^^^^^^
 
-(let_polymorphism_records.md:48:6):
-
 Both sides of `and` must be `Bool` values, but the right side is:
 
     { data: a, ..b }, a -> { data: a, ..b }
@@ -84,8 +82,6 @@ This string literal is being used where a non-string type is needed.
 
 str = "hello"
       ^^^^^^^
-
-(let_polymorphism_records.md:8:7):
 
 The type was determined to be:
 

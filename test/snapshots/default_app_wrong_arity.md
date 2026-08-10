@@ -23,7 +23,7 @@ main! = |arg1, arg2| {
                ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_arg2` to
-suppress this warning. (default_app_wrong_arity.md:1:16):
+suppress this warning. default_app_wrong_arity.md:1:16:
 
 ── ✗ `main!` should take 1 argument ───────────── default_app_wrong_arity.md:1:1
 
@@ -37,7 +37,7 @@ main! = |arg1, arg2| {
 Found `2` arguments.
 
 Change it to:
-`main! = |arg| { ... } (default_app_wrong_arity.md:1:1):`
+`main! = |arg| { ... } default_app_wrong_arity.md:1:1:`
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,

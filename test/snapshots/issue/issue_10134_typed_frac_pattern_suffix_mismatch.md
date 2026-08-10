@@ -24,8 +24,6 @@ classify = |n| match n {
     _ => 0
 }
 
-(issue_10134_typed_frac_pattern_suffix_mismatch.md:2:16):
-
 The first pattern is trying to match:
 
     F32

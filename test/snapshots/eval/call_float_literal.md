@@ -19,8 +19,6 @@ that method.
 x = 12.34()
     ^^^^^
 
-(call_float_literal.md:1:5):
-
 The value's type, which does not have a method named `from_numeral`, is:
 
     ({}) -> _ret

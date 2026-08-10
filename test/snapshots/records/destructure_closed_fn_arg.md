@@ -19,8 +19,6 @@ This expression is used in an unexpected way.
 get_sum = |{ x, y }| x + y
            ^^^^^^^^
 
-(destructure_closed_fn_arg.md:2:12):
-
 It has the type:
 
     { x: _field, y: U64 }

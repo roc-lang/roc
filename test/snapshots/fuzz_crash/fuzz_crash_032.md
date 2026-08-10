@@ -47,7 +47,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here. (fuzz_crash_032.md:1:24):
+I found `=` here. fuzz_crash_032.md:1:24:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_032.md:1:26
 
@@ -62,7 +62,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (fuzz_crash_032.md:1:26):
+I found `[` here. fuzz_crash_032.md:1:26:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_032.md:1:34
 
@@ -80,7 +80,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(fuzz_crash_032.md:1:34):
+fuzz_crash_032.md:1:34:
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_032.md:1:44
 
@@ -98,7 +98,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_032.md:1:44):
+item before it. fuzz_crash_032.md:1:44:
 
 ── ✗ import must be top level ─────────────────────────── fuzz_crash_032.md:4:18
 
@@ -117,7 +117,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_032.md:4:18):
+fuzz_crash_032.md:4:18:
 
 ── ✗ unexpected pattern syntax ────────────────────────── fuzz_crash_032.md:7:21
 
@@ -132,7 +132,7 @@ underscores, or nested patterns.
 For example:
     { name, age }
 
-I found `-` here. (fuzz_crash_032.md:7:21):
+I found `-` here. fuzz_crash_032.md:7:21:
 
 ── ✗ missing match arrow ──────────────────────────────── fuzz_crash_032.md:7:22
 
@@ -147,7 +147,7 @@ For example:
     Err(msg) => crash msg
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_032.md:7:22):
+fuzz_crash_032.md:7:22:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_032.md:1:14
 
@@ -157,7 +157,7 @@ LocalStatus :lue => Loc= [Pending, Complete]
              ^^^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_032.md:1:14):
+fuzz_crash_032.md:1:14:
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_032.md:1:21
 
@@ -166,7 +166,6 @@ The type `Loc` is not declared in this scope.
 LocalStatus :lue => Loc= [Pending, Complete]
                     ^^^
 
-(fuzz_crash_032.md:1:21):
 
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_032.md:4:25
 
@@ -175,7 +174,6 @@ The type `Color` is not declared in this scope.
 olor = |color| { import Color.RGB
                         ^^^^^
 
-(fuzz_crash_032.md:4:25):
 
 ── ✗ expected nominal type ────────────────────────────── fuzz_crash_032.md:6:26
 
@@ -183,9 +181,6 @@ You are using the type `LocalStatus` like a nominal type, but it is an alias.
 
 match color { RGB => LocalStatus.Pending
                      ^^^^^^^^^^^
-
-(fuzz_crash_032.md:6:26):
-
 
 Hint: You can declare this type with `:=` to make it nominal.
 INVALID PATTERN
@@ -200,7 +195,6 @@ The type `B` is not declared in this scope.
 B.Blue => LocalStatus.Pending
 ^
 
-(fuzz_crash_032.md:8:3):
 
 ── ✗ expected nominal type ────────────────────────────── fuzz_crash_032.md:8:13
 
@@ -208,9 +202,6 @@ You are using the type `LocalStatus` like a nominal type, but it is an alias.
 
 B.Blue => LocalStatus.Pending
           ^^^^^^^^^^^
-
-(fuzz_crash_032.md:8:13):
-
 
 Hint: You can declare this type with `:=` to make it nominal.
 
@@ -220,8 +211,6 @@ The second branch of this `match` does not match the previous branches .
 
 Green => LocalStatus-Complete
          ^^^^^^^^^^^
-
-(fuzz_crash_032.md:7:10):
 
 The second branch is:
 

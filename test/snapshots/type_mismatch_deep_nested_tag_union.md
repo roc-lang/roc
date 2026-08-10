@@ -24,8 +24,6 @@ This expression is used in an unexpected way.
 collide = |x| x
               ^
 
-(type_mismatch_deep_nested_tag_union.md:7:15):
-
 It has the type:
 
     [A6([A5([A4([A3([A2([A1([Z1, Z10, Z2, Z3, Z4, Z5, Z6, Z7, Z8, Z9]), B1_1,

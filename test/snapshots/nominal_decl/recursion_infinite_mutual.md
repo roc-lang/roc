@@ -21,8 +21,6 @@ The nominal type T refers to itself in a way that would make it infinite.
 T := (U, U64)
 ^^^^^^^^^^^^^
 
-(recursion_infinite_mutual.md:1:1):
-
 Its definition is:
 
     (U, U64)

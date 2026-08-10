@@ -25,8 +25,6 @@ expression.
 t=|(0|(#\r))|0
     ^^^^^^
 
-(fuzz_crash_084.md:1:5):
-
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
 # TOKENS

@@ -26,9 +26,7 @@ ambiguous = conv(poly())
             ^^^^^^^^^^^^
 
 
-(static_dispatch_unresolved_via_helper.md:5:13):
-
-The type was left undetermined by this call (static_dispatch_unresolved_via_helper.md:5:18) (static_dispatch_unresolved_via_helper.md:5:18):
+The type was left undetermined by this call static_dispatch_unresolved_via_helper.md:5:18:
 
 ambiguous = conv(poly())
                  ^^^^^^

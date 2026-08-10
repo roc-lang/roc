@@ -26,7 +26,7 @@ g = |x| f(x)
 Local definitions are evaluated in order: a definition can refer to itself or
 to definitions written before it, but not to definitions written later in the
 same block. Move `f` above this use, or move both to the top level.
-(local_let_forward_reference.md:2:13):
+local_let_forward_reference.md:2:13:
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

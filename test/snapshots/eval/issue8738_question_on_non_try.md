@@ -31,8 +31,6 @@ The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and
 _x = ok_or(Err(""), Exit(5))?
      ^^^^^^^^^^^^^^^^^^^^^^^
 
-(issue8738_question_on_non_try.md:9:7):
-
 This expression has type:
 
     [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a,

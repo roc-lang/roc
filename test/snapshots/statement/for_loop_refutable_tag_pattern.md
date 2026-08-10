@@ -21,8 +21,6 @@ This destructuring pattern doesn't cover all possible cases.
 for Ok(_value) in [Ok(1), Err("bad")] {}
     ^^^^^^^^^^
 
-(for_loop_refutable_tag_pattern.md:2:9):
-
 The value being destructured has type:
         [Err(Str), Ok(Dec), ..]
 

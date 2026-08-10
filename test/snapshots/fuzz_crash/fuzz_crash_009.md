@@ -28,7 +28,6 @@ This string is missing a closing quote.
 "onmo %
 ^^^^^^^
 
-(fuzz_crash_009.md:6:5):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:2
 
@@ -45,7 +44,7 @@ For example:
 
 I found `f` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_009.md:1:2):
+depending on the surrounding syntax. fuzz_crash_009.md:1:2:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:3
 
@@ -60,7 +59,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (fuzz_crash_009.md:1:3):
+I found `{` here. fuzz_crash_009.md:1:3:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:4
 
@@ -77,7 +76,7 @@ For example:
 
 I found `o` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_009.md:1:4):
+depending on the surrounding syntax. fuzz_crash_009.md:1:4:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:5
 
@@ -94,7 +93,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(fuzz_crash_009.md:1:5):
+fuzz_crash_009.md:1:5:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:2:6
 
@@ -111,7 +110,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_009.md:2:6):
+item before it. fuzz_crash_009.md:2:6:
 # TOKENS
 ~~~zig
 LowerIdent,OpenCurly,LowerIdent,Comma,

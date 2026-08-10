@@ -71,7 +71,6 @@ This Unicode escape sequence is not valid.
 '\u',
  ^^
 
-(unicode_single_quotes.md:5:6):
 
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:6:6
 
@@ -80,7 +79,6 @@ This Unicode escape sequence is not valid.
 '\u)',
  ^^
 
-(unicode_single_quotes.md:6:6):
 
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:7:6
 
@@ -89,7 +87,6 @@ This Unicode escape sequence is not valid.
 '\u(',
  ^^^
 
-(unicode_single_quotes.md:7:6):
 
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:8:6
 
@@ -98,7 +95,6 @@ This Unicode escape sequence is not valid.
 '\u()',
  ^^^^
 
-(unicode_single_quotes.md:8:6):
 
 ── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:10:6
 
@@ -107,7 +103,6 @@ This Unicode escape sequence is not valid.
 '\u(EDA0B5)'
  ^^^^^^^^^^
 
-(unicode_single_quotes.md:10:6):
 
 ── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:11:6
 
@@ -116,7 +111,6 @@ This Unicode escape sequence is not valid.
 '\u(K)',
  ^^^^^
 
-(unicode_single_quotes.md:11:6):
 
 ── ✗ single quote empty ────────────────────────── unicode_single_quotes.md:14:5
 
@@ -125,7 +119,6 @@ Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 '',
 ^^
 
-(unicode_single_quotes.md:14:5):
 
 ── ✗ single quote too long ─────────────────────── unicode_single_quotes.md:15:5
 
@@ -134,7 +127,6 @@ Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 'long',
 ^^^^^^
 
-(unicode_single_quotes.md:15:5):
 
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:16:5
 
@@ -143,7 +135,6 @@ This single-quoted literal is missing a closing quote.
 '\',
 ^^^^
 
-(unicode_single_quotes.md:16:5):
 
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:19:5
 
@@ -152,7 +143,6 @@ This single-quoted literal is missing a closing quote.
 y = 'u
     ^^
 
-(unicode_single_quotes.md:19:5):
 
 ── ✗ invalid escape sequence ───────────────────── unicode_single_quotes.md:22:2
 
@@ -161,7 +151,6 @@ This escape sequence is not recognized.
 '\
 
 
-(unicode_single_quotes.md:22:2):
 
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:22:1
 
@@ -170,7 +159,6 @@ This single-quoted literal is missing a closing quote.
 '\
 ^^
 
-(unicode_single_quotes.md:22:1):
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:5:5
 
@@ -185,7 +173,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u'` here. (unicode_single_quotes.md:5:5):
+I found `'\u'` here. unicode_single_quotes.md:5:5:
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:6:5
 
@@ -200,7 +188,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u)'` here. (unicode_single_quotes.md:6:5):
+I found `'\u)'` here. unicode_single_quotes.md:6:5:
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:7:5
 
@@ -215,7 +203,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u('` here. (unicode_single_quotes.md:7:5):
+I found `'\u('` here. unicode_single_quotes.md:7:5:
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:8:5
 
@@ -230,7 +218,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u()'` here. (unicode_single_quotes.md:8:5):
+I found `'\u()'` here. unicode_single_quotes.md:8:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:10:5
 
@@ -245,7 +233,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(EDA0B5)'` here. (unicode_single_quotes.md:10:5):
+I found `'\u(EDA0B5)'` here. unicode_single_quotes.md:10:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:11:5
 
@@ -260,7 +248,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(K)'` here. (unicode_single_quotes.md:11:5):
+I found `'\u(K)'` here. unicode_single_quotes.md:11:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:14:5
 
@@ -275,7 +263,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `''` here. (unicode_single_quotes.md:14:5):
+I found `''` here. unicode_single_quotes.md:14:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:15:5
 
@@ -290,7 +278,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'long'` here. (unicode_single_quotes.md:15:5):
+I found `'long'` here. unicode_single_quotes.md:15:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:16:5
 
@@ -305,7 +293,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\',` here. (unicode_single_quotes.md:16:5):
+I found `'\',` here. unicode_single_quotes.md:16:5:
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:19:5
 
@@ -320,7 +308,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'u` here. (unicode_single_quotes.md:19:5):
+I found `'u` here. unicode_single_quotes.md:19:5:
 
 ── ✗ unexpected statement ──────────────────────── unicode_single_quotes.md:22:1
 
@@ -335,7 +323,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `'\` here. (unicode_single_quotes.md:22:1):
+I found `'\` here. unicode_single_quotes.md:22:1:
 INVALID TUPLE ELEMENT
 
 This tuple element is malformed or contains invalid syntax.
@@ -379,8 +367,6 @@ I don't recognize this syntax.
 
 y = 'u
     ^^
-
-(unicode_single_quotes.md:19:5):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

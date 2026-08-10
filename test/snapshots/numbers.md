@@ -50,8 +50,6 @@ This number literal does not fit in the inferred type.
 0.1e42,
 ^^^^^^
 
-(numbers.md:8:5):
-
 The inferred type is:
 
     Dec
@@ -62,8 +60,6 @@ This number literal does not fit in the inferred type.
 
 0.1E42,
 ^^^^^^
-
-(numbers.md:9:5):
 
 The inferred type is:
 
@@ -76,8 +72,6 @@ This number literal does not fit in the inferred type.
 1.e42,
 ^^^^^
 
-(numbers.md:10:5):
-
 The inferred type is:
 
     Dec
@@ -88,8 +82,6 @@ This number literal does not fit in the inferred type.
 
 1.E42,
 ^^^^^
-
-(numbers.md:11:5):
 
 The inferred type is:
 

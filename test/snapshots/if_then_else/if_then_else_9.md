@@ -28,7 +28,6 @@ make the same choice.
 } else if 10 { # Comment after else open
           ^^
 
-(if_then_else_9.md:3:11):
 
 ── ✗ type mismatch ────────────────────────────────────── if_then_else_9.md:3:11
 
@@ -36,8 +35,6 @@ This number is being used where a non-number type is needed.
 
 } else if 10 { # Comment after else open
           ^^
-
-(if_then_else_9.md:3:11):
 
 Other code expects this to have the type:
 
@@ -51,8 +48,6 @@ that method.
 1
 ^
 
-(if_then_else_9.md:2:2):
-
 The value's type, which does not have a method named `from_numeral`, is:
 
     [A, ..]
@@ -64,8 +59,6 @@ that method.
 
 3
 ^
-
-(if_then_else_9.md:6:2):
 
 The value's type, which does not have a method named `from_numeral`, is:
 

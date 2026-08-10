@@ -22,7 +22,7 @@ Nothing is named `line!` in this scope.
 main! = |_| Stdout.line!("Hello, world!")
             ^^^^^^^^^^^^
 
-Is it misspelled, or is there an import missing? (hello_world.md:5:13):
+Is it misspelled, or is there an import missing? hello_world.md:5:13:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

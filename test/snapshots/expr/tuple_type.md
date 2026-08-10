@@ -24,8 +24,6 @@ This number is being used where a non-number type is needed.
 f((1, 2))
    ^
 
-(tuple_type.md:5:8):
-
 Other code expects this to have the type:
 
     Str
@@ -36,8 +34,6 @@ This number is being used where a non-number type is needed.
 
 f((1, 2))
       ^
-
-(tuple_type.md:5:11):
 
 Other code expects this to have the type:
 

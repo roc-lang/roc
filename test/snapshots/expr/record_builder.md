@@ -33,7 +33,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `<-` here. (record_builder.md:1:15):
+I found `<-` here. record_builder.md:1:15:
 
 ── ✗ unexpected type syntax ────────────────────────────── record_builder.md:2:8
 
@@ -48,7 +48,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `5` here. (record_builder.md:2:8):
+I found `5` here. record_builder.md:2:8:
 
 ── ✗ unexpected expression syntax ──────────────────────── record_builder.md:2:9
 
@@ -65,7 +65,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_builder.md:2:9):
+record_builder.md:2:9:
 
 ── ✗ unexpected type syntax ────────────────────────────── record_builder.md:3:8
 
@@ -80,7 +80,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here. (record_builder.md:3:8):
+I found `0` here. record_builder.md:3:8:
 
 ── ✗ unexpected expression syntax ──────────────────────── record_builder.md:3:9
 
@@ -97,7 +97,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_builder.md:3:9):
+record_builder.md:3:9:
 
 ── ● declaration has no value ──────────────────────────── record_builder.md:2:5
 
@@ -105,9 +105,6 @@ This declaration has a type annotation but no implementation.
 
 x: 5,
 ^^^^
-
-(record_builder.md:2:5):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -118,9 +115,6 @@ This declaration has a type annotation but no implementation.
 
 y: 0,
 ^^^^
-
-(record_builder.md:3:5):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

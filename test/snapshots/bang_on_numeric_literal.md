@@ -19,8 +19,6 @@ method.
 !3
 ^^
 
-(bang_on_numeric_literal.md:1:1):
-
 The value's type, which does not have a method named `not`, is:
 
     Dec

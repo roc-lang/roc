@@ -39,7 +39,6 @@ This Unicode escape sequence is not valid.
 "\u",
  ^^
 
-(string.md:4:3):
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:5:3
 
@@ -48,7 +47,6 @@ This Unicode escape sequence is not valid.
 "\u)",
  ^^
 
-(string.md:5:3):
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:6:3
 
@@ -57,7 +55,6 @@ This Unicode escape sequence is not valid.
 "\u(",
  ^^^
 
-(string.md:6:3):
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:7:3
 
@@ -66,7 +63,6 @@ This Unicode escape sequence is not valid.
 "\u()",
  ^^^^
 
-(string.md:7:3):
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:8:3
 
@@ -75,7 +71,6 @@ This Unicode escape sequence is not valid.
 "\u(K)",
  ^^^^^
 
-(string.md:8:3):
 
 ── ✗ invalid escape sequence ──────────────────────────────────── string.md:13:2
 
@@ -84,7 +79,6 @@ This escape sequence is not recognized.
 "\
 
 
-(string.md:13:2):
 
 ── ✗ unclosed string ──────────────────────────────────────────── string.md:13:1
 
@@ -93,7 +87,6 @@ This string is missing a closing quote.
 "\
 ^^
 
-(string.md:13:1):
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:1
 
@@ -108,7 +101,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here. (string.md:13:1):
+I found `"` here. string.md:13:1:
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:2
 
@@ -127,7 +120,7 @@ I found `\` here.
 
 Tip: Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1,
 arg2| body`, and double backslash (`\\`) begins a line in a multiline string.
-(string.md:13:2):
+string.md:13:2:
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:3
 
@@ -143,7 +136,7 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
-(string.md:13:3):
+string.md:13:3:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

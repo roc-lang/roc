@@ -1010,7 +1010,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("In this scope, ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" was already defined here:");
+        try report.document.addReflowingText(" was already defined in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1040,7 +1040,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addReflowingText(" is being redeclared.");
 
         // Show where the redeclaration is
-        try report.document.addReflowingText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is in:");
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1054,7 +1054,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("But ");
         try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" was already declared here:");
+        try report.document.addReflowingText(" was already declared in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1161,7 +1161,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
 
         // Show where the redeclaration is
-        try report.document.addReflowingText("The redeclaration is here:");
+        try report.document.addReflowingText("The redeclaration is in:");
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1175,7 +1175,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("But ");
         try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" was already declared here:");
+        try report.document.addReflowingText(" was already declared in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1208,7 +1208,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addText("The new declaration is here:");
+        try report.document.addText("The new declaration is in:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1220,7 +1220,7 @@ pub const Diagnostic = union(enum) {
             line_starts,
         );
         try report.document.addLineBreak();
-        try report.document.addText("The outer type was declared here:");
+        try report.document.addText("The outer type was declared in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1252,7 +1252,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("This may make the builtin type inaccessible in this scope.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addText("The new declaration is here:");
+        try report.document.addText("The new declaration is in:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1292,7 +1292,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
 
         // Show where the conflict is
-        try report.document.addText("The conflicting parameter is here:");
+        try report.document.addText("The conflicting parameter is in:");
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1306,7 +1306,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_parameter_name);
-        try report.document.addText(" was already declared here:");
+        try report.document.addText(" was already declared in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1415,7 +1415,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addReflowingText(" appears more than once in this record.");
 
         // Show where the duplicate field is
-        try report.document.addReflowingText("This field is duplicated here:");
+        try report.document.addReflowingText("This field is duplicated in:");
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1429,7 +1429,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("The field ");
         try report.document.addRecordField(owned_field_name);
-        try report.document.addReflowingText(" was first defined here:");
+        try report.document.addReflowingText(" was first defined in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1461,7 +1461,7 @@ pub const Diagnostic = union(enum) {
         try report.headline.addUnqualifiedSymbol(owned_tag_name);
         try report.headline.addReflowingText(" appears more than once in this tag union.");
 
-        try report.document.addReflowingText("This tag is duplicated here:");
+        try report.document.addReflowingText("This tag is duplicated in:");
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1475,7 +1475,7 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("The tag ");
         try report.document.addUnqualifiedSymbol(owned_tag_name);
-        try report.document.addReflowingText(" was first defined here:");
+        try report.document.addReflowingText(" was first defined in:");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,

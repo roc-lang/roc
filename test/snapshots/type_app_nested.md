@@ -23,7 +23,6 @@ The type `Err` is not declared in this scope.
 processNested : List(Try(Str, Err)) -> List(Str)
                               ^^^
 
-(type_app_nested.md:3:31):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

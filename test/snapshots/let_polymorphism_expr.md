@@ -21,7 +21,6 @@ the same value.
 match [] {
       ^^
 
-(let_polymorphism_expr.md:1:7):
 # TOKENS
 ~~~zig
 KwMatch,OpenSquare,CloseSquare,OpenCurly,

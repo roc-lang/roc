@@ -27,7 +27,7 @@ For example:
     person.name
     pair.0
 
-I found `.` here. (fuzz_crash_081.md:1:6):
+I found `.` here. fuzz_crash_081.md:1:6:
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_081.md:1:5
 
@@ -35,8 +35,6 @@ I don't recognize this syntax.
 
 x = 0.()
     ^^^^
-
-(fuzz_crash_081.md:1:5):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

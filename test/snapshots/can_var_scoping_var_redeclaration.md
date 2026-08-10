@@ -27,9 +27,7 @@ var x_ = 10 # Redeclare var - should warn but proceed
 ^^^^^^^^^^^
 
 
-(can_var_scoping_var_redeclaration.md:4:2):
-
-In this scope, `x_` was already defined here (can_var_scoping_var_redeclaration.md:3:2) (can_var_scoping_var_redeclaration.md:3:2):
+In this scope, `x_` was already defined in can_var_scoping_var_redeclaration.md:3:2:
 
 var x_ = 5
 ^^^^^^^^^^

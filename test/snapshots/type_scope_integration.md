@@ -30,9 +30,9 @@ Foo : Str
 ^^^^^^^^^
 
 
-The redeclaration is here (type_scope_integration.md:5:1):
+The redeclaration is in type_scope_integration.md:5:1:
 
-But Foo was already declared here (type_scope_integration.md:2:1) (type_scope_integration.md:2:1):
+But Foo was already declared in type_scope_integration.md:2:1:
 
 Foo : U64
 ^^^^^^^^^
@@ -44,7 +44,6 @@ The type `SomeUndeclaredType` is not declared in this scope.
 Bar : SomeUndeclaredType
       ^^^^^^^^^^^^^^^^^^
 
-(type_scope_integration.md:8:7):
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

@@ -18,7 +18,6 @@ This Unicode escape sequence is not valid.
 "abc\u(zzzz)def"
     ^^^^^^^^
 
-(unicode_not_hex.md:1:5):
 # TOKENS
 ~~~zig
 StringStart,MalformedStringPart,StringEnd,

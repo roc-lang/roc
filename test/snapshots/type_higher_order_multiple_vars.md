@@ -33,7 +33,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c (type_higher_order_multiple_vars.md:3:36):
+    (a -> b) -> c type_higher_order_multiple_vars.md:3:36:
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:39
 
@@ -48,7 +48,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here. (type_higher_order_multiple_vars.md:3:39):
+I found `(` here. type_higher_order_multiple_vars.md:3:39:
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:40
 
@@ -63,7 +63,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_a` here. (type_higher_order_multiple_vars.md:3:40):
+I found `_a` here. type_higher_order_multiple_vars.md:3:40:
 
 ── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:43
 
@@ -77,7 +77,7 @@ function as an argument.
 
 For example:
     a -> (b -> c)
-    (a -> b) -> c (type_higher_order_multiple_vars.md:3:43):
+    (a -> b) -> c type_higher_order_multiple_vars.md:3:43:
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:46
 
@@ -92,7 +92,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_c` here. (type_higher_order_multiple_vars.md:3:46):
+I found `_c` here. type_higher_order_multiple_vars.md:3:46:
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:48
 
@@ -109,7 +109,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (type_higher_order_multiple_vars.md:3:48):
+item before it. type_higher_order_multiple_vars.md:3:48:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

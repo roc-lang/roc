@@ -27,7 +27,7 @@ bad_function = |msg| Stdout.line!(msg)
                      ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(pure_annotation_effectful_body_error.md:7:22):
+pure_annotation_effectful_body_error.md:7:22:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

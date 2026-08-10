@@ -28,7 +28,7 @@ print_msg! = |msg| Stdout.line!(msg)
                    ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(effectful_with_effectful_annotation.md:7:20):
+effectful_with_effectful_annotation.md:7:20:
 
 ── ✗ effectful top level value ────── effectful_with_effectful_annotation.md:9:9
 
@@ -36,9 +36,6 @@ This top-level definition performs an effect while initializing.
 
 main! = print_msg!("Hello, world!")
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-(effectful_with_effectful_annotation.md:9:9):
-
 
 Move the effect into a function body so it runs when the function is called.
 # TOKENS

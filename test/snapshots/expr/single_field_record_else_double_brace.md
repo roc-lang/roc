@@ -26,7 +26,6 @@ make the same choice.
 if True {
    ^^^^
 
-(single_field_record_else_double_brace.md:3:5):
 # TOKENS
 ~~~zig
 OpenCurly,

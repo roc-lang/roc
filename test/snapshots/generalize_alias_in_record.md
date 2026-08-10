@@ -22,8 +22,6 @@ This string literal is being used where a non-string type is needed.
 main = ((r.f)(1), (r.f)("a"))
                         ^^^
 
-(generalize_alias_in_record.md:5:25):
-
 The type was determined to be:
 
     Dec

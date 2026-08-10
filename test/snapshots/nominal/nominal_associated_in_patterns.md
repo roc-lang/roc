@@ -24,7 +24,7 @@ handleSuccess = |res| "success"
                  ^^^
 
 If you don't need this variable, prefix it with an underscore like `_res` to
-suppress this warning. (nominal_associated_in_patterns.md:6:18):
+suppress this warning. nominal_associated_in_patterns.md:6:18:
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

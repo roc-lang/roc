@@ -23,8 +23,6 @@ The `mapList` function expects 2 arguments, but it got 1 instead.
 main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^^^^^^^^^^^^^^
 
-(type_app_with_vars.md:6:13):
-
 The `mapList` function has the type:
 
     List(a), (a -> b) -> List(b)

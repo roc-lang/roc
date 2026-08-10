@@ -24,8 +24,6 @@ that method.
 (Zero, Zero) => "origin"
                 ^^^^^^^^
 
-(tuple_patterns.md:2:21):
-
 The value's type, which does not have a method named `from_quote`, is:
 
     [Zero, ..]

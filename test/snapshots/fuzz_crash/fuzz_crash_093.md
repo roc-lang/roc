@@ -18,8 +18,6 @@ I am part way through parsing this tuple, but it is empty.
 d=(0||())
       ^^
 
-(fuzz_crash_093.md:1:7):
-
 If you want to represent nothing, try using an empty record: `{}`.
 # TOKENS
 ~~~zig

@@ -25,8 +25,6 @@ This string literal is being used where a non-string type is needed.
 main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
                                          ^^^
 
-(generalize_alias_assoc_fn_record.md:8:42):
-
 The type was determined to be:
 
     Dec

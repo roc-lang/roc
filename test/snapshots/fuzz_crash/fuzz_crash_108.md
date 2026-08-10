@@ -18,8 +18,6 @@ This destructuring pattern doesn't cover all possible cases.
 main!=|0|||"".P
        ^
 
-(fuzz_crash_108.md:1:8):
-
 The value being destructured has type:
         a
   where [

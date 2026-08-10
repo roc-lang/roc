@@ -21,8 +21,6 @@ type variable, which has no methods.
 result = poly() == poly()
          ^^^^^^
 
-(static_dispatch_unresolved_equality.md:3:10):
-
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.

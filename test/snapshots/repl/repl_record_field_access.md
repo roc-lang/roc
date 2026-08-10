@@ -12,7 +12,6 @@ type=repl
 # OUTPUT
 **Type Mismatch**
 This record does not have a `foo` field.
-(repl:1:1):
 ```roc
 {}.foo
 ```

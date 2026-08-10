@@ -28,7 +28,7 @@ For example:
 
 I found `mo` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_001.md:1:1):
+depending on the surrounding syntax. fuzz_crash_001.md:1:1:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_001.md:1:3
 
@@ -43,7 +43,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. (fuzz_crash_001.md:1:3):
+I found `|` here. fuzz_crash_001.md:1:3:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_001.md:1:4
 
@@ -58,7 +58,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `%` here. (fuzz_crash_001.md:1:4):
+I found `%` here. fuzz_crash_001.md:1:4:
 # TOKENS
 ~~~zig
 LowerIdent,OpBar,OpPercent,

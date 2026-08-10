@@ -39,7 +39,7 @@ num = identity(42)
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_num` to
-suppress this warning. (rigid_var_instantiation.md:10:5):
+suppress this warning. rigid_var_instantiation.md:10:5:
 
 ── ● unused variable ─────────────────────────── rigid_var_instantiation.md:13:5
 
@@ -49,7 +49,7 @@ str = identity("hello")
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_str` to
-suppress this warning. (rigid_var_instantiation.md:13:5):
+suppress this warning. rigid_var_instantiation.md:13:5:
 
 ── ● unused variable ─────────────────────────── rigid_var_instantiation.md:16:5
 
@@ -59,7 +59,7 @@ lst = identity([1, 2, 3])
 ^^^
 
 If you don't need this variable, prefix it with an underscore like `_lst` to
-suppress this warning. (rigid_var_instantiation.md:16:5):
+suppress this warning. rigid_var_instantiation.md:16:5:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -26,8 +26,6 @@ The `swap` function expects 1 argument, but it got 2 instead.
 main = swap(1, 2)
        ^^^^^^^^^^
 
-(test_tuple_instantiation_crash.md:9:8):
-
 The `swap` function has the type:
 
     (a, b) -> (b, a)

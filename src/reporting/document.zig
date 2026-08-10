@@ -465,6 +465,12 @@ pub const Document = struct {
     fn injectLocation(self: *Document, filename: []const u8, line: u32, col: u32) std.mem.Allocator.Error!void {
         const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
         const sanitized_filename = sanitisePathForSnapshots(filename);
+        
+        var start: usize = 0;
+        for (sanitized_filename, 0..) |c, i| {
+            if (c == '/' or c == '\\') start = i + 1;
+        }
+        const basename = sanitized_filename[start..];
 
         var i: usize = self.elements.items.len;
         while (i > 0) {
@@ -474,18 +480,18 @@ pub const Document = struct {
                 .line_break, .annotation_start, .annotation_end, .indent, .space => continue,
                 .reflowing_text => |*text| {
                     if (std.mem.endsWith(u8, text.*, ":")) {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             text.*[0 .. text.*.len - 1],
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
                         self.allocator.free(text.*);
                         text.* = new_text;
                     } else {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             text.*,
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
@@ -496,18 +502,18 @@ pub const Document = struct {
                 },
                 .text => |*text| {
                     if (std.mem.endsWith(u8, text.*, ":")) {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             text.*[0 .. text.*.len - 1],
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
                         self.allocator.free(text.*);
                         text.* = new_text;
                     } else {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             text.*,
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
@@ -518,18 +524,18 @@ pub const Document = struct {
                 },
                 .annotated => |*annotated| {
                     if (std.mem.endsWith(u8, annotated.content, ":")) {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             annotated.content[0 .. annotated.content.len - 1],
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
                         self.allocator.free(annotated.content);
                         annotated.content = new_text;
                     } else {
-                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} ({s}:{d}:{d}):", .{
+                        const new_text = try std.fmt.allocPrint(self.allocator, "{s} {s}:{d}:{d}:", .{
                             annotated.content,
-                            sanitized_filename,
+                            basename,
                             line,
                             col,
                         });
@@ -541,12 +547,6 @@ pub const Document = struct {
                 else => break,
             }
         }
-        
-        // If we get here, we either hit an element that stops the search or reached the beginning without finding text.
-        // We append a new text element before the source region, and also a line break so it doesn't stick to the code block.
-        const new_text = try std.fmt.allocPrint(self.allocator, "({s}:{d}:{d}):", .{ sanitized_filename, line, col });
-        try self.elements.append(.{ .text = new_text });
-        try self.elements.append(.line_break);
     }
 
     /// Add multiple line breaks.

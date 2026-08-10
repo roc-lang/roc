@@ -24,7 +24,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here. (unknown_operator.md:1:4):
+I found `+` here. unknown_operator.md:1:4:
 # TOKENS
 ~~~zig
 Int,OpPlus,OpPlus,Int,

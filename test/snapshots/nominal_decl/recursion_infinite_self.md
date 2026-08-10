@@ -25,7 +25,7 @@ t = T.((t, 1))
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. (recursion_infinite_self.md:4:9):
+value being assigned. recursion_infinite_self.md:4:9:
 
 ── ✗ invalid recursive type ───────────────────── recursion_infinite_self.md:1:1
 
@@ -33,8 +33,6 @@ The nominal type T refers to itself in a way that would make it infinite.
 
 T := (T, U64)
 ^^^^^^^^^^^^^
-
-(recursion_infinite_self.md:1:1):
 
 Its definition is:
 

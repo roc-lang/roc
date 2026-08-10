@@ -19,7 +19,6 @@ This string is missing a closing quote.
 app[]{f:platform"",r:"
                      ^
 
-(fuzz_crash_058.md:1:22):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,

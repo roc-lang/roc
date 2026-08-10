@@ -23,8 +23,6 @@ This expression is used in an unexpected way.
 main = "${y}"
           ^
 
-(issue_9075.md:6:11):
-
 It has the type:
 
     Dec

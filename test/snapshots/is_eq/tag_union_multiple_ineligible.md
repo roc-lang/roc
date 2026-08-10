@@ -24,8 +24,6 @@ equality.
 expect result == result
        ^^^^^^^^^^^^^^^^
 
-(tag_union_multiple_ineligible.md:6:8):
-
 The type is:
 
     [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]

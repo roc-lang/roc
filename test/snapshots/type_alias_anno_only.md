@@ -20,9 +20,6 @@ This declaration has a type annotation but no implementation.
 hey : MyType
 ^^^^^^^^^^^^
 
-(type_alias_anno_only.md:3:1):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 # TOKENS

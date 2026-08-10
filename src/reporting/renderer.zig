@@ -704,6 +704,7 @@ fn renderEmbeddedBox(
 ) error{WriteFailed}!void {
     _ = annotation;
     _ = config;
+    _ = filename;
 
     var body = std.mem.trim(u8, preceding_text, " \n\r\t");
     var ends_with_colon = false;
@@ -723,23 +724,11 @@ fn renderEmbeddedBox(
         }
     }
 
-    if (body.len > 0 or filename != null) {
+    if (body.len > 0) {
         try writer.writeByte('\n');
         try writer.writeAll(palette.secondary);
         try writer.writeAll(body);
         try writer.writeAll(suffix);
-
-        if (filename) |f| {
-            const dim_gray = if (palette.reset.len > 0) AnsiCodes.BRIGHT_BLACK else "";
-            if (body.len > 0) {
-                try writer.writeAll(" ");
-            }
-            try writer.writeAll(dim_gray);
-            try writer.writeAll("(");
-            try writeLocation(writer, palette, sanitisePathForSnapshots(f), start_line, start_column);
-            try writer.writeAll(dim_gray);
-            try writer.writeAll(")");
-        }
 
         if (ends_with_colon) {
             try writer.writeAll(palette.reset);

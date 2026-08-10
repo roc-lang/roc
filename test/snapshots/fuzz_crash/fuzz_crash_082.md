@@ -25,7 +25,6 @@ The type `U` is not declared in this scope.
 i:U
   ^
 
-(fuzz_crash_082.md:1:3):
 
 ── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_082.md:4:4
 
@@ -33,8 +32,6 @@ I am part way through parsing this tuple, but it is empty.
 
 ()=()
    ^^
-
-(fuzz_crash_082.md:4:4):
 
 If you want to represent nothing, try using an empty record: `{}`.
 
@@ -44,9 +41,6 @@ This declaration has a type annotation but no implementation.
 
 i:U
 ^^^
-
-(fuzz_crash_082.md:1:1):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -58,9 +52,6 @@ This declaration has a type annotation but no implementation.
 d:i
 ^^^
 
-(fuzz_crash_082.md:2:1):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -71,8 +62,6 @@ that method.
 
 o=||{D()=0}
          ^
-
-(fuzz_crash_082.md:3:10):
 
 The value's type, which does not have a method named `from_numeral`, is:
 

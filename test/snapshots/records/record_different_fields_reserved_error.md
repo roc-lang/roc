@@ -48,7 +48,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_reserved_error.md:2:7):
+I found `:` here. record_different_fields_reserved_error.md:2:7:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:2:22
 
@@ -65,7 +65,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:2:22):
+record_different_fields_reserved_error.md:2:22:
 
 ── ✗ unexpected type syntax ───── record_different_fields_reserved_error.md:3:11
 
@@ -80,7 +80,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here. (record_different_fields_reserved_error.md:3:11):
+I found `"` here. record_different_fields_reserved_error.md:3:11:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:12
 
@@ -95,7 +95,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `pattern match` here. (record_different_fields_reserved_error.md:3:12):
+I found `pattern match` here. record_different_fields_reserved_error.md:3:12:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:25
 
@@ -110,7 +110,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here. (record_different_fields_reserved_error.md:3:25):
+I found `"` here. record_different_fields_reserved_error.md:3:25:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:26
 
@@ -127,7 +127,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:3:26):
+record_different_fields_reserved_error.md:3:26:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:11
 
@@ -142,7 +142,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_reserved_error.md:4:11):
+I found `:` here. record_different_fields_reserved_error.md:4:11:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:29
 
@@ -159,7 +159,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:4:29):
+record_different_fields_reserved_error.md:4:29:
 
 ── ✗ import must be top level ──── record_different_fields_reserved_error.md:5:5
 
@@ -178,7 +178,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(record_different_fields_reserved_error.md:5:5):
+record_different_fields_reserved_error.md:5:5:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:11
 
@@ -193,7 +193,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_reserved_error.md:5:11):
+I found `:` here. record_different_fields_reserved_error.md:5:11:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:23
 
@@ -210,7 +210,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:5:23):
+record_different_fields_reserved_error.md:5:23:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:5
 
@@ -225,7 +225,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `and` here. (record_different_fields_reserved_error.md:6:5):
+I found `and` here. record_different_fields_reserved_error.md:6:5:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:19
 
@@ -242,7 +242,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:6:19):
+record_different_fields_reserved_error.md:6:19:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:5
 
@@ -257,7 +257,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `or` here. (record_different_fields_reserved_error.md:7:5):
+I found `or` here. record_different_fields_reserved_error.md:7:5:
 
 ── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:19
 
@@ -274,7 +274,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_reserved_error.md:7:19):
+record_different_fields_reserved_error.md:7:19:
 
 ── ● declaration has no value ──── record_different_fields_reserved_error.md:3:5
 
@@ -282,9 +282,6 @@ This declaration has a type annotation but no implementation.
 
 when: "pattern match",
 ^^^^^^^
-
-(record_different_fields_reserved_error.md:3:5):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -297,8 +294,6 @@ that method.
 expect: "test assertion",
         ^^^^^^^^^^^^^^^^
 
-(record_different_fields_reserved_error.md:4:13):
-
 The value's type, which does not have a method named `from_quote`, is:
 
     {}
@@ -310,8 +305,6 @@ that method.
 
 import: "mod load",
         ^^^^^^^^^^
-
-(record_different_fields_reserved_error.md:5:13):
 
 The value's type, which does not have a method named `from_quote`, is:
 

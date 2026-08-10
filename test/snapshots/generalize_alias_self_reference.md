@@ -23,7 +23,7 @@ x = x
 
 Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
-value being assigned. (generalize_alias_self_reference.md:1:5):
+value being assigned. generalize_alias_self_reference.md:1:5:
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,

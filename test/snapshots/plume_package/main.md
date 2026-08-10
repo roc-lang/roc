@@ -20,7 +20,6 @@ The mod `Color` was not found in this Roc project.
 Color,
 ^^^^^
 
-(main.md:2:5):
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,

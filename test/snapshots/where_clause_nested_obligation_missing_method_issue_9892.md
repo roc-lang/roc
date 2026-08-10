@@ -28,8 +28,6 @@ that method.
 unwrap = |Wrap.W(x)| x.frobnicate()
                        ^^^^^^^^^^
 
-(where_clause_nested_obligation_missing_method_issue_9892.md:3:28):
-
 The value's type, which does not have a method named `frobnicate`, is:
 
     U8

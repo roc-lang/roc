@@ -21,7 +21,6 @@ an early return.
 A?
 ^^
 
-(try_undefined_tag.md:1:1):
 
 ── ✗ type mismatch ──────────────────────────────────── try_undefined_tag.md:1:1
 
@@ -30,8 +29,6 @@ The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and
 
 A?
 ^
-
-(try_undefined_tag.md:1:1):
 
 This expression has type:
 

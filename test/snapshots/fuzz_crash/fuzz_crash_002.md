@@ -38,7 +38,7 @@ For example:
 
 I found `;` here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
-(fuzz_crash_002.md:1:6):
+fuzz_crash_002.md:1:6:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:7
 
@@ -53,7 +53,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:7):
+I found `::` here. fuzz_crash_002.md:1:7:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:9
 
@@ -68,7 +68,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:9):
+I found `::` here. fuzz_crash_002.md:1:9:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:11
 
@@ -83,7 +83,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:11):
+I found `::` here. fuzz_crash_002.md:1:11:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:13
 
@@ -98,7 +98,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:13):
+I found `::` here. fuzz_crash_002.md:1:13:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:15
 
@@ -113,7 +113,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:15):
+I found `::` here. fuzz_crash_002.md:1:15:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:17
 
@@ -128,7 +128,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:17):
+I found `::` here. fuzz_crash_002.md:1:17:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:19
 
@@ -143,7 +143,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here. (fuzz_crash_002.md:1:19):
+I found `::` here. fuzz_crash_002.md:1:19:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:21
 
@@ -160,7 +160,7 @@ For example:
 
 I found `le` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_002.md:1:21):
+depending on the surrounding syntax. fuzz_crash_002.md:1:21:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:23
 
@@ -175,7 +175,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (fuzz_crash_002.md:1:23):
+I found `[` here. fuzz_crash_002.md:1:23:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:24
 
@@ -190,7 +190,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `%` here. (fuzz_crash_002.md:1:24):
+I found `%` here. fuzz_crash_002.md:1:24:
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_002.md:1:6
 
@@ -199,7 +199,6 @@ This type annotation is malformed or contains invalid syntax.
 modu:;::::::::::::::le[%
      ^
 
-(fuzz_crash_002.md:1:6):
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_002.md:1:1
 
@@ -207,9 +206,6 @@ This declaration has a type annotation but no implementation.
 
 modu:;::::::::::::::le[%
 ^^^^^^
-
-(fuzz_crash_002.md:1:1):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.

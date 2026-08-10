@@ -30,7 +30,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest] (list_rest_scoping_variables.md:2:6):
+    [first, .. as rest] list_rest_scoping_variables.md:2:6:
 
 ── ✗ old list rest pattern ───────────────── list_rest_scoping_variables.md:3:13
 
@@ -43,7 +43,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest] (list_rest_scoping_variables.md:3:13):
+    [first, .. as rest] list_rest_scoping_variables.md:3:13:
 
 ── ✗ old list rest pattern ────────────────── list_rest_scoping_variables.md:4:6
 
@@ -56,7 +56,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest] (list_rest_scoping_variables.md:4:6):
+    [first, .. as rest] list_rest_scoping_variables.md:4:6:
 
 ── ✗ old list rest pattern ───────────────── list_rest_scoping_variables.md:5:13
 
@@ -69,7 +69,7 @@ List rest patterns now use `.. as name`. The name is optional, but if it is
 present it must come after `as`.
 
 For example:
-    [first, .. as rest] (list_rest_scoping_variables.md:5:13):
+    [first, .. as rest] list_rest_scoping_variables.md:5:13:
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

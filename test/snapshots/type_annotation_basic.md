@@ -45,7 +45,7 @@ pair = combine(num, text)
 ^^^^
 
 If you don't need this variable, prefix it with an underscore like `_pair` to
-suppress this warning. (type_annotation_basic.md:21:5):
+suppress this warning. type_annotation_basic.md:21:5:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

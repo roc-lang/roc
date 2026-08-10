@@ -25,8 +25,6 @@ to it.
 inner : a -> Str where [a.show : a -> Str]
                         ^^^^^^^^^^^^^^^^^
 
-(where_clause_enclosing_rigid_error.md:3:29):
-
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `a` to the annotation, or remove this constraint.

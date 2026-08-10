@@ -42,7 +42,6 @@ The type `Maybe` is not declared in this scope.
 processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
                           ^^^^^
 
-(type_app_complex_nested.md:4:27):
 
 ── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:48
 
@@ -51,7 +50,6 @@ The type `Error` is not declared in this scope.
 processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
                                                ^^^^^
 
-(type_app_complex_nested.md:4:48):
 
 ── ● unused variable ─────────────────────────── type_app_complex_nested.md:7:12
 
@@ -61,7 +59,7 @@ Ok(maybeList) => []
    ^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_maybeList`
-to suppress this warning. (type_app_complex_nested.md:7:12):
+to suppress this warning. type_app_complex_nested.md:7:12:
 
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:12:14
 
@@ -70,7 +68,6 @@ The type `Maybe` is not declared in this scope.
 deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
-(type_app_complex_nested.md:12:14):
 
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:30
 
@@ -79,7 +76,6 @@ The type `Maybe` is not declared in this scope.
 ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
                              ^^^^^
 
-(type_app_complex_nested.md:18:30):
 
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:51
 
@@ -88,7 +84,6 @@ The type `Error` is not declared in this scope.
 ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
                                                   ^^^^^
 
-(type_app_complex_nested.md:18:51):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

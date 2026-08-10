@@ -21,8 +21,6 @@ This destructuring pattern doesn't cover all possible cases.
 for 1 in [1, 2] {}
     ^
 
-(for_loop_refutable_literal_pattern.md:2:9):
-
 The value being destructured has type:
         Dec
 

@@ -31,7 +31,7 @@ For example:
 
 I found `)` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_090.md:2:7):
+item before it. fuzz_crash_090.md:2:7:
 
 ── ✗ expected closing brace ────────────────────────────── fuzz_crash_090.md:3:1
 
@@ -49,7 +49,7 @@ For example:
     }
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_090.md:3:1):
+fuzz_crash_090.md:3:1:
 
 ── ✗ expected tuple separator ──────────────────────────── fuzz_crash_090.md:3:1
 
@@ -65,7 +65,7 @@ For example:
     (x, y)
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_090.md:3:1):
+fuzz_crash_090.md:3:1:
 
 ── ✗ expected closing brace ────────────────────────────── fuzz_crash_090.md:3:1
 
@@ -83,7 +83,7 @@ For example:
     }
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_090.md:3:1):
+fuzz_crash_090.md:3:1:
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_090.md:1:1
 
@@ -91,8 +91,6 @@ I don't recognize this syntax.
 
 e={({\\
 ^
-
-(fuzz_crash_090.md:1:1):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

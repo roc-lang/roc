@@ -19,7 +19,6 @@ make the same choice.
 if x > 5 "big" else "small"
    ^^^^^
 
-(if_expression.md:1:4):
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpGreaterThan,Int,StringStart,StringPart,StringEnd,KwElse,StringStart,StringPart,StringEnd,

@@ -23,8 +23,6 @@ match person {
     { age } => age
 }
 
-(simple_record.md:1:1):
-
 This second branch is trying to match:
 
     { age: _field }

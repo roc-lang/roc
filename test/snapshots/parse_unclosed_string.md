@@ -18,7 +18,6 @@ This string is missing a closing quote.
 "hello
 ^^^^^^
 
-(parse_unclosed_string.md:1:1):
 # TOKENS
 ~~~zig
 StringStart,StringPart,StringEnd,

@@ -45,7 +45,7 @@ result2 = swap((Bool.true, [1, 2, 3]))
                 ^^^^^^^^^
 
 `Bool` is in scope, but it has no associated `true`.
-(rigid_var_no_instantiation_error.md:17:21):
+rigid_var_no_instantiation_error.md:17:21:
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:13:5
 
@@ -55,7 +55,7 @@ result1 = swap((42, "hello"))
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result1`
-to suppress this warning. (rigid_var_no_instantiation_error.md:13:5):
+to suppress this warning. rigid_var_no_instantiation_error.md:13:5:
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:17:5
 
@@ -65,7 +65,7 @@ result2 = swap((Bool.true, [1, 2, 3]))
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result2`
-to suppress this warning. (rigid_var_no_instantiation_error.md:17:5):
+to suppress this warning. rigid_var_no_instantiation_error.md:17:5:
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:21:5
 
@@ -75,7 +75,7 @@ result3 = swap(("foo", "bar"))
 ^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_result3`
-to suppress this warning. (rigid_var_no_instantiation_error.md:21:5):
+to suppress this warning. rigid_var_no_instantiation_error.md:21:5:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

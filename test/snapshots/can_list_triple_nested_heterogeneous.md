@@ -18,8 +18,6 @@ This string literal is being used where a non-string type is needed.
 [[], [[], [1]], [[], ["hello"]]]
                       ^^^^^^^
 
-(can_list_triple_nested_heterogeneous.md:1:23):
-
 The type was determined to be:
 
     Dec

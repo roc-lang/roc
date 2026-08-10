@@ -23,7 +23,7 @@ You cannot define a `where` clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this here (fuzz_crash_083.md:1:1):
+You're attempting do this in fuzz_crash_083.md:1:1:
 
 ── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
 
@@ -35,9 +35,9 @@ C(b, b) : (a, b)
 
 Type parameters must have unique names within their scope.
 
-The conflicting parameter is here (fuzz_crash_083.md:2:6):
+The conflicting parameter is in fuzz_crash_083.md:2:6:
 
-But `b` was already declared here (fuzz_crash_083.md:2:3) (fuzz_crash_083.md:2:3):
+But `b` was already declared in fuzz_crash_083.md:2:3:
 
 C(b, b) : (a, b)
   ^
@@ -50,7 +50,7 @@ C(b, b) : (a, b)
            ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_083.md:2:12):
+fuzz_crash_083.md:2:12:
 
 ── ✗ too many args ────────────────────────────────────── fuzz_crash_083.md:3:11
 
@@ -59,7 +59,6 @@ The type C expects 1 argument, but got 2 instead.
 D(a, b) : C(a, b)
           ^^^^^^^
 
-(fuzz_crash_083.md:3:11):
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpArrow,UpperIdent,CloseSquare,

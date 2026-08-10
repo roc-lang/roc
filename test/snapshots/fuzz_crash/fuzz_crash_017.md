@@ -27,7 +27,7 @@ embedded expression.
 For example:
     "Hello, ${name}!"
 
-I found `"` here. (fuzz_crash_017.md:2:7):
+I found `"` here. fuzz_crash_017.md:2:7:
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_017.md:2:7
 
@@ -35,8 +35,6 @@ I don't recognize this syntax.
 
 foo = "hello ${namF
       ^^^^^^^^^^^^^
-
-(fuzz_crash_017.md:2:7):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

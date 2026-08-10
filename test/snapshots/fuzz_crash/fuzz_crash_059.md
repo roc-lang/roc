@@ -35,7 +35,7 @@ For example:
 
 I found `if` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_059.md:2:3):
+fuzz_crash_059.md:2:3:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:6
 
@@ -50,7 +50,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. (fuzz_crash_059.md:2:6):
+I found `0` here. fuzz_crash_059.md:2:6:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:7
 
@@ -65,7 +65,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here. (fuzz_crash_059.md:2:7):
+I found `{` here. fuzz_crash_059.md:2:7:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:8
 
@@ -82,7 +82,7 @@ For example:
 
 I found `}` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_059.md:2:8):
+item before it. fuzz_crash_059.md:2:8:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:9
 
@@ -99,7 +99,7 @@ For example:
 
 I found `else` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_059.md:2:9):
+fuzz_crash_059.md:2:9:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:13
 
@@ -114,7 +114,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. (fuzz_crash_059.md:2:13):
+I found `|` here. fuzz_crash_059.md:2:13:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:14
 
@@ -129,7 +129,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here. (fuzz_crash_059.md:2:14):
+I found `|` here. fuzz_crash_059.md:2:14:
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:15
 
@@ -144,7 +144,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here. (fuzz_crash_059.md:2:15):
+I found `0` here. fuzz_crash_059.md:2:15:
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_059.md:1:20
 
@@ -153,7 +153,6 @@ The mod `B` was not found in this Roc project.
 app[]{f:platform""}import B as
 G if 0{}else||0
 
-(fuzz_crash_059.md:1:20):
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,KwImport,UpperIdent,KwAs,

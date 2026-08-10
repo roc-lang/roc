@@ -24,8 +24,6 @@ method.
 [x, [y]] => x * y
             ^^^^^
 
-(nested_list_scoping.md:4:17):
-
 The value's type, which does not have a method named `times`, is:
 
     List(a) where [a.minus : a, a -> a, a.plus : a, a -> a]
@@ -42,9 +40,6 @@ match nestedList {
     [[x, y]] => x - y
     [x, [y]] => x * y
 }
-
-(nested_list_scoping.md:1:1):
-
 
 Its type is:
 a where [a.minus : a, a -> a, a.plus : a, a -> a]

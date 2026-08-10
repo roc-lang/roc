@@ -39,8 +39,6 @@ The value before this `+` operator has a type that doesn't have a `plus` method.
 result1 = a + b
           ^^^^^
 
-(plus_operator_vs_method.md:11:11):
-
 The value's type, which does not have a method named `plus`, is:
 
     MyType
@@ -55,8 +53,6 @@ method.
 
 result2 = c.plus(d)
             ^^^^
-
-(plus_operator_vs_method.md:21:13):
 
 The value's type, which does not have a method named `plus`, is:
 

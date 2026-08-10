@@ -52,7 +52,6 @@ middle or at the end.
 field$special: "dollar",
      ^
 
-(record_different_fields_error.md:6:10):
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:2:20
 
@@ -67,7 +66,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here. (record_different_fields_error.md:2:20):
+I found `"` here. record_different_fields_error.md:2:20:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:21
 
@@ -82,7 +81,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `leading underscore` here. (record_different_fields_error.md:2:21):
+I found `leading underscore` here. record_different_fields_error.md:2:21:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:39
 
@@ -97,7 +96,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here. (record_different_fields_error.md:2:39):
+I found `"` here. record_different_fields_error.md:2:39:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:40
 
@@ -114,7 +113,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:2:40):
+record_different_fields_error.md:2:40:
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:3:13
 
@@ -129,7 +128,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here. (record_different_fields_error.md:3:13):
+I found `"` here. record_different_fields_error.md:3:13:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:14
 
@@ -144,7 +143,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `trailing underscore` here. (record_different_fields_error.md:3:14):
+I found `trailing underscore` here. record_different_fields_error.md:3:14:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:33
 
@@ -159,7 +158,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here. (record_different_fields_error.md:3:33):
+I found `"` here. record_different_fields_error.md:3:33:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:34
 
@@ -176,7 +175,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:3:34):
+record_different_fields_error.md:3:34:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:15
 
@@ -191,7 +190,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_error.md:4:15):
+I found `:` here. record_different_fields_error.md:4:15:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:25
 
@@ -208,7 +207,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:4:25):
+record_different_fields_error.md:4:25:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:15
 
@@ -223,7 +222,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_error.md:5:15):
+I found `:` here. record_different_fields_error.md:5:15:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:24
 
@@ -240,7 +239,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:5:24):
+record_different_fields_error.md:5:24:
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:6:20
 
@@ -255,7 +254,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here. (record_different_fields_error.md:6:20):
+I found `"` here. record_different_fields_error.md:6:20:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:21
 
@@ -270,7 +269,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `dollar` here. (record_different_fields_error.md:6:21):
+I found `dollar` here. record_different_fields_error.md:6:21:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:27
 
@@ -285,7 +284,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here. (record_different_fields_error.md:6:27):
+I found `"` here. record_different_fields_error.md:6:27:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:28
 
@@ -302,7 +301,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:6:28):
+record_different_fields_error.md:6:28:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:10
 
@@ -317,7 +316,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `@symbol` here. (record_different_fields_error.md:7:10):
+I found `@symbol` here. record_different_fields_error.md:7:10:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:17
 
@@ -332,7 +331,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here. (record_different_fields_error.md:7:17):
+I found `:` here. record_different_fields_error.md:7:17:
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:30
 
@@ -349,7 +348,7 @@ For example:
 
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
-(record_different_fields_error.md:7:30):
+record_different_fields_error.md:7:30:
 
 ── ● declaration has no value ───────────── record_different_fields_error.md:2:5
 
@@ -357,9 +356,6 @@ This declaration has a type annotation but no implementation.
 
 _privateField: "leading underscore",
 ^^^^^^^^^^^^^^^^
-
-(record_different_fields_error.md:2:5):
-
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
@@ -371,9 +367,6 @@ This declaration has a type annotation but no implementation.
 field_: "trailing underscore",
 ^^^^^^^^^
 
-(record_different_fields_error.md:3:5):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -383,8 +376,6 @@ This expression produces a value, but it's not being used.
 
 PascalCase: "pascal",
 ^^^^^^^^^^
-
-(record_different_fields_error.md:4:5):
 
 It has the type:
 
@@ -401,8 +392,6 @@ that method.
 PascalCase: "pascal",
             ^^^^^^^^
 
-(record_different_fields_error.md:4:17):
-
 The value's type, which does not have a method named `from_quote`, is:
 
     {}
@@ -415,8 +404,6 @@ that method.
 kebab-case: "kebab",
             ^^^^^^^
 
-(record_different_fields_error.md:5:17):
-
 The value's type, which does not have a method named `from_quote`, is:
 
     {}
@@ -428,9 +415,6 @@ This declaration has a type annotation but no implementation.
 field$special: "dollar",
 ^^^^^^^^^^^^^^^^
 
-(record_different_fields_error.md:6:5):
-
-
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
@@ -441,8 +425,6 @@ that method.
 
 field@symbol: "at symbol",
               ^^^^^^^^^^^
-
-(record_different_fields_error.md:7:19):
 
 The value's type, which does not have a method named `from_quote`, is:
 

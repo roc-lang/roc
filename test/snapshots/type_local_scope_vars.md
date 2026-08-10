@@ -49,8 +49,6 @@ The first argument being passed to this function has the wrong type.
 _result2 = f(b)
              ^
 
-(type_local_scope_vars.md:19:14):
-
 This argument has the type:
 
     b

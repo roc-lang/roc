@@ -19,8 +19,6 @@ This number literal does not fit in the inferred type.
 x = 500
     ^^^
 
-(u8_annotation_large_value.md:2:5):
-
 The inferred type is:
 
     U8

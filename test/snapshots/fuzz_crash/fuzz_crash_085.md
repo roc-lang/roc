@@ -23,8 +23,6 @@ Underscores are not allowed in type alias declarations.
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
   ^
 
-(fuzz_crash_085.md:1:3):
-
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
@@ -37,7 +35,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
              ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_085.md:1:14):
+fuzz_crash_085.md:1:14:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:16
 
@@ -47,7 +45,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_085.md:1:16):
+fuzz_crash_085.md:1:16:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:23
 
@@ -57,7 +55,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                       ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_085.md:1:23):
+fuzz_crash_085.md:1:23:
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:27
 
@@ -67,7 +65,7 @@ C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                           ^
 
 Type variables must be introduced in a type annotation before they can be used.
-(fuzz_crash_085.md:1:27):
+fuzz_crash_085.md:1:27:
 
 ── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_085.md:1:32
 
@@ -75,8 +73,6 @@ I am part way through parsing this tuple, but it is empty.
 
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                                ^^
-
-(fuzz_crash_085.md:1:32):
 
 If you want to represent nothing, try using an empty record: `{}`.
 # TOKENS

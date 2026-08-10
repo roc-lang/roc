@@ -21,9 +21,6 @@ match value {
     x => x + 1
 }
 
-(single_branch.md:1:1):
-
-
 Its type is:
 a where [a.plus : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.

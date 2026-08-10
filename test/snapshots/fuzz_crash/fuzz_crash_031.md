@@ -27,7 +27,6 @@ This single-quoted literal is missing a closing quote.
 vavar t= '
          ^
 
-(fuzz_crash_031.md:4:10):
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:1
 
@@ -44,7 +43,7 @@ For example:
 
 I found `mule` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_031.md:1:1):
+depending on the surrounding syntax. fuzz_crash_031.md:1:1:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:6
 
@@ -59,7 +58,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here. (fuzz_crash_031.md:1:6):
+I found `[` here. fuzz_crash_031.md:1:6:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:7
 
@@ -76,7 +75,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_031.md:1:7):
+item before it. fuzz_crash_031.md:1:7:
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:4:1
 
@@ -93,7 +92,7 @@ For example:
 
 I found `vavar` here.
 Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax. (fuzz_crash_031.md:4:1):
+depending on the surrounding syntax. fuzz_crash_031.md:4:1:
 
 ── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_031.md:4:10
 
@@ -108,7 +107,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'` here. (fuzz_crash_031.md:4:10):
+I found `'` here. fuzz_crash_031.md:4:10:
 
 ── ✗ unrecognized syntax ──────────────────────────────── fuzz_crash_031.md:4:10
 
@@ -116,8 +115,6 @@ I don't recognize this syntax.
 
 vavar t= '
          ^
-
-(fuzz_crash_031.md:4:10):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 # TOKENS

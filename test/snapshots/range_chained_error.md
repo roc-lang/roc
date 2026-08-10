@@ -19,7 +19,6 @@ Range operators can't be chained. Write a single range instead, like `a..<b` or
 r = 1..<5..<10
     ^^^^^^^^^^
 
-(range_chained_error.md:1:5):
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpDoubleDotLessThan,Int,OpDoubleDotLessThan,Int,

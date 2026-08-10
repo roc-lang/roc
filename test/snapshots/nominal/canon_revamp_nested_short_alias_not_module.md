@@ -32,7 +32,6 @@ DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
 bad = Nested.val
       ^^^^^^^^^^
 
-(canon_revamp_nested_short_alias_not_mod.md:13:7):
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

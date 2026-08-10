@@ -26,7 +26,7 @@ For example:
     person.name
     pair.0
 
-I found `.` here. (error_bad_record_accessor.md:1:7):
+I found `.` here. error_bad_record_accessor.md:1:7:
 # TOKENS
 ~~~zig
 LowerIdent,Dot,MalformedOpaqueNameWithoutName,

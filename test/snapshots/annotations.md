@@ -41,8 +41,6 @@ This string literal is being used where a non-string type is needed.
 failPairDiffTypes = mkPair("1", 2)
                            ^^^
 
-(annotations.md:16:28):
-
 The type was determined to be:
 
     U8
@@ -54,8 +52,6 @@ This string literal is being used where a non-string type is needed.
 failPairDiffTypes2 = Pair.Pair(1, "str")
                                   ^^^^^
 
-(annotations.md:19:35):
-
 The type was determined to be:
 
     U64
@@ -66,8 +62,6 @@ I'm having trouble with this nominal tag.
 
 mkPairInvalid = |x, y| Pair.Pair(x, y)
                        ^^^^^^^^^^^^^^^
-
-(annotations.md:22:24):
 
 The tag is:
 

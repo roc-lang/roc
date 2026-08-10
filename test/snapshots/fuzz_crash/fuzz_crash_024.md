@@ -37,7 +37,7 @@ For example:
 
 I found `var` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_024.md:2:1):
+fuzz_crash_024.md:2:1:
 
 ── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_024.md:2:8
 
@@ -54,7 +54,7 @@ For example:
 
 I found `]` here.
 This closes the current construct, so the parser was looking for the missing
-item before it. (fuzz_crash_024.md:2:8):
+item before it. fuzz_crash_024.md:2:8:
 
 ── ✗ var outside body ──────────────────────────────────── fuzz_crash_024.md:5:1
 
@@ -74,7 +74,7 @@ For example:
 
 I found `var` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(fuzz_crash_024.md:5:1):
+fuzz_crash_024.md:5:1:
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_024.md:2:8
 
@@ -82,8 +82,6 @@ I don't recognize this syntax.
 
 var t= ]
        ^
-
-(fuzz_crash_024.md:2:8):
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -95,9 +93,7 @@ var t= 0
     ^
 
 
-(fuzz_crash_024.md:5:5):
-
-In this scope, `t` was already defined here (fuzz_crash_024.md:2:5) (fuzz_crash_024.md:2:5):
+In this scope, `t` was already defined in fuzz_crash_024.md:2:5:
 
 var t= ]
     ^

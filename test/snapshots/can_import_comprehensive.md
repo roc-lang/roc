@@ -60,9 +60,7 @@ import json.Json
 ^^^^^^^^^^^^^^^^
 
 
-(can_import_comprehensive.md:1:1):
-
-In this scope, `Json` was already defined here (can_import_comprehensive.md:1:1) (can_import_comprehensive.md:1:1):
+In this scope, `Json` was already defined in can_import_comprehensive.md:1:1:
 
 import json.Json
 ^
@@ -75,9 +73,7 @@ import utils.String as Str
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-(can_import_comprehensive.md:3:1):
-
-In this scope, `Str` was already defined here (can_import_comprehensive.md:1:1) (can_import_comprehensive.md:1:1):
+In this scope, `Str` was already defined in can_import_comprehensive.md:1:1:
 
 import json.Json
 ^
@@ -90,7 +86,7 @@ client = Http.get
          ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:6:14):
+can_import_comprehensive.md:6:14:
 
 ── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:7:14
 
@@ -100,7 +96,7 @@ parser = Json.utf8
          ^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:7:14):
+can_import_comprehensive.md:7:14:
 
 ── ✗ name not in scope ──────────────────────── can_import_comprehensive.md:8:14
 
@@ -110,7 +106,7 @@ helper = Str.trim
          ^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:8:14):
+can_import_comprehensive.md:8:14:
 
 ── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:11:15
 
@@ -120,7 +116,7 @@ result1 = Json.parse
           ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:11:15):
+can_import_comprehensive.md:11:15:
 
 ── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:14:15
 
@@ -130,7 +126,7 @@ result2 = Http.post
           ^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:14:15):
+can_import_comprehensive.md:14:15:
 
 ── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:17:15
 
@@ -140,7 +136,7 @@ result3 = get
           ^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:17:15):
+can_import_comprehensive.md:17:15:
 
 ── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:18:15
 
@@ -150,7 +146,7 @@ result4 = post
           ^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:18:15):
+can_import_comprehensive.md:18:15:
 
 ── ✗ name not in scope ─────────────────────── can_import_comprehensive.md:21:16
 
@@ -160,7 +156,7 @@ combined = Str.concat
            ^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
-(can_import_comprehensive.md:21:16):
+can_import_comprehensive.md:21:16:
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

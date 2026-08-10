@@ -45,7 +45,7 @@ For example:
 
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
-(nominal_mixed_scope.md:7:5):
+nominal_mixed_scope.md:7:5:
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
 
@@ -54,7 +54,6 @@ The type `Color` is not declared in this scope.
 import Color.RGB
        ^^^^^
 
-(nominal_mixed_scope.md:7:12):
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:10:9
 
@@ -63,7 +62,6 @@ The type `RGB` is not declared in this scope.
 RGB.Red => LocalStatus.Pending
 ^^^
 
-(nominal_mixed_scope.md:10:9):
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:11:9
 
@@ -72,7 +70,6 @@ The type `RGB` is not declared in this scope.
 RGB.Green => LocalStatus.Complete
 ^^^
 
-(nominal_mixed_scope.md:11:9):
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:12:9
 
@@ -81,7 +78,6 @@ The type `RGB` is not declared in this scope.
 RGB.Blue => LocalStatus.Pending
 ^^^
 
-(nominal_mixed_scope.md:12:9):
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

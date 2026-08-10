@@ -26,7 +26,7 @@ For example:
         zero = @Id 0
     ]
 
-I found `.` here. (type_alias_with_associated.md:1:16):
+I found `.` here. type_alias_with_associated.md:1:16:
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,CloseCurly,

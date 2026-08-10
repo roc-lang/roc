@@ -27,7 +27,7 @@ var xs = []
 ^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like `_xs` to
-suppress this warning. (var_polymorphic_annotation_rejected.md:5:5):
+suppress this warning. var_polymorphic_annotation_rejected.md:5:5:
 
 ── ✗ polymorphic var ──────────────── var_polymorphic_annotation_rejected.md:4:5
 
@@ -36,9 +36,6 @@ must have a single concrete type.
 
 xs : List(a)
 ^^^^^^^^^^^^
-
-(var_polymorphic_annotation_rejected.md:4:5):
-
 
 Give it a concrete type, or replace the type variable with `_` to let the type
 be inferred from how the `var` is used.

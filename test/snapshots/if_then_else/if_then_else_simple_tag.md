@@ -19,7 +19,6 @@ make the same choice.
 if Bool.True Ok(0) else Err(1)
    ^^^^^^^^^
 
-(if_then_else_simple_tag.md:1:4):
 # TOKENS
 ~~~zig
 KwIf,UpperIdent,NoSpaceDotUpperIdent,UpperIdent,NoSpaceOpenRound,Int,CloseRound,KwElse,UpperIdent,NoSpaceOpenRound,Int,CloseRound,

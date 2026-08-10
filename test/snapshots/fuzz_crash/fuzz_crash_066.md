@@ -25,7 +25,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here. (fuzz_crash_066.md:1:4):
+I found `0` here. fuzz_crash_066.md:1:4:
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_066.md:1:4
 
@@ -34,7 +34,6 @@ This type annotation is malformed or contains invalid syntax.
 C:[0]
    ^
 
-(fuzz_crash_066.md:1:4):
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenSquare,Int,CloseSquare,

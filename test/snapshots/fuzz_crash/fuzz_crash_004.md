@@ -26,7 +26,7 @@ For example:
     List(U8)
 
 I reached the end of the file before this construct was complete.
-(fuzz_crash_004.md:2:1):
+fuzz_crash_004.md:2:1:
 # TOKENS
 ~~~zig
 UpperIdent,

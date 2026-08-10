@@ -21,8 +21,6 @@ Stringable is a where alias, not a type.
 describe : Stringable -> Str
            ^^^^^^^^^^
 
-(where_alias_in_type_position.md:3:12):
-
 A where alias names a set of method constraints, so it constrains a type
 variable in a `where` clause rather than standing in for a type of its own.
 # TOKENS
