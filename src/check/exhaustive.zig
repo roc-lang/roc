@@ -1238,6 +1238,9 @@ fn isTypeInhabitedWithKnownEmpty(
     var results: std.ArrayList(bool) = .empty;
     defer results.deinit(gpa);
 
+    var record_field_vars: std.ArrayList(Var) = .empty;
+    defer record_field_vars.deinit(gpa);
+
     // Start with the initial type
     try work_list.append(gpa, .{ .check_type = type_var });
 
@@ -1321,22 +1324,12 @@ fn isTypeInhabitedWithKnownEmpty(
                         // Records - all fields must be inhabited (AND semantics)
                         .record => |record| {
                             const presences = type_store.getRecordFieldsSlice(record.fields).items(.presence);
-                            var field_vars = std.ArrayList(Var).empty;
-                            defer field_vars.deinit(gpa);
-                            for (presences) |presence| {
-                                try field_vars.append(gpa, presence.typeVar());
-                            }
-                            try pushAndWork(gpa, &work_list, field_vars.items);
+                            try pushRecordAndWork(gpa, &work_list, &record_field_vars, presences);
                         },
 
                         .record_unbound => |fields| {
                             const presences = type_store.getRecordFieldsSlice(fields).items(.presence);
-                            var field_vars = std.ArrayList(Var).empty;
-                            defer field_vars.deinit(gpa);
-                            for (presences) |presence| {
-                                try field_vars.append(gpa, presence.typeVar());
-                            }
-                            try pushAndWork(gpa, &work_list, field_vars.items);
+                            try pushRecordAndWork(gpa, &work_list, &record_field_vars, presences);
                         },
 
                         // Tuples - all elements must be inhabited (AND semantics)
@@ -2033,6 +2026,20 @@ fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars
             try work_list.append(gpa, .{ .check_type = v });
         }
     }
+}
+
+fn pushRecordAndWork(
+    gpa: std.mem.Allocator,
+    work_list: *std.ArrayList(WorkItem),
+    field_vars: *std.ArrayList(Var),
+    presences: []const types.RecordField.Presence,
+) Allocator.Error!void {
+    field_vars.clearRetainingCapacity();
+    try field_vars.ensureTotalCapacity(gpa, presences.len);
+    for (presences) |presence| {
+        field_vars.appendAssumeCapacity(presence.typeVar());
+    }
+    try pushAndWork(gpa, work_list, field_vars.items);
 }
 
 /// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
@@ -4461,4 +4468,28 @@ fn formatPatternInto(
             try writer.writeAll("]");
         },
     }
+}
+
+test "record inhabitedness retains its field-var scratch buffer" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counting.allocator();
+    const presences = [_]types.RecordField.Presence{
+        .{ .required = @enumFromInt(1) },
+        .{ .required = @enumFromInt(2) },
+    };
+    var work_list: std.ArrayList(WorkItem) = .empty;
+    defer work_list.deinit(gpa);
+    var scratch: std.ArrayList(Var) = .empty;
+    defer scratch.deinit(gpa);
+
+    try pushRecordAndWork(gpa, &work_list, &scratch, &presences);
+    try std.testing.expect(scratch.capacity >= presences.len);
+
+    work_list.clearRetainingCapacity();
+    const allocations = counting.allocations;
+    const resizes = counting.resize_index;
+    try pushRecordAndWork(gpa, &work_list, &scratch, &presences);
+
+    try std.testing.expectEqual(allocations, counting.allocations);
+    try std.testing.expectEqual(resizes, counting.resize_index);
 }
