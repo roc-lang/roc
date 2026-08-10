@@ -245,8 +245,11 @@ my @categories = (
               counts => { $LS => 2 } },
             { label => 'active_unifications', re => qr/\bactive_unifications\b/,
               counts => { $LS => 8 } },
+            # $LS gained one `forall` when the exhaustive-switch lint replaced
+            # an `else` prong with the content cases it stood for: the added
+            # mention is that prong's label, not a new read of a scheme.
             { label => 'forall', re => qr/\bforall\b/,
-              counts => { $LS => 12, $LSTY => 1, $SLL => 2, $LMLOW => 7 } },
+              counts => { $LS => 13, $LSTY => 1, $SLL => 2, $LMLOW => 7 } },
         ],
     },
     {
