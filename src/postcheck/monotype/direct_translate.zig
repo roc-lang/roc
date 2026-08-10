@@ -1729,7 +1729,7 @@ const Walk = struct {
         try self.appendRecordFields(out, head);
 
         const ext_start = ext orelse return;
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.owner.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.owner.allocator);
         defer seen.deinit();
         var current = ext_start;
         while (true) {
@@ -1810,7 +1810,7 @@ const Walk = struct {
     ) WalkError!void {
         try self.appendTags(out, head);
 
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.owner.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.owner.allocator);
         defer seen.deinit();
         var current = ext;
         while (true) {

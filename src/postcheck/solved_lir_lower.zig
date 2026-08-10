@@ -9584,7 +9584,7 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
         // types, so it drops dedup buckets and stays non-interning; its ids are
         // copied verbatim, and the exclusion set is only meaningful while a
         // store is still deduplicating.
-        .dedup_excluded = std.AutoHashMap(MonoType.TypeId, void).init(allocator),
+        .dedup_excluded = collections.DenseMap(MonoType.TypeId, void).init(allocator),
     };
 }
 

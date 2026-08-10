@@ -8034,7 +8034,7 @@ fn resolveCapturedBinders(
         for (lists.items) |*list| list.entries.deinit(allocator);
         lists.deinit(allocator);
     }
-    var list_by_scheme = std.AutoHashMap(CheckedTypeSchemeId, u32).init(allocator);
+    var list_by_scheme = collections.DenseMap(CheckedTypeSchemeId, u32).init(allocator);
     defer list_by_scheme.deinit();
     var seen = std.AutoHashMap(CapturedBinderKey, void).init(allocator);
     defer seen.deinit();
@@ -8090,7 +8090,7 @@ fn resolveCapturedBinders(
 fn capturedBinderListFor(
     allocator: Allocator,
     lists: *std.ArrayList(CapturedBinderList),
-    list_by_scheme: *std.AutoHashMap(CheckedTypeSchemeId, u32),
+    list_by_scheme: *collections.DenseMap(CheckedTypeSchemeId, u32),
     scheme_id: CheckedTypeSchemeId,
     owner_node: u32,
 ) Allocator.Error!u32 {
@@ -8141,7 +8141,7 @@ fn resolveBodyCapturedBinders(
     scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
     lists: *std.ArrayList(CapturedBinderList),
     seen: *std.AutoHashMap(CapturedBinderKey, void),
-    list_by_scheme: *std.AutoHashMap(CheckedTypeSchemeId, u32),
+    list_by_scheme: *collections.DenseMap(CheckedTypeSchemeId, u32),
 ) Allocator.Error!void {
     if (binder_owner.count() == 0) return;
     const module_env = module.moduleEnvConst();
@@ -8558,17 +8558,17 @@ fn publishSchemeOwnerIndex(allocator: Allocator, store: *CheckedTypeStore) Alloc
 /// each undisposed counted once per body.
 const ResidualDispositionScan = struct {
     store: *const CheckedTypeStore,
-    binders: *const std.AutoHashMap(CheckedTypeId, void),
+    binders: *const collections.DenseMap(CheckedTypeId, void),
     allocator: Allocator,
     residuals: *std.ArrayList(CheckedTypeId),
     /// Distinct type ids of variable-shaped residuals that are not plain
     /// unconstrained residuals (a stray non-binder rigid or a dispatcher-
     /// constrained flex), accumulated across every body walk so the census counts
     /// each once.
-    undisposed: *std.AutoHashMap(CheckedTypeId, void),
+    undisposed: *collections.DenseMap(CheckedTypeId, void),
     /// Of `undisposed`, the ones that are rigids no generalized list names, as
     /// opposed to flexes whose dispatch constraints decide their outcome.
-    stray_rigids: *std.AutoHashMap(CheckedTypeId, void),
+    stray_rigids: *collections.DenseMap(CheckedTypeId, void),
 
     pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
         const payload = self.store.payload(root);
@@ -8630,7 +8630,7 @@ fn collectContextualTargets(
     store: *const CheckedTypeStore,
     scheme: CheckedTypeScheme,
     residuals: *const std.ArrayList(CheckedTypeId),
-    out: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    out: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
 ) Allocator.Error!void {
     const root_residual: ?CheckedTypeId = blk: {
         for (residuals.items) |r| {
@@ -8711,7 +8711,7 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
     const census_on = reunify_census.active();
 
     // Global binder set: every checked type id that is a binder of any scheme.
-    var binders = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var binders = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer binders.deinit();
     for (store.schemes.items) |scheme| {
         for (scheme.generalizedVars(store)) |gv| {
@@ -8721,7 +8721,7 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
 
     var residuals = std.ArrayList(CheckedTypeId).empty;
     defer residuals.deinit(allocator);
-    var contextual_targets = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    var contextual_targets = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
     defer contextual_targets.deinit();
     // `(owner node, type id)` already recorded, so a residual is disposed once per
     // body context; also used by the module-body pass to skip residuals already
@@ -8730,15 +8730,15 @@ fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) A
     defer recorded.deinit();
     // Distinct residual/undisposed type ids already accounted for across the whole
     // module, so census counts are per-distinct-residual, not per-occurrence.
-    var residual_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var residual_seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer residual_seen.deinit();
-    var undisposed_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var undisposed_seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer undisposed_seen.deinit();
-    var stray_rigid_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var stray_rigid_seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer stray_rigid_seen.deinit();
     // Residual type ids disposed under a scheme owner in pass one, so pass two
     // records only the body-expression residuals no scheme type reached.
-    var pass_one_residual_ids = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var pass_one_residual_ids = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer pass_one_residual_ids.deinit();
 
     // Pass one: each scheme's own type, keyed by that scheme's owner node.
@@ -8836,7 +8836,7 @@ fn recordResidualDisposition(
     residual: CheckedTypeId,
     contextual_target: ?CheckedTypeId,
     recorded: *std.AutoHashMap(u64, void),
-    residual_seen: *std.AutoHashMap(CheckedTypeId, void),
+    residual_seen: *collections.DenseMap(CheckedTypeId, void),
     census_on: bool,
 ) Allocator.Error!void {
     const dedup_key = (@as(u64, owner_node) << 32) | @intFromEnum(residual);
@@ -8905,8 +8905,8 @@ fn instantiationSiteRecordsEquivalent(module: TypedCIR.Module, a_idx: u32, b_idx
 /// whether any such outside variable also lacks a final disposition.
 const SchemeBinderCoverageScan = struct {
     store: *const CheckedTypeStore,
-    bound: *const std.AutoHashMap(CheckedTypeId, void),
-    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    bound: *const collections.DenseMap(CheckedTypeId, void),
+    disposed: *const collections.DenseMap(CheckedTypeId, void),
     reached_variable: bool = false,
     reached_disposed: bool = false,
     reached_unaccounted: bool = false,
@@ -8951,7 +8951,7 @@ fn checkedSchemeBinderCoverage(
     store: *const CheckedTypeStore,
     scheme: CheckedTypeScheme,
 ) Allocator.Error!reunify_census.SchemeBinderCoverage {
-    var bound = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var bound = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer bound.deinit();
     for (scheme.generalizedVars(store)) |gv| try bound.put(gv, {});
     for (scheme.capturedBinders(store)) |captured| {
@@ -8962,7 +8962,7 @@ fn checkedSchemeBinderCoverage(
         try bound.put(outer.generalizedVars(store)[captured.binder_index], {});
     }
 
-    var disposed = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var disposed = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer disposed.deinit();
     for (store.residual_dispositions.items) |disposition| {
         if (disposition.scheme_owner_node != scheme.owner_node) continue;
@@ -8990,8 +8990,8 @@ fn checkedSchemeBinderCoverage(
 /// measurement targets.
 const PlanCallableCoverageScan = struct {
     store: *const CheckedTypeStore,
-    bound: *const std.AutoHashMap(CheckedTypeId, void),
-    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    bound: *const collections.DenseMap(CheckedTypeId, void),
+    disposed: *const collections.DenseMap(CheckedTypeId, void),
     reached_variable: bool = false,
     reached_disposed: bool = false,
     reached_constrained: bool = false,
@@ -9037,8 +9037,8 @@ const PlanCallableCoverageScan = struct {
 fn checkedPlanCallableCoverage(
     allocator: Allocator,
     store: *const CheckedTypeStore,
-    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
-    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    binder_set: *const collections.DenseMap(CheckedTypeId, void),
+    disposed: *const collections.DenseMap(CheckedTypeId, void),
     callable: CheckedTypeId,
 ) Allocator.Error!reunify_census.DispatchPlanCallableCoverage {
     var scan = PlanCallableCoverageScan{ .store = store, .bound = binder_set, .disposed = disposed };
@@ -9092,7 +9092,7 @@ fn debugVerifyCheckedBoundary(
 
     // Every scheme's binder range, root, and captured range are in bounds and not
     // pending (hard). Collect the global binder set while validating.
-    var binder_set = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var binder_set = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer binder_set.deinit();
     for (store.schemes.items) |scheme| {
         if (@as(u64, scheme.gv_start) + scheme.gv_len > store.type_id_pool.items.len) {
@@ -9221,7 +9221,7 @@ fn debugVerifyCheckedBoundary(
     // solved variable had is measured here rather than found downstream. Measured
     // through the opt-in census; `unaccounted` is the forbidden class.
     if (census_on) {
-        var disposed_ids = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+        var disposed_ids = collections.DenseMap(CheckedTypeId, void).init(allocator);
         defer disposed_ids.deinit();
         for (store.residual_dispositions.items) |disposition| {
             try disposed_ids.put(disposition.typeId(), {});
@@ -9274,7 +9274,7 @@ fn debugVerifyCheckedIdReachable(store: *const CheckedTypeStore, id: CheckedType
 fn debugRunValidationMatcher(
     allocator: Allocator,
     store: *const CheckedTypeStore,
-    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
+    binder_set: *const collections.DenseMap(CheckedTypeId, void),
     disposition_by_key: *const std.AutoHashMap(u64, CheckedResidualDisposition),
 ) Allocator.Error!void {
     for (store.instantiation_sites.items) |site| {
@@ -9304,7 +9304,7 @@ fn debugRunValidationMatcher(
         // Map each scheme binder to the site's positional actual. A shorter actual
         // vector than the binder list leaves later binders unmapped (treated as a
         // walk skip if reached).
-        var subst = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        var subst = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
         defer subst.deinit();
         const binders = scheme.generalizedVars(store);
         const mapped = @min(binders.len, actuals.len);
@@ -9357,9 +9357,9 @@ const MatcherResult = enum { match, mismatch, skip };
 /// through their recorded dispositions) against the instantiated root.
 const MatcherWalk = struct {
     store: *const CheckedTypeStore,
-    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
+    binder_set: *const collections.DenseMap(CheckedTypeId, void),
     disposition_by_key: *const std.AutoHashMap(u64, CheckedResidualDisposition),
-    subst: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    subst: *collections.DenseMap(CheckedTypeId, CheckedTypeId),
     owner_node: u32,
     allocator: Allocator,
     /// The first structural disagreement's reason, for bounded mismatch detail.
@@ -22500,11 +22500,11 @@ fn adoptResolvedDispatchOperandDispositions(
     if (pins.len == 0) return;
     if (store.residual_dispositions.items.len == 0) return;
 
-    var adopted = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    var adopted = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator);
     defer adopted.deinit();
-    var conflicted = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    var conflicted = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer conflicted.deinit();
-    var concrete = std.AutoHashMap(CheckedTypeId, bool).init(allocator);
+    var concrete = collections.DenseMap(CheckedTypeId, bool).init(allocator);
     defer concrete.deinit();
 
     for (pins) |pin| {

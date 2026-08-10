@@ -2856,7 +2856,7 @@ pub const Rehearsal = struct {
             ty: checked.CheckedTypeId,
             path: BinderPath,
         };
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(Visit).empty;
         defer stack.deinit(self.allocator);
@@ -4731,7 +4731,7 @@ pub const Rehearsal = struct {
     /// the whole value rather than its head catches a residual nested inside a
     /// structure, which is where most bound residuals sit.
     fn carriesResidualMaterialization(self: *Rehearsal, root: Type.TypeId) bool {
-        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(Type.TypeId).empty;
         defer stack.deinit(self.allocator);
@@ -4858,7 +4858,7 @@ pub const Rehearsal = struct {
         view: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
     ) bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(checked.CheckedTypeId).empty;
         defer stack.deinit(self.allocator);
@@ -4921,7 +4921,7 @@ pub const Rehearsal = struct {
         view: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
     ) bool {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(checked.CheckedTypeId).empty;
         defer stack.deinit(self.allocator);
@@ -5592,7 +5592,7 @@ pub const Rehearsal = struct {
         root: checked.CheckedTypeId,
         env: ?*const direct_translate.BindingEnvironment,
     ) ?checked.CheckedTypeId {
-        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(checked.CheckedTypeId).empty;
         defer stack.deinit(self.allocator);

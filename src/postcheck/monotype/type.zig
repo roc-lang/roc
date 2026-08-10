@@ -306,7 +306,7 @@ pub const Store = struct {
     /// answer for two nodes. The dedup scan skips these ids, so an equal type
     /// receives a fresh id and each live-node handle stays one id per read.
     /// Empty on a field-wise clone.
-    dedup_excluded: std.AutoHashMap(TypeId, void),
+    dedup_excluded: collections.DenseMap(TypeId, void),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -324,7 +324,7 @@ pub const Store = struct {
             .declared_fields = .empty,
             .frozen = false,
             .intern_buckets = null,
-            .dedup_excluded = std.AutoHashMap(TypeId, void).init(allocator),
+            .dedup_excluded = collections.DenseMap(TypeId, void).init(allocator),
         };
     }
 
@@ -427,7 +427,7 @@ pub const Store = struct {
             .declared_fields = @TypeOf(self.declared_fields).fromArrayList(declared_fields),
             .frozen = false,
             .intern_buckets = null,
-            .dedup_excluded = std.AutoHashMap(TypeId, void).init(allocator),
+            .dedup_excluded = collections.DenseMap(TypeId, void).init(allocator),
         };
     }
 
@@ -2894,7 +2894,7 @@ pub fn reintern(
         .dest = dest,
         .name_store = name_store,
         .source = source,
-        .index_of = std.AutoHashMap(TypeId, u32).init(arena_impl.allocator()),
+        .index_of = collections.DenseMap(TypeId, u32).init(arena_impl.allocator()),
     };
     const root_index = try reinterner.collect(root);
     try reinterner.run();
@@ -2909,7 +2909,7 @@ const Reintern = struct {
     dest: *Store,
     name_store: *const names.NameStore,
     source: Store.View,
-    index_of: std.AutoHashMap(TypeId, u32),
+    index_of: collections.DenseMap(TypeId, u32),
     nodes: std.ArrayList(TypeId) = .empty,
     children: std.ArrayList([]const u32) = .empty,
     resolved: std.ArrayList(?TypeId) = .empty,

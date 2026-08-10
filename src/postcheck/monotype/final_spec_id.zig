@@ -107,7 +107,7 @@ const Walk = struct {
     owner: *ErasureStore,
     store: *const MonoType.Store,
     source_names: *const names.NameStore,
-    active: std.AutoHashMap(MonoType.TypeId, void),
+    active: collections.DenseMap(MonoType.TypeId, void),
     skip_reason: *SkipReason,
     rep_inputs: *std.ArrayList(RepresentationInput),
 
@@ -346,7 +346,7 @@ pub const Computer = struct {
             .owner = &self.erasure,
             .store = store,
             .source_names = store_names,
-            .active = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator),
+            .active = collections.DenseMap(MonoType.TypeId, void).init(self.allocator),
             .skip_reason = skip_reason,
             .rep_inputs = rep_inputs,
         };
