@@ -125,9 +125,12 @@ my @categories = (
             # they state: each spelled out `constrainTypeToCell` by hand, so
             # they now call it. That is the same funnelling the shared relaters
             # already do, and it puts every checked-type-to-request constraint
-            # in the one place directed instantiation has to take over.
+            # in the one place directed instantiation has to take over. An
+            # eighth followed: the record rest pattern's own type against the
+            # rest node, where `lowerTypeNode` is `instNode` with a timing
+            # scope, so the site was the funnel spelled out as well.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 21, $LOWER => 21, $PCMOD => 1 } },
+              counts => { $SOLVE => 21, $LOWER => 20, $PCMOD => 1 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,

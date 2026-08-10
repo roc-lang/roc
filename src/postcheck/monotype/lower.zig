@@ -42974,9 +42974,9 @@ const BodyContext = struct {
                 .fields = try self.graph.arena().dupe(InstField, remaining.items),
                 .ext = try self.graph.newNode(.empty_record),
             } });
-        try self.graph.unify(
-            try self.lowerTypeNode(self.view.bodies.pattern(rest_pattern).ty),
-            rest_node,
+        try self.constrainTypeToCell(
+            self.view.bodies.pattern(rest_pattern).ty,
+            DraftTypeCell.fromGraphNode(rest_node),
         );
         return rest_node;
     }
