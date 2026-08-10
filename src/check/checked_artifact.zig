@@ -23105,13 +23105,6 @@ pub const CompileTimeRootTable = struct {
         return null;
     }
 
-    pub fn lookupIdBySource(self: *const CompileTimeRootTable, source: RootSource) ?ComptimeRootId {
-        for (self.roots) |entry| {
-            if (rootSourceMatches(entry.source, source)) return entry.id;
-        }
-        return null;
-    }
-
     /// Look up the field-default root (design.md "Defaulted Fields") whose
     /// body is the given checked expression.
     pub fn lookupFieldDefaultRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {

@@ -5936,19 +5936,7 @@ test "check type - nested error in function return should use annotation" {
 // List.first method syntax tests - REGRESSION TEST for cycle detection bug
 
 test "check type - List.first method syntax should not create cyclic types" {
-    // REGRESSION TEST: This test reproduces a bug where calling [1].first() (method syntax)
-    // would cause an infinite loop in layout computation because the interpreter was creating
-    // cyclic rigid var mappings in the TypeScope when building layouts.
-    //
-    // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, ..]) with an open tag union,
-    // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
-    //
-    // Method syntax: [1].first()
-    // Should have same type as function syntax: List.first([1])
-    //
-    // NOTE: The type checking itself is correct - this test verifies type checking produces
-    // the right type. The bug manifests in the interpreter's layout computation phase.
+    // Method syntax must infer the same non-cyclic type as List.first([1]).
     const source =
         \\result = [1].first()
     ;
