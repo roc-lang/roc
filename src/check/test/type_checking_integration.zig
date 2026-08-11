@@ -8236,6 +8236,241 @@ test "check type - dispatch - strictly growing dispatch chain reports recursive 
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
+// The variants below pin the divergence detector's coverage of receivers
+// unification can still refine, of growth spelled through aliases, and of
+// legal programs the growth rule must never reject. Each rejected variant is
+// a chain the checker would otherwise re-derive forever, so these tests
+// double as termination witnesses.
+
+fn expectRecursiveDispatchReported(test_env: *TestEnv) !void {
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn expectNoRecursiveDispatchReported(test_env: *TestEnv) !void {
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "check type - dispatch - strictly growing chain over shared weak receiver reports recursive dispatch" {
+    // Every hop's receiver is `Wrap^(2n+1)` of the same still-flex var, so no
+    // hop is ever settled and no two states are ever digest-equal. The
+    // embedding walk must still see each receiver strictly embedding its
+    // same-binding ancestors and reject the chain.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(a)))
+        \\    step = |w| Wrap.W(Wrap.W(w))
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\make : {} -> a
+        \\make = |_| crash "seed"
+        \\main = Wrap.W(make({})).go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - insertion growth minting a fresh flex per hop reports recursive dispatch" {
+    // `step`'s return nests the receiver's element next to a type variable
+    // that is free in the annotation, so every hop mints a fresh flex and
+    // wraps the previous receiver's interior one level deeper. No receiver is
+    // a structural subterm of any later one—the old spine is re-parenthesized
+    // around the insertion—so only embedding (couple or dive past any big-side
+    // constructor) can relate the states and stop the chain.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap((a, b)))
+        \\    step = |_w| crash "unreachable"
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - non-growing chain minting a fresh flex per hop reports recursive dispatch" {
+    // `step` discards the receiver and returns `Wrap^3` of a fresh flex, so
+    // every hop after the first has an alpha-equivalent state and the exact
+    // repeated-state rule must reject it without any settledness gate.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(b)))
+        \\    step = |_w| crash "unreachable"
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - dispatch - growth spelled through alias arguments reports recursive dispatch" {
+    // The receiver grows only inside the arguments of the `Ph` alias whose
+    // backing (`Nom(q)`) never mentions its first parameter. The detector
+    // must see growth through alias spelling rather than looping forever on
+    // receivers whose backing looks constant.
+    const source =
+        \\Nom(a) := [N(a)].{
+        \\    grow : Ph(p, a) -> Ph(Ph(p, a), a)
+        \\    grow = |_| crash "n"
+        \\    go = |x| x.grow().go()
+        \\}
+        \\Ph(p, q) : Nom(q)
+        \\seed : Ph({}, Str)
+        \\seed = crash "seed"
+        \\main = seed.go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - dispatch - larger argument-supplied receiver on one lineage is not recursive dispatch" {
+    // `main`'s call makes `b := Nom(Nom(Base))`, so the `where`-obligation on
+    // `b` re-enters `Nom.pick` with a receiver that strictly embeds the first
+    // edge's `Nom(Base)`—but the larger receiver arrived from a call-site
+    // argument, not from the derivation pumping itself, and the chain
+    // terminates at `Base.pick`. A single growth step must stay legal.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\seed : Nom(Base)
+        \\seed = crash "s"
+        \\other : Nom(Nom(Base))
+        \\other = crash "o"
+        \\main = seed.pick(other)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - phantom alias receiver never matches its bare backing" {
+    // Same chain as the bare control above, but the first receiver is spelled
+    // through `A(Str, Base)`, an alias whose backing discards its first
+    // argument. Discarding the alias arguments would make the receiver
+    // compare equal to bare `Nom(Base)` and reject this legal program; the
+    // embedding walk must keep the alias identity and its arguments.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\A(p, q) : Nom(q)
+        \\seed : A(Str, Base)
+        \\seed = crash "s"
+        \\other : Nom(Nom(Base))
+        \\other = crash "o"
+        \\main = seed.pick(other)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - unrelated poisoned receivers never manufacture recursive dispatch" {
+    // Two dispatches fail legitimately (`not_a_method` on a `List`, `gone` on
+    // `Nom`), poisoning their receivers to erroneous content, while the
+    // `pick` lineage itself is legal. Erroneous content compares only against
+    // its own resolved var, so the poison from the unrelated failures must
+    // not make any state on the legal chain repeat or embed an ancestor.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\mystery : {} -> q
+        \\mystery = |_| crash "m"
+        \\weak = mystery({})
+        \\lst = [weak]
+        \\oops = lst.not_a_method()
+        \\seed : Nom(Base)
+        \\seed = crash "s"
+        \\arg2val = Nom.N(lst)
+        \\main = seed.pick(arg2val)
+        \\oops2 = seed.gone()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectNoRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - callable pumping with constant receivers reports recursive dispatch" {
+    // Each `pick` requires the other type's `pick` at a callable whose last
+    // argument is one `Wrap` deeper than its own, so the obligation chain
+    // alternates between the two constant receivers while the required
+    // callable grows without bound. No state is ever digest-equal and no
+    // receiver ever grows, so only joint state embedding (receiver and
+    // callable together) can stop the chain.
+    const source =
+        \\Wrap(a) := [W(a)]
+        \\A := [MkA].{
+        \\    pick : A, d, e -> {} where [d.pick : d, A, Wrap(e) -> {}]
+        \\    pick = |_, _, _| {}
+        \\}
+        \\B := [MkB].{
+        \\    pick : B, d, e -> {} where [d.pick : d, B, Wrap(e) -> {}]
+        \\    pick = |_, _, _| {}
+        \\}
+        \\a_val = A.MkA
+        \\main = a_val.pick(B.MkB, Wrap.W("x"))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - weak receiver grounded by a later requirement discharge stays legal" {
+    // `w`'s receiver is still flex when `h`'s scheme requirement is copied;
+    // only the pinned annotation at the bottom grounds it. A finite chain
+    // over a weak receiver must resolve cleanly once grounding arrives.
+    const source =
+        \\T1 := [C1].{
+        \\    step : T1 -> T2
+        \\    step = |_| T2.C2
+        \\}
+        \\T2 := [C2]
+        \\make : {} -> a
+        \\make = |_| crash "n"
+        \\w = make({})
+        \\h = |_u| w.step()
+        \\use = h({})
+        \\pin : T1
+        \\pin = w
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("use", "T2");
+}
+
 // ANNOTATED DISPATCH TARGETS ALWAYS RESOLVE THROUGH THEIR PREDECLARED SCHEMES.
 // Method-syntax dispatch to an annotated method must instantiate that method's
 // predeclared scheme at EVERY dispatch site—including a site inside the same

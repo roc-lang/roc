@@ -72,25 +72,23 @@ pub fn identityVarsFromVar(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
-/// Public `nodeCountFromVar` function.
+/// Public `fromVarErrSensitive` function.
 ///
-/// The number of `writeVar` visits the canonical key traversal makes for
-/// `var_`. The count is a function of the serialized traversal, so two vars
-/// with equal canonical keys always have equal counts, and in a well-formed
-/// (cycle-free once nominal backings are excluded) store a proper structural
-/// subterm never visits more nodes than its container. Consumers use the
-/// count as a cheap necessary condition for subterm containment before paying
-/// for a per-subterm digest walk.
-pub fn nodeCountFromVar(
+/// Like `fromVar`, except erroneous content digests as its resolved root var
+/// rather than as one universal token. Dispatch-state digests use this so two
+/// states that were poisoned by unrelated failures never compare equal, while
+/// re-encountering the very same poisoned var still digests stably.
+pub fn fromVarErrSensitive(
     allocator: Allocator,
     store: *const TypeStore,
     env: *const ModuleEnv,
     var_: Var,
-) Allocator.Error!u32 {
+) Allocator.Error!canonical.CanonicalTypeKey {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.err_by_var = true;
     try builder.writeVar(var_);
-    return builder.node_count;
+    return .{ .bytes = builder.hasher.finalResult() };
 }
 
 /// Public `fromConcreteVar` function.
@@ -167,8 +165,9 @@ const Builder = struct {
     contains_identity_variables: bool = false,
     detect_errors: bool = false,
     contains_error: bool = false,
-    /// Total `writeVar` invocations, cycle markers and identity refs included.
-    node_count: u32 = 0,
+    /// Digest erroneous content as its resolved root var instead of one
+    /// universal token, so unrelated poisoned positions never key equal.
+    err_by_var: bool = false,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -188,9 +187,14 @@ const Builder = struct {
     }
 
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
-        self.node_count += 1;
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
+
+        if (self.err_by_var and resolved.desc.content == .err) {
+            self.writeTag("err_var");
+            self.writeU32(@intFromEnum(root));
+            return;
+        }
 
         // The checker explicitly records when it closes an otherwise
         // unresolved identity to `[]`. Encode the surviving union-find root so
@@ -848,6 +852,49 @@ test "source type keys normalize closed empty tag unions to empty tag union" {
     const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
+}
+
+test "err-sensitive keys distinguish unrelated erroneous vars and stay stable per var" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+
+    var store = try TypeStore.initCapacity(allocator, 4, 0);
+    defer store.deinit();
+    const err_a = try store.freshFromContent(.err);
+    const err_b = try store.freshFromContent(.err);
+
+    const key_a = try fromVarErrSensitive(allocator, &store, &env, err_a);
+    const key_b = try fromVarErrSensitive(allocator, &store, &env, err_b);
+    const key_a_again = try fromVarErrSensitive(allocator, &store, &env, err_a);
+
+    try std.testing.expect(!std.meta.eql(key_a, key_b));
+    try std.testing.expect(std.meta.eql(key_a, key_a_again));
+
+    // The plain digest keys every erroneous var identically; the err-sensitive
+    // digest must differ from it so the two modes never collide.
+    const plain_a = try fromVar(allocator, &store, &env, err_a);
+    const plain_b = try fromVar(allocator, &store, &env, err_b);
+    try std.testing.expect(std.meta.eql(plain_a, plain_b));
+    try std.testing.expect(!std.meta.eql(key_a, plain_a));
+}
+
+test "err-sensitive keys match plain keys on error-free types" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+
+    var store = try TypeStore.initCapacity(allocator, 8, 0);
+    defer store.deinit();
+    const elem = try store.freshFromContent(.{ .structure = .empty_record });
+    const tuple_elems = try store.appendVars(&.{ elem, elem });
+    const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
+
+    const plain = try fromVar(allocator, &store, &env, tuple);
+    const sensitive = try fromVarErrSensitive(allocator, &store, &env, tuple);
+    try std.testing.expect(std.meta.eql(plain, sensitive));
 }
 
 test "canonical error detection traverses alias arguments" {

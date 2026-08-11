@@ -551,6 +551,16 @@ dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .e
 /// unification.
 dispatch_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// Reusable scratch for the receiver-embedding walk of recursive-dispatch
+/// detection: the in-progress (small, big) pair stack that cuts cyclic
+/// structure, and the completed-pair memo that keeps shared substructure
+/// linear. Both are cleared at each growth-rule invocation.
+scratch_embed_active_pairs: std.ArrayListUnmanaged(DispatchEmbedPair) = .empty,
+scratch_embed_memo: std.AutoHashMapUnmanaged(DispatchEmbedPair, DispatchEmbedGrade) = .empty,
+/// In-progress cuts taken by the embedding walk since its last invocation
+/// began. A result computed below a cut is path-specific, so it is not
+/// memoized; this counter is how completed pairs detect that.
+scratch_embed_cut_count: usize = 0,
 /// One-shot attribution for the outer scheme instantiation performed when a
 /// containing value stores a generalized expression-position function. It is
 /// consumed at `instantiateVarHelp` entry so any instantiations triggered
@@ -993,11 +1003,18 @@ const DispatchTargetInstantiation = struct {
     constraint_fn_var: Var,
     receiver_var: Var,
     parent_constraint_fn_var: ?Var,
-    /// Canonical receiver+callable digest for this edge, frozen at whatever
-    /// point it is first computed. An edge selected with no parent skips the
-    /// digest entirely and stores null; a descendant's ancestor walk computes
-    /// and caches it on demand.
-    state_type_key: ?[32]u8,
+    /// Canonical receiver+callable digest for this edge, computed at record
+    /// time for every edge. Any edge can later serve as an ancestor on a
+    /// descendant's lineage walk (a chain root has no parent yet still
+    /// anchors the chain), and record time is the one point that does not
+    /// depend on which descendant or fixpoint pass reads the key first.
+    state_type_key: [32]u8,
+    /// Whether this edge's dispatch state (receiver and required callable)
+    /// strictly embeds a same-binding ancestor's state on its own lineage. A
+    /// single embedding step is legal (an argument-supplied state may simply
+    /// be larger); a chain that embeds an ancestor which itself already grew
+    /// is pumping and gets rejected.
+    grew_from_ancestor: bool,
     target_env: *const ModuleEnv,
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
@@ -1243,11 +1260,7 @@ fn registerInstantiatedAttachedDispatch(
     receiver_var: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
     instantiation_expr: ?CIR.Expr.Idx,
-    parent_constraint_fn_var: ?Var,
 ) Allocator.Error!void {
-    if (parent_constraint_fn_var) |parent_fn_var| {
-        try self.recordDispatchDerivations(constraints, parent_fn_var);
-    }
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = receiver_var,
         .constraints = constraints,
@@ -2300,6 +2313,8 @@ pub fn deinit(self: *Self) void {
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
     self.dispatch_derivations.deinit(self.gpa);
     self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
+    self.scratch_embed_active_pairs.deinit(self.gpa);
+    self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
@@ -4763,7 +4778,6 @@ fn instantiateVarHelp(
                             fresh_var,
                             flex.constraints,
                             self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
-                            if (self.evidence_target_site) |target| target.constraint_fn_var else null,
                         );
                     }
                 }
@@ -11055,7 +11069,6 @@ fn replayPredeclaredSchemeUse(
                         fresh_var,
                         flex.constraints,
                         pending.source_expr,
-                        pending.parent_constraint_fn_var,
                     );
                 }
             }
@@ -22587,71 +22600,50 @@ fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
     }
 }
 
-/// Whether selecting `method_lookup` for this obligation would repeat a
-/// semantic dispatch state already on its explicit derivation chain. Fresh
+/// Canonical receiver+callable digest for one dispatch edge. Fresh
 /// instantiated vars are deliberately ignored as identities: the canonical
 /// type digest alpha-normalizes them, while concrete structural progress
-/// changes the digest. A state repeats only when that digest and the exact
-/// selected method binding both match an ancestor. An obligation with no
-/// parent has no chain to repeat, so it skips digest construction entirely
-/// and records a null key.
-fn dispatchStateRepeatsAncestor(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    parent_constraint_fn_var: ?Var,
-    method_lookup: StaticDispatchMethodBinding,
-    state_type_key: *?[32]u8,
-) Allocator.Error!bool {
-    if (parent_constraint_fn_var == null) {
-        state_type_key.* = null;
-        return false;
-    }
-    state_type_key.* = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var);
-
-    return try self.dispatchStateKeyRepeatsAncestor(
-        constraint,
-        parent_constraint_fn_var,
-        method_lookup,
-        state_type_key.*.?,
-    );
-}
-
+/// changes the digest. Erroneous content digests per poisoned var, so two
+/// states poisoned by unrelated failures never compare equal while a chain
+/// that genuinely cycles through one poisoned var still digests stably.
 fn dispatchStateTypeKey(
     self: *Self,
     dispatcher_var: Var,
     constraint_fn_var: Var,
 ) Allocator.Error![32]u8 {
-    const receiver_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, dispatcher_var);
-    const callable_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, constraint_fn_var);
+    const receiver_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, dispatcher_var);
+    const callable_key = try canonical_type_keys.fromVarErrSensitive(self.gpa, self.types, self.cir, constraint_fn_var);
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(&receiver_key.bytes);
     hasher.update(&callable_key.bytes);
     return hasher.finalResult();
 }
 
+/// Whether selecting `method_lookup` for this obligation would repeat a
+/// semantic dispatch state already on its explicit derivation chain. A state
+/// repeats only when its digest and the exact selected method binding both
+/// match an ancestor. Every ancestor's key was computed at its own record
+/// time, so the comparison never depends on which descendant or fixpoint
+/// pass walks the lineage first.
 fn dispatchStateKeyRepeatsAncestor(
     self: *Self,
     constraint: StaticDispatchConstraint,
     parent_constraint_fn_var: ?Var,
     method_lookup: StaticDispatchMethodBinding,
     state_type_key: [32]u8,
-) Allocator.Error!bool {
+) bool {
     var steps: usize = 0;
     var ancestor_fn = parent_constraint_fn_var;
     while (ancestor_fn) |fn_var| {
         const ancestor_idx = self.dispatch_target_instantiation_by_fn_var.get(fn_var) orelse return false;
         steps += 1;
         std.debug.assert(steps <= self.dispatch_target_instantiations.items.len);
-        const ancestor = &self.dispatch_target_instantiations.items[ancestor_idx];
+        const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
         if (ancestor.target_env == method_lookup.env and
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
             ancestor.method_name.eql(constraint.fn_name))
         {
-            if (ancestor.state_type_key == null) {
-                ancestor.state_type_key = try self.dispatchStateTypeKey(ancestor.receiver_var, ancestor.constraint_fn_var);
-            }
-            if (std.meta.eql(state_type_key, ancestor.state_type_key.?)) return true;
+            if (std.meta.eql(state_type_key, ancestor.state_type_key)) return true;
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
     }
@@ -22659,33 +22651,46 @@ fn dispatchStateKeyRepeatsAncestor(
 }
 
 /// Whether selecting `method_lookup` re-enters an ancestor edge's exact
-/// method binding with a receiver that strictly structurally contains that
-/// ancestor's receiver. Such a chain re-enters the same method on a strictly
-/// larger dispatcher every cycle, so it can never terminate even though no
-/// two of its states are ever equal. Returns the matched ancestor's receiver.
-/// Both receivers must be settled: a receiver that unification can still
-/// refine has no final structure to compare, so it stays exempt here and
-/// remains covered by the exact repeated-state rule.
+/// method binding with a dispatch state into which that ancestor's state
+/// strictly embeds, on a lineage that already grew once before. A state
+/// embeds when both its receiver and its required callable embed and at
+/// least one of them does so strictly: a chain can pump either component
+/// (a growing receiver, or a constant receiver whose `where`-shape feeds an
+/// ever-deeper type through a non-receiver argument), and every such chain
+/// re-derives a strictly larger copy of the same obligation forever even
+/// though no two of its states are ever digest-equal. One growth step alone
+/// proves nothing: a legal chain may pass through one strictly larger state
+/// that simply arrived from a call-site argument (a `where`-clause
+/// obligation on a non-receiver type variable). A growth step whose
+/// embedded ancestor itself already grew can only come from the derivation
+/// pumping its own state, so that edge is rejected. Returns the matched
+/// ancestor's receiver for reporting; `grew_from_ancestor` reports whether
+/// this edge took a permitted first growth step.
 fn dispatchStateGrowsAlongLineage(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
+    grew_from_ancestor: *bool,
 ) Allocator.Error!?Var {
+    grew_from_ancestor.* = false;
     if (parent_constraint_fn_var == null) return null;
-    if (!try self.dispatchReceiverIsSettled(dispatcher_var)) return null;
 
-    // Containment is a strict subterm relation, so it can only hold when the
-    // ancestor receiver's canonical traversal is no larger than the new
-    // receiver's. Comparing linear-cost node counts first skips the
-    // per-subterm digest walk for every ancestor that cannot possibly be
-    // contained—on a legal same-binding chain each requirement hop peels
-    // structure off the receiver, so every ancestor is larger and the walk
-    // never runs. Counts are recomputed per call rather than memoized: a
-    // settled receiver may still hold open literal-conversion flexes whose
-    // later defaulting changes its traversal.
-    var dispatcher_node_count: ?u32 = null;
+    self.scratch_embed_memo.clearRetainingCapacity();
+    self.scratch_embed_active_pairs.clearRetainingCapacity();
+    self.scratch_embed_cut_count = 0;
+
+    // Embedding never shrinks the normalized walk, so a linear-cost size
+    // comparison on the receivers skips the pairwise embedding walks for
+    // every ancestor whose receiver cannot possibly embed—on a legal
+    // same-binding chain each requirement hop peels structure off the
+    // receiver, so every ancestor is larger and the walks never run. Equal
+    // sizes must fall through: a chain can hold its receiver fixed and pump
+    // the callable instead. A size walk that crossed cyclic structure has no
+    // reliable total, so it runs the embedding walk (which cuts cycles
+    // pairwise) instead of pruning.
+    var dispatcher_size: ?DispatchSizeResult = null;
 
     var steps: usize = 0;
     var ancestor_fn = parent_constraint_fn_var;
@@ -22696,17 +22701,22 @@ fn dispatchStateGrowsAlongLineage(
         const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
         if (ancestor.target_env == method_lookup.env and
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
-            ancestor.method_name.eql(constraint.fn_name) and
-            try self.dispatchReceiverIsSettled(ancestor.receiver_var))
+            ancestor.method_name.eql(constraint.fn_name))
         {
-            if (dispatcher_node_count == null) {
-                dispatcher_node_count = try canonical_type_keys.nodeCountFromVar(self.gpa, self.types, self.cir, dispatcher_var);
+            if (dispatcher_size == null) {
+                dispatcher_size = try self.dispatchReceiverSize(dispatcher_var);
             }
-            const ancestor_node_count = try canonical_type_keys.nodeCountFromVar(self.gpa, self.types, self.cir, ancestor.receiver_var);
-            if (ancestor_node_count <= dispatcher_node_count.? and
-                try self.receiverStrictlyContains(dispatcher_var, ancestor.receiver_var))
-            {
-                return ancestor.receiver_var;
+            const ancestor_size = try self.dispatchReceiverSize(ancestor.receiver_var);
+            const sizes_conclusive = !dispatcher_size.?.saw_cycle and !ancestor_size.saw_cycle;
+            if (!sizes_conclusive or ancestor_size.count <= dispatcher_size.?.count) {
+                const receiver_grade = try self.dispatchReceiverEmbedGrade(ancestor.receiver_var, dispatcher_var);
+                if (receiver_grade != .none) {
+                    const callable_grade = try self.dispatchReceiverEmbedGrade(ancestor.constraint_fn_var, constraint.fn_var);
+                    if (callable_grade != .none and (receiver_grade == .strict or callable_grade == .strict)) {
+                        if (ancestor.grew_from_ancestor) return ancestor.receiver_var;
+                        grew_from_ancestor.* = true;
+                    }
+                }
             }
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
@@ -22714,180 +22724,537 @@ fn dispatchStateGrowsAlongLineage(
     return null;
 }
 
-/// Whether every var reachable through this receiver's type structure is
-/// settled. Rigid identities are settled; the callable relations attached to
-/// them are not receiver structure, so they are not traversed. An open
-/// literal-conversion flex is settled: every constraint on it is a literal
-/// conversion, so defaulting or a concrete pin grounds it deterministically.
-/// Any other flex can still be refined into arbitrary structure, an open row
-/// or union tail ends in one, and an unbound record row can still gain
-/// fields, so none of those is ever settled.
-fn dispatchReceiverIsSettled(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited.deinit();
-    return self.dispatchReceiverIsSettledInner(var_, &visited);
-}
+const DispatchEmbedPair = struct { small: Var, big: Var };
 
-fn dispatchReceiverIsSettledInner(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
+/// Result of one receiver-embedding comparison. `equal` means the two types
+/// coupled at every position without ever descending past a constructor on
+/// the big side; `strict` means the walk dove into the big side somewhere or
+/// coupled a strictly embedded child, so the big receiver properly grew.
+const DispatchEmbedGrade = enum(u8) { none, equal, strict };
 
-    return switch (resolved.desc.content) {
-        .flex => |flex| blk: {
-            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-            if (constraints.len == 0) break :blk false;
-            for (constraints) |flex_constraint| {
-                if (!self.constraintIsLiteralConversion(flex_constraint)) break :blk false;
-            }
-            break :blk true;
-        },
-        .rigid, .err => true,
-        .alias => |alias| blk: {
-            if (!try self.dispatchReceiverIsSettledInner(self.types.getAliasBackingVar(alias), visited)) break :blk false;
-            break :blk try self.dispatchReceiverVarsAreSettled(self.types.sliceAliasArgs(alias), visited);
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_record, .empty_tag_union => true,
-            .record_unbound => false,
-            .tuple => |tuple| try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(tuple.elems), visited),
-            .nominal_type => |nominal| try self.dispatchReceiverVarsAreSettled(self.types.sliceNominalArgs(nominal), visited),
-            .fn_pure, .fn_unbound, .fn_effectful => |func| blk: {
-                if (!try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(func.args), visited)) break :blk false;
-                break :blk try self.dispatchReceiverIsSettledInner(func.ret, visited);
-            },
-            .record => |record| blk: {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                if (!try self.dispatchReceiverVarsAreSettled(fields.items(.var_), visited)) break :blk false;
-                break :blk try self.dispatchReceiverIsSettledInner(record.ext, visited);
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |args| {
-                    if (!try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(args), visited)) break :blk false;
-                }
-                break :blk try self.dispatchReceiverIsSettledInner(tag_union.ext, visited);
-            },
-        },
-    };
-}
+const DispatchSizeResult = struct { count: u32, saw_cycle: bool };
 
-fn dispatchReceiverVarsAreSettled(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    for (vars) |var_| {
-        if (!try self.dispatchReceiverIsSettledInner(var_, visited)) return false;
+const DispatchRowTailKind = enum { closed, open, unbound };
+
+const DispatchRowTail = struct { kind: DispatchRowTailKind, var_: Var };
+
+const DispatchRecordField = struct { name: Ident.Idx, var_: Var };
+
+const DispatchUnionTag = struct { name: Ident.Idx, args: Var.SafeList.Range };
+
+fn dispatchSameAliasIdentity(a: types_mod.Alias, b: types_mod.Alias) bool {
+    if (a.origin_module != b.origin_module) return false;
+    if (a.source_decl.present or b.source_decl.present) {
+        return a.source_decl.eql(b.source_decl);
     }
-    return true;
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-/// Whether `small_var`'s type occurs as a proper structural subterm of
-/// `big_var`'s type. Alias wrappers are looked through on both sides;
-/// candidate subterms are compared against `small_var` by canonical-key
-/// equality—the same alpha-normalized digest the exact repeated-state rule
-/// uses, so identity variables match by first-occurrence correspondence and
-/// never against arbitrary structure. `active` mirrors the canonical key
-/// builder's cycle stack: revisiting an in-progress root is non-containment,
-/// so recursive structure terminates.
-fn receiverStrictlyContains(self: *Self, big_var: Var, small_var: Var) Allocator.Error!bool {
-    var active: std.ArrayListUnmanaged(Var) = .empty;
-    defer active.deinit(self.gpa);
-
-    const small_root = blk: {
-        var resolved = self.types.resolveVar(small_var);
-        while (resolved.desc.content == .alias) {
-            if (varInStack(active.items, resolved.var_)) return false;
-            try active.append(self.gpa, resolved.var_);
-            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
-        }
-        break :blk resolved.var_;
-    };
-    const small_key = (try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, small_root)).bytes;
-
-    active.clearRetainingCapacity();
-    return self.receiverContainsKey(&active, big_var, small_key, false);
-}
-
-fn receiverContainsKey(
-    self: *Self,
-    active: *std.ArrayListUnmanaged(Var),
-    var_: Var,
-    small_key: [32]u8,
-    include_self: bool,
-) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (varInStack(active.items, resolved.var_)) return false;
-    try active.append(self.gpa, resolved.var_);
-    defer _ = active.pop();
-
-    if (resolved.desc.content == .alias) {
-        return self.receiverContainsKey(
-            active,
-            self.types.getAliasBackingVar(resolved.desc.content.alias),
-            small_key,
-            include_self,
-        );
+fn dispatchSameNominalIdentity(a: types_mod.NominalType, b: types_mod.NominalType) bool {
+    if (a.origin_module != b.origin_module) return false;
+    const a_source_decl = a.sourceDecl();
+    const b_source_decl = b.sourceDecl();
+    if (a_source_decl.present or b_source_decl.present) {
+        return a_source_decl.eql(b_source_decl);
     }
-
-    if (include_self) {
-        const key = (try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, resolved.var_)).bytes;
-        if (std.meta.eql(key, small_key)) return true;
-    }
-
-    return switch (resolved.desc.content) {
-        .alias => unreachable,
-        .flex, .rigid, .err => false,
-        .structure => |flat_type| switch (flat_type) {
-            .empty_record, .empty_tag_union => false,
-            .tuple => |tuple| try self.anyReceiverVarContainsKey(active, self.types.sliceVars(tuple.elems), small_key),
-            .nominal_type => |nominal| try self.anyReceiverVarContainsKey(active, self.types.sliceNominalArgs(nominal), small_key),
-            .fn_pure, .fn_unbound, .fn_effectful => |func| blk: {
-                if (try self.anyReceiverVarContainsKey(active, self.types.sliceVars(func.args), small_key)) break :blk true;
-                break :blk try self.receiverContainsKey(active, func.ret, small_key, true);
-            },
-            .record => |record| blk: {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                if (try self.anyReceiverVarContainsKey(active, fields.items(.var_), small_key)) break :blk true;
-                break :blk try self.receiverContainsKey(active, record.ext, small_key, true);
-            },
-            .record_unbound => |fields_range| blk: {
-                const fields = self.types.getRecordFieldsSlice(fields_range);
-                break :blk try self.anyReceiverVarContainsKey(active, fields.items(.var_), small_key);
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |args| {
-                    if (try self.anyReceiverVarContainsKey(active, self.types.sliceVars(args), small_key)) break :blk true;
-                }
-                break :blk try self.receiverContainsKey(active, tag_union.ext, small_key, true);
-            },
-        },
-    };
+    return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-fn anyReceiverVarContainsKey(
-    self: *Self,
-    active: *std.ArrayListUnmanaged(Var),
-    vars: []const Var,
-    small_key: [32]u8,
-) Allocator.Error!bool {
-    for (vars) |var_| {
-        if (try self.receiverContainsKey(active, var_, small_key, true)) return true;
-    }
-    return false;
-}
-
-fn varInStack(vars: []const Var, var_: Var) bool {
+fn dispatchVarInList(vars: []const Var, var_: Var) bool {
     for (vars) |candidate| {
         if (candidate == var_) return true;
     }
     return false;
+}
+
+/// Homeomorphic-embedding comparison between an ancestor receiver (`small`)
+/// and a descendant dispatcher (`big`), mirroring unification's view of type
+/// equality position by position:
+///
+/// - Constructors couple with the same constructor and pair their children;
+///   the walk may also dive past any big-side constructor into one of its
+///   children, which is what makes growth by insertion visible.
+/// - Identity variables couple with any identity variable: a divergent chain
+///   mints fresh receiver variables every hop, so pinning them to specific
+///   vars would blind the rule to every pumped chain. Structure never couples
+///   with a variable.
+/// - Erroneous content matches only its own resolved var (the fast path), so
+///   receivers poisoned by unrelated failures never compare related while a
+///   chain threading one poisoned var is still tracked.
+/// - Same-identity aliases pair their arguments and backing exactly as
+///   unification does, phantom arguments included. Any other alias on the
+///   big side is transparent spelling and is looked through; an alias on the
+///   small side couples only with its own identity, so its arguments are
+///   never silently discarded.
+/// - Rows normalize their extension chains first and couple only on an
+///   identical field/tag layout, then pair the member types and tails.
+///
+/// In-progress pairs cut the walk (`.none`) so cyclic structure terminates;
+/// completed pairs are memoized unless an in-progress cut fired somewhere
+/// below them, since such a result is specific to the path that computed it.
+fn dispatchReceiverEmbedGrade(self: *Self, small_var: Var, big_var: Var) Allocator.Error!DispatchEmbedGrade {
+    const small = self.types.resolveVar(small_var);
+    const big = self.types.resolveVar(big_var);
+    if (small.var_ == big.var_) return .equal;
+
+    const pair: DispatchEmbedPair = .{ .small = small.var_, .big = big.var_ };
+    if (self.scratch_embed_memo.get(pair)) |grade| return grade;
+    for (self.scratch_embed_active_pairs.items) |active_pair| {
+        if (active_pair.small == pair.small and active_pair.big == pair.big) {
+            self.scratch_embed_cut_count += 1;
+            return .none;
+        }
+    }
+    try self.scratch_embed_active_pairs.append(self.gpa, pair);
+    const cuts_before = self.scratch_embed_cut_count;
+
+    const grade = blk: {
+        const couple = try self.dispatchEmbedCoupleGrade(small, big);
+        if (couple == .strict) break :blk DispatchEmbedGrade.strict;
+        if (try self.dispatchEmbedDivesIntoChild(small.var_, big)) break :blk DispatchEmbedGrade.strict;
+        break :blk couple;
+    };
+
+    const popped = self.scratch_embed_active_pairs.pop().?;
+    std.debug.assert(popped.small == pair.small and popped.big == pair.big);
+    if (self.scratch_embed_cut_count == cuts_before) {
+        try self.scratch_embed_memo.put(self.gpa, pair, grade);
+    }
+    return grade;
+}
+
+fn dispatchEmbedCoupleGrade(
+    self: *Self,
+    small: types_mod.ResolvedVarDesc,
+    big: types_mod.ResolvedVarDesc,
+) Allocator.Error!DispatchEmbedGrade {
+    const small_content = small.desc.content;
+    const big_content = big.desc.content;
+
+    if (small_content == .alias and big_content == .alias and
+        dispatchSameAliasIdentity(small_content.alias, big_content.alias))
+    {
+        const small_alias = small_content.alias;
+        const big_alias = big_content.alias;
+        const small_args = self.types.sliceAliasArgs(small_alias);
+        const big_args = self.types.sliceAliasArgs(big_alias);
+        if (small_args.len != big_args.len) return .none;
+        var strict = false;
+        switch (try self.dispatchReceiverEmbedGrade(
+            self.types.getAliasBackingVar(small_alias),
+            self.types.getAliasBackingVar(big_alias),
+        )) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+        for (small_args, big_args) |small_arg, big_arg| {
+            switch (try self.dispatchReceiverEmbedGrade(small_arg, big_arg)) {
+                .none => return .none,
+                .strict => strict = true,
+                .equal => {},
+            }
+        }
+        return if (strict) .strict else .equal;
+    }
+    if (big_content == .alias) {
+        return try self.dispatchReceiverEmbedGrade(
+            small.var_,
+            self.types.getAliasBackingVar(big_content.alias),
+        );
+    }
+
+    switch (small_content) {
+        .err => return .none,
+        .flex, .rigid => return switch (big_content) {
+            .flex, .rigid => .equal,
+            .alias, .structure, .err => .none,
+        },
+        .alias => return .none,
+        .structure => |small_flat| {
+            if (big_content != .structure) return .none;
+            const big_flat = big_content.structure;
+            switch (small_flat) {
+                .tuple => |small_tuple| {
+                    if (big_flat != .tuple) return .none;
+                    const small_elems = self.types.sliceVars(small_tuple.elems);
+                    const big_elems = self.types.sliceVars(big_flat.tuple.elems);
+                    if (small_elems.len != big_elems.len) return .none;
+                    return try self.dispatchEmbedPairwiseGrade(small_elems, big_elems);
+                },
+                .nominal_type => |small_nominal| {
+                    if (big_flat != .nominal_type) return .none;
+                    const big_nominal = big_flat.nominal_type;
+                    if (!dispatchSameNominalIdentity(small_nominal, big_nominal)) return .none;
+                    const small_args = self.types.sliceNominalArgs(small_nominal);
+                    const big_args = self.types.sliceNominalArgs(big_nominal);
+                    if (small_args.len != big_args.len) return .none;
+                    return try self.dispatchEmbedPairwiseGrade(small_args, big_args);
+                },
+                .fn_pure, .fn_unbound, .fn_effectful => |small_func| {
+                    const big_func = switch (big_flat) {
+                        .fn_pure, .fn_unbound, .fn_effectful => |func| func,
+                        .empty_record, .record, .record_unbound, .empty_tag_union, .tag_union, .tuple, .nominal_type => return .none,
+                    };
+                    // An unbound function can still commit either way, so it
+                    // couples with everything; pure and effectful couple only
+                    // with themselves, exactly as unification allows.
+                    const small_is_pure = small_flat == .fn_pure;
+                    const small_is_effectful = small_flat == .fn_effectful;
+                    const big_is_pure = big_flat == .fn_pure;
+                    const big_is_effectful = big_flat == .fn_effectful;
+                    if ((small_is_pure and big_is_effectful) or (small_is_effectful and big_is_pure)) return .none;
+                    const small_args = self.types.sliceVars(small_func.args);
+                    const big_args = self.types.sliceVars(big_func.args);
+                    if (small_args.len != big_args.len) return .none;
+                    var strict = false;
+                    switch (try self.dispatchEmbedPairwiseGrade(small_args, big_args)) {
+                        .none => return .none,
+                        .strict => strict = true,
+                        .equal => {},
+                    }
+                    switch (try self.dispatchReceiverEmbedGrade(small_func.ret, big_func.ret)) {
+                        .none => return .none,
+                        .strict => strict = true,
+                        .equal => {},
+                    }
+                    return if (strict) .strict else .equal;
+                },
+                .empty_record, .record, .record_unbound => {
+                    switch (big_flat) {
+                        .empty_record, .record, .record_unbound => {},
+                        .empty_tag_union, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => return .none,
+                    }
+                    return try self.dispatchEmbedRecordRowGrade(small.var_, big.var_);
+                },
+                .empty_tag_union, .tag_union => {
+                    switch (big_flat) {
+                        .empty_tag_union, .tag_union => {},
+                        .empty_record, .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => return .none,
+                    }
+                    return try self.dispatchEmbedTagRowGrade(small.var_, big.var_);
+                },
+            }
+        },
+    }
+}
+
+fn dispatchEmbedPairwiseGrade(
+    self: *Self,
+    small_vars: []const Var,
+    big_vars: []const Var,
+) Allocator.Error!DispatchEmbedGrade {
+    std.debug.assert(small_vars.len == big_vars.len);
+    var strict = false;
+    for (small_vars, big_vars) |small_var, big_var| {
+        switch (try self.dispatchReceiverEmbedGrade(small_var, big_var)) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+    }
+    return if (strict) .strict else .equal;
+}
+
+fn dispatchEmbedRecordRowGrade(self: *Self, small_var: Var, big_var: Var) Allocator.Error!DispatchEmbedGrade {
+    var small_fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
+    defer small_fields.deinit(self.gpa);
+    var big_fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
+    defer big_fields.deinit(self.gpa);
+    const small_tail = try self.dispatchCollectRecordRow(small_var, &small_fields);
+    const big_tail = try self.dispatchCollectRecordRow(big_var, &big_fields);
+    if (small_tail.kind != big_tail.kind) return .none;
+    if (small_fields.items.len != big_fields.items.len) return .none;
+
+    const idents = self.cir.getIdentStoreConst();
+    var strict = false;
+    for (small_fields.items) |small_field| {
+        const big_field_var = blk: {
+            for (big_fields.items) |big_field| {
+                if (idents.idxTextEql(small_field.name, big_field.name)) break :blk big_field.var_;
+            }
+            return .none;
+        };
+        switch (try self.dispatchReceiverEmbedGrade(small_field.var_, big_field_var)) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+    }
+    if (small_tail.kind == .open) {
+        switch (try self.dispatchReceiverEmbedGrade(small_tail.var_, big_tail.var_)) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+    }
+    return if (strict) .strict else .equal;
+}
+
+fn dispatchEmbedTagRowGrade(self: *Self, small_var: Var, big_var: Var) Allocator.Error!DispatchEmbedGrade {
+    var small_tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
+    defer small_tags.deinit(self.gpa);
+    var big_tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
+    defer big_tags.deinit(self.gpa);
+    const small_tail = try self.dispatchCollectTagRow(small_var, &small_tags);
+    const big_tail = try self.dispatchCollectTagRow(big_var, &big_tags);
+    if (small_tail.kind != big_tail.kind) return .none;
+    if (small_tags.items.len != big_tags.items.len) return .none;
+
+    const idents = self.cir.getIdentStoreConst();
+    var strict = false;
+    for (small_tags.items) |small_tag| {
+        const big_tag_args = blk: {
+            for (big_tags.items) |big_tag| {
+                if (idents.idxTextEql(small_tag.name, big_tag.name)) break :blk big_tag.args;
+            }
+            return .none;
+        };
+        const small_args = self.types.sliceVars(small_tag.args);
+        const big_args = self.types.sliceVars(big_tag_args);
+        if (small_args.len != big_args.len) return .none;
+        switch (try self.dispatchEmbedPairwiseGrade(small_args, big_args)) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+    }
+    if (small_tail.kind == .open) {
+        switch (try self.dispatchReceiverEmbedGrade(small_tail.var_, big_tail.var_)) {
+            .none => return .none,
+            .strict => strict = true,
+            .equal => {},
+        }
+    }
+    return if (strict) .strict else .equal;
+}
+
+/// Whether `small_var` embeds into any child of the resolved big-side node.
+/// The child set is exactly the structure the size walk counts, so a strict
+/// embedding always implies a strictly smaller size.
+fn dispatchEmbedDivesIntoChild(
+    self: *Self,
+    small_var: Var,
+    big: types_mod.ResolvedVarDesc,
+) Allocator.Error!bool {
+    switch (big.desc.content) {
+        .flex, .rigid, .err => return false,
+        .alias => |alias| {
+            if (try self.dispatchEmbedsInto(small_var, self.types.getAliasBackingVar(alias))) return true;
+            for (self.types.sliceAliasArgs(alias)) |arg| {
+                if (try self.dispatchEmbedsInto(small_var, arg)) return true;
+            }
+            return false;
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => return false,
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    if (try self.dispatchEmbedsInto(small_var, elem)) return true;
+                }
+                return false;
+            },
+            .nominal_type => |nominal| {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    if (try self.dispatchEmbedsInto(small_var, arg)) return true;
+                }
+                return false;
+            },
+            .fn_pure, .fn_unbound, .fn_effectful => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    if (try self.dispatchEmbedsInto(small_var, arg)) return true;
+                }
+                return try self.dispatchEmbedsInto(small_var, func.ret);
+            },
+            .record, .record_unbound => {
+                var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
+                defer fields.deinit(self.gpa);
+                const tail = try self.dispatchCollectRecordRow(big.var_, &fields);
+                for (fields.items) |field| {
+                    if (try self.dispatchEmbedsInto(small_var, field.var_)) return true;
+                }
+                if (tail.kind == .open) return try self.dispatchEmbedsInto(small_var, tail.var_);
+                return false;
+            },
+            .tag_union => {
+                var tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
+                defer tags.deinit(self.gpa);
+                const tail = try self.dispatchCollectTagRow(big.var_, &tags);
+                for (tags.items) |tag| {
+                    for (self.types.sliceVars(tag.args)) |arg| {
+                        if (try self.dispatchEmbedsInto(small_var, arg)) return true;
+                    }
+                }
+                if (tail.kind == .open) return try self.dispatchEmbedsInto(small_var, tail.var_);
+                return false;
+            },
+        },
+    }
+}
+
+fn dispatchEmbedsInto(self: *Self, small_var: Var, big_var: Var) Allocator.Error!bool {
+    return (try self.dispatchReceiverEmbedGrade(small_var, big_var)) != .none;
+}
+
+/// Collect one record row's normalized layout: every field along the
+/// extension chain plus the terminal tail. Mirrors the canonical key
+/// builder's row normalization so two spellings of one row compare equal.
+fn dispatchCollectRecordRow(
+    self: *Self,
+    row_var: Var,
+    fields: *std.ArrayListUnmanaged(DispatchRecordField),
+) Allocator.Error!DispatchRowTail {
+    var seen: std.ArrayListUnmanaged(Var) = .empty;
+    defer seen.deinit(self.gpa);
+    var tail_var = row_var;
+    while (true) {
+        const resolved = self.types.resolveVar(tail_var);
+        if (dispatchVarInList(seen.items, resolved.var_)) return .{ .kind = .open, .var_ = resolved.var_ };
+        try seen.append(self.gpa, resolved.var_);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .empty_record => return .{ .kind = .closed, .var_ = resolved.var_ },
+                .record => |record| {
+                    const slice = self.types.getRecordFieldsSlice(record.fields);
+                    const names = slice.items(.name);
+                    const vars = slice.items(.var_);
+                    for (names, vars) |name, field_var| {
+                        try fields.append(self.gpa, .{ .name = name, .var_ = field_var });
+                    }
+                    tail_var = record.ext;
+                },
+                .record_unbound => |fields_range| {
+                    const slice = self.types.getRecordFieldsSlice(fields_range);
+                    const names = slice.items(.name);
+                    const vars = slice.items(.var_);
+                    for (names, vars) |name, field_var| {
+                        try fields.append(self.gpa, .{ .name = name, .var_ = field_var });
+                    }
+                    return .{ .kind = .unbound, .var_ = resolved.var_ };
+                },
+                .empty_tag_union, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
+                    return .{ .kind = .open, .var_ = resolved.var_ };
+                },
+            },
+            .flex, .rigid, .alias, .err => return .{ .kind = .open, .var_ = resolved.var_ },
+        }
+    }
+}
+
+/// Collect one tag-union row's normalized layout: every tag along the
+/// extension chain plus the terminal tail.
+fn dispatchCollectTagRow(
+    self: *Self,
+    row_var: Var,
+    tags: *std.ArrayListUnmanaged(DispatchUnionTag),
+) Allocator.Error!DispatchRowTail {
+    var seen: std.ArrayListUnmanaged(Var) = .empty;
+    defer seen.deinit(self.gpa);
+    var tail_var = row_var;
+    while (true) {
+        const resolved = self.types.resolveVar(tail_var);
+        if (dispatchVarInList(seen.items, resolved.var_)) return .{ .kind = .open, .var_ = resolved.var_ };
+        try seen.append(self.gpa, resolved.var_);
+        switch (resolved.desc.content) {
+            .structure => |flat| switch (flat) {
+                .empty_tag_union => return .{ .kind = .closed, .var_ = resolved.var_ },
+                .tag_union => |tag_union| {
+                    const slice = self.types.getTagsSlice(tag_union.tags);
+                    const names = slice.items(.name);
+                    const args = slice.items(.args);
+                    for (names, args) |name, arg_range| {
+                        try tags.append(self.gpa, .{ .name = name, .args = arg_range });
+                    }
+                    tail_var = tag_union.ext;
+                },
+                .empty_record, .record, .record_unbound, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
+                    return .{ .kind = .open, .var_ = resolved.var_ };
+                },
+            },
+            .flex, .rigid, .alias, .err => return .{ .kind = .open, .var_ = resolved.var_ },
+        }
+    }
+}
+
+/// Size of one receiver over exactly the structure the embedding walk can
+/// couple or dive through: identity leaves count one apiece (their attached
+/// callable relations are not receiver structure), aliases count their
+/// backing and arguments, rows count their normalized chain. Any strictly
+/// embedded receiver therefore has a strictly smaller size, which is what
+/// lets the size comparison prune the pairwise walk. Crossing an in-progress
+/// var means cyclic structure whose totals are path-dependent, so the result
+/// is flagged inconclusive.
+fn dispatchReceiverSize(self: *Self, var_: Var) Allocator.Error!DispatchSizeResult {
+    var active: std.ArrayListUnmanaged(Var) = .empty;
+    defer active.deinit(self.gpa);
+    var result: DispatchSizeResult = .{ .count = 0, .saw_cycle = false };
+    try self.dispatchReceiverSizeInner(&active, var_, &result);
+    return result;
+}
+
+fn dispatchReceiverSizeInner(
+    self: *Self,
+    active: *std.ArrayListUnmanaged(Var),
+    var_: Var,
+    result: *DispatchSizeResult,
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    result.count +|= 1;
+    if (dispatchVarInList(active.items, resolved.var_)) {
+        result.saw_cycle = true;
+        return;
+    }
+    try active.append(self.gpa, resolved.var_);
+    defer _ = active.pop();
+
+    switch (resolved.desc.content) {
+        .flex, .rigid, .err => {},
+        .alias => |alias| {
+            try self.dispatchReceiverSizeInner(active, self.types.getAliasBackingVar(alias), result);
+            for (self.types.sliceAliasArgs(alias)) |arg| {
+                try self.dispatchReceiverSizeInner(active, arg, result);
+            }
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => {},
+            .tuple => |tuple| {
+                for (self.types.sliceVars(tuple.elems)) |elem| {
+                    try self.dispatchReceiverSizeInner(active, elem, result);
+                }
+            },
+            .nominal_type => |nominal| {
+                for (self.types.sliceNominalArgs(nominal)) |arg| {
+                    try self.dispatchReceiverSizeInner(active, arg, result);
+                }
+            },
+            .fn_pure, .fn_unbound, .fn_effectful => |func| {
+                for (self.types.sliceVars(func.args)) |arg| {
+                    try self.dispatchReceiverSizeInner(active, arg, result);
+                }
+                try self.dispatchReceiverSizeInner(active, func.ret, result);
+            },
+            .record, .record_unbound => {
+                var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
+                defer fields.deinit(self.gpa);
+                const tail = try self.dispatchCollectRecordRow(resolved.var_, &fields);
+                for (fields.items) |field| {
+                    try self.dispatchReceiverSizeInner(active, field.var_, result);
+                }
+                if (tail.kind == .open) try self.dispatchReceiverSizeInner(active, tail.var_, result);
+            },
+            .tag_union => {
+                var tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
+                defer tags.deinit(self.gpa);
+                const tail = try self.dispatchCollectTagRow(resolved.var_, &tags);
+                for (tags.items) |tag| {
+                    for (self.types.sliceVars(tag.args)) |arg| {
+                        try self.dispatchReceiverSizeInner(active, arg, result);
+                    }
+                }
+                if (tail.kind == .open) try self.dispatchReceiverSizeInner(active, tail.var_, result);
+            },
+        },
+    }
 }
 
 /// Return an already-selected target for this raw dispatch edge. Parent
@@ -22943,7 +23310,8 @@ fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
-    state_type_key: ?[32]u8,
+    state_type_key: [32]u8,
+    grew_from_ancestor: bool,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     cycle_method_expr_var: ?Var,
@@ -23008,6 +23376,7 @@ fn instantiateDispatchTargetMethodVar(
         .receiver_var = dispatcher_var,
         .parent_constraint_fn_var = parent_constraint_fn_var,
         .state_type_key = state_type_key,
+        .grew_from_ancestor = grew_from_ancestor,
         .target_env = method_lookup.env,
         .target_binding = method_lookup.binding,
         .method_name = constraint.fn_name,
@@ -23038,23 +23407,24 @@ fn resolveDispatchTargetMethodVar(
         return existing.method_var;
     }
 
-    var state_type_key: ?[32]u8 = undefined;
-    if (try self.dispatchStateRepeatsAncestor(
-        dispatcher_var,
+    const state_type_key = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var);
+    if (self.dispatchStateKeyRepeatsAncestor(
         constraint,
         parent_constraint_fn_var,
         method_lookup,
-        &state_type_key,
+        state_type_key,
     )) {
         try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr, null);
         return null;
     }
 
+    var grew_from_ancestor = false;
     if (try self.dispatchStateGrowsAlongLineage(
         dispatcher_var,
         parent_constraint_fn_var,
         constraint,
         method_lookup,
+        &grew_from_ancestor,
     )) |ancestor_receiver| {
         try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr, ancestor_receiver);
         return null;
@@ -23064,6 +23434,7 @@ fn resolveDispatchTargetMethodVar(
         dispatcher_var,
         parent_constraint_fn_var,
         state_type_key,
+        grew_from_ancestor,
         constraint,
         method_lookup,
         cycle_method_expr_var,
