@@ -3722,6 +3722,16 @@ fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier
     return self.runUnify(a, b, env, .{});
 }
 
+fn fieldPresenceRelationForContext(
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+) unifier.FieldPresenceRelation {
+    if (ctx == .record_access) {
+        return if (ctx.record_access.mode == .required) .required_access else .ordinary;
+    }
+    return if (row_width_relation == .exact) .committed_value else .ordinary;
+}
+
 /// Unify two types with a context for error reporting.
 fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     const row_width_relation: unifier.RowWidthRelation = if (std.meta.activeTag(ctx) == .platform_requirement)
@@ -3731,10 +3741,7 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{
         .context = ctx,
         .row_width_relation = row_width_relation,
-        .field_presence_relation = switch (ctx) {
-            .record_access => |access| if (access.mode == .required) .required_access else .ordinary,
-            else => if (row_width_relation == .exact) .committed_value else .ordinary,
-        },
+        .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
     });
 }
 
@@ -3759,10 +3766,7 @@ fn unifyOwnedRelation(
         .context = ctx,
         .on_mismatch = .write_no_report,
         .row_width_relation = row_width_relation,
-        .field_presence_relation = switch (ctx) {
-            .record_access => |access| if (access.mode == .required) .required_access else .ordinary,
-            else => if (row_width_relation == .exact) .committed_value else .ordinary,
-        },
+        .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
     });
     if (result.isOk()) return .ok;

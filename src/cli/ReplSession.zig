@@ -1715,10 +1715,11 @@ fn declarationBoundNames(allocator: Allocator, line: []const u8) Allocator.Error
 
     var names = std.ArrayList([]const u8).empty;
     errdefer names.deinit(allocator);
-    switch (ast.store.getStatement(@enumFromInt(ast.root_node_idx))) {
-        .decl => |decl| try collectPatternBoundNames(ast, decl.pattern, &names, allocator),
-        .@"var" => |variable| try appendBoundName(&names, allocator, ast.resolve(variable.name)),
-        else => {},
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    if (statement == .decl) {
+        try collectPatternBoundNames(ast, statement.decl.pattern, &names, allocator);
+    } else if (statement == .@"var") {
+        try appendBoundName(&names, allocator, ast.resolve(statement.@"var".name));
     }
     return names.toOwnedSlice(allocator);
 }

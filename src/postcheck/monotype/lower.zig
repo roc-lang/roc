@@ -31925,18 +31925,6 @@ const BodyContext = struct {
         return null;
     }
 
-    /// Find a field kind through checked aliases, nominal backing, and row tails.
-    fn checkedFieldKind(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-    ) Allocator.Error!?checked.CheckedFieldKind {
-        return switch (try self.checkedRecordFieldByName(checked_ty, field_name)) {
-            .found => |field| field.kind,
-            .scheme_interior, .absent => null,
-        };
-    }
-
     /// Read the concrete kind selected on an immutable Monotype field.
     fn monotypeFieldKindTag(_: *BodyContext, field: Type.Field) checked.CheckedFieldKind.Tag {
         if (field.kind_state != .resolved) {

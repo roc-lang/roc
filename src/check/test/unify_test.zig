@@ -122,6 +122,24 @@ const TestEnv = struct {
         return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
     }
 
+    fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .problems_gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .self_module_identity = self.module_env.selfModuleIdentity(),
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{
+            .on_mismatch = .write_no_report,
+            .row_width_relation = .exact,
+        });
+    }
+
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
 
     /// Get a desc from a root var
@@ -1493,6 +1511,17 @@ test "unify - zero-field unbound row and empty record canonicalize without a fre
     try std.testing.expectEqual(Result.ok, try env.unify(unbound, empty));
     try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(empty).desc.content);
     try std.testing.expectEqual(@as(usize, 0), env.scratch.fresh_vars.len());
+}
+
+test "unify - exact zero-field closed row and empty record agree" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const closed_zero_field_row = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{})).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.ok, try env.unifyExact(closed_zero_field_row, empty));
 }
 
 // unification - structure/structure - records shared field presence //

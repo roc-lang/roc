@@ -67,10 +67,9 @@ pub const FormattingResult = struct {
 /// the formatter owns. Every other parse diagnostic still blocks formatting so
 /// a malformed file is never overwritten from a lossy recovery tree.
 fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
-    for (diagnostics) |diagnostic| switch (diagnostic.tag) {
-        .optional_field_mark_after_colon => {},
-        else => return false,
-    };
+    for (diagnostics) |diagnostic| {
+        if (diagnostic.tag != .optional_field_mark_after_colon) return false;
+    }
     return true;
 }
 

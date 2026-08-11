@@ -2168,8 +2168,12 @@ const Unifier = struct {
         fields: RecordFieldSafeMultiList.Range,
         mb_ext: ?Var,
     ) Error!void {
-        if (fields.len() == 0 and mb_ext == null) {
-            try self.merge(vars, .{ .structure = .empty_record });
+        if (fields.len() == 0) {
+            if (mb_ext) |ext| {
+                try self.unifyGuarded(ext, record_var);
+            } else {
+                try self.merge(vars, .{ .structure = .empty_record });
+            }
             return;
         }
         if (self.row_width_relation == .exact) return error.TypeMismatch;

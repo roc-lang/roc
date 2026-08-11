@@ -1126,8 +1126,13 @@ fn expectInlinePlanDecision(
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
-    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
-    return lowered.lir_result.root_procs.items[0];
+    var root: ?LIR.LirProcSpecId = null;
+    for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |proc, metadata| {
+        if (metadata.abi == .compile_time) continue;
+        if (root != null) return error.TestUnexpectedResult;
+        root = proc;
+    }
+    return root orelse error.MissingRootProcedure;
 }
 
 fn collectAssignCallProcs(
