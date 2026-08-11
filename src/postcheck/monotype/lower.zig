@@ -26586,19 +26586,48 @@ const BodyContext = struct {
                     if (try self.graph.containsGeneratedPrivate(expected)) break :born_final;
                 }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
-                if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                // A root that reaches a variable is not ground, but under the
+                // innermost binding frame it is still one stated type; the
+                // bound reader answers it below, under the stricter walk.
+                const bound_request = rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty);
                 // A callable anywhere in the return may lower erased and
                 // boxed, and erased-reuse ownership is decided across graph
                 // relations a frozen constant never joins.
-                const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
-                    .function => |checked_function| checked_function.ret,
+                const checked_function = switch (checkedPayload(self.view, source_fn_ty)) {
+                    .function => |checked_function| checked_function,
                     .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :born_final,
                 };
-                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
+                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_function.ret)) {
                     break :born_final;
                 }
+                if (bound_request) {
+                    // A defaultable variable's value comes from the other
+                    // operand under the literal-leaves law, never from the
+                    // binding, so a signature that reaches one cannot freeze.
+                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.types, source_fn_ty)) {
+                        break :born_final;
+                    }
+                    // A bound request freezes at the binding's answer, so no
+                    // position may need graph-side row widening or capture
+                    // evidence afterwards: rows and functions anywhere in the
+                    // signature decline it.
+                    for (checked_function.args) |arg| {
+                        if (rehearsal.checkedRootReachesRowOrFunction(Builder.directTranslateCursor(self.view), arg)) break :born_final;
+                    }
+                    if (rehearsal.checkedRootReachesRowOrFunction(Builder.directTranslateCursor(self.view), checked_function.ret)) {
+                        break :born_final;
+                    }
+                }
                 const address = self.typeAddress(source_fn_ty);
-                const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                const final_ty = if (bound_request) blk: {
+                    var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+                    break :blk (rehearsal.typeForCheckedPositionWithEdge(
+                        .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                        self.callee_context,
+                        &binding,
+                        rehearsal.innermostRequestEdge(),
+                    ) catch break :born_final) orelse break :born_final;
+                } else (rehearsal.typeForCheckedAuthoritativeOrUnstated(
                     .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
                     self.callee_context,
                     rehearsal.innermostRequestEdge(),
@@ -26734,20 +26763,49 @@ const BodyContext = struct {
                     if (try self.graph.containsGeneratedPrivate(expected)) break :born_final;
                 }
                 const rehearsal = self.builder.rehearsal orelse break :born_final;
-                if (rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty)) break :born_final;
+                // A root that reaches a variable is not ground, but under the
+                // innermost binding frame it is still one stated type; the
+                // bound reader answers it below, under the stricter walk.
+                const bound_request = rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty);
                 // As on the direct-call path: a callable anywhere in the
                 // return may lower erased and boxed, and erased-reuse
                 // ownership is decided across graph relations a frozen
                 // constant never joins.
-                const checked_ret = switch (checkedPayload(self.view, source_fn_ty)) {
-                    .function => |checked_function| checked_function.ret,
+                const checked_function = switch (checkedPayload(self.view, source_fn_ty)) {
+                    .function => |checked_function| checked_function,
                     .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => break :born_final,
                 };
-                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_ret)) {
+                if (rehearsal.checkedRootReachesFunction(Builder.directTranslateCursor(self.view), checked_function.ret)) {
                     break :born_final;
                 }
+                if (bound_request) {
+                    // A defaultable variable's value comes from the other
+                    // operand under the literal-leaves law, never from the
+                    // binding, so a signature that reaches one cannot freeze.
+                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.types, source_fn_ty)) {
+                        break :born_final;
+                    }
+                    // A bound request freezes at the binding's answer, so no
+                    // position may need graph-side row widening or capture
+                    // evidence afterwards: rows and functions anywhere in the
+                    // signature decline it.
+                    for (checked_function.args) |arg| {
+                        if (rehearsal.checkedRootReachesRowOrFunction(Builder.directTranslateCursor(self.view), arg)) break :born_final;
+                    }
+                    if (rehearsal.checkedRootReachesRowOrFunction(Builder.directTranslateCursor(self.view), checked_function.ret)) {
+                        break :born_final;
+                    }
+                }
                 const address = self.typeAddress(source_fn_ty);
-                const final_ty = (rehearsal.typeForCheckedAuthoritativeOrUnstated(
+                const final_ty = if (bound_request) blk: {
+                    var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+                    break :blk (rehearsal.typeForCheckedPositionWithEdge(
+                        .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
+                        self.callee_context,
+                        &binding,
+                        rehearsal.innermostRequestEdge(),
+                    ) catch break :born_final) orelse break :born_final;
+                } else (rehearsal.typeForCheckedAuthoritativeOrUnstated(
                     .{ .module_bytes = address.module_bytes, .type_id = address.type_id },
                     self.callee_context,
                     rehearsal.innermostRequestEdge(),
