@@ -24,6 +24,7 @@ const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const arc_certify = @import("arc_certify.zig");
 const arc_dismantle = @import("arc_dismantle.zig");
+const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -240,15 +241,24 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .store = store,
         .layouts = layouts,
     };
-    var local_contains_refcounted = try store.allocator.alloc(bool, store.localCount());
-    defer store.allocator.free(local_contains_refcounted);
-    for (0..store.localCount()) |index| {
-        const local = store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
-        local_contains_refcounted[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
-    }
-    inserter.local_contains_refcounted = local_contains_refcounted;
+    const boxy_rc_descs = try computeBoxyRcDescs(store);
+    defer store.allocator.free(boxy_rc_descs);
 
-    var solution = try arc_solve.solve(store.allocator, store, local_contains_refcounted, options.roots);
+    const local_contains_refcounted = try computeLocalContainsRefcounted(store.allocator, store, layouts, boxy_rc_descs);
+    defer store.allocator.free(local_contains_refcounted);
+    inserter.local_contains_refcounted = local_contains_refcounted;
+    inserter.boxy_rc_descs = boxy_rc_descs;
+
+    const borrow_anchor_refcounted = try computeBorrowAnchorRefcounted(store.allocator, store, layouts, local_contains_refcounted);
+    defer store.allocator.free(borrow_anchor_refcounted);
+
+    var solution = try arc_solve.solve(
+        store.allocator,
+        store,
+        borrow_anchor_refcounted,
+        boxy_rc_descs,
+        options.roots,
+    );
     defer solution.deinit();
     inserter.solution = &solution;
 
@@ -323,6 +333,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             break;
         }
 
+        const emit_proc_spec = store.getProcSpecPtr(emit_proc);
+        emit_proc_spec.rc_borrowed_params = emit_sig.borrowed_params;
+        emit_proc_spec.rc_ret_borrowed = emit_sig.ret_mode == .borrowed;
+        emit_proc_spec.rc_ret_lenders = emit_sig.ret_lenders;
+
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
         const source_spec = store.getProcSpec(source_proc);
         var domain_arena = std.heap.ArenaAllocator.init(store.allocator);
@@ -340,6 +355,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer inserter.current_domain = null;
 
         const emit_args = store.getProcSpec(emit_proc).args;
+        inserter.current_proc = emit_proc;
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
         inserter.current_source_proc = source_proc;
@@ -450,8 +466,204 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs }, options.roots);
+        const certified_boxy_rc_descs = try computeBoxyRcDescs(store);
+        defer store.allocator.free(certified_boxy_rc_descs);
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, certified_boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
     }
+}
+
+fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
+    const local_count = store.localCount();
+    const descs = try store.allocator.alloc(?LIR.BoxyDescRef, local_count);
+    for (0..local_count) |index| {
+        const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        descs[index] = store.getLocal(local_id).boxy_desc;
+    }
+    return descs;
+}
+
+fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
+    const index = @intFromEnum(local);
+    if (index >= descs.len) return null;
+    return descs[index];
+}
+
+fn computeLocalContainsRefcounted(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+) ResourceError![]bool {
+    const local_count = store.localCount();
+    const contains = try allocator.alloc(bool, local_count);
+    errdefer allocator.free(contains);
+    for (0..local_count) |index| {
+        const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+        const local = store.getLocal(local_id);
+        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
+            (boxy_rc_descs[index] != null and
+                layouts.layoutContainsRcErasedBox(layouts.getLayout(local.layout_idx)));
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (0..store.cfStmtCount()) |stmt_index| {
+            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_ref) {
+                const assign = stmt.assign_ref;
+                switch (assign.op) {
+                    .local => |source| changed = markLocalRcIfSourceRc(contains, assign.target, source) or changed,
+                    .nominal => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
+                    .list_reinterpret => |op| changed = markLocalRcIfSourceRc(contains, assign.target, op.backing_ref) or changed,
+                    .field,
+                    .tag_payload,
+                    .tag_payload_struct,
+                    .discriminant,
+                    => {},
+                }
+            } else if (stmt == .assign_list) {
+                const assign = stmt.assign_list;
+                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.elems) or changed;
+            } else if (stmt == .assign_struct) {
+                const assign = stmt.assign_struct;
+                changed = markLocalRcIfSpanContainsRc(store, contains, assign.target, assign.fields) or changed;
+            } else if (stmt == .assign_tag) {
+                const assign = stmt.assign_tag;
+                if (assign.payload) |payload| {
+                    changed = markLocalRcIfSourceRc(contains, assign.target, payload) or changed;
+                }
+                if (assign.target_desc != null) {
+                    changed = markLocalRc(contains, assign.target) or changed;
+                }
+            } else if (stmt == .assign_boxy_box) {
+                changed = markLocalRc(contains, stmt.assign_boxy_box.target) or changed;
+            } else if (stmt == .assign_boxy_reuse_box) {
+                changed = markLocalRc(contains, stmt.assign_boxy_reuse_box.target) or changed;
+            } else if (stmt == .assign_boxy_tag) {
+                changed = markLocalRc(contains, stmt.assign_boxy_tag.target) or changed;
+            }
+        }
+    }
+
+    return contains;
+}
+
+/// Borrow-anchor refcounted set for the ARC solver. Extends the emission-time
+/// refcounted set with payload-read projections (`.field`, `.tag_payload`,
+/// `.tag_payload_struct`) whose result carries descriptor-driven dynamic
+/// (`box_of_zst`) content borrowed out of a refcounted source. Such a
+/// projection is an alias into its source's allocation whose extracted boxes
+/// stay live past the projection, so the source's release must land after the
+/// projection's last use. An erased capture load similarly produces a view of
+/// the capture storage owned by the pinned callable frame. These intermediate
+/// views own no RC unit: their dynamic payloads are refcounted by descriptor,
+/// which the layout-only refcount check cannot see, so the views carry no Boxy
+/// descriptor of their own. Marking them refcounted for the solver alone lets
+/// projections join an explicit liveness group. Emission keeps consulting the
+/// narrower `local_contains_refcounted`, so a solver-only anchor is never
+/// forced to carry an RC helper it lacks.
+fn computeBorrowAnchorRefcounted(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    local_contains_refcounted: []const bool,
+) ResourceError![]bool {
+    const anchor = try allocator.dupe(bool, local_contains_refcounted);
+    errdefer allocator.free(anchor);
+
+    var visited = std.AutoHashMap(layout_mod.Idx, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(layout_mod.Idx).empty;
+    defer stack.deinit(allocator);
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (0..store.cfStmtCount()) |stmt_index| {
+            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt == .assign_low_level) {
+                const assign = stmt.assign_low_level;
+                if (assign.op != .erased_capture_load) continue;
+                const target_layout = store.getLocal(assign.target).layout_idx;
+                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                changed = markLocalRc(anchor, assign.target) or changed;
+            } else if (stmt == .assign_ref) {
+                const assign = stmt.assign_ref;
+                if (assign.op != .field and assign.op != .tag_payload and assign.op != .tag_payload_struct) continue;
+                const source_index = @intFromEnum(refOpSource(assign.op));
+                if (source_index >= anchor.len or !anchor[source_index]) continue;
+                const target_layout = store.getLocal(assign.target).layout_idx;
+                if (!try layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) continue;
+                changed = markLocalRc(anchor, assign.target) or changed;
+            }
+        }
+    }
+    return anchor;
+}
+
+/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
+/// (`box_of_zst`) content. Recursive tag unions reference themselves through
+/// their layout indices, so the walk tracks visited indices; `visited` and
+/// `stack` are caller-owned scratch reused across queries.
+fn layoutMayContainBoxyDynamic(
+    allocator: Allocator,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    stack: *std.ArrayList(layout_mod.Idx),
+) ResourceError!bool {
+    visited.clearRetainingCapacity();
+    stack.clearRetainingCapacity();
+    try stack.append(allocator, layout_idx);
+    while (stack.pop()) |idx| {
+        if ((try visited.getOrPut(idx)).found_existing) continue;
+        const layout_val = layouts.getLayout(idx);
+        switch (layout_val.tag) {
+            .box_of_zst => return true,
+            .box, .list => try stack.append(allocator, layout_val.getIdx()),
+            .list_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .struct_ => {
+                const info = layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
+                }
+            },
+            .tag_union => {
+                const info = layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
+                }
+            },
+            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
+        }
+    }
+    return false;
+}
+
+fn markLocalRc(contains: []bool, local: LIR.LocalId) bool {
+    const index = @intFromEnum(local);
+    if (index >= contains.len or contains[index]) return false;
+    contains[index] = true;
+    return true;
+}
+
+fn markLocalRcIfSourceRc(contains: []bool, target: LIR.LocalId, source: LIR.LocalId) bool {
+    const source_index = @intFromEnum(source);
+    if (source_index >= contains.len or !contains[source_index]) return false;
+    return markLocalRc(contains, target);
+}
+
+fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target: LIR.LocalId, span: LIR.LocalSpan) bool {
+    const locals = store.getLocalSpan(span);
+    for (0..GuardedList.borrowLen(locals)) |span_index| {
+        const local = GuardedList.at(locals, span_index);
+        const local_index = @intFromEnum(local);
+        if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
+    }
+    return false;
 }
 
 const VariantSelector = struct {
@@ -818,6 +1030,7 @@ const ArcPlanStep = struct {
     initialized: bool = false,
     stmt: LIR.CFStmtId = undefined,
     pre_release: ?ReleaseDecision = null,
+    pre_release_extra: std.ArrayList(ReleaseDecision) = .empty,
     pre_retain: std.ArrayList(LIR.LocalId) = .empty,
     retain_assign_ref_target: bool = true,
     retain_set_target: bool = true,
@@ -839,6 +1052,7 @@ const ArcPlanStep = struct {
         self.initialized = true;
         self.stmt = stmt;
         self.pre_release = null;
+        self.pre_release_extra.clearRetainingCapacity();
         self.pre_retain.clearRetainingCapacity();
         self.retain_assign_ref_target = true;
         self.retain_set_target = true;
@@ -892,6 +1106,11 @@ const ArcPlanTerminal = union(enum) {
         match_plan: u32,
         miss_plan: u32,
         capture_retain_count: u16,
+    },
+    boxy_tag_match: struct {
+        stmt: LIR.CFStmtId,
+        match_plan: u32,
+        miss_plan: u32,
     },
     str_match_set: struct {
         stmt: LIR.CFStmtId,
@@ -948,6 +1167,7 @@ const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     local_contains_refcounted: []const bool = &.{},
+    boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
@@ -982,7 +1202,10 @@ const Inserter = struct {
     active_liveness_source: ?LIR.LirProcSpecId = null,
     current_source_proc: LIR.LirProcSpecId = undefined,
     next_loop_keep_id: u32 = 1,
+    // Set to the proc being rewritten before any diagnostic or helper reads it.
+    current_proc: LIR.LirProcSpecId = undefined,
     current_proc_body: LIR.CFStmtId = undefined,
+    current_rewrite_stmt: ?LIR.CFStmtId = null,
     join_bodies: []const arc_solve.JoinBody = &.{},
     /// Join metadata accumulated when each final join is materialized,
     /// avoiding a second discovery walk over the finished graph.
@@ -1170,6 +1393,17 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, str_plan.miss_plan, &state.child_results[1]);
                 try self.pushMaterializePath(tasks, str_plan.match_plan, &state.child_results[0]);
             },
+            .boxy_tag_match => |tag_plan| {
+                const state = try self.emission_allocator.create(MaterializeControlTask);
+                state.* = .{
+                    .plan_index = path.plan_index,
+                    .child_results = try self.emission_allocator.alloc(LIR.CFStmtId, 2),
+                    .result = path.result,
+                };
+                try tasks.append(self.emission_allocator, .{ .control = state });
+                try self.pushMaterializePath(tasks, tag_plan.miss_plan, &state.child_results[1]);
+                try self.pushMaterializePath(tasks, tag_plan.match_plan, &state.child_results[0]);
+            },
             .str_match_set => |str_plan| {
                 const state = try self.emission_allocator.create(MaterializeControlTask);
                 state.* = .{
@@ -1265,6 +1499,16 @@ const Inserter = struct {
                     .on_miss = state.child_results[1],
                 } });
             },
+            .boxy_tag_match => |tag_plan| {
+                const source = self.store.getCFStmt(tag_plan.stmt).boxy_tag_match;
+                tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
+                    .source = source.source,
+                    .source_desc = source.source_desc,
+                    .tag_name = source.tag_name,
+                    .on_match = state.child_results[0],
+                    .on_miss = state.child_results[1],
+                } });
+            },
             .str_match_set => |str_plan| {
                 const source = self.store.getCFStmt(str_plan.stmt).str_match_set;
                 const source_arms = self.store.getStrMatchArms(source.arms);
@@ -1334,6 +1578,9 @@ const Inserter = struct {
 
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(step.stmt);
+        const saved_rewrite_stmt = self.current_rewrite_stmt;
+        defer self.current_rewrite_stmt = saved_rewrite_stmt;
+        self.current_rewrite_stmt = step.stmt;
         const saved_loc = self.store.current_loc;
         defer self.store.current_loc = saved_loc;
         const saved_region = self.store.current_region;
@@ -1375,6 +1622,8 @@ const Inserter = struct {
                     .target = assign.target,
                     .proc = step.call_target_override orelse assign.proc,
                     .args = assign.args,
+                    .result_desc = assign.result_desc,
+                    .out_desc = assign.out_desc,
                     .is_cold = assign.is_cold,
                     .next = next,
                 } });
@@ -1385,6 +1634,11 @@ const Inserter = struct {
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .arg_layouts = assign.arg_layouts,
+                    .arg_descs = assign.arg_descs,
+                    .arg_desc_keys = assign.arg_desc_keys,
+                    .result_desc = assign.result_desc,
+                    .out_desc = assign.out_desc,
                     .arg_plan = assign.arg_plan,
                     .reuse_closure = assign.reuse_closure,
                     .reuse_source = assign.reuse_source,
@@ -1401,8 +1655,120 @@ const Inserter = struct {
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .result_desc = assign.result_desc,
                     .reuse = assign.reuse,
                     .reuse_unique = step.reuse_unique,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_desc_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = assign.target,
+                .desc = assign.desc,
+                .nested_index = assign.nested_index,
+                .box_payload_layout = assign.box_payload_layout,
+                .tag_payload = assign.tag_payload,
+                .tag_ext = assign.tag_ext,
+                .tag_residual_for = assign.tag_residual_for,
+                .captures = assign.captures,
+                .next = next,
+            } }),
+            .assign_boxy_dict_ref => |assign| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                .target = assign.target,
+                .dict = assign.dict,
+                .next = next,
+            } }),
+            .assign_boxy_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                .target = assign.target,
+                .payload = assign.payload,
+                .payload_layout = assign.payload_layout,
+                .source_desc = assign.source_desc,
+                .payload_desc = assign.payload_desc,
+                .payload_mode = assign.payload_mode,
+                .next = next,
+            } }),
+            .assign_boxy_reuse_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
+                .target = assign.target,
+                .source = assign.source,
+                .desc = assign.desc,
+                .next = next,
+            } }),
+            .assign_boxy_unbox => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                    .target = assign.target,
+                    .source = assign.source,
+                    .source_desc = assign.source_desc,
+                    .target_desc = assign.target_desc,
+                    .target_layout = assign.target_layout,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_adapt => |assign| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                .target = assign.target,
+                .source = assign.source,
+                .adapter = assign.adapter,
+                .source_desc = assign.source_desc,
+                .target_desc = assign.target_desc,
+                .source_mode = assign.source_mode,
+                .next = next,
+            } }),
+            .assign_boxy_inspect => |assign| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                .target = assign.target,
+                .source = assign.source,
+                .source_desc = assign.source_desc,
+                .source_mode = assign.source_mode,
+                .next = next,
+            } }),
+            .assign_boxy_eq => |assign| blk: {
+                if (assign.source_mode == .move) {
+                    next = try self.retainLocalIfRc(assign.rhs, next);
+                    next = try self.retainLocalIfRc(assign.lhs, next);
+                }
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_eq = .{
+                    .target = assign.target,
+                    .lhs = assign.lhs,
+                    .rhs = assign.rhs,
+                    .source_desc = assign.source_desc,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_boxy_tag => |assign| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
+                .target = assign.target,
+                .target_desc = assign.target_desc,
+                .tag_name = assign.tag_name,
+                .payload = assign.payload,
+                .payload_layout = assign.payload_layout,
+                .payload_desc = assign.payload_desc,
+                .payload_mode = assign.payload_mode,
+                .next = next,
+            } }),
+            .assign_boxy_tag_payload => |assign| blk: {
+                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                break :blk try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
+                    .target = assign.target,
+                    .target_desc = assign.target_desc,
+                    .source = assign.source,
+                    .source_desc = assign.source_desc,
+                    .tag_name = assign.tag_name,
+                    .payload_index = assign.payload_index,
+                    .source_mode = assign.source_mode,
+                    .next = next,
+                } });
+            },
+            .assign_call_dict => |assign| blk: {
+                next = try self.retainSpanExcept(assign.args, step.transfer_mask, next);
+                break :blk try self.store.addCFStmt(.{ .assign_call_dict = .{
+                    .target = assign.target,
+                    .dict = assign.dict,
+                    .method = assign.method,
+                    .method_slot = assign.method_slot,
+                    .args = assign.args,
+                    .arg_descs = assign.arg_descs,
+                    .hidden_args = assign.hidden_args,
+                    .result_desc = assign.result_desc,
+                    .is_cold = assign.is_cold,
                     .next = next,
                 } });
             },
@@ -1436,6 +1802,7 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
+                    .contents_desc = assign.contents_desc,
                     .next = next,
                 } });
             },
@@ -1445,6 +1812,7 @@ const Inserter = struct {
                 }
                 break :blk try self.store.addCFStmt(.{ .assign_tag = .{
                     .target = assign.target,
+                    .target_desc = assign.target_desc,
                     .variant_index = assign.variant_index,
                     .discriminant = assign.discriminant,
                     .payload = assign.payload,
@@ -1513,6 +1881,7 @@ const Inserter = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
+            .boxy_tag_match,
             .loop_continue,
             .loop_break,
             .join,
@@ -1523,6 +1892,11 @@ const Inserter = struct {
         };
 
         if (step.pre_release) |release| cloned = try self.materializeReleaseDecision(release, cloned);
+        var pre_release_index = step.pre_release_extra.items.len;
+        while (pre_release_index > 0) {
+            pre_release_index -= 1;
+            cloned = try self.materializeReleaseDecision(step.pre_release_extra.items[pre_release_index], cloned);
+        }
         if (step.preserve_consumed_args != 0) {
             const assign = stmt.assign_low_level;
             cloned = try self.retainMaskedArgs(assign.args, step.preserve_consumed_args, cloned);
@@ -1699,6 +2073,182 @@ const Inserter = struct {
                     if (transfer.preserve_reuse) try step.pre_retain.append(self.solve_allocator, assign.reuse.?);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    try self.planValuesInvalidatedByDescriptorUpdate(
+                        assign.target,
+                        &segment.owned,
+                        assign.next,
+                        segment.ctx.loop_keep,
+                        &step.pre_release_extra,
+                    );
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    self.death_scratch.clearRetainingCapacity();
+                    const desc_local = assign.desc.localOrNull() orelse assign.target;
+                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
+                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    const dict_local = assign.dict.localOrNull() orelse assign.target;
+                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_box => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.payload_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.payload_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.payload);
+                    }
+                    const singles = [_]LIR.LocalId{ assign.payload, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (!transfer.transfer_single) try step.pre_retain.append(self.solve_allocator, assign.source);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_unbox => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
+                    }
+                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_adapt => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
+                    }
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_inspect => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
+                    }
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    if (assign.source_mode == .move) {
+                        _ = try self.singleTransfer(assign.lhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                        _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &segment.owned, segment.ctx.loop_keep);
+                    }
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_tag => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.payload_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.payload_mode == .move and !transfer.transfer_single) {
+                        if (assign.payload) |payload| try step.pre_retain.append(self.solve_allocator, payload);
+                    }
+                    const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    const transfer = if (assign.source_mode == .move)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                    else
+                        SingleTransfer{
+                            .transfer_single = false,
+                            .release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
+                        };
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
+                    step.transfer_single = transfer.transfer_single;
+                    if (assign.source_mode == .move and !transfer.transfer_single) {
+                        try step.pre_retain.append(self.solve_allocator, assign.source);
+                    }
+                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
+                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    segment.cursor = assign.next;
+                },
+                .boxy_tag_match => |tag_match| {
+                    const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
+                    const child_plans = terminal.boxy_tag_match;
+                    try self.pushSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
+                    try self.pushSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
+                    return;
+                },
+                .assign_call_dict => |assign| {
+                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, segment.ctx.loop_keep, .no);
+                    step.pre_release = if (self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
+                    self.death_scratch.clearRetainingCapacity();
+                    const singles = [_]LIR.LocalId{assign.target};
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -2102,6 +2652,7 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -2130,6 +2681,7 @@ const Inserter = struct {
                 .switch_stmt,
                 .initialized_payload_switch,
                 .str_match,
+                .boxy_tag_match,
                 .str_match_set,
                 .jump,
                 .terminal,
@@ -2162,6 +2714,7 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .terminal,
             => {},
@@ -2187,6 +2740,7 @@ const Inserter = struct {
                 .switch_stmt,
                 .initialized_payload_switch,
                 .str_match,
+                .boxy_tag_match,
                 .str_match_set,
                 .terminal,
                 => arcInvariant("ARC registered jump plan had another terminal"),
@@ -2218,6 +2772,7 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -2274,6 +2829,7 @@ const Inserter = struct {
                 .switch_stmt,
                 .initialized_payload_switch,
                 .str_match,
+                .boxy_tag_match,
                 .str_match_set,
                 .jump,
                 .terminal,
@@ -2303,6 +2859,7 @@ const Inserter = struct {
                 .join,
                 .initialized_payload_switch,
                 .str_match,
+                .boxy_tag_match,
                 .str_match_set,
                 .jump,
                 .terminal,
@@ -2332,6 +2889,7 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             => {},
@@ -2373,6 +2931,7 @@ const Inserter = struct {
             .join,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -2418,6 +2977,7 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .str_match,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -2446,6 +3006,7 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .initialized_payload_switch,
+            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -2460,6 +3021,24 @@ const Inserter = struct {
             .match_plan = children[0],
             .miss_plan = children[1],
             .capture_retain_count = capture_retain_count,
+        } };
+        return &self.arcPlan(plan_index).terminal;
+    }
+
+    fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
+        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
+        const children = if (previous_terminal == .boxy_tag_match) blk: {
+            const previous = previous_terminal.boxy_tag_match;
+            if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
+            break :blk .{ previous.match_plan, previous.miss_plan };
+        } else .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) };
+        if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
+            arcInvariant("ARC Boxy tag-match child plan changed its structured start");
+        }
+        self.arcPlan(plan_index).terminal = .{ .boxy_tag_match = .{
+            .stmt = stmt,
+            .match_plan = children[0],
+            .miss_plan = children[1],
         } };
         return &self.arcPlan(plan_index).terminal;
     }
@@ -2484,6 +3063,7 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
+            .boxy_tag_match,
             .jump,
             .terminal,
             => {
@@ -2982,7 +3562,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
-        const move_value = try self.canMoveSetLocalValue(owned, source, next, loop_keep);
+        const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
         const release_old_target = self.takeRebindTarget(owned, target);
         if (move_value) _ = self.takeUnit(owned, source);
         self.placeUnit(owned, target);
@@ -3017,7 +3597,7 @@ const Inserter = struct {
         loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
-        const move_value = try self.canMoveSetLocalValue(owned, value, next, loop_keep);
+        const move_value = try self.canMoveAliasBindValue(owned, value, target, next, loop_keep);
         const release_old_target = switch (mode) {
             .replace_existing, .initialize_join_param => self.takeRebindTarget(owned, target),
             .initialize_join_result => false,
@@ -3214,7 +3794,7 @@ const Inserter = struct {
         }
         var transfer_mask: u64 = 0;
         if (rc_effect.retain_args != 0) {
-            transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, loop_keep);
+            transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, loop_keep, .yes);
         }
         self.placeUnit(owned, target);
         return .{
@@ -3234,10 +3814,37 @@ const Inserter = struct {
         return true;
     }
 
+    fn planValuesInvalidatedByDescriptorUpdate(
+        self: *Inserter,
+        desc_local: LIR.LocalId,
+        owned: *OwnedSet,
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+        releases: *std.ArrayList(ReleaseDecision),
+    ) ResourceError!void {
+        for (owned.domain.frame_locals) |local| {
+            if (!owned.contains(local)) continue;
+            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
+            if (try self.valueUsedInPath(next, local, loop_keep)) continue;
+            if (!self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
+            try releases.append(self.solve_allocator, self.releaseDecision(local));
+        }
+    }
+
+    fn localUsesDescriptorLocal(self: *const Inserter, local: LIR.LocalId, desc_local: LIR.LocalId) bool {
+        const desc = boxyDescForLocal(self.boxy_rc_descs, local) orelse return false;
+        return if (desc.localOrNull()) |local_desc| local_desc == desc_local else false;
+    }
+
     /// Computes which low-level argument positions in `span` (restricted to
     /// `position_mask`) can move their ownership unit into the value being
     /// constructed: the operand is owned and its liveness group has no use
     /// after this statement. Transferred operands leave the owned set.
+    /// Whether a transferred operand's unit lands inside the statement's
+    /// result (`.yes`, for aggregate and low-level constructions) or is handed
+    /// off to a callee that owns it (`.no`, for dict calls).
+    const TargetHoldsUnit = enum { yes, no };
+
     fn spanTransferMask(
         self: *Inserter,
         span: LIR.LocalSpan,
@@ -3246,9 +3853,15 @@ const Inserter = struct {
         target: LIR.LocalId,
         owned: *OwnedSet,
         loop_keep: ?LoopKeep,
+        target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
-        if (!self.localContainsRefcounted(target)) return 0;
+        // Aggregate and low-level transfers move the operand's unit into the
+        // result, so a non-refcounted result has nothing to carry it and the
+        // operand must be retained instead. A dict call instead hands the unit
+        // to the callee, which owns it regardless of the result's layout, so
+        // that transfer stays valid even when the result is not refcounted.
+        if (target_holds_unit == .yes and !self.localContainsRefcounted(target)) return 0;
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
@@ -3338,6 +3951,19 @@ const Inserter = struct {
         }
     }
 
+    fn canMoveAliasBindValue(
+        self: *Inserter,
+        owned: *const OwnedSet,
+        value: LIR.LocalId,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!bool {
+        if (!self.ownsUnit(owned, value)) return false;
+        if (!self.localContainsRefcounted(value)) return false;
+        return !(try self.groupUsedInPathExcept(next, value, target, loop_keep));
+    }
+
     fn noteDeathIfUnused(
         self: *Inserter,
         owned: *OwnedSet,
@@ -3349,11 +3975,18 @@ const Inserter = struct {
         // A borrowed operand's lifetime event belongs to its owning leader:
         // the leader dies when no group member has a later use.
         const owner = self.solution.leaderOf(local);
-        if (!owned.contains(owner)) return;
+        if (!owned.contains(owner)) {
+            return;
+        }
         // Join parameters carry their unit into the join body, whose release
         // statements are not visible to use scans.
-        if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) return;
-        if (try self.groupUsedInPath(next, owner, loop_keep)) return;
+        if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) {
+            return;
+        }
+        const used = try self.groupUsedInPath(next, owner, loop_keep);
+        if (used) {
+            return;
+        }
         owned.unset(owner);
         if (collected) |list| {
             try list.append(self.emission_allocator, owner);
@@ -3393,18 +4026,6 @@ const Inserter = struct {
         }
     }
 
-    fn canMoveSetLocalValue(
-        self: *Inserter,
-        owned: *OwnedSet,
-        value: LIR.LocalId,
-        next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
-    ) ResourceError!bool {
-        if (!self.ownsUnit(owned, value)) return false;
-        if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.groupUsedInPath(next, value, loop_keep));
-    }
-
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         const locals = self.store.getLocalSpan(span);
@@ -3415,6 +4036,18 @@ const Inserter = struct {
             if ((mask & argMaskBit(i)) != 0) {
                 current = try self.retainLocalIfRc(GuardedList.at(locals, i), current);
             }
+        }
+        return current;
+    }
+
+    fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        var current = next;
+        const locals = self.store.getLocalSpan(span);
+        var i = locals.len;
+        while (i > 0) {
+            i -= 1;
+            if (i < 64 and (skip_mask & argMaskBit(i)) != 0) continue;
+            current = try self.retainLocalIfRc(GuardedList.at(locals, i), current);
         }
         return current;
     }
@@ -3645,7 +4278,15 @@ const Inserter = struct {
             .frame_locals = source_spec.frame_locals,
             .body = self.variants.original_bodies[@intFromEnum(callee)],
             .ret_layout = source_spec.ret_layout,
+            .ret_desc = source_spec.ret_desc,
+            .runtime_ret_desc = source_spec.runtime_ret_desc,
+            .erased_arg_desc_offsets = source_spec.erased_arg_desc_offsets,
+            .erased_arg_layouts = source_spec.erased_arg_layouts,
+            .erased_arg_desc_params = source_spec.erased_arg_desc_params,
+            .erased_capture_arg = source_spec.erased_capture_arg,
             .abi = source_spec.abi,
+            .boxy_runtime_entry = source_spec.boxy_runtime_entry,
+            .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
             .stack_probe = source_spec.stack_probe,
@@ -4013,6 +4654,9 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -4020,12 +4664,92 @@ const Inserter = struct {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.closure);
                     if (assign.reuse_source) |reuse_source| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse_source);
                     self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, capture);
                     if (assign.reuse) |reuse| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, reuse);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.captures);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_box => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.payload);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_unbox => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_adapt => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_inspect => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_eq => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.lhs);
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.rhs);
+                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.payload) |payload| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.dict.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
+                    self.noteLivenessUseSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -4045,6 +4769,9 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     if (assign.payload) |payload| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, payload);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -4128,6 +4855,12 @@ const Inserter = struct {
                         const arm = GuardedList.at(arms, arm_index);
                         try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
                     }
+                },
+                .boxy_tag_match => |tag_match| {
+                    self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, tag_match.source);
+                    if (tag_match.source_desc.localOrNull()) |local| self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_match);
+                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, tag_match.on_miss);
                 },
                 .join => |join_stmt| {
                     // Entering a join statement itself continues with the
@@ -4689,15 +5422,16 @@ const Inserter = struct {
         }
     }
 
-    /// Value liveness for one raw local (no group extension): answered by
-    /// the local's value-use bit in the liveness table.
+    /// Value liveness for one raw local (no group extension). Borrowed call
+    /// results have a dedicated value-use bit; other resources use their raw
+    /// ownership bit.
     fn valueUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
         loop_keep: ?LoopKeep,
     ) ResourceError!bool {
-        const bit = self.valueUseBitOf(needle) orelse
+        const bit = self.valueUseBitOf(needle) orelse self.rawLivenessBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
         const reads = try self.livenessRow(start, loop_keep);
         return reads.isSet(bit);
@@ -4750,6 +5484,25 @@ const Inserter = struct {
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         return self.groupUsedFromTable(reads, local);
+    }
+
+    fn groupUsedInPathExcept(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        local: LIR.LocalId,
+        except: LIR.LocalId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!bool {
+        const reads = try self.livenessRow(start, loop_keep);
+        const leader = self.solution.leaderOf(local);
+        for (self.domain().frame_locals) |member_local| {
+            if (self.solution.leaderOf(member_local) != leader) continue;
+            if (member_local == except) continue;
+            const bit = self.rawLivenessBitOf(member_local) orelse
+                arcInvariant("ARC refcounted borrow-group member missing its raw liveness bit");
+            if (reads.isSet(bit)) return true;
+        }
+        return false;
     }
 
     fn retainSpanExceptPositions(
@@ -4858,7 +5611,7 @@ const Inserter = struct {
             try self.dismantle_temps.append(self.emission_allocator, temp);
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
-                .rc = rc,
+                .rc = LIR.RcHelper.fromConcrete(rc),
                 .atomicity = atomicity,
                 .next = tail,
             } });
@@ -4894,13 +5647,47 @@ const Inserter = struct {
         return if (self.solution.isVisible(local)) .atomic else .single_thread;
     }
 
-    fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) layout_mod.RcHelper {
+    fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
+        const local_index = @intFromEnum(local);
+        if (local_index < self.boxy_rc_descs.len) {
+            if (self.boxy_rc_descs[local_index]) |desc| {
+                return .{ .boxy = desc };
+            }
+        }
+
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
-            arcInvariant("ARC attempted to emit a noop RC helper for a refcounted local");
+            if (comptime builtin.mode == .Debug and builtin.target.os.tag == .freestanding) {
+                @panic("ARC attempted to emit a noop RC helper for a refcounted local");
+            } else if (comptime builtin.mode == .Debug) {
+                var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
+                defer buffer.deinit();
+                debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
+                std.debug.print("\n{s}\n", .{buffer.written()});
+                const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| blk: {
+                    const stmt = self.store.getCFStmt(stmt_id);
+                    break :blk if (stmt == .assign_ref) refOpSource(stmt.assign_ref.op) else null;
+                } else null;
+                const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
+                const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
+                std.debug.panic("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
+                    @intFromEnum(local),
+                    @intFromEnum(local_layout),
+                    self.layouts.getLayout(local_layout),
+                    boxyDescForLocal(self.boxy_rc_descs, local),
+                    @intFromEnum(self.current_proc),
+                    if (self.current_rewrite_stmt) |stmt_id| @intFromEnum(stmt_id) else null,
+                    if (ref_source) |source| @intFromEnum(source) else null,
+                    if (ref_source_layout) |source_layout| @intFromEnum(source_layout) else null,
+                    if (ref_source_layout) |source_layout| self.layouts.getLayout(source_layout) else null,
+                    ref_source_desc,
+                    if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
+                });
+            }
+            unreachable;
         }
-        return helper;
+        return LIR.RcHelper.fromConcrete(helper);
     }
 
     fn rcHelperForLayout(self: *const Inserter, op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
@@ -4909,6 +5696,34 @@ const Inserter = struct {
             return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
         }
         return .{ .op = op, .layout_idx = layout_idx };
+    }
+
+    fn layoutMayContainBoxyDynamic(self: *const Inserter, layout_idx: layout_mod.Idx) bool {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        return switch (layout_val.tag) {
+            .box_of_zst => true,
+            .box => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
+            .list => self.layoutMayContainBoxyDynamic(layout_val.getIdx()),
+            .list_of_zst => false,
+            .struct_ => blk: {
+                const info = self.layouts.getStructInfo(layout_val);
+                for (0..info.fields.len) |index| {
+                    const field = info.fields.get(@intCast(index));
+                    if (self.layoutMayContainBoxyDynamic(field.layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const info = self.layouts.getTagUnionInfo(layout_val);
+                for (0..info.variants.len) |index| {
+                    const payload_layout = info.variants.get(@intCast(index)).payload_layout;
+                    if (self.layoutMayContainBoxyDynamic(payload_layout)) break :blk true;
+                }
+                break :blk false;
+            },
+            .closure => self.layoutMayContainBoxyDynamic(layout_val.getClosure().captures_layout_idx),
+            .zst, .scalar, .erased_callable, .ptr => false,
+        };
     }
 
     fn nestedDropOp(op: layout_mod.RcOp) layout_mod.RcOp {
@@ -5005,7 +5820,7 @@ fn refOpSource(op: LIR.RefOp) LIR.LocalId {
 fn addCanonicalRetain(
     store: *LirStore,
     local: LIR.LocalId,
-    rc: layout_mod.RcHelper,
+    rc: LIR.RcHelper,
     atomicity: LIR.RcAtomicity,
     count: u16,
     next: LIR.CFStmtId,
@@ -5036,11 +5851,12 @@ fn addCanonicalRetain(
 }
 
 fn rcRetainReleasePair(retain: anytype, release: anytype) bool {
-    return retain.value == release.value and
-        retain.atomicity == release.atomicity and
-        retain.rc.op == .incref and
-        release.rc.op == .decref and
-        retain.rc.layout_idx == release.rc.layout_idx;
+    if (retain.value != release.value or retain.atomicity != release.atomicity) return false;
+    const retain_helper = retain.rc.concreteOrNull() orelse return false;
+    const release_helper = release.rc.concreteOrNull() orelse return false;
+    return retain_helper.op == .incref and
+        release_helper.op == .decref and
+        retain_helper.layout_idx == release_helper.layout_idx;
 }
 
 fn argMaskBit(index: usize) u64 {
@@ -5051,6 +5867,11 @@ fn argMaskBit(index: usize) u64 {
 fn arcInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
     unreachable;
+}
+
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
 }
 
 test "exact ARC sets preserve operations at the inline boundary" {
@@ -5088,13 +5909,13 @@ test "RC elision removes adjacent retain release pairs" {
     const ret = try f.ret(value);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = value,
-        .rc = .{ .op = .decref, .layout_idx = .str },
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
     } });
     const retain = try addCanonicalRetain(
         &f.store,
         value,
-        .{ .op = .incref, .layout_idx = .str },
+        LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
         .atomic,
         1,
         release,
@@ -5110,13 +5931,13 @@ test "RC elision lowers adjacent multi retain count" {
     const ret = try f.ret(value);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = value,
-        .rc = .{ .op = .decref, .layout_idx = .str },
+        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
         .next = ret,
     } });
     const retain = try addCanonicalRetain(
         &f.store,
         value,
-        .{ .op = .incref, .layout_idx = .str },
+        LIR.RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str }),
         .atomic,
         3,
         release,
@@ -5463,6 +6284,18 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                inline .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
@@ -5479,6 +6312,7 @@ const ArcTest = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
+                .boxy_tag_match,
                 .loop_continue,
                 .loop_break,
                 .join,
@@ -5574,6 +6408,18 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                inline .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
@@ -5590,6 +6436,7 @@ const ArcTest = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
+                .boxy_tag_match,
                 .loop_continue,
                 .loop_break,
                 .join,
@@ -5648,11 +6495,15 @@ const ArcTest = struct {
                     }
                     try stack.append(self.allocator, s.on_miss);
                 },
+                .boxy_tag_match => |s| {
+                    try stack.append(self.allocator, s.on_match);
+                    try stack.append(self.allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -5704,6 +6555,17 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_boxy_desc_ref => |assign| cursor = assign.next,
+                .assign_boxy_dict_ref => |assign| cursor = assign.next,
+                .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_reuse_box => |assign| cursor = assign.next,
+                .assign_boxy_unbox => |assign| cursor = assign.next,
+                .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
+                .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
@@ -5722,7 +6584,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -5758,6 +6620,17 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_boxy_desc_ref => |assign| cursor = assign.next,
+                .assign_boxy_dict_ref => |assign| cursor = assign.next,
+                .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_reuse_box => |assign| cursor = assign.next,
+                .assign_boxy_unbox => |assign| cursor = assign.next,
+                .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
+                .assign_call_dict => |assign| cursor = assign.next,
                 .assign_low_level => |assign| cursor = assign.next,
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
@@ -5768,12 +6641,116 @@ const ArcTest = struct {
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => return error.ExpectedConditionalDecref,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => return error.NonLinearPath,
+                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join => return error.NonLinearPath,
+            }
+        }
+        return error.CyclicPath;
+    }
+
+    fn expectReachableDecrefBeforeSet(
+        self: *const ArcTest,
+        start: LIR.CFStmtId,
+        value: LIR.LocalId,
+        set_target: LIR.LocalId,
+    ) error{ ExpectedDecref, SetBeforeDecref, NonLinearPath, CyclicPath }!void {
+        var cursor = start;
+        var remaining = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .decref => |rc| {
+                    if (rc.value == value) return;
+                    cursor = rc.next;
+                },
+                .set_local => |assign| {
+                    if (assign.target == set_target) return error.SetBeforeDecref;
+                    cursor = assign.next;
+                },
+                .incref => |rc| cursor = rc.next,
+                .decref_if_initialized => |rc| cursor = rc.next,
+                .free => |rc| cursor = rc.next,
+                .assign_ref => |assign| cursor = assign.next,
+                .assign_literal => |assign| cursor = assign.next,
+                .init_uninitialized => |uninit| cursor = uninit.next,
+                .assign_call => |assign| cursor = assign.next,
+                .assign_call_erased => |assign| cursor = assign.next,
+                .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_boxy_desc_ref => |assign| cursor = assign.next,
+                .assign_boxy_dict_ref => |assign| cursor = assign.next,
+                .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_reuse_box => |assign| cursor = assign.next,
+                .assign_boxy_unbox => |assign| cursor = assign.next,
+                .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
+                .assign_call_dict => |assign| cursor = assign.next,
+                .assign_low_level => |assign| cursor = assign.next,
+                .assign_list => |assign| cursor = assign.next,
+                .assign_struct => |assign| cursor = assign.next,
+                .assign_tag => |assign| cursor = assign.next,
+                .store_struct => |assign| cursor = assign.next,
+                .store_tag => |assign| cursor = assign.next,
+                .debug => |debug_stmt| cursor = debug_stmt.next,
+                .expect => |expect_stmt| cursor = expect_stmt.next,
+                .comptime_branch_taken => |marker| cursor = marker.next,
+                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedDecref,
+                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
     }
 };
+
+test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = erased_box },
+        .{ .index = 1, .layout = .opaque_ptr },
+    });
+    const capture_ptr = try f.local(.opaque_ptr);
+    const capture_view = try f.local(capture_layout);
+    const captured_value = try f.local(erased_box);
+    f.store.setLocalBoxyDesc(captured_value, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_stmt = try f.assignI64(result, 0, ret);
+    const field_read = try f.assignRefField(captured_value, capture_view, 0, result_stmt);
+    _ = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = capture_view,
+        .op = .erased_capture_load,
+        .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+        .args = try f.span(&.{capture_ptr}),
+        .next = field_read,
+    } });
+
+    const boxy_descs = try computeBoxyRcDescs(&f.store);
+    defer f.allocator.free(boxy_descs);
+    const local_contains_refcounted = try computeLocalContainsRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        boxy_descs,
+    );
+    defer f.allocator.free(local_contains_refcounted);
+    const borrow_anchors = try computeBorrowAnchorRefcounted(
+        f.allocator,
+        &f.store,
+        &f.layouts,
+        local_contains_refcounted,
+    );
+    defer f.allocator.free(borrow_anchors);
+
+    try testing.expect(!local_contains_refcounted[@intFromEnum(capture_view)]);
+    try testing.expect(local_contains_refcounted[@intFromEnum(captured_value)]);
+    try testing.expect(borrow_anchors[@intFromEnum(capture_view)]);
+    try testing.expect(borrow_anchors[@intFromEnum(captured_value)]);
+}
 
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
@@ -5794,12 +6771,14 @@ test "ARC preserves erased callable repack reuse" {
     });
 
     const ret = try f.ret(new_callable);
+    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(2)) };
     const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .proc = callback,
         .capture = capture,
         .capture_layout = .str,
         .on_drop = .none,
+        .result_desc = result_desc,
         .reuse = old_callable,
         .next = ret,
     } });
@@ -5825,6 +6804,7 @@ test "ARC preserves erased callable repack reuse" {
                     try testing.expect(cursor != new_pack);
                     try testing.expectEqual(old_callable, assign.reuse.?);
                     try testing.expect(assign.reuse_unique);
+                    try testing.expectEqual(result_desc, assign.result_desc.?);
                     found = true;
                     break;
                 }
@@ -5840,6 +6820,18 @@ test "ARC preserves erased callable repack reuse" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -5866,6 +6858,69 @@ test "ARC preserves erased callable repack reuse" {
         }
     }
     try testing.expect(found);
+}
+
+test "ARC preserves erased call ABI metadata" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const erased_callable = try f.layouts.insertErasedCallable();
+    const closure = try f.local(erased_callable);
+    const arg = try f.local(.u64);
+    const arg_desc = try f.local(.opaque_ptr);
+    const result = try f.local(.u64);
+    const out_desc = try f.local(.opaque_ptr);
+    const args = try f.span(&.{arg});
+    const arg_descs = try f.span(&.{arg_desc});
+    const arg_layouts: LIR.BoxySpan = .{ .start = 4, .len = 1 };
+    const arg_desc_keys: LIR.BoxySpan = .{ .start = 7, .len = 1 };
+    const result_desc: LIR.BoxyDescRef = .{ .static = @enumFromInt(fixtureTableIndex(3)) };
+    const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{.u64});
+
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = result,
+        .closure = closure,
+        .args = args,
+        .arg_layouts = arg_layouts,
+        .arg_descs = arg_descs,
+        .arg_desc_keys = arg_desc_keys,
+        .result_desc = result_desc,
+        .out_desc = out_desc,
+        .arg_plan = arg_plan,
+        .next = ret,
+    } });
+    const caller = try f.addProc(&.{ closure, arg, arg_desc }, call, .u64);
+
+    try f.run();
+
+    var cursor = f.store.getProcSpec(caller).body.?;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call_erased) {
+            const rewritten = stmt.assign_call_erased;
+            try testing.expectEqual(args, rewritten.args);
+            try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
+            try testing.expectEqual(arg_descs, rewritten.arg_descs);
+            try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
+            try testing.expectEqual(result_desc, rewritten.result_desc.?);
+            try testing.expectEqual(out_desc, rewritten.out_desc.?);
+            try testing.expectEqual(arg_plan, rewritten.arg_plan);
+            return;
+        } else if (stmt == .incref) {
+            cursor = stmt.incref.next;
+        } else if (stmt == .decref) {
+            cursor = stmt.decref.next;
+        } else if (stmt == .decref_if_initialized) {
+            cursor = stmt.decref_if_initialized.next;
+        } else if (stmt == .free) {
+            cursor = stmt.free.next;
+        } else {
+            return error.UnexpectedStatement;
+        }
+    }
+    return error.MissingErasedCall;
 }
 
 test "ARC runtime-checks erased callable repack from an ordinary parameter" {
@@ -5918,6 +6973,18 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -5991,6 +7058,18 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -6094,6 +7173,18 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -6175,6 +7266,18 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -6294,7 +7397,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     });
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
     defer solution.deinit();
     var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -6368,7 +7471,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     });
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -8293,6 +9396,17 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_call => |a| cursor = a.next,
             .assign_call_erased => |a| cursor = a.next,
             .assign_packed_erased_fn => |a| cursor = a.next,
+            .assign_boxy_desc_ref => |a| cursor = a.next,
+            .assign_boxy_dict_ref => |a| cursor = a.next,
+            .assign_boxy_box => |a| cursor = a.next,
+            .assign_boxy_reuse_box => |a| cursor = a.next,
+            .assign_boxy_unbox => |a| cursor = a.next,
+            .assign_boxy_adapt => |a| cursor = a.next,
+            .assign_boxy_inspect => |a| cursor = a.next,
+            .assign_boxy_eq => |a| cursor = a.next,
+            .assign_boxy_tag => |a| cursor = a.next,
+            .assign_boxy_tag_payload => |a| cursor = a.next,
+            .assign_call_dict => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,
             .assign_struct => |a| cursor = a.next,
@@ -8310,6 +9424,7 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
+            .boxy_tag_match,
             .loop_continue,
             .loop_break,
             .join,
@@ -8793,6 +9908,7 @@ test "RC specialization: caller body survives variant proc append" {
     const callee_param = try f.local(.str);
     const callee_ret = try f.ret(callee_param);
     const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_ret, .str);
+    f.store.getProcSpecPtr(callee).runtime_ret_desc = callee_flag;
 
     // Caller builds an owned string and passes it as its final use. The
     // variant turns the borrowed return into an owned return. It is appended
@@ -8820,6 +9936,7 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(callee_flag, f.store.getProcSpec(variant).runtime_ret_desc.?);
 
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
@@ -8838,6 +9955,18 @@ test "RC specialization: caller body survives variant proc append" {
             .init_uninitialized,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -9048,6 +10177,22 @@ test "RC alias chain into a consuming call moves the unit through" {
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
+test "RC alias exclusion maps high local ids through dense liveness bits" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    for (0..16) |_| _ = try f.local(.i64);
+    const value = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.assignCall(result, &.{alias}, ret);
+    const alias_assign = try f.assignRefLocal(alias, value, call);
+    const body = try f.assignStr(value, "dense", alias_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
 test "RC alias into aggregate moves the leader unit" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -9074,6 +10219,177 @@ test "RC alias into set_local moves the leader unit" {
     const alias_assign = try f.assignRefLocal(alias, value, set_result);
     const body = try f.assignStr(value, "through-set-local", alias_assign);
     _ = try f.addProc(&.{}, body, .str);
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC releases descriptor-backed old set_local value before immutable replacement" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const desc = try f.local(.opaque_ptr);
+    const current = try f.local(.str);
+    const replacement = try f.local(.str);
+    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+
+    const ret = try f.ret(current);
+    const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
+    const assign_replacement = try f.assignStr(replacement, "new", set_current);
+    const assign_current = try f.assignStr(current, "old", assign_replacement);
+    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_current,
+    } });
+    _ = try f.addProc(&.{}, init_desc, .str);
+
+    try f.run();
+    try f.expectReachableDecrefBeforeSet(f.procBody(), current, current);
+}
+
+test "RC descriptor updates scan only the current proc frame" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const unrelated = try f.local(.str);
+    const desc = try f.local(.opaque_ptr);
+    const current = try f.local(.str);
+    const result = try f.local(.i64);
+    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+
+    const unrelated_ret = try f.ret(unrelated);
+    const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = unrelated_body,
+        .frame_locals = try f.span(&.{unrelated}),
+        .ret_layout = .str,
+    });
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const update_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_result,
+    } });
+    const assign_current = try f.assignStr(current, "old", update_desc);
+    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_current,
+    } });
+    _ = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = init_desc,
+        .frame_locals = try f.span(&.{ desc, current, result }),
+        .ret_layout = .i64,
+    });
+
+    try f.run();
+    try f.expectRc(current, 0, 1, 0);
+}
+
+test "RC descriptor snapshot owns an alias across source descriptor reuse" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const source_desc = try f.local(.opaque_ptr);
+    const alias_desc = try f.local(.opaque_ptr);
+    const source = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+    f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
+    f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const use_alias = try f.expectStmt(alias, assign_result);
+    const reuse_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = source_desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(1)) },
+        .next = use_alias,
+    } });
+    const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
+    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .initialize_join_result, assign_alias);
+    const assign_source = try f.assignStr(source, "old", snapshot_desc);
+    const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = source_desc,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .next = assign_source,
+    } });
+    _ = try f.addProc(&.{}, init_source_desc, .i64);
+
+    try f.run();
+    try f.expectRc(source, 0, 0, 0);
+    try f.expectRc(alias, 0, 1, 0);
+}
+
+test "RC preserves a surviving source before a consuming boxy adapter" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const source = try f.local(f.list_i64);
+    const adapted = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    f.store.setLocalBoxyDesc(source, desc);
+    f.store.setLocalBoxyDesc(adapted, desc);
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const use_source = try f.expectStmt(source, assign_result);
+    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
+        .target = adapted,
+        .source = source,
+        .adapter = @enumFromInt(fixtureTableIndex(0)),
+        .source_desc = desc,
+        .target_desc = desc,
+        .source_mode = .move,
+        .next = use_source,
+    } });
+    const body = try f.assignList(source, &.{}, adapt);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    // Certification verifies that the retain precedes the consuming move.
+    try f.run();
+    try f.expectRc(source, 1, 1, 0);
+    try f.expectRc(adapted, 0, 1, 0);
+}
+
+test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    const result = try f.local(.u32);
+    const adapted = try f.local(.u32);
+    f.store.setLocalBoxyDesc(result, desc);
+    f.store.setLocalBoxyDesc(adapted, desc);
+
+    const ret = try f.ret(result);
+    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
+        .target = adapted,
+        .source = result,
+        .adapter = @enumFromInt(fixtureTableIndex(0)),
+        .source_desc = desc,
+        .target_desc = desc,
+        .source_mode = .move,
+        .next = ret,
+    } });
+    const body = try f.store.addCFStmt(.{ .assign_call_dict = .{
+        .target = result,
+        .dict = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .method = @enumFromInt(fixtureTableIndex(0)),
+        .method_slot = 0,
+        .args = .empty(),
+        .result_desc = desc,
+        .next = adapt,
+    } });
+    _ = try f.addProc(&.{}, body, .u32);
+
     try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }

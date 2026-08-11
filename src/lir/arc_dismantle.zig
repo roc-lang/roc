@@ -446,6 +446,86 @@ pub fn compute(
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
+            .assign_boxy_desc_ref => |stmt| {
+                if (stmt.desc.localOrNull()) |local| analysis.useWhole(local);
+                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| analysis.useWhole(local);
+                const captures = store.getLocalSpan(stmt.captures);
+                for (0..GuardedList.borrowLen(captures)) |i| analysis.useWhole(GuardedList.at(captures, i));
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_dict_ref => |stmt| {
+                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_box => |stmt| {
+                analysis.useWhole(stmt.payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_reuse_box => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_unbox => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_adapt => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_inspect => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_eq => |stmt| {
+                analysis.useWhole(stmt.lhs);
+                analysis.useWhole(stmt.rhs);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_tag => |stmt| {
+                if (stmt.payload) |payload| analysis.useWhole(payload);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_tag_payload => |stmt| {
+                analysis.useWhole(stmt.source);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                if (stmt.target_desc) |target_desc| {
+                    try analysis.noteDef(target_desc, current);
+                    analysis.disqualify(target_desc);
+                }
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_call_dict => |stmt| {
+                if (stmt.dict.localOrNull()) |local| analysis.useWhole(local);
+                const args = store.getLocalSpan(stmt.args);
+                for (0..GuardedList.borrowLen(args)) |i| analysis.useWhole(GuardedList.at(args, i));
+                const arg_descs = store.getLocalSpan(stmt.arg_descs);
+                for (0..GuardedList.borrowLen(arg_descs)) |i| analysis.useWhole(GuardedList.at(arg_descs, i));
+                const hidden_args = store.getLocalSpan(stmt.hidden_args);
+                for (0..GuardedList.borrowLen(hidden_args)) |i| analysis.useWhole(GuardedList.at(hidden_args, i));
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
             .assign_low_level => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
                 for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
@@ -559,6 +639,11 @@ pub fn compute(
                 }
                 try stack.append(gpa, stmt.on_miss);
             },
+            .boxy_tag_match => |stmt| {
+                analysis.useWhole(stmt.source);
+                try stack.append(gpa, stmt.on_match);
+                try stack.append(gpa, stmt.on_miss);
+            },
             .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
@@ -615,6 +700,18 @@ pub fn compute(
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .init_uninitialized,
                 .assign_ref,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 .store_struct,
                 .store_tag,
                 .set_local,
@@ -734,7 +831,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .join => |stmt| {
                         try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
@@ -784,6 +881,10 @@ pub fn compute(
                         for (0..GuardedList.borrowLen(arms)) |i| {
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
+                        cursor = stmt.on_miss;
+                    },
+                    .boxy_tag_match => |stmt| {
+                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
                     // Every exit the flow reaches must agree, so the death

@@ -885,7 +885,8 @@ pub const Layout = packed struct {
                 .int, .frac, .opaque_ptr, .vector => false,
             },
             .list, .list_of_zst => true, // Lists need refcounting
-            .box, .box_of_zst => true, // Boxes need refcounting
+            .box => true, // Boxes need refcounting
+            .box_of_zst => false, // Box({}) is represented as a null pointer, not an allocation
             .erased_callable => true, // Boxed erased functions need refcounting
             .struct_, .closure, .zst, .tag_union, .ptr => false,
         };

@@ -20,12 +20,15 @@ const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
+const boxy_abi = @import("boxy_abi.zig");
 const interpreter_mod = @import("interpreter.zig");
 const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
 const LirProgram = lir.Program;
+const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
+const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
@@ -649,6 +652,7 @@ fn lowerEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
             .timing = if (options.timing) |timing| &timing.lowering else null,
         },
@@ -752,10 +756,11 @@ fn lowerEvalAndFinishRoots(
     var host = CompilerHost.init(allocator);
     defer host.deinit();
 
-    var interpreter = try Interpreter.init(
+    var interpreter = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        Interpreter.BoxyTables.fromResult(&lowered.lir_result),
         host.ops(),
         .normalize,
     );
@@ -794,6 +799,8 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
+                    error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
                     // expect_err statements only occur in top-level expect
                     // test roots, never in compile-time constant roots.
                     error.ExpectErr => unreachable,
@@ -925,6 +932,16 @@ const ThreadSafeAllocator = struct {
     }
 };
 
+fn boxyNativeFnTable() BoxyNativeFnTable {
+    var table: BoxyNativeFnTable = undefined;
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const name = comptime boxy_fn.symbolName();
+        table[field.value] = @intFromPtr(&@field(boxy_abi, name));
+    }
+    return table;
+}
+
 const DevRootLabel = struct {
     module_name: []const u8,
     snippet: []u8,
@@ -961,6 +978,7 @@ const DevRunContext = struct {
     jobs: []DevRootJob,
     std_io: ?std.Io,
     progress_reporter: ?*DevProgressReporter,
+    boxy_global_installed: bool,
     had_oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
@@ -1130,6 +1148,7 @@ fn lowerDevEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
             .timing = if (options.timing) |timing| &timing.lowering else null,
         },
@@ -1187,11 +1206,13 @@ fn lowerDevEvalAndFinishRoots(
     const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
     // Compile-time code runs in this process, so it is generated for the CPU
     // of the machine compiling, not for the CPU the program is compiled for.
-    var codegen = try backend.HostLirCodeGen.init(
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         .normalize,
         roc_target.host_cpu.level(),
     );
@@ -1204,6 +1225,8 @@ fn lowerDevEvalAndFinishRoots(
         .call_enter = CompileTimeHost.rocComptimeCallEnter,
         .call_exit = CompileTimeHost.rocComptimeCallExit,
     });
+    var native_fns = boxyNativeFnTable();
+    codegen.boxy_native_fns = &native_fns;
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized_static_data);
     defer allocator.free(static_rc_helpers);
@@ -1264,11 +1287,24 @@ fn lowerDevEvalAndFinishRoots(
         allocator.free(jobs);
     }
 
-    var executable = try backend.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-        codegen.getGeneratedCode(),
-        0,
-        codegen.getUnwindFunctions(),
-    );
+    const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
+    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntimeForStore(&lowered.lir_result.store);
+    if (boxy_global_installed) {
+        boxy_abi.deinitGlobal();
+        boxy_abi.initGlobal(
+            allocator,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            boxy_tables,
+            jobs[0].host.ops(),
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AlreadyInitialized => finalizationInvariant("compile-time boxy runtime stayed initialized after teardown"),
+        };
+    }
+    defer if (boxy_global_installed) boxy_abi.deinitGlobal();
+
+    var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
     defer executable.deinit();
 
     const StaticFunctionResolver = struct {
@@ -1314,8 +1350,11 @@ fn lowerDevEvalAndFinishRoots(
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
         .progress_reporter = if (progress.thread == null) null else &progress,
+        .boxy_global_installed = boxy_global_installed,
     };
-    const max_threads = if (options.max_threads == 0)
+    const max_threads = if (boxy_global_installed)
+        1
+    else if (options.max_threads == 0)
         0
     else
         @max(options.max_threads, 1);
@@ -1437,6 +1476,9 @@ fn lowerDevEvalAndFinishRoots(
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     const job = &context.jobs[item_id];
     job.host.resetForRun();
+    if (context.boxy_global_installed) {
+        boxy_abi.setGlobalRocOps(job.host.ops());
+    }
     job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
     job.last_progress_ms.store(0, .release);
     job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
@@ -1823,6 +1865,8 @@ fn evalCompileTimeRoot(
         error.DivisionByZero => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero") },
         error.Crash => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed") },
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
+        error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
+        error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time root reached an invalid hosted function signature"),
     };
     return .{ .value = result };
 }

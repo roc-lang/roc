@@ -3,7 +3,7 @@ import "../../README.md" as readme : Str
 # Note 1: I tried to demonstrate all Roc syntax (possible in a single app file),
 # but I probably forgot some things. Let @Anton know on zulip if you spot something missing, or make a github issue.
 
-# # Double hashtag for doc comment
+## Double hashtag for doc comment
 number_operators : I64, I64 -> _
 number_operators = |a, b| {
 	a_f64 = I64.to_f64(a)

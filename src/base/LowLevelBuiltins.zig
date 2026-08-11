@@ -226,7 +226,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_sublist_borrowed, BuiltinFn.list_sublist_borrowed },
         .{ LowLevel.list_drop_at, BuiltinFn.list_drop_at },
         .{ LowLevel.list_swap, BuiltinFn.list_swap },
-        .{ LowLevel.list_set, BuiltinFn.list_replace },
+        .{ LowLevel.list_set, BuiltinFn.list_set },
         .{ LowLevel.list_replace_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_set_in_place_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_reserve, BuiltinFn.list_reserve },

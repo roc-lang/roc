@@ -25,8 +25,9 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Disables stack-trace capture in the shim; panics here go through the host's RocOps.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+/// Keeps std off the symbols a roc program's link cannot resolve; see
+/// `shim_io.std_options_static_archive`. Panics here go through the host's RocOps.
+pub const std_options = shim_io.std_options_static_archive;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -130,6 +131,7 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         // expect_err statements only occur in top-level expect test roots,
         // never in platform entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     ops.crash(message);
 }
@@ -165,10 +167,11 @@ fn evaluateEntrypointInView(
     };
     defer gpa.free(arg_layouts);
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         gpa,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
         .preserve,
     ) catch {
@@ -245,12 +248,13 @@ fn shimEntrypointFromImage(
         return;
     };
 
-    const view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
+    var view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
+    defer view.deinit();
 
     evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
         error.ImageUnavailable,

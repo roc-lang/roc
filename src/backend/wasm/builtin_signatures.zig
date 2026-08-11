@@ -99,6 +99,7 @@ pub const BuiltinKind = enum {
     list_drop_at,
     list_reserve,
     list_replace,
+    list_set,
     list_swap,
     list_eq,
     list_str_eq,
