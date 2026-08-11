@@ -8235,3 +8235,365 @@ test "check type - dispatch - strictly growing dispatch chain reports recursive 
     defer test_env.deinit();
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
+
+// ANNOTATED DISPATCH TARGETS ALWAYS RESOLVE THROUGH THEIR PREDECLARED SCHEMES.
+// Method-syntax dispatch to an annotated method must instantiate that method's
+// predeclared scheme at EVERY dispatch site—including a site inside the same
+// name-linked binding group whose target member has already been checked but
+// whose shared group frame has not generalized yet. Linking such a site
+// directly to the target's in-flight def var unifies the two members'
+// annotation rigids with each other, so the annotated spelling of a group
+// rejects programs its unannotated spelling accepts. The two tests below pin
+// the agreement: the annotated group must infer exactly the same types as its
+// unannotated twin (the control that follows).
+
+test "check type - mutually recursive static dispatch - annotated name-linked group members instantiate predeclared schemes" {
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd : Flip(a), U64 -> a
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.bwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  bwd : Flip(a), U64 -> a
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.fwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - unannotated name-linked group control" {
+    // Control for the test above: the identical group without annotations.
+    // The type-qualified calls put `fwd` and `bwd` in one name-linked binding
+    // group; the method-syntax dispatches link monomorphically inside it, and
+    // the shared boundary generalizes both members together.
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.bwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.fwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+    // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
+    // annotations license this—each method-syntax dispatch to an annotated
+    // target must instantiate the target's predeclared scheme, whether or not
+    // the target sits in the same name-linked group and has already been
+    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
+    // name-graph cycle that makes the two methods one binding group.)
+    const source =
+        \\Poly(a) := [Val(a)].{
+        \\  size : Poly(a), U64 -> U64
+        \\  size = |Poly.Val(x), n| {
+        \\    if n == 0 {
+        \\      0
+        \\    } else {
+        \\      Poly.deeper(Poly.Val(x), n)
+        \\    }
+        \\  }
+        \\  deeper : Poly(a), U64 -> U64
+        \\  deeper = |Poly.Val(x), n| {
+        \\    if n == 17 {
+        \\      Poly.size(Poly.Val(x), 0)
+        \\    } else {
+        \\      Poly.Val((x, x)).size(n - 1)
+        \\    }
+        \\  }
+        \\}
+        \\use = Poly.Val(1.U64).size(3)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "use", .expected = "U64" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {
+    // Control: annotated mutual recursion through method syntax alone. With no
+    // name-graph edge between them, each method is its own binding group, so
+    // every dispatch site sees either a predeclared scheme or a generalized
+    // def and instantiates it.
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd : Flip(a), U64 -> a
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0 {
+        \\      x
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1)
+        \\    }
+        \\  }
+        \\  bwd : Flip(a), U64 -> a
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0 {
+        \\      x
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+// DEF ORDER MUST NOT MOVE A DISPATCH DIAGNOSTIC OFF THE DISPATCH EXPRESSION.
+// In this module, `weak`'s pending `combine` relation is genuinely unresolved,
+// so exactly three diagnostics are correct in EITHER def order: a Polymorphic
+// Value for `weak`, a Polymorphic Value for `shared`, and one Missing Method
+// reported at the dispatch expression `weak.combine(shared)` itself. The
+// end-of-check residual ambiguity judgment builds ONE shared reachability set
+// from every function def's interface (plain walks) and scheme-requirement
+// relations (walks that treat the shared receiver as an opaque boundary).
+// `weak` is reachable from `g`'s interface through `shared`'s `List` var, so
+// the judgment must acquit it regardless of whether `f`'s receiver-excluding
+// requirement walk visited that `List` var first. A conviction instead
+// replaces `weak`'s own body with a runtime error and lands the Missing
+// Method on `make({})`—a definition site that has nothing wrong with it.
+
+fn expectResidualDispatchReportShape(test_env: *TestEnv, expected_dispatch_text: []const u8) !void {
+    var polymorphic_value_count: usize = 0;
+    var unresolved_dispatcher_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        switch (problem) {
+            .polymorphic_value => polymorphic_value_count += 1,
+            .static_dispatch => |static_dispatch_problem| switch (static_dispatch_problem) {
+                .unresolved_dispatcher => |data| {
+                    unresolved_dispatcher_count += 1;
+                    const source = test_env.module_env.common.source;
+                    const region_text = source[data.region.start.offset..data.region.end.offset];
+                    try testing.expectEqualStrings(expected_dispatch_text, region_text);
+                },
+                else => return error.TestUnexpectedResult,
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), polymorphic_value_count);
+    try testing.expectEqual(@as(usize, 1), unresolved_dispatcher_count);
+}
+
+test "check type - def order independence - residual dispatch report with requirement walk first" {
+    // `f` (whose scheme carries the `combine` requirement over `weak`) sits
+    // ahead of `g` (whose interface reaches `weak` through `shared`), so the
+    // residual judgment's excluded-receiver requirement walk visits `shared`'s
+    // var before `g`'s plain interface walk does.
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\shared = [weak]
+        \\f = |_u| weak.combine(shared)
+        \\g = |_u| shared
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResidualDispatchReportShape(&test_env, "weak.combine(shared)");
+}
+
+test "check type - def order independence - residual dispatch report with interface walk first" {
+    // Control: identical module with `g` ahead of `f`, so `g`'s plain
+    // interface walk reaches `weak` before any requirement walk runs.
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\shared = [weak]
+        \\g = |_u| shared
+        \\f = |_u| weak.combine(shared)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResidualDispatchReportShape(&test_env, "weak.combine(shared)");
+}
+
+// A REJECTED SPECULATIVE DEFAULT TARGET MUST NOT COMMIT TYPES. Validating the
+// open literal `5` against its `Dec` specialization target unifies `Dec.plus`
+// with the recorded `plus` relation; the annotation pins that relation's
+// return to `Str`, so the validation fails and the target is rejected. The
+// rejected attempt must leave `weakarg` exactly as it stands without it:
+// still `c where [c.wobble : c -> c]`, reported as a Polymorphic Value
+// alongside the one Type Mismatch. Keeping the partial unification instead
+// silently retypes `weakarg` to `Dec` and swaps its Polymorphic Value report
+// for a Missing Method claiming `wobble` is missing on a type the program
+// never chose.
+
+fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) !void {
+    var type_mismatch_count: usize = 0;
+    var polymorphic_value_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        switch (problem) {
+            .type_mismatch => type_mismatch_count += 1,
+            .polymorphic_value => polymorphic_value_count += 1,
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), type_mismatch_count);
+    try testing.expectEqual(@as(usize, 1), polymorphic_value_count);
+}
+
+test "check type - rejected default target leaves merged weak argument polymorphic" {
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Str
+        \\r = (5).plus(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
+test "check type - rejected default target leaves unreached weak argument polymorphic" {
+    // Control: the same module except the failing `plus` argument is
+    // `[weakarg]`, whose `List` shape already conflicts with `Dec`, so the
+    // rejected validation never unifies through to `weakarg`. The receiver
+    // keeps its polymorphic where-constrained type and both diagnostics land:
+    // this is the exact outcome the test above requires when the argument IS
+    // reached.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Str
+        \\r = (5).plus([weakarg])
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
+// CAP-FREE GENERATIONAL DISCHARGE. Each helper `h<i>` owns an explicit scheme
+// requirement over the module-level weak value `w<i>`, and each use
+// `w<i+1> = h<i>({})` mints a pending requirement copy whose receiver is
+// still flex. Grounding cascades one hop per instantiated-dispatch fixpoint
+// round: discharging hop `i` is what grounds hop `i+1`'s receiver, which then
+// takes its single deferred-queue transition through the pending index in the
+// NEXT round. With 70 hops through 70 DISTINCT nominal schemes, the fixpoint
+// must run ~70 generations to quiescence and the module must check cleanly—
+// dispatch termination is structural, with no round budget to exhaust.
+
+test "check type - dispatch - cap-free generational discharge across pending scheme requirements" {
+    const allocator = testing.allocator;
+    const hops = 70;
+
+    var source_builder: std.ArrayList(u8) = .empty;
+    defer source_builder.deinit(allocator);
+
+    for (1..hops + 2) |i| {
+        if (i < hops + 1) {
+            const piece = try std.fmt.allocPrint(allocator,
+                \\T{d} := [C{d}].{{
+                \\    step : T{d} -> T{d}
+                \\    step = |_| T{d}.C{d}
+                \\}}
+                \\
+            , .{ i, i, i, i + 1, i + 1, i + 1 });
+            defer allocator.free(piece);
+            try source_builder.appendSlice(allocator, piece);
+        } else {
+            const piece = try std.fmt.allocPrint(allocator,
+                \\T{d} := [C{d}]
+                \\
+            , .{ i, i });
+            defer allocator.free(piece);
+            try source_builder.appendSlice(allocator, piece);
+        }
+    }
+    try source_builder.appendSlice(allocator,
+        \\make : {} -> a
+        \\make = |_| crash "seed"
+        \\w1 = make({})
+        \\
+    );
+    for (1..hops + 1) |i| {
+        const piece = try std.fmt.allocPrint(allocator,
+            \\h{d} = |_u| w{d}.step()
+            \\w{d} = h{d}({{}})
+            \\
+        , .{ i, i, i + 1, i });
+        defer allocator.free(piece);
+        try source_builder.appendSlice(allocator, piece);
+    }
+    const tail = try std.fmt.allocPrint(allocator,
+        \\pin : T1
+        \\pin = w1
+        \\final : T{d}
+        \\final = w{d}
+        \\
+    , .{ hops + 1, hops + 1 });
+    defer allocator.free(tail);
+    try source_builder.appendSlice(allocator, tail);
+
+    var test_env = try TestEnv.init("Test", source_builder.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    // A hop in the middle of the chain proves the cascade really ran: `w35`
+    // starts flex and only `h34`'s discharged requirement can ground it.
+    try test_env.assertDefType("w35", "T35");
+    try test_env.assertDefType("final", "T71");
+
+    // Every hop must have traveled the pending-requirement route: one
+    // explicit scheme-requirement copy per use of an `h<i>` helper.
+    var scheme_requirement_dispatchers: usize = 0;
+    for (test_env.checker.instantiation_dispatchers.items) |dispatcher| {
+        if (dispatcher.source == .scheme_requirement) scheme_requirement_dispatchers += 1;
+    }
+    try testing.expect(scheme_requirement_dispatchers >= hops);
+}
