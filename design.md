@@ -3971,16 +3971,21 @@ When later unification grounds one, it receives its one deferred-queue
 transition. Processing an entry may append further entries, and validation
 continues until there is no new entry or newly grounded pending requirement.
 
-Exact repeated-state detection is the dispatch-cycle termination rule described
-below. Non-repeating structural growth also has explicit compiler resource
-bounds: recursive graph instantiation is limited before it can exhaust the
-native stack, one instantiated-dispatch fixpoint is limited to 64 productive
-rounds, and one deferred-dispatch pass may grow its queue by at most 16384
-relations. Crossing a bound rejects and poisons the active dispatch relation
-with an infinite-type or precise missing-method diagnostic. It does not
-silently accept a partial relation, and deferred-queue exhaustion does not
-discard unrelated queued relations. These bounds are safety limits, not
-evidence that two types or dispatch states are equal.
+Dispatch-cycle termination is structural, with two rules. Target selection is
+rejected as recursive dispatch when it repeats an exact solver state along
+its own derivation lineage—the same alpha-normalized receiver plus callable
+digest with the same exact method binding—or when it re-enters an ancestor
+edge's exact binding with a settled receiver that strictly structurally
+contains that ancestor's settled receiver. Every child constraint minted by
+selecting a target records its parent edge, so the parent graph is
+lineage-complete and acyclic by construction: a child is provably fresh at
+record time. The dispatch worklists carry no numeric give-up bounds; they
+terminate because the two rules keep fresh edges finite while every latched
+fixpoint—deferred re-defers, pending scheme requirements, stored finalization
+relations—consumes a monotone resource, each relation grounding at most once
+and taking at most one enqueue. Recursive graph instantiation alone keeps an
+explicit depth bound so it cannot exhaust the native stack. Rejection poisons
+only the cyclic relation and does not discard unrelated queued relations.
 
 A generalization boundary captures its owned
 requirements before literal defaulting, runs grounded copied requirements to
@@ -3995,18 +4000,21 @@ worklists run to quiescence. Only their exact consumed/rejected record permits
 retirement; the receiver's concrete shape alone never does.
 
 Selected method-target instantiation explicitly records which parent dispatch
-edge produced each copied child constraint. Ordinary caller constraints that
-happen to become concrete during the same unification do not acquire that
-lineage. Before selecting a target for a derived child, the checker computes an
-alpha-normalized digest of the receiver plus callable relation and
-compares it with the child's ancestor chain. Reaching the same digest, method
-name, owner environment, and exact method binding is the same solver
-state and is rejected as recursive dispatch; a chain whose concrete type
-structure changes has a different digest and continues. Rejection settles
-only that cyclic relation and processing continues with unrelated queued
-relations. A repeated observation of the same raw edge first reuses its
-recorded target and state key; type traversal and digest construction
-occur only when selecting a target for a new edge.
+edge produced each copied child constraint—literal-conversion children copied
+from the selected target's scheme included. Only pre-existing caller
+constraints that happen to become concrete during the same unification do not
+acquire that lineage. Before selecting a target for a derived child, the
+checker computes an alpha-normalized digest of the receiver plus callable
+relation and compares it with the child's ancestor chain. Reaching the same
+digest, method name, owner environment, and exact method binding is the same
+solver state and is rejected as recursive dispatch; a chain whose concrete
+type structure changes has a different digest and continues unless the
+growth rule catches it re-entering the same exact binding with a strictly
+grown settled receiver. Rejection settles only that cyclic relation and
+processing continues with unrelated queued relations. A repeated observation
+of the same raw edge reuses its recorded target; type traversal and digest
+construction occur only when selecting a target for a new derived edge, and
+an edge selected with no parent records no digest at all.
 
 Only roots actually promoted to generalized rank can instantiate a side-table
 scheme. A mixed recursive group can provisionally capture requirements for a
@@ -4065,7 +4073,9 @@ problem counts. The literal-constrained lambda parameter regression proves two
 concrete instantiations remain independent. Static-dispatch termination is
 pinned on both sides: an 80-layer nested requirement chain succeeds, while a
 repeated self-nested state reports one recursive dispatch error without
-abandoning unrelated queue entries.
+abandoning unrelated queue entries, and a strictly growing dispatch chain
+reports one recursive dispatch error through the growth rule rather than
+grinding on ever-larger receivers.
 The cross-module weak-receiver regression proves that, after the receiver has
 settled, checked module output preserves the discharged root scheme's
 polymorphism without checker-local requirement state.
@@ -4142,12 +4152,13 @@ Other solved-graph mutations:
   origin and checked scheme-use substitution produced by those operations;
   there is no rank rewrite, structural ownership probe, or graph restamp.
 - `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
-  Type Schemes (above). The explicit derivation chain and alpha-normalized
-  receiver + callable digest prove that target selection has returned to the
-  same solver state and exact binding. A changing finite chain remains accepted
-  within the compiler's explicit resource contract; only a repeated state is
-  rejected by this rewrite. The 80-layer accepted chain and self-nested
-  rejected chain pin both sides of the rule.
+  Type Schemes (above). Two triggers: the explicit derivation chain and
+  alpha-normalized receiver + callable digest prove that target selection has
+  returned to the same solver state and exact binding, or a settled receiver
+  strictly structurally contains the settled receiver of an ancestor edge
+  with the same exact binding. A shrinking or otherwise changing finite chain
+  is accepted. The 80-layer accepted chain, the self-nested rejected chain,
+  and the strictly growing rejected chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 

@@ -479,11 +479,15 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
-/// same static-dispatch constraint again on the same dispatcher type.
+/// same static-dispatch constraint again on the same dispatcher type, or on a
+/// dispatcher that strictly structurally contains an earlier dispatcher on the
+/// same derivation chain. `grown_from_snapshot` is that earlier, strictly
+/// smaller dispatcher in the growing-receiver case.
 pub const RecursiveDispatch = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    grown_from_snapshot: ?SnapshotContentIdx = null,
 };
 
 // nominal type errors //

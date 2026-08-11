@@ -960,7 +960,11 @@ const DispatchTargetInstantiation = struct {
     constraint_fn_var: Var,
     receiver_var: Var,
     parent_constraint_fn_var: ?Var,
-    state_type_key: [32]u8,
+    /// Canonical receiver+callable digest for this edge, frozen at whatever
+    /// point it is first computed. An edge selected with no parent skips the
+    /// digest entirely and stores null; a descendant's ancestor walk computes
+    /// and caches it on demand.
+    state_type_key: ?[32]u8,
     target_env: *const ModuleEnv,
     target_binding: ModuleEnv.MethodBinding,
     method_name: Ident.Idx,
@@ -4594,6 +4598,13 @@ fn instantiateVarHelp(
             if (fresh_resolved.desc.content == .flex) {
                 const flex = fresh_resolved.desc.content.flex;
                 if (flex.constraints.len() > 0) {
+                    // Every constraint copied out of a selected dispatch
+                    // target belongs to that edge's derivation chain,
+                    // literal conversions included: recursive-dispatch
+                    // detection walks exactly this lineage.
+                    if (self.evidence_target_site) |target| {
+                        try self.recordDispatchDerivations(flex.constraints, target.constraint_fn_var);
+                    }
                     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                     var has_literal_constraint = false;
                     var has_other_constraint = false;
@@ -8248,15 +8259,19 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 /// fresh constrained flex that may only resolve after later call-site evidence.
 /// Re-checking the recorded range here makes that concrete owner validation
 /// explicit and leaves unresolved cases to the ambiguity verdicts.
-const max_instantiated_dispatch_rounds: u32 = 64;
-
+///
+/// The fixpoint returns once a round leaves no new dispatcher entry and no
+/// newly grounded pending requirement. It terminates structurally: a pending
+/// requirement grounds at most once (flex to non-flex is monotone) and takes
+/// exactly one deferred-queue transition (the `deferred_enqueued` latch),
+/// while dispatcher entries are minted dispatch edges, which the lineage
+/// detectors keep finite.
 fn checkInstantiatedStaticDispatchConstraints(
     self: *Self,
     env: *Env,
     is_numeric_default_pass: bool,
 ) std.mem.Allocator.Error!void {
-    var rounds_remaining = max_instantiated_dispatch_rounds;
-    while (rounds_remaining > 0) : (rounds_remaining -= 1) {
+    while (true) {
         const start = self.instantiation_dispatchers_checked;
         const end = self.instantiation_dispatchers.items.len;
         self.instantiation_dispatchers_checked = end;
@@ -8344,30 +8359,23 @@ fn checkInstantiatedStaticDispatchConstraints(
             try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
             try self.checkAllConstraints(env);
         }
-        if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len) return;
+        if (self.instantiation_dispatchers_checked == self.instantiation_dispatchers.items.len and
+            !self.anyPendingSchemeRequirementNewlyGrounded()) return;
     }
+}
 
-    // A target chain kept creating fresh dispatchers for every completed
-    // round. Report one deterministic infinite-type failure, then reject the
-    // still-unvisited suffix so finalization cannot replay partial relations.
-    const overflow_start = self.instantiation_dispatchers_checked;
-    if (overflow_start >= self.instantiation_dispatchers.items.len) return;
-    const overflow_dispatcher = self.instantiation_dispatchers.items[overflow_start];
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, overflow_dispatcher.dispatcher_var);
-    _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
-        .var_ = overflow_dispatcher.dispatcher_var,
-        .snapshot = snapshot,
-        .def_name = null,
-    } });
-    for (self.instantiation_dispatchers.items[overflow_start..]) |*dispatcher| {
-        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
-            try self.markStaticDispatchRejected(constraint);
-        }
-        dispatcher.compatibility_checked = true;
-        dispatcher.deferred_enqueued = true;
+/// Whether any explicit scheme requirement still waiting in the compact
+/// pending index was grounded by this round's drain without yet taking its
+/// one deferred-queue transition. Such an entry means another round can make
+/// progress even though no new dispatcher entry was appended.
+fn anyPendingSchemeRequirementNewlyGrounded(self: *Self) bool {
+    for (self.pending_scheme_requirement_dispatchers.items) |pending_idx| {
+        const pending = self.instantiation_dispatchers.items[pending_idx];
+        if (pending.deferred_enqueued) continue;
+        if (self.types.resolveVar(pending.dispatcher_var).desc.content == .flex) continue;
+        return true;
     }
-    self.instantiation_dispatchers_checked = self.instantiation_dispatchers.items.len;
-    try self.markErroneous(overflow_dispatcher.dispatcher_var);
+    return false;
 }
 
 fn hasInstantiationAmbiguityVerdict(self: *Self, var_: Var) bool {
@@ -10877,6 +10885,12 @@ fn replayPredeclaredSchemeUse(
         if (fresh_resolved.desc.content == .flex) {
             const flex = fresh_resolved.desc.content.flex;
             if (flex.constraints.len() > 0) {
+                // Every constraint copied out of a selected dispatch target
+                // belongs to that edge's derivation chain, literal conversions
+                // included: recursive-dispatch detection walks this lineage.
+                if (pending.parent_constraint_fn_var) |parent_fn_var| {
+                    try self.recordDispatchDerivations(flex.constraints, parent_fn_var);
+                }
                 const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
                 var has_literal_constraint = false;
                 var has_other_constraint = false;
@@ -21312,14 +21326,21 @@ fn checkGroundedSchemeRequirementsAtBoundary(
 /// Re-enqueue every newly concrete stored relation and drive both ordinary and
 /// instantiated dispatch work to a fixpoint before checked-module publication.
 /// Retirement still depends on `recordSettledDeferredDispatchRelation`; a
-/// concrete receiver alone never counts as discharge.
+/// concrete receiver alone never counts as discharge. A stored relation the
+/// drain retains rather than settles (an unresolved derived codec, a target
+/// def still being checked) stays unsettled here, so each relation takes at
+/// most one enqueue per finalization call—the latch below persists across
+/// rounds, mirroring the `deferred_enqueued` discipline of
+/// `checkGroundedSchemeRequirementsAtBoundary`—and the loop exits once a
+/// round enqueues nothing new.
 fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
     self: *Self,
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!void {
+    var enqueued_fn_vars = std.AutoHashMap(Var, void).init(self.gpa);
+    defer enqueued_fn_vars.deinit();
     while (true) {
-        self.var_set.clearRetainingCapacity();
         var appended = false;
         for (self.type_schemes.items) |scheme| {
             for (scheme.dispatch_requirements.items) |requirement| {
@@ -21329,8 +21350,8 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                     continue;
                 }
                 if (self.types.resolveVar(requirement.receiver_var).desc.content == .flex) continue;
-                if (self.var_set.contains(requirement.constraint.fn_var)) continue;
-                try self.var_set.put(requirement.constraint.fn_var, {});
+                if (enqueued_fn_vars.contains(requirement.constraint.fn_var)) continue;
+                try enqueued_fn_vars.put(requirement.constraint.fn_var, {});
 
                 const constraint_range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
                 _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
@@ -22281,13 +22302,6 @@ fn importedMethodScheme(
     return self.importedMethodSchemeFromSource(method_lookup.env, method_lookup.binding.type_node_idx);
 }
 
-/// Memory-safety backstop for one deferred-dispatch pass. Semantic lineage
-/// rejects ordinary recursive dispatch first; this bounds a non-repeating
-/// derivation that would otherwise grow the queue until the compiler exhausts
-/// memory. The tripping relation is rejected precisely and unrelated queued
-/// work is still processed.
-const max_deferred_dispatch_iterations: usize = 1 << 14;
-
 fn importedMethodSchemeFromSource(
     self: *Self,
     source_env: *const ModuleEnv,
@@ -22324,11 +22338,18 @@ fn recordDispatchDerivations(
     parent_fn_var: Var,
 ) Allocator.Error!void {
     for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        const entry = try self.dispatch_derivation_by_child_fn_var.getOrPut(self.gpa, constraint.fn_var);
-        if (entry.found_existing) {
-            std.debug.assert(entry.value_ptr.* == parent_fn_var);
+        // The parent graph is acyclic by construction: an edge is recorded
+        // only for a child that is provably fresh at record time. A child that
+        // equals its parent or that has already selected a dispatch target is
+        // not fresh, so it never becomes a new node here; a child that already
+        // carries a parent keeps its first recorded edge.
+        if (constraint.fn_var == parent_fn_var) {
+            if (builtin.mode == .Debug) std.debug.panic("static-dispatch derivation would record a self-edge", .{});
             continue;
         }
+        if (self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) continue;
+        const entry = try self.dispatch_derivation_by_child_fn_var.getOrPut(self.gpa, constraint.fn_var);
+        if (entry.found_existing) continue;
         errdefer _ = self.dispatch_derivation_by_child_fn_var.remove(constraint.fn_var);
         entry.value_ptr.* = parent_fn_var;
         try self.dispatch_derivations.append(self.gpa, .{
@@ -22351,57 +22372,290 @@ fn shrinkDispatchDerivationsTo(self: *Self, new_len: usize) void {
 /// instantiated vars are deliberately ignored as identities: the canonical
 /// type digest alpha-normalizes them, while concrete structural progress
 /// changes the digest. A state repeats only when that digest and the exact
-/// selected method binding both match an ancestor.
+/// selected method binding both match an ancestor. An obligation with no
+/// parent has no chain to repeat, so it skips digest construction entirely
+/// and records a null key.
 fn dispatchStateRepeatsAncestor(
     self: *Self,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     parent_constraint_fn_var: ?Var,
     method_lookup: StaticDispatchMethodBinding,
-    state_type_key: *[32]u8,
+    state_type_key: *?[32]u8,
 ) Allocator.Error!bool {
-    const receiver_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, dispatcher_var);
-    const callable_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, constraint.fn_var);
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(&receiver_key.bytes);
-    hasher.update(&callable_key.bytes);
-    state_type_key.* = hasher.finalResult();
+    if (parent_constraint_fn_var == null) {
+        state_type_key.* = null;
+        return false;
+    }
+    state_type_key.* = try self.dispatchStateTypeKey(dispatcher_var, constraint.fn_var);
 
-    return self.dispatchStateKeyRepeatsAncestor(
+    return try self.dispatchStateKeyRepeatsAncestor(
         constraint,
         parent_constraint_fn_var,
         method_lookup,
-        state_type_key.*,
+        state_type_key.*.?,
     );
 }
 
+fn dispatchStateTypeKey(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint_fn_var: Var,
+) Allocator.Error![32]u8 {
+    const receiver_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, dispatcher_var);
+    const callable_key = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, constraint_fn_var);
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&receiver_key.bytes);
+    hasher.update(&callable_key.bytes);
+    return hasher.finalResult();
+}
+
 fn dispatchStateKeyRepeatsAncestor(
-    self: *const Self,
+    self: *Self,
     constraint: StaticDispatchConstraint,
     parent_constraint_fn_var: ?Var,
     method_lookup: StaticDispatchMethodBinding,
     state_type_key: [32]u8,
-) bool {
+) Allocator.Error!bool {
+    var steps: usize = 0;
     var ancestor_fn = parent_constraint_fn_var;
     while (ancestor_fn) |fn_var| {
         const ancestor_idx = self.dispatch_target_instantiation_by_fn_var.get(fn_var) orelse return false;
-        const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
+        steps += 1;
+        std.debug.assert(steps <= self.dispatch_target_instantiations.items.len);
+        const ancestor = &self.dispatch_target_instantiations.items[ancestor_idx];
         if (ancestor.target_env == method_lookup.env and
             std.meta.eql(ancestor.target_binding, method_lookup.binding) and
-            ancestor.method_name.eql(constraint.fn_name) and
-            std.meta.eql(state_type_key, ancestor.state_type_key))
+            ancestor.method_name.eql(constraint.fn_name))
         {
-            return true;
+            if (ancestor.state_type_key == null) {
+                ancestor.state_type_key = try self.dispatchStateTypeKey(ancestor.receiver_var, ancestor.constraint_fn_var);
+            }
+            if (std.meta.eql(state_type_key, ancestor.state_type_key.?)) return true;
         }
         ancestor_fn = ancestor.parent_constraint_fn_var;
     }
     return false;
 }
 
-/// Return an already-selected target for this raw dispatch edge. The stored
-/// target includes the canonical state key computed on the first observation,
-/// so a fixpoint revisit must consult this cache before rebuilding canonical
-/// receiver/callable keys.
+/// Whether selecting `method_lookup` re-enters an ancestor edge's exact
+/// method binding with a receiver that strictly structurally contains that
+/// ancestor's receiver. Such a chain re-enters the same method on a strictly
+/// larger dispatcher every cycle, so it can never terminate even though no
+/// two of its states are ever equal. Returns the matched ancestor's receiver.
+/// Both receivers must be settled: a receiver that unification can still
+/// refine has no final structure to compare, so it stays exempt here and
+/// remains covered by the exact repeated-state rule.
+fn dispatchStateGrowsAlongLineage(
+    self: *Self,
+    dispatcher_var: Var,
+    parent_constraint_fn_var: ?Var,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+) Allocator.Error!?Var {
+    if (parent_constraint_fn_var == null) return null;
+    if (!try self.dispatchReceiverIsSettled(dispatcher_var)) return null;
+
+    var steps: usize = 0;
+    var ancestor_fn = parent_constraint_fn_var;
+    while (ancestor_fn) |fn_var| {
+        const ancestor_idx = self.dispatch_target_instantiation_by_fn_var.get(fn_var) orelse return null;
+        steps += 1;
+        std.debug.assert(steps <= self.dispatch_target_instantiations.items.len);
+        const ancestor = self.dispatch_target_instantiations.items[ancestor_idx];
+        if (ancestor.target_env == method_lookup.env and
+            std.meta.eql(ancestor.target_binding, method_lookup.binding) and
+            ancestor.method_name.eql(constraint.fn_name) and
+            try self.dispatchReceiverIsSettled(ancestor.receiver_var) and
+            try self.receiverStrictlyContains(dispatcher_var, ancestor.receiver_var))
+        {
+            return ancestor.receiver_var;
+        }
+        ancestor_fn = ancestor.parent_constraint_fn_var;
+    }
+    return null;
+}
+
+/// Whether every var reachable through this receiver's type structure is
+/// settled. Rigid identities are settled; the callable relations attached to
+/// them are not receiver structure, so they are not traversed. An open
+/// literal-conversion flex is settled: every constraint on it is a literal
+/// conversion, so defaulting or a concrete pin grounds it deterministically.
+/// Any other flex can still be refined into arbitrary structure, an open row
+/// or union tail ends in one, and an unbound record row can still gain
+/// fields, so none of those is ever settled.
+fn dispatchReceiverIsSettled(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    return self.dispatchReceiverIsSettledInner(var_, &visited);
+}
+
+fn dispatchReceiverIsSettledInner(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return true;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .flex => |flex| blk: {
+            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+            if (constraints.len == 0) break :blk false;
+            for (constraints) |flex_constraint| {
+                if (!self.constraintIsLiteralConversion(flex_constraint)) break :blk false;
+            }
+            break :blk true;
+        },
+        .rigid, .err => true,
+        .alias => |alias| blk: {
+            if (!try self.dispatchReceiverIsSettledInner(self.types.getAliasBackingVar(alias), visited)) break :blk false;
+            break :blk try self.dispatchReceiverVarsAreSettled(self.types.sliceAliasArgs(alias), visited);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .empty_record, .empty_tag_union => true,
+            .record_unbound => false,
+            .tuple => |tuple| try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(tuple.elems), visited),
+            .nominal_type => |nominal| try self.dispatchReceiverVarsAreSettled(self.types.sliceNominalArgs(nominal), visited),
+            .fn_pure, .fn_unbound, .fn_effectful => |func| blk: {
+                if (!try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(func.args), visited)) break :blk false;
+                break :blk try self.dispatchReceiverIsSettledInner(func.ret, visited);
+            },
+            .record => |record| blk: {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                if (!try self.dispatchReceiverVarsAreSettled(fields.items(.var_), visited)) break :blk false;
+                break :blk try self.dispatchReceiverIsSettledInner(record.ext, visited);
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args| {
+                    if (!try self.dispatchReceiverVarsAreSettled(self.types.sliceVars(args), visited)) break :blk false;
+                }
+                break :blk try self.dispatchReceiverIsSettledInner(tag_union.ext, visited);
+            },
+        },
+    };
+}
+
+fn dispatchReceiverVarsAreSettled(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!bool {
+    for (vars) |var_| {
+        if (!try self.dispatchReceiverIsSettledInner(var_, visited)) return false;
+    }
+    return true;
+}
+
+/// Whether `small_var`'s type occurs as a proper structural subterm of
+/// `big_var`'s type. Alias wrappers are looked through on both sides;
+/// candidate subterms are compared against `small_var` by canonical-key
+/// equality—the same alpha-normalized digest the exact repeated-state rule
+/// uses, so identity variables match by first-occurrence correspondence and
+/// never against arbitrary structure. `active` mirrors the canonical key
+/// builder's cycle stack: revisiting an in-progress root is non-containment,
+/// so recursive structure terminates.
+fn receiverStrictlyContains(self: *Self, big_var: Var, small_var: Var) Allocator.Error!bool {
+    var active: std.ArrayListUnmanaged(Var) = .empty;
+    defer active.deinit(self.gpa);
+
+    const small_root = blk: {
+        var resolved = self.types.resolveVar(small_var);
+        while (resolved.desc.content == .alias) {
+            if (varInStack(active.items, resolved.var_)) return false;
+            try active.append(self.gpa, resolved.var_);
+            resolved = self.types.resolveVar(self.types.getAliasBackingVar(resolved.desc.content.alias));
+        }
+        break :blk resolved.var_;
+    };
+    const small_key = (try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, small_root)).bytes;
+
+    active.clearRetainingCapacity();
+    return self.receiverContainsKey(&active, big_var, small_key, false);
+}
+
+fn receiverContainsKey(
+    self: *Self,
+    active: *std.ArrayListUnmanaged(Var),
+    var_: Var,
+    small_key: [32]u8,
+    include_self: bool,
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (varInStack(active.items, resolved.var_)) return false;
+    try active.append(self.gpa, resolved.var_);
+    defer _ = active.pop();
+
+    if (resolved.desc.content == .alias) {
+        return self.receiverContainsKey(
+            active,
+            self.types.getAliasBackingVar(resolved.desc.content.alias),
+            small_key,
+            include_self,
+        );
+    }
+
+    if (include_self) {
+        const key = (try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, resolved.var_)).bytes;
+        if (std.meta.eql(key, small_key)) return true;
+    }
+
+    return switch (resolved.desc.content) {
+        .alias => unreachable,
+        .flex, .rigid, .err => false,
+        .structure => |flat_type| switch (flat_type) {
+            .empty_record, .empty_tag_union => false,
+            .tuple => |tuple| try self.anyReceiverVarContainsKey(active, self.types.sliceVars(tuple.elems), small_key),
+            .nominal_type => |nominal| try self.anyReceiverVarContainsKey(active, self.types.sliceNominalArgs(nominal), small_key),
+            .fn_pure, .fn_unbound, .fn_effectful => |func| blk: {
+                if (try self.anyReceiverVarContainsKey(active, self.types.sliceVars(func.args), small_key)) break :blk true;
+                break :blk try self.receiverContainsKey(active, func.ret, small_key, true);
+            },
+            .record => |record| blk: {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                if (try self.anyReceiverVarContainsKey(active, fields.items(.var_), small_key)) break :blk true;
+                break :blk try self.receiverContainsKey(active, record.ext, small_key, true);
+            },
+            .record_unbound => |fields_range| blk: {
+                const fields = self.types.getRecordFieldsSlice(fields_range);
+                break :blk try self.anyReceiverVarContainsKey(active, fields.items(.var_), small_key);
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |args| {
+                    if (try self.anyReceiverVarContainsKey(active, self.types.sliceVars(args), small_key)) break :blk true;
+                }
+                break :blk try self.receiverContainsKey(active, tag_union.ext, small_key, true);
+            },
+        },
+    };
+}
+
+fn anyReceiverVarContainsKey(
+    self: *Self,
+    active: *std.ArrayListUnmanaged(Var),
+    vars: []const Var,
+    small_key: [32]u8,
+) Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.receiverContainsKey(active, var_, small_key, true)) return true;
+    }
+    return false;
+}
+
+fn varInStack(vars: []const Var, var_: Var) bool {
+    for (vars) |candidate| {
+        if (candidate == var_) return true;
+    }
+    return false;
+}
+
+/// Return an already-selected target for this raw dispatch edge. Parent
+/// chains and state keys are frozen at record time, so a fixpoint revisit of
+/// a cached edge can never newly repeat an ancestor; a revisit reuses the
+/// stored target without rebuilding canonical receiver/callable keys.
 fn cachedDispatchTargetInstantiationIndex(
     self: *const Self,
     constraint: StaticDispatchConstraint,
@@ -22424,13 +22678,19 @@ fn rejectRecursiveStaticDispatch(
     constraint: StaticDispatchConstraint,
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
+    grown_from_receiver: ?Var,
 ) Allocator.Error!void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+    const grown_from_snapshot = if (grown_from_receiver) |ancestor_receiver|
+        try self.snapshots.snapshotVarForError(self.types, &self.type_writer, ancestor_receiver)
+    else
+        null;
     _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
         .recursive_dispatch = .{
             .dispatcher_snapshot = snapshot,
             .fn_var = constraint.fn_var,
             .method_name = constraint.fn_name,
+            .grown_from_snapshot = grown_from_snapshot,
         },
     } });
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
@@ -22445,7 +22705,7 @@ fn instantiateDispatchTargetMethodVar(
     self: *Self,
     dispatcher_var: Var,
     parent_constraint_fn_var: ?Var,
-    state_type_key: [32]u8,
+    state_type_key: ?[32]u8,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     cycle_method_expr_var: ?Var,
@@ -22537,19 +22797,10 @@ fn resolveDispatchTargetMethodVar(
     if (self.cachedDispatchTargetInstantiationIndex(constraint, method_lookup)) |raw_index| {
         const existing = self.dispatch_target_instantiations.items[raw_index];
         std.debug.assert(existing.parent_constraint_fn_var == parent_constraint_fn_var);
-        if (self.dispatchStateKeyRepeatsAncestor(
-            constraint,
-            parent_constraint_fn_var,
-            method_lookup,
-            existing.state_type_key,
-        )) {
-            try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr);
-            return null;
-        }
         return existing.method_var;
     }
 
-    var state_type_key: [32]u8 = undefined;
+    var state_type_key: ?[32]u8 = undefined;
     if (try self.dispatchStateRepeatsAncestor(
         dispatcher_var,
         constraint,
@@ -22557,7 +22808,17 @@ fn resolveDispatchTargetMethodVar(
         method_lookup,
         &state_type_key,
     )) {
-        try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr);
+        try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr, null);
+        return null;
+    }
+
+    if (try self.dispatchStateGrowsAlongLineage(
+        dispatcher_var,
+        parent_constraint_fn_var,
+        constraint,
+        method_lookup,
+    )) |ancestor_receiver| {
+        try self.rejectRecursiveStaticDispatch(dispatcher_var, constraint, env, failure_expr, ancestor_receiver);
         return null;
     }
 
@@ -22615,56 +22876,6 @@ fn recordSettledDeferredDispatchRelation(
     }
 }
 
-fn dispatchConstraintDescendsFromAny(
-    self: *const Self,
-    constraint_fn_var: Var,
-    ancestor_fn_vars: []const Var,
-) bool {
-    var current: ?Var = constraint_fn_var;
-    while (current) |fn_var| {
-        for (ancestor_fn_vars) |ancestor_fn_var| {
-            if (fn_var == ancestor_fn_var) return true;
-        }
-        current = self.dispatch_derivation_by_child_fn_var.get(fn_var);
-    }
-    return false;
-}
-
-/// Stop one non-repeating derivation subtree at the deferred-work resource
-/// bound without losing independent obligations that happen to follow it in
-/// the queue. A merged range is split by explicit per-constraint lineage.
-fn retainDeferredConstraintsOutsideRunawayDerivation(
-    self: *Self,
-    env: *Env,
-    first_unprocessed: usize,
-    runaway_roots: []const Var,
-) Allocator.Error!void {
-    const queued_end = env.deferred_static_dispatch_constraints.items.items.len;
-    var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
-    defer retained_constraints.deinit(self.gpa);
-
-    for (env.deferred_static_dispatch_constraints.items.items[first_unprocessed..queued_end]) |queued| {
-        retained_constraints.clearRetainingCapacity();
-        for (self.types.sliceStaticDispatchConstraints(queued.constraints)) |constraint| {
-            if (self.dispatchConstraintDescendsFromAny(constraint.fn_var, runaway_roots)) {
-                try self.markStaticDispatchRejected(constraint);
-                if (!self.commit_probe_active) {
-                    try self.settled_static_dispatch_constraint_fns.put(self.gpa, constraint.fn_var, {});
-                }
-            } else {
-                try retained_constraints.append(self.gpa, constraint);
-            }
-        }
-
-        if (retained_constraints.items.len == 0) continue;
-        var retained = queued;
-        if (retained_constraints.items.len != queued.constraints.len()) {
-            retained.constraints = try self.types.appendStaticDispatchConstraints(retained_constraints.items);
-        }
-        try self.scratch_deferred_static_dispatch_constraints.append(retained);
-    }
-}
-
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -22674,9 +22885,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
     defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
     const settled_relations_before = self.settled_static_dispatch_constraint_fns.count();
-    const initial_deferred_count = env.deferred_static_dispatch_constraints.items.items.len;
-    const runaway_limit = std.math.add(usize, initial_deferred_count, max_deferred_dispatch_iterations) catch std.math.maxInt(usize);
 
+    // The drain runs until the queue is exhausted. Termination is structural:
+    // every re-deferred relation keeps a still-flex receiver whose eventual
+    // grounding consumes it, and every fresh child edge passes the lineage
+    // detectors, which reject an exact repeated state or a strictly grown
+    // re-entry of the same binding before it can extend the queue further.
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
@@ -22684,51 +22898,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
         const failure_expr = deferredConstraintFailureExpr(deferred_constraint);
         const deferred_children_start = env.deferred_static_dispatch_constraints.items.items.len;
         defer inheritDeferredConstraintFailureExpr(env, deferred_children_start, deferred_constraint.failure_expr);
-
-        if (deferred_constraint_index >= runaway_limit) {
-            const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
-            const runaway_constraints = try self.gpa.dupe(StaticDispatchConstraint, constraints);
-            defer self.gpa.free(runaway_constraints);
-            const runaway_roots = try self.gpa.alloc(Var, runaway_constraints.len);
-            defer self.gpa.free(runaway_roots);
-            for (runaway_constraints, runaway_roots) |constraint, *root| root.* = constraint.fn_var;
-            const resolved_content = self.types.resolveVar(deferred_constraint.var_).desc.content;
-            const dispatcher_type: ?problem.DispatcherDoesNotImplMethod.DispatcherType =
-                if (resolved_content == .structure and resolved_content.structure == .nominal_type)
-                    .nominal
-                else if (resolved_content == .rigid)
-                    .rigid
-                else
-                    null;
-            if (runaway_constraints.len > 0 and dispatcher_type != null) {
-                try self.reportConstraintError(
-                    deferred_constraint.var_,
-                    runaway_constraints[0],
-                    .{ .missing_method = dispatcher_type.? },
-                    env,
-                    is_numeric_default_pass,
-                );
-            } else {
-                const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, deferred_constraint.var_);
-                _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
-                    .var_ = deferred_constraint.var_,
-                    .snapshot = snapshot,
-                    .def_name = null,
-                } });
-            }
-            for (runaway_constraints) |constraint| {
-                try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                try self.markStaticDispatchRejected(constraint);
-            }
-            try self.markErroneous(deferred_constraint.var_);
-            try self.recordSettledDeferredDispatchRelation(deferred_constraint);
-            try self.retainDeferredConstraintsOutsideRunawayDerivation(
-                env,
-                deferred_constraint_index + 1,
-                runaway_roots,
-            );
-            break;
-        }
 
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;

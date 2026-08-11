@@ -7976,3 +7976,262 @@ test "check type - generated principality under optional exact annotations" {
         try testing.expect((try rejected_annotated.typeProblemCount()) > 0);
     }
 }
+
+// PRINCIPALITY. A definition whose generalization boundary resolves a pending
+// dispatch target checks every earlier unchecked group inside that boundary,
+// sharing the module-wide rank counter with those nested checks. Schemes those
+// groups capture belong to their own module-level definitions, so the boundary
+// owner's generalization must leave them intact: `lengths`/`selves` must see
+// `f`'s pending `split_on`/`map` relation over `weak` no matter which
+// definition's boundary caused `f` to be checked. All four defs must infer
+// exactly what they infer when `f` is checked outside any other boundary
+// (the reordered control below).
+const pending_dispatch_boundary_defs = &[_]DefAndExpectation{
+    .{ .def = "user", .expected = "_arg -> Str" },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - module scheme survives unrelated pending-dispatch boundary" {
+    // `user` dispatches to `Thing.tag`, an unannotated method defined later,
+    // so `user`'s boundary checks `f`'s group before generalizing. The uses
+    // of `f` come after `Thing`, so they replay `f`'s scheme afterward.
+    const source =
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\f = |g| weak.split_on(",").map(g)
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+test "check type - principality - scheme copies made inside unrelated pending-dispatch boundary" {
+    // Same module with the uses of `f` ahead of `Thing`, so `user`'s boundary
+    // checks `f`, `lengths`, and `selves` while resolving its pending target:
+    // the per-use scheme copies themselves are made inside that boundary.
+    const source =
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\f = |g| weak.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+test "check type - principality - helper checked ahead of unrelated pending-dispatch boundary" {
+    // Control: identical module except `f` sits ahead of `user`, so `f`'s
+    // group is already checked when `user`'s boundary resolves its pending
+    // target. The two tests above must infer exactly these same types.
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g| weak.split_on(",").map(g)
+        \\user = |_x| Thing.Val("z").tag()
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+// PRINCIPALITY. `base` receives its dispatch receiver as an ARGUMENT, so
+// `f = |g| base(weak, g)` meets `base`'s where-constraints as attached
+// constraints copied during instantiation, and their fresh receiver unifies
+// outward with the module-level `weak`. The still-pending relation must enter
+// `f`'s scheme exactly as it does when `base` names `weak` directly (the
+// "transitive scheme requirement" tests above): these two modules differ only
+// in `weak`'s annotation, so every def must infer the same type in both.
+const principality_argument_routed_defs = &[_]DefAndExpectation{
+    .{ .def = "base", .expected =
+    \\c, d -> e
+    \\  where [
+    \\    c.split_on : c, h -> i,
+    \\    h.from_quote : Str -> Try(h, [BadQuotedBytes(Str)]),
+    \\    i.map : i, d -> e,
+    \\  ]
+    },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated argument-routed transitive scheme requirement" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\base = |r, g| r.split_on(",").map(g)
+        \\f = |g| base(weak, g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_argument_routed_defs);
+}
+
+test "check type - principality - inferred argument-routed transitive scheme requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |r, g| r.split_on(",").map(g)
+        \\f = |g| base(weak, g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_argument_routed_defs);
+}
+
+// SCHEME OWNERSHIP IS CHECK-ORDER INDEPENDENT. A module-level value def's
+// dispatch belongs to no definition's scheme, whether the def is checked
+// directly by the module driver or from inside another definition's
+// generalization boundary (here `use_it`'s boundary checks `mid`'s group
+// while resolving its pending dispatch target into `Thing.tag`). No scheme in
+// this module carries a requirement, so no use of any def may instantiate
+// one: every ambiguity candidate must be a creation-site record. An
+// instantiation-sourced candidate would mean `use_it`'s scheme captured
+// `mid`'s relation over `n`—a receiver `use_it` does not own—and replayed it
+// at each use of `use_it`.
+fn expectNoInstantiatedSchemeRequirements(source: []const u8) !void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("mid", "List(Str)");
+    var instantiation_candidates: usize = 0;
+    for (test_env.checker.ambiguity_candidates.items) |candidate| {
+        if (candidate.source == .instantiation) instantiation_candidates += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), instantiation_candidates);
+}
+
+test "check type - lazily checked value def dispatch stays out of enclosing boundary's scheme" {
+    try expectNoInstantiatedSchemeRequirements(
+        \\n = "a,b,c"
+        \\use_it = |_x| Thing.Val("z").tag()
+        \\mid = n.split_on(",")
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\first = use_it({})
+        \\second = use_it({})
+    );
+}
+
+test "check type - value def dispatch checked ahead of boundary stays out of every scheme" {
+    // Control: identical module except `mid` sits ahead of `use_it`, so the
+    // module driver checks it before any boundary is active.
+    try expectNoInstantiatedSchemeRequirements(
+        \\n = "a,b,c"
+        \\mid = n.split_on(",")
+        \\use_it = |_x| Thing.Val("z").tag()
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\first = use_it({})
+        \\second = use_it({})
+    );
+}
+
+// DERIVED CODEC VALIDATION MUST SHARE OUTER-RANK RECEIVERS. When derived-shape
+// validation reaches a local annotated method (here `ItemKind.encoder_for`,
+// found through the derived record encoder inside `Json.to_str`), the
+// instantiation of that method's scheme must keep body requirements rooted at
+// module-level receivers (`weak`'s pending `split_on`/`get` relation)
+// connected to those receivers, exactly as scheme replay does at ordinary use
+// sites. A disconnected copy strands the `get` index literal on fresh vars
+// where it can never meet `List.get`'s `U64` index, so it defaults and the
+// module spuriously fails to check.
+
+test "check type - derived codec - annotated encoder_for body with module-level receiver requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\ItemKind := [Basic, Fancy].{
+        \\  encoder_for : encoding -> (ItemKind, state -> Try(state, err))
+        \\  encoder_for = |_encoding| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    |_kind, state| Ok(state)
+        \\  }
+        \\}
+        \\out = Json.to_str({ kind: ItemKind.Basic })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - annotated encoder_for body with annotated module-level receiver" {
+    // Control: identical module except `weak` is annotated, so the body's
+    // `split_on`/`get` dispatches resolve against `Str` right away and no
+    // module-level pending relation enters `encoder_for`'s scheme.
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\ItemKind := [Basic, Fancy].{
+        \\  encoder_for : encoding -> (ItemKind, state -> Try(state, err))
+        \\  encoder_for = |_encoding| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    |_kind, state| Ok(state)
+        \\  }
+        \\}
+        \\out = Json.to_str({ kind: ItemKind.Basic })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
+// `from_interpolation` constraint on the annotation's inner
+// `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
+// that same type again, so the checker must reject the chain as recursive
+// dispatch. Builtin's `Try` really declares `from_interpolation`, so a
+// missing-method report on this program would be factually wrong.
+
+test "check type - dispatch - nested Try interpolation reports recursive dispatch" {
+    const source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+// STRICTLY GROWING DISPATCH CHAINS MUST BE REJECTED STRUCTURALLY. Every
+// `go` step dispatches `go` again on a receiver wrapped in two more layers of
+// `Wrap`, so the chain can never terminate and no two states on it are ever
+// equal. The checker must reject the chain as recursive dispatch quickly,
+// rather than grinding out the whole deferred-dispatch budget on receivers
+// whose printed form grows without bound.
+
+test "check type - dispatch - strictly growing dispatch chain reports recursive dispatch" {
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(a)))
+        \\    step = |w| Wrap.W(Wrap.W(w))
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
