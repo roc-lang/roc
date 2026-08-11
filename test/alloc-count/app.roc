@@ -57,11 +57,12 @@ check_iter_rev_allocs! = |bytes, expected| {
 	expect fold_allocs == 0
 	expect sum == expected
 
+	expected_found = List.last(List.keep_if(bytes, |byte| byte > 0))
 	find_before = Host.alloc_count!()
 	found = List.find_last(bytes, |byte| byte > 0)
 	find_allocs = Host.alloc_count!() - find_before
 	expect find_allocs == 0
-	expect found == List.last(bytes)
+	expect found == expected_found
 	{}
 }
 

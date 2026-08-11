@@ -452,6 +452,15 @@ pub const Store = struct {
             self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
             try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
+            if (ty != root) {
+                if (self.iterator_interface_cache.unsafeRawItemsForView()[ty_index]) |cached| {
+                    if (cached) {
+                        self.iterator_interface_cache.set(root_index, true);
+                        return true;
+                    }
+                    continue;
+                }
+            }
             switch (self.get(ty)) {
                 .primitive, .erased, .zst => {},
                 .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
@@ -487,6 +496,7 @@ pub const Store = struct {
                 .named => |named| {
                     if (named.builtin_owner) |owner| {
                         if (static_dispatch.isIteratorOwner(owner)) {
+                            self.iterator_interface_cache.set(ty_index, true);
                             self.iterator_interface_cache.set(root_index, true);
                             return true;
                         }
@@ -571,6 +581,10 @@ pub const Store = struct {
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
+        // A surviving reserved slot may have been filled after the mark with
+        // children that are now truncated and whose ids can be reused. Clear
+        // every retained containment answer so those new children are walked.
+        @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
@@ -3068,6 +3082,33 @@ test "monotype cached digest survives completion of an unrelated reserved slot" 
     try std.testing.expectEqual(@as(u64, 1), after_fill_stats.cache_hits);
     try std.testing.expectEqual(@as(u64, 0), after_fill_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 0), after_fill_stats.nodes_visited);
+}
+
+test "monotype iterator containment cache is invalidated by rollback" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const survivor = try store.reserveSlot();
+    const mark_ = store.mark();
+    const transient = try store.add(.{ .primitive = .u64 });
+    store.fillReservedSlot(survivor, .{ .box = transient });
+    try std.testing.expect(!try store.containsIteratorInterface(survivor));
+
+    store.restore(mark_);
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const replacement = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .builtin_owner = .iter,
+        .args = Span.empty(),
+    } });
+    try std.testing.expectEqual(transient, replacement);
+    try std.testing.expect(try store.containsIteratorInterface(survivor));
 }
 
 test "monotype cached digest stays stable across multiple edges into one recursive group" {

@@ -4115,6 +4115,176 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(123, 321)" },
     },
+    // A list literal builds one element representation for every item, so a
+    // producer-authored iterator reaching a list element must keep the
+    // representation the constructor selected for that element. These cases
+    // put the iterator behind a second container (a nested list, a tuple slot,
+    // a record field) so the element representation is a container rather than
+    // the iterator itself, and build the container in its own procedure so the
+    // whole result cannot be folded before it is lowered.
+    .{
+        .name = "for loop over a procedure returning a list of lists of iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(List(Iter(U64)))
+        \\wrap = |xs| [[xs.iter()]]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of records holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List({ it : Iter(U64) })
+        \\wrap = |xs| [{ it: xs.iter() }]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of tuples holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List((Iter(U64), U64))
+        \\wrap = |xs| [(xs.iter(), 1)]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.0 {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of lists of ranges",
+        .source_kind = .module,
+        .source =
+        \\wrap : U64 -> List(List(Iter(U64)))
+        \\wrap = |n| [[0..<n]]
+        \\
+        \\digits : U64 -> U64
+        \\digits = |n| {
+        \\    var $out = 0
+        \\    for row in wrap(n) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits(3)
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of lists of string iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : Str -> List(List(Iter(U8)))
+        \\wrap = |text| [[Str.iter_utf8(text)]]
+        \\
+        \\total : Str -> U64
+        \\total = |text| {
+        \\    var $sum = 0
+        \\    for row in wrap(text) {
+        \\        for it in row {
+        \\            for byte in it {
+        \\                $sum = $sum + byte.to_u64()
+        \\            }
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = total("ab")
+        ,
+        .expected = .{ .inspect_str = "195" },
+    },
+    // Every element of a list literal contributes its own producer
+    // representation. A literal that mixes producers must read each element
+    // back at the representation that element was built with.
+    .{
+        .name = "for loop over a procedure returning mixed forward and reverse list iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [xs.iter(), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "123321" },
+    },
+    .{
+        .name = "for loop over a procedure returning mixed list and range producers",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64), U64 -> List(Iter(U64))
+        \\wrap = |xs, n| [xs.iter(), 1..<n, xs.iter_rev()]
+        \\
+        \\digits : List(U64), U64 -> U64
+        \\digits = |xs, n| {
+        \\    var $out = 0
+        \\    for it in wrap(xs, n) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([7, 8, 9], 4)
+        ,
+        .expected = .{ .inspect_str = "789123987" },
+    },
     .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =

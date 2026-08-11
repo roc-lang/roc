@@ -281,9 +281,15 @@ const ContainmentResult = struct {
 };
 
 const ContainmentCacheEntry = struct {
-    valid: bool = false,
+    generated_private_valid: bool = false,
+    iterator_interface_valid: bool = false,
     result: ContainmentResult = .{},
     dependencies: std.ArrayList(ContainmentDependency) = .empty,
+};
+
+const ContainmentQuery = enum {
+    generated_private,
+    iterator_interface,
 };
 
 const RelationState = enum {
@@ -379,9 +385,8 @@ pub const InstGraph = struct {
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
     /// Shared allocation-free scratch and cache for exact structural
-    /// containment. One walk records both generated-private evidence and the
-    /// public iterator interface, so querying both facts for a call retains one
-    /// dependency list instead of duplicating the graph-sized cache.
+    /// containment. The two queries share one conservative dependency list,
+    /// while each walk can stop as soon as its requested property is found.
     containment_pending: std.ArrayList(NodeId),
     containment_visit_epochs: std.ArrayList(u32),
     containment_visit_epoch: u32,
@@ -1664,34 +1669,55 @@ pub const InstGraph = struct {
     /// from a backing shape.
     pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("iterator_interface_scans");
-        const result = try self.containmentResult(root, "iterator_interface_nodes_visited", "iterator_interface_cache_hits");
-        return result.iterator_interface;
+        return try self.containmentResult(
+            root,
+            .iterator_interface,
+            "iterator_interface_nodes_visited",
+            "iterator_interface_cache_hits",
+        );
     }
 
     /// Whether this exact graph type contains compiler-generated private
     /// opaque evidence at any structural depth.
     pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("generated_private_scans");
-        const result = try self.containmentResult(root, "generated_private_nodes_visited", "generated_private_cache_hits");
-        return result.generated_private;
+        return try self.containmentResult(
+            root,
+            .generated_private,
+            "generated_private_nodes_visited",
+            "generated_private_cache_hits",
+        );
     }
 
     fn containmentResult(
         self: *InstGraph,
         root: NodeId,
+        comptime query: ContainmentQuery,
         comptime nodes_visited_field: []const u8,
         comptime cache_hits_field: []const u8,
-    ) Allocator.Error!ContainmentResult {
+    ) Allocator.Error!bool {
         const query_root = self.find(root);
         const cache = try self.containment_cache.getOrPut(query_root);
         if (!cache.found_existing) cache.value_ptr.* = .{};
-        if (cache.value_ptr.valid and self.containmentCacheEntryValid(cache.value_ptr)) {
-            self.countDiagnostic(cache_hits_field);
-            return cache.value_ptr.result;
+        const has_valid_result = cache.value_ptr.generated_private_valid or
+            cache.value_ptr.iterator_interface_valid;
+        if (has_valid_result and !self.containmentCacheEntryValid(cache.value_ptr)) {
+            cache.value_ptr.generated_private_valid = false;
+            cache.value_ptr.iterator_interface_valid = false;
+            cache.value_ptr.result = .{};
+            cache.value_ptr.dependencies.clearRetainingCapacity();
         }
-        cache.value_ptr.valid = false;
-        cache.value_ptr.result = .{};
-        cache.value_ptr.dependencies.clearRetainingCapacity();
+        const query_valid = switch (query) {
+            .generated_private => cache.value_ptr.generated_private_valid,
+            .iterator_interface => cache.value_ptr.iterator_interface_valid,
+        };
+        if (query_valid) {
+            self.countDiagnostic(cache_hits_field);
+            return switch (query) {
+                .generated_private => cache.value_ptr.result.generated_private,
+                .iterator_interface => cache.value_ptr.result.iterator_interface,
+            };
+        }
         self.containment_pending.clearRetainingCapacity();
         defer self.containment_pending.clearRetainingCapacity();
         if (self.containment_visit_epoch == std.math.maxInt(u32)) {
@@ -1733,15 +1759,30 @@ pub const InstGraph = struct {
                     try self.containment_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
-                    if (named.builtin_owner) |owner| {
-                        if (static_dispatch.isIteratorOwner(owner)) {
-                            cache.value_ptr.result.iterator_interface = true;
+                    const found = switch (query) {
+                        .iterator_interface => if (named.builtin_owner) |owner|
+                            static_dispatch.isIteratorOwner(owner)
+                        else
+                            false,
+                        .generated_private => if (named.backing) |backing|
+                            backing.authority == .generated_private
+                        else
+                            false,
+                    };
+                    if (found) {
+                        switch (query) {
+                            .generated_private => {
+                                cache.value_ptr.result.generated_private = true;
+                                cache.value_ptr.generated_private_valid = true;
+                            },
+                            .iterator_interface => {
+                                cache.value_ptr.result.iterator_interface = true;
+                                cache.value_ptr.iterator_interface_valid = true;
+                            },
                         }
+                        return true;
                     }
                     if (named.backing) |backing| {
-                        if (backing.authority == .generated_private) {
-                            cache.value_ptr.result.generated_private = true;
-                        }
                         try self.containment_pending.append(self.allocator, backing.node);
                     }
                     try self.containment_pending.appendSlice(self.allocator, named.args);
@@ -1752,8 +1793,11 @@ pub const InstGraph = struct {
                 },
             }
         }
-        cache.value_ptr.valid = true;
-        return cache.value_ptr.result;
+        switch (query) {
+            .generated_private => cache.value_ptr.generated_private_valid = true,
+            .iterator_interface => cache.value_ptr.iterator_interface_valid = true,
+        }
+        return false;
     }
 
     fn containmentCacheEntryValid(

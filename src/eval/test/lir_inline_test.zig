@@ -4310,6 +4310,25 @@ test "nested iterator results retain the callee-authored representation" {
 
 test "completed iterator method specs refresh their public lookup keys" {
     const allocator = std.testing.allocator;
+    const single_source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_once : Rows -> U64
+        \\sum_once = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_once(Rows.{ items: [1, 2, 3] })
+    ;
     const source =
         \\Rows := { items : List(U64) }.{
         \\    iter : Rows -> Iter(U64)
@@ -4339,15 +4358,19 @@ test "completed iterator method specs refresh their public lookup keys" {
 
     try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+
+    const single_counters = try monotypeCountersForModule(allocator, single_source);
+    const repeated_counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expectEqual(single_counters.template_misses, repeated_counters.template_misses);
+    try std.testing.expect(repeated_counters.template_hits > single_counters.template_hits);
 }
 
 test "match locals and field accesses retain their registered scrutinee nodes" {
     const allocator = std.testing.allocator;
     const source =
-        \\main : U64
-        \\main = {
-        \\    local = Ok(1.U64)
-        \\    record = { value: Ok(2.U64) }
+        \\main : Try(U64, [Unavailable]), { value : Try(U64, [Unavailable]) } -> U64
+        \\main = |input, record| {
+        \\    local = input
         \\    from_local = match local {
         \\        Ok(value) => value
         \\        Err(_) => 0

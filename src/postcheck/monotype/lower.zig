@@ -761,7 +761,44 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
         },
-        .redirect, .unresolved, .primitive, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+        .tag_union => switch (right_content) {
+            .tag_union => {
+                try graph.relateOpaqueInterface(left_node, right_node);
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+        },
+        .record => switch (right_content) {
+            .record => {
+                try graph.relateOpaqueInterface(left_node, right_node);
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+        },
+        .named => |left_named| switch (right_content) {
+            .named => |right_named| {
+                if (!sameTypeDef(left_named.def, right_named.def) or
+                    left_named.kind != right_named.kind or
+                    left_named.args.len != right_named.args.len)
+                {
+                    return false;
+                }
+                for (left_named.args, right_named.args) |left_arg, right_arg| {
+                    try relateRequestComponent(graph, left_arg, right_arg);
+                }
+                if (left_named.backing) |left_backing| {
+                    const right_backing = right_named.backing orelse return false;
+                    try relateRequestComponent(graph, left_backing.node, right_backing.node);
+                } else if (right_named.backing != null) {
+                    return false;
+                }
+                return true;
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        },
+        .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
     return false;
 }
@@ -3729,8 +3766,9 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
+                    if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
+                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -3756,7 +3794,10 @@ const Builder = struct {
                             const spec = &source_ctx.draft.template_specs.items[raw_spec];
                             if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                             if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                            const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
+                            const exact_interface = source_ctx.graph.sameFunctionInterface(
+                                draftTemplateSpecLookupRequestNode(spec),
+                                request_fn_node,
+                            );
                             const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
                                 source_ctx.draft.current_owner,
                                 spec.fn_id,
@@ -3804,8 +3845,9 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    const spec_request = draftTemplateSpecLookupRequestNode(spec);
+                    if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
+                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -3835,14 +3877,14 @@ const Builder = struct {
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
             if (active_recursive_edge) {
                 try source_ctx.graph.unifyRecursiveFunctionInterface(
-                    spec.request_fn_node,
+                    draftTemplateSpecLookupRequestNode(spec),
                     spec.initial_request_arg_classes,
                     request_fn_node,
                 );
             } else {
-                try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
+                try source_ctx.graph.unify(draftTemplateSpecLookupRequestNode(spec), request_fn_node);
             }
-            if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
+            if (!source_ctx.graph.sameFunctionInterface(draftTemplateSpecLookupRequestNode(spec), request_fn_node)) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
             if (signature_relation == .exact_graph) {
@@ -3858,7 +3900,7 @@ const Builder = struct {
                 });
             }
             if (resolved_lookup_address) |address| {
-                const active_spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                const active_spec_fn_ty = try source_ctx.activeTypeFromNode(draftTemplateSpecLookupRequestNode(spec));
                 if (try self.program.types.typeEql(
                     &self.program.names,
                     active_spec_fn_ty,
@@ -9860,35 +9902,10 @@ fn registerTemplateSpecLookup(
     address: DraftTemplateLookupAddress,
     raw_spec: u32,
 ) Allocator.Error!void {
-    const spec = &draft.template_specs.items[raw_spec];
-    var tracked = false;
-    for (spec.lookup_addresses.items) |existing| {
-        if (std.meta.eql(existing, address)) {
-            tracked = true;
-            break;
-        }
-    }
-    if (!tracked) try spec.lookup_addresses.append(allocator, address);
-
     const entry = try draft.template_spec_lookup.getOrPut(address);
     if (!entry.found_existing) entry.value_ptr.* = .empty;
     for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
     try entry.value_ptr.append(allocator, raw_spec);
-}
-
-fn unregisterTemplateSpecLookup(
-    draft: *BodyDraftStore,
-    address: DraftTemplateLookupAddress,
-    raw_spec: u32,
-) void {
-    const candidates = draft.template_spec_lookup.getPtr(address) orelse
-        Common.invariant("registered draft template lookup address disappeared before retargeting");
-    for (candidates.items, 0..) |candidate, index| {
-        if (candidate != raw_spec) continue;
-        _ = candidates.orderedRemove(index);
-        return;
-    }
-    Common.invariant("registered draft template lookup candidate disappeared before retargeting");
 }
 
 fn registerTemplateSpecInterfaceLookups(
@@ -9909,17 +9926,6 @@ fn registerTemplateSpecInterfaceLookups(
         request_fn_node,
         raw_spec,
     );
-}
-
-fn unregisterTemplateSpecLookups(
-    draft: *BodyDraftStore,
-    raw_spec: u32,
-) void {
-    const spec = &draft.template_specs.items[raw_spec];
-    for (spec.lookup_addresses.items) |address| {
-        unregisterTemplateSpecLookup(draft, address, raw_spec);
-    }
-    spec.lookup_addresses.clearRetainingCapacity();
 }
 
 fn updateTemplateSpecInterfaceLookups(
@@ -10177,12 +10183,13 @@ const DraftTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
+    /// Stable public request retained only when eager iterator completion
+    /// replaces `request_fn_node` with its producer-completed private callable.
+    /// Other completed specs keep their existing representation-sensitive
+    /// matching semantics.
+    lookup_request_fn_node: ?NodeId = null,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
-    /// Exact raw lookup addresses registered for this request. Graph class
-    /// representatives may change after registration, so retargeting removes
-    /// these retained keys instead of reconstructing them from live nodes.
-    lookup_addresses: std.ArrayList(DraftTemplateLookupAddress) = .empty,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     /// Runtime-value demands recorded while this specialization's body (and
     /// any explicitly lexical-context-dependent procedure bodies it owns)
@@ -10205,6 +10212,10 @@ const DraftTemplateSpec = struct {
     /// specialization key did not move afterward.
     eager_resolution: ?EagerTemplateResolution = null,
 };
+
+fn draftTemplateSpecLookupRequestNode(spec: *const DraftTemplateSpec) NodeId {
+    return spec.lookup_request_fn_node orelse spec.request_fn_node;
+}
 
 const DraftConstUseProvenance = union(enum) {
     declared,
@@ -10960,7 +10971,6 @@ const BodyDraftStore = struct {
 
     fn deinit(self: *BodyDraftStore) void {
         for (self.template_specs.items) |*spec| {
-            spec.lookup_addresses.deinit(self.allocator);
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
                 self.allocator.free(lexical.local_procs);
@@ -16780,6 +16790,12 @@ const BodyContext = struct {
         if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
             return witness;
+        }
+        const checked_private = try self.graph.containsGeneratedPrivate(checked_root);
+        const produced_private = try self.graph.containsGeneratedPrivate(produced_root);
+        if (checked_private or produced_private) {
+            try relateRequestComponent(self.graph, checked_root, produced_root);
+            return if (produced_private) produced_node else checked_node;
         }
         try self.graph.unify(checked_root, produced_root);
         return checked_node;
@@ -27947,9 +27963,9 @@ const BodyContext = struct {
         if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
 
         const raw_spec: u32 = @intCast(spec_index);
-        unregisterTemplateSpecLookups(self.draft, raw_spec);
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
         self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
+        self.draft.template_specs.items[spec_index].lookup_request_fn_node = current_node;
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
         const completed_spec = self.draft.template_specs.items[spec_index];
         const completed_source = self.draft.fns.items[@intFromEnum(draft_fn)].source;
@@ -31928,8 +31944,8 @@ const BodyContext = struct {
         try self.prepareConstructorChildrenAtNodes(items, item_nodes);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
-        var produced_element = element_node;
-        var requires_distinct_witness = false;
+        var produced_element: ?NodeId = null;
+        const element_contains_iterator = try self.graph.containsIteratorInterface(element_node);
         for (items, 0..) |item, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
@@ -31938,12 +31954,19 @@ const BodyContext = struct {
                 child_node,
                 "list graph constructor child differed without explicit representation evidence",
             )) {
-                requires_distinct_witness = true;
-                produced_element = try self.relateCheckedNodeToProducedValue(produced_element, child_node);
+                if (produced_element) |selected| {
+                    if (element_contains_iterator) {
+                        try selectRequestRepresentation(self.graph, selected, child_node);
+                    } else {
+                        produced_element = child_node;
+                    }
+                } else {
+                    produced_element = child_node;
+                }
             }
         }
-        const produced_node = if (requires_distinct_witness) blk: {
-            const structural_node = try self.graph.newNode(.{ .list = produced_element });
+        const produced_node = if (produced_element) |element_witness| blk: {
+            const structural_node = try self.graph.newNode(.{ .list = element_witness });
             const witness = try self.constructorWitnessWithStructuralNode(list_node, structural_node);
             break :blk try self.relateCheckedNodeToProducedValue(list_node, witness);
         } else list_node;

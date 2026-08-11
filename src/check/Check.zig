@@ -3191,8 +3191,8 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_hosted_lambda,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3270,8 +3270,8 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_run_low_level,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3306,8 +3306,8 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_method_call,
         .e_type_dispatch_call,
         => true,
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call.method_name),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
         .e_for,
         .e_run_low_level,
         .e_lookup_required,
@@ -3367,8 +3367,26 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     };
 }
 
-fn methodCallPreservesIteratorSourceInput(self: *const Self, method_name: Ident.Idx) bool {
-    return static_dispatch.methodNamePreservesIteratorSourceInput(self.cir.getIdentText(method_name));
+fn methodCallPreservesIteratorSourceInput(self: *Self, call: anytype) bool {
+    var owner_var = ModuleEnv.varFrom(call.receiver);
+    const nominal = while (true) {
+        const resolved = self.types.resolveVar(owner_var);
+        switch (resolved.desc.content) {
+            .alias => |alias| owner_var = self.types.getAliasBackingVar(alias),
+            else => break resolved.desc.content.unwrapNominalType() orelse return false,
+        }
+    };
+    const owner_env = self.getNominalOriginEnv(nominal);
+    const method = self.lookupStaticDispatchMethodBinding(
+        owner_env,
+        nominal.sourceDeclOptional(),
+        self.cir,
+        call.method_name,
+    ) orelse return false;
+    return static_dispatch.procedurePreservesHoistableSourceInputForEnvDef(
+        method.env,
+        method.binding.def_idx,
+    );
 }
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {

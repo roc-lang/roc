@@ -316,45 +316,32 @@ const iterator_procedure_name_entries = blk: {
 
 const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(&iterator_procedure_name_entries);
 
-const iterator_source_method_count = blk: {
-    var count: usize = 0;
-    for (iterator_procedure_name_entries) |entry| {
-        if (entry[1].preservesHoistableSourceInput()) count += 1;
+/// Return the compiler-owned iterator role assigned to a Builtin definition.
+pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
+    if (env.module_role != .builtin) return null;
+    const def = env.store.getDef(def_idx);
+    const pattern = env.store.getPattern(def.pattern);
+    if (pattern != .assign) return null;
+    return iterator_procedure_by_name.get(env.getIdent(pattern.assign.ident));
+}
+
+/// Whether this exact Builtin procedure needs its eager receiver preserved as
+/// a separate hoist root. Iterator identity covers public producers; the
+/// generated FieldNames iterator is an intrinsic with the same source-lifetime
+/// requirement.
+pub fn procedurePreservesHoistableSourceInputForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    if (iteratorProcedureForEnvDef(env, def_idx)) |producer| {
+        return producer.preservesHoistableSourceInput();
     }
-    break :blk count;
-};
-
-const iterator_source_method_names = std.StaticStringMap(void).initComptime(blk: {
-    var entries: [iterator_source_method_count]struct { []const u8, void } = undefined;
-    var index: usize = 0;
-    for (iterator_procedure_name_entries) |entry| {
-        if (!entry[1].preservesHoistableSourceInput()) continue;
-
-        const dot_index = std.mem.lastIndexOfScalar(u8, entry[0], '.') orelse
-            @compileError("iterator procedure names must be fully qualified");
-        entries[index] = .{ entry[0][dot_index + 1 ..], {} };
-        index += 1;
-    }
-    break :blk &entries;
-});
-
-/// Whether a surface method converts an eager collection to an iterator and
-/// therefore needs its closed source expression preserved as a separate hoist
-/// root until static dispatch resolves the exact procedure.
-pub fn methodNamePreservesIteratorSourceInput(text: []const u8) bool {
-    return iterator_source_method_names.has(text);
+    const def = env.store.getDef(def_idx);
+    const expr = env.store.getExpr(def.expr);
+    if (expr != .e_anno_only) return false;
+    return can.BuiltinLowLevel.intrinsicAnnotation(env, expr.e_anno_only.ident) == .field_names_iter;
 }
 
 /// Return the compiler-owned iterator role assigned to a Builtin definition.
 pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
-    const env = module.moduleEnvConst();
-    if (env.module_role != .builtin) return null;
-    const def = module.def(def_idx);
-    if (std.meta.activeTag(def.pattern.data) != .assign) return null;
-    const ident = def.pattern.data.assign.ident;
-    const text = module.getIdent(ident);
-
-    return iterator_procedure_by_name.get(text);
+    return iteratorProcedureForEnvDef(module.moduleEnvConst(), def_idx);
 }
 
 /// Public `MethodKey` declaration.

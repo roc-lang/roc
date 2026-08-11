@@ -126,7 +126,7 @@ pub const Constants = struct {
     /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
     /// 52: Checked iterator procedure identity includes List.iter_rev.
     /// 53: Reserved; unused by any released cache format.
-    /// 54: Checked iterator identity includes the numeric to/until ranges.
+    /// 54: Checked iterator identity includes numeric to/until and F32/F64 ranges.
     /// 55: Numeric to/until iterator representations have producer-specific
     ///     identities distinct from the range helpers they do not delegate to.
     pub const CACHE_VERSION = 55;

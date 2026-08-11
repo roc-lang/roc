@@ -4,7 +4,6 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 const hoist_roots = @import("../hoist_roots.zig");
-const static_dispatch = @import("../static_dispatch_registry.zig");
 
 test "hoist roots selected for referenced closed local binding chain" {
     var test_env = try TestEnv.init("Test",
@@ -212,16 +211,6 @@ test "iterator producer calls leave their closed inputs available for hoisting" 
 
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_list));
-    for (test_env.checker.selectedHoistedRoots()) |root| {
-        const method_name = switch (test_env.module_env.store.getExpr(root.expr)) {
-            .e_method_call => |call| call.method_name,
-            .e_dispatch_call => |call| call.method_name,
-            else => continue,
-        };
-        try std.testing.expect(!static_dispatch.methodNamePreservesIteratorSourceInput(
-            test_env.module_env.getIdent(method_name),
-        ));
-    }
 }
 
 test "non-iterator methods sharing iterator producer names remain hoistable" {
@@ -256,6 +245,34 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
             ,
             .method_name = "concat",
         },
+        .{
+            .source =
+            \\Parcel := { value : U64 }.{
+            \\    iter : Parcel -> List(U64)
+            \\    iter = |box| [box.value]
+            \\}
+            \\
+            \\main = |runtime| {
+            \\    values = Parcel.{ value: 1 }.iter()
+            \\    if runtime == 0 { List.len(values) } else { runtime }
+            \\}
+            ,
+            .method_name = "iter",
+        },
+        .{
+            .source =
+            \\Parcel := { value : U64 }.{
+            \\    iter_rev : Parcel -> List(U64)
+            \\    iter_rev = |box| [box.value]
+            \\}
+            \\
+            \\main = |runtime| {
+            \\    values = Parcel.{ value: 1 }.iter_rev()
+            \\    if runtime == 0 { List.len(values) } else { runtime }
+            \\}
+            ,
+            .method_name = "iter_rev",
+        },
     };
 
     for (cases) |case| {
@@ -277,13 +294,6 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
             ),
             else => try std.testing.expect(false),
         }
-    }
-
-    for ([_][]const u8{
-        "append",     "map",        "concat", "single", "keep_if", "drop_if",
-        "take_first", "drop_first", "custom", "to",     "until",
-    }) |method_name| {
-        try std.testing.expect(!static_dispatch.methodNamePreservesIteratorSourceInput(method_name));
     }
 }
 

@@ -447,7 +447,7 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
-test "Monotype iterator result completion stays out of relation replay and reindexes completed requests" {
+test "Monotype iterator result completion stays out of relation replay and retains public request lookups" {
     const lower_source = @embedFile("monotype/lower.zig");
     const dispatch_result = sourceSliceBetween(
         lower_source,
@@ -463,8 +463,15 @@ test "Monotype iterator result completion stays out of relation replay and reind
         "fn constUseMonoType(",
     );
     try expectContains(completion, "try registerTemplateSpecInterfaceLookups(");
-    try expectContains(completion, "unregisterTemplateSpecLookups(");
     try expectContains(completion, "completed_source.evidence_digest.bytes");
+    try expectNotContains(completion, "unregisterTemplateSpec");
+
+    const template_spec = sourceSliceBetween(
+        lower_source,
+        "const DraftTemplateSpec = struct",
+        "const DraftConstUseProvenance",
+    );
+    try expectContains(template_spec, "lookup_request_fn_node: ?NodeId");
 }
 
 test "Monotype direct uninhabited calls lower argument through graph cell" {
@@ -711,7 +718,6 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
         try expectContains(lookup_source, "classMemberIterator(interface_node)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
-        try expectContains(lookup_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
         try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
@@ -721,6 +727,8 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    try expectContains(template_source, "draftTemplateSpecLookupRequestNode(spec)");
+    try expectContains(nested_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
     const interface_registration = sourceSliceBetween(
         lower_source,
         "fn updateTemplateSpecInterfaceLookups(",
