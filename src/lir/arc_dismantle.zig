@@ -215,6 +215,9 @@ const Analysis = struct {
     fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_ and local_layout.tag != .tag_union) return false;
+        if (local_layout.tag == .tag_union and
+            @import("builtin").os.tag != .freestanding and
+            std.c.getenv("ROC_NO_UNION_DISMANTLE") != null) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[@intFromEnum(local)]) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
@@ -1009,6 +1012,17 @@ pub fn compute(
                 switch (store.getCFStmt(cursor)) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .join => |stmt| {
+                        if (is_union) {
+                            // Tag-union takes stay region-local: a join
+                            // declared inside the region means reads or
+                            // deaths can sit in its body, where the variant
+                            // knowledge that justifies the residual dispatch
+                            // no longer accompanies every walk of the
+                            // emitted code. Such containers keep their whole
+                            // release; cross-join takes are future work.
+                            poison = ~@as(u64, 0);
+                            break :flow;
+                        }
                         try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },

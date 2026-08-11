@@ -528,6 +528,15 @@ pub fn certifyStoreOrPanic(
                     extra_locals[index] = link.origin;
                 }
                 writeFailureContext(&context, store, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                if (@import("builtin").os.tag != .freestanding and std.c.getenv("ROC_ARC_CERTIFY_DUMP") != null) {
+                    const debug_print = @import("debug_print.zig");
+                    var dump_buffer = std.ArrayList(u8).empty;
+                    defer dump_buffer.deinit(allocator);
+                    var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &dump_buffer);
+                    if (debug_print.writeProc(allocator, store, layouts, proc_id, &aw.writer)) |_| {
+                        std.debug.print("\n===CERTIFY-DUMP proc {d}===\n{s}\n===END===\n", .{ @intFromEnum(proc_id), aw.writer.buffered() });
+                    } else |_| {}
+                }
             }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
@@ -929,7 +938,10 @@ const State = struct {
     /// Variants (by index) a tag-union value cannot hold on this path,
     /// refined by payload reads and by switches on its own discriminant. A
     /// path that excludes every variant of a live container is infeasible
-    /// and certifies vacuously.
+    /// and certifies vacuously. Deliberately not carried across join
+    /// quotients: a residual-release switch reached past a join recovers
+    /// the variant from the container's claims instead, so exclusions never
+    /// split or refine join groups.
     variant_excluded: std.AutoHashMapUnmanaged(ValueId, u64),
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
@@ -1108,10 +1120,6 @@ const LocalSummary = struct {
     /// Field index of the read, valid with `payload_source`: a struct field
     /// index or a tag-union claim-encoding bit.
     payload_field: u16 = 0,
-    /// For owned locals: variants (by index) the paths reaching this
-    /// summary have excluded for the value, via switches on its own
-    /// discriminant or reads of one variant's payload.
-    variant_excluded: u64 = 0,
     /// For borrowed locals that are tag-union payload views: dense position
     /// of the union container local, or `no_dense`.
     view_container: u32 = no_dense,
@@ -1121,6 +1129,8 @@ const LocalSummary = struct {
 /// Pair-map marker for a (container, discriminant) witnessed with two
 /// different variant indexes; such a pair proves nothing.
 const ambiguous_variant: u16 = std.math.maxInt(u16);
+
+const VariantDiscPair = struct { disc: u16, variant: u16 };
 
 fn variantPairKey(container: LIR.LocalId, tag_discriminant: u16) u64 {
     return (@as(u64, @intFromEnum(container)) << 16) | tag_discriminant;
@@ -1277,6 +1287,10 @@ const Certifier = struct {
     /// discriminant) -> variant pairs the proc's payload reads witness.
     disc_sources: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId) = .empty,
     variant_pairs: std.AutoHashMapUnmanaged(u64, u16) = .empty,
+    /// (discriminant, variant) pairs grouped per container local, so the
+    /// per-arm exclusion math touches one container's few pairs instead of
+    /// scanning the proc's whole pair table.
+    container_pairs: std.AutoHashMapUnmanaged(LIR.LocalId, std.ArrayList(VariantDiscPair)) = .empty,
     /// Set when the current path proved itself infeasible (a live container
     /// excluded every variant); the segment walk ends vacuously.
     path_infeasible: bool = false,
@@ -1301,6 +1315,14 @@ const Certifier = struct {
         self.value_walk_scratch.deinit(self.allocator);
         self.disc_sources.deinit(self.allocator);
         self.variant_pairs.deinit(self.allocator);
+        self.clearContainerPairs();
+        self.container_pairs.deinit(self.allocator);
+    }
+
+    fn clearContainerPairs(self: *Certifier) void {
+        var it = self.container_pairs.valueIterator();
+        while (it.next()) |list| list.deinit(self.allocator);
+        self.container_pairs.clearRetainingCapacity();
     }
 
     fn clearRecords(self: *Certifier) void {
@@ -1591,8 +1613,12 @@ const Certifier = struct {
     fn checkLeaks(self: *Certifier, state: *State) CertifyError!void {
         try self.settleNegativeClaims(state);
 
+        // Claims exist only while a dismantle is in flight, so the per-value
+        // map probe collapses to one emptiness check on the vast majority of
+        // terminals.
+        const any_claims = state.claims.count() != 0;
         for (state.balance.items, 0..) |units, value_index| {
-            const claims = state.claimsOf(@intCast(value_index));
+            const claims = if (any_claims) state.claimsOf(@intCast(value_index)) else 0;
             if (claims != 0) {
                 // A dismantled value's own unit must still be in hand, and
                 // every refcounted field's stored unit must have been spent
@@ -1645,6 +1671,7 @@ const Certifier = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
         }
 
+        const any_claims = state.claims.count() != 0;
         for (0..self.proc_locals.items.len) |dense| {
             var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0 };
             const value = state.valueAtDense(dense);
@@ -1661,8 +1688,13 @@ const Certifier = struct {
                             .condition = @intFromEnum(condition.local),
                             .condition_mask = condition.mask,
                         };
+                    } else if (any_claims and self.claimsSpendUnit(state, value)) {
+                        // Fully dismantled: the unit is spent and nothing may
+                        // consume, release, or borrow the value again, so it
+                        // summarizes as unbound—the walks either side of its
+                        // death re-converge instead of forking forever.
                     } else {
-                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .variant_excluded = state.variantExcludedOf(value) };
+                        summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0, .claims = if (any_claims) state.claimsOf(value) else 0 };
                     }
                 } else if (try self.valueIsLive(state, value)) {
                     summary = .{
@@ -1810,7 +1842,6 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.claims));
             hasher.update(std.mem.asBytes(&entry.payload_source));
             hasher.update(std.mem.asBytes(&entry.payload_field));
-            hasher.update(std.mem.asBytes(&entry.variant_excluded));
             hasher.update(std.mem.asBytes(&entry.view_container));
             hasher.update(std.mem.asBytes(&entry.view_variant));
         }
@@ -1830,7 +1861,6 @@ const Certifier = struct {
             const value = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (entry.claims != 0) try state.setClaims(value, entry.claims);
-            if (entry.variant_excluded != 0) try state.setVariantExcluded(value, entry.variant_excluded);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .conditional_owned or entry.repr != dense) continue;
@@ -1888,13 +1918,27 @@ const Certifier = struct {
                 }
             }
             // Restore a payload view's union container the same way, so
-            // field reads after the join still claim through it.
+            // field reads after the join still claim through it. Restoring
+            // provenance also re-establishes the variant the path observed:
+            // summaries deliberately do not carry exclusions, so the join
+            // entry reconstructs them from the reads that crossed.
             if (entry.view_container != no_dense and entry.view_container < self.proc_locals.items.len) {
                 const container = state.valueAtDense(entry.view_container);
                 if (container != no_value) {
                     const info = &self.values.items[value];
                     info.view_container = container;
                     info.view_variant = entry.view_variant;
+                    try self.observeVariant(&state, container, entry.view_variant);
+                }
+            }
+            if (entry.payload_source != no_dense and entry.payload_source < self.proc_locals.items.len) {
+                const container = state.valueAtDense(entry.payload_source);
+                if (container != no_value) {
+                    if (self.unionEncodingOfValue(container)) |encoding| {
+                        if (encoding.variantOfClaims(@as(u64, 1) << @intCast(entry.payload_field))) |variant| {
+                            try self.observeVariant(&state, container, variant);
+                        }
+                    }
                 }
             }
         }
@@ -1974,7 +2018,7 @@ const Certifier = struct {
                 .unbound => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
-                .owned => if (ga.claims != sb.claims or ga.variant_excluded != sb.variant_excluded) return false,
+                .owned => if (ga.claims != sb.claims) return false,
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
                 .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs) or
                     ga.payload_source != sb.payload_source or
@@ -3033,6 +3077,7 @@ const Certifier = struct {
         }
 
         // Build the restricted summary.
+        const any_claims = state.claims.count() != 0;
         self.repr_scratch.clearRetainingCapacity();
         self.summary_scratch.clearRetainingCapacity();
         try self.summary_scratch.ensureTotalCapacity(self.allocator, self.proc_locals.items.len);
@@ -3059,7 +3104,15 @@ const Certifier = struct {
             const container = self.values.items[value].payload_source;
             if (container == no_value) continue;
             if (state.balanceOf(container) < 1) continue;
-            if (self.repr_scratch.contains(container)) continue;
+            // Once a dismantle is in flight (any claim made), every crossing
+            // unit-less field read of the container is a taker: borrows of a
+            // container whose takes ran are rejected by the analysis, so
+            // settling now cannot misclassify one. This makes both sides of
+            // a death point summarize identically by the next quotient
+            // instead of splitting join groups until the claims complete. A
+            // container with no claims yet only settles when it stays
+            // behind, where the claim could otherwise never land.
+            if (state.claimsOf(container) == 0 and self.repr_scratch.contains(container)) continue;
             if (try self.tryClaim(state, value)) {
                 try state.addBalance(value, 1);
             }
@@ -3094,8 +3147,11 @@ const Certifier = struct {
                                     .condition = @intFromEnum(condition.local),
                                     .condition_mask = condition.mask,
                                 };
+                            } else if (any_claims and self.claimsSpendUnit(state, value)) {
+                                // Fully dismantled: spent, untouchable, and
+                                // deliberately summarized unbound.
                             } else {
-                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = state.claimsOf(value), .variant_excluded = state.variantExcludedOf(value) };
+                                summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = if (any_claims) state.claimsOf(value) else 0 };
                             }
                         } else if (try self.valueIsLive(state, value)) {
                             summary = .{
@@ -3133,8 +3189,8 @@ const Certifier = struct {
                 self.diag.context_proc = self.current_proc;
                 self.diag.context_local = origin;
                 return self.fail(
-                    "ownership unit of value originating at local {d} not carried into join {d} (balance={d} claims=0x{x} excluded=0x{x})",
-                    .{ @intFromEnum(origin), @intFromEnum(join_id), units, state.claimsOf(@intCast(value_index)), state.variantExcludedOf(@intCast(value_index)) },
+                    "ownership unit of value originating at local {d} not carried into join {d}",
+                    .{ @intFromEnum(origin), @intFromEnum(join_id) },
                 );
             }
         }
@@ -3151,6 +3207,7 @@ const Certifier = struct {
     fn collectVariantFacts(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
         self.disc_sources.clearRetainingCapacity();
         self.variant_pairs.clearRetainingCapacity();
+        self.clearContainerPairs();
 
         var def_counts = std.AutoHashMapUnmanaged(LIR.LocalId, u8).empty;
         defer def_counts.deinit(self.allocator);
@@ -3270,6 +3327,17 @@ const Certifier = struct {
             const root = resolver.root(read.source) orelse continue;
             try self.disc_sources.put(self.allocator, read.target, root);
         }
+
+        var pair_it = self.variant_pairs.iterator();
+        while (pair_it.next()) |entry| {
+            const variant = entry.value_ptr.*;
+            if (variant == ambiguous_variant or variant >= 64) continue;
+            const container: LIR.LocalId = @enumFromInt(@as(u32, @intCast(entry.key_ptr.* >> 16)));
+            const disc: u16 = @truncate(entry.key_ptr.*);
+            const slot = try self.container_pairs.getOrPut(self.allocator, container);
+            if (!slot.found_existing) slot.value_ptr.* = .empty;
+            try slot.value_ptr.append(self.allocator, .{ .disc = disc, .variant = variant });
+        }
     }
 
     fn noteProcLocal(self: *Certifier, local: LIR.LocalId) Allocator.Error!void {
@@ -3361,6 +3429,14 @@ const Certifier = struct {
         group.queued = false;
         var body_state = try self.stateFromSummary(group.summary);
         errdefer body_state.deinit();
+        if (self.path_infeasible) {
+            // Rebuilding the entry state proved it impossible (its restored
+            // reads exclude every variant of a live container); the body
+            // certifies vacuously under this group.
+            self.path_infeasible = false;
+            body_state.deinit();
+            return;
+        }
         try work.append(self.allocator, .{ .segment = .{
             .cursor = record.body,
             .state = body_state,
@@ -3852,10 +3928,23 @@ const Certifier = struct {
         const variant_count = self.layouts.getTagUnionInfo(origin_layout).variants.len;
         if (variant_count == 0 or variant_count > 64) return null;
         const all_mask: u64 = if (variant_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(variant_count)) - 1;
+        // Claims already made on the container pin its variant—takes of one
+        // variant's payload only run while the container holds it—and
+        // claims cross join quotients, so this recovers the exclusion a
+        // summary deliberately does not carry.
+        var excluded = state.variantExcludedOf(container) & all_mask;
+        const claims = state.claimsOf(container);
+        if (claims != 0) {
+            if (arc_takes.unionClaimEncoding(self.layouts, origin_layout)) |encoding| {
+                if (encoding.variantOfClaims(claims)) |variant| {
+                    if (variant < 64) excluded |= all_mask & ~(@as(u64, 1) << @intCast(variant));
+                }
+            }
+        }
         return .{
             .container = container,
             .container_local = container_local,
-            .excluded = state.variantExcludedOf(container) & all_mask,
+            .excluded = excluded,
             .all_mask = all_mask,
         };
     }
@@ -3864,19 +3953,14 @@ const Certifier = struct {
     /// the value excludes every other variant; otherwise each witnessed pair
     /// with a different discriminant excludes its own variant.
     fn armExclusion(self: *Certifier, part: DiscPartition, case_value: u64) u64 {
+        const pairs = self.container_pairs.get(part.container_local) orelse return 0;
         var excluded: u64 = 0;
         var positive: ?u16 = null;
-        var it = self.variant_pairs.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if ((key >> 16) != @intFromEnum(part.container_local)) continue;
-            const variant = entry.value_ptr.*;
-            if (variant == ambiguous_variant or variant >= 64) continue;
-            const disc: u16 = @truncate(key);
-            if (disc == case_value) {
-                positive = variant;
+        for (pairs.items) |pair| {
+            if (pair.disc == case_value) {
+                positive = pair.variant;
             } else {
-                excluded |= @as(u64, 1) << @intCast(variant);
+                excluded |= @as(u64, 1) << @intCast(pair.variant);
             }
         }
         if (positive) |variant| return part.all_mask & ~(@as(u64, 1) << @intCast(variant));
@@ -3886,22 +3970,17 @@ const Certifier = struct {
     /// Variants the default arm excludes: each witnessed pair whose
     /// discriminant is a listed case.
     fn defaultExclusion(self: *Certifier, part: DiscPartition, branches: anytype) u64 {
+        const pairs = self.container_pairs.get(part.container_local) orelse return 0;
         var excluded: u64 = 0;
-        var it = self.variant_pairs.iterator();
-        while (it.next()) |entry| {
-            const key = entry.key_ptr.*;
-            if ((key >> 16) != @intFromEnum(part.container_local)) continue;
-            const variant = entry.value_ptr.*;
-            if (variant == ambiguous_variant or variant >= 64) continue;
-            const disc: u16 = @truncate(key);
+        for (pairs.items) |pair| {
             var listed = false;
             for (0..GuardedList.borrowLen(branches)) |i| {
-                if (GuardedList.at(branches, i).value == disc) {
+                if (GuardedList.at(branches, i).value == pair.disc) {
                     listed = true;
                     break;
                 }
             }
-            if (listed) excluded |= @as(u64, 1) << @intCast(variant);
+            if (listed) excluded |= @as(u64, 1) << @intCast(pair.variant);
         }
         return excluded;
     }

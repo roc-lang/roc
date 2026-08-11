@@ -7913,3 +7913,4 @@ test "SCRATCH union takes with early error exit in wide loop" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 }
+

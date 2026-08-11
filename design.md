@@ -6044,6 +6044,17 @@ non-struct payload read is itself the read of the variant's single field. A
 discriminant read is no use at all beyond remembering its target: the tag
 word is disjoint from every stored unit, so it needs no ordering with takes.
 
+Tag-union takes stay region-local: a candidate whose region declares a
+join keeps its whole release. A join declared between the definition and
+the exits means reads or deaths can sit in its body, where walks of the
+emitted residual dispatch arrive without the variant knowledge that
+justifies skipping its unmatched arms—the certifier would face
+runtime-infeasible arm states it cannot prove vacuous without carrying
+exclusions across every quotient, which multiplies join groups on large
+specialized procedures. Cross-join takes are future work; the region-local
+shape already covers the motivating pattern, a checked call's payload
+extracted and rebound before the next iteration.
+
 Variants make the exit-agreement rule path-sensitive where structs need none
 of it: a take of one variant's field lives inside that variant's match arm,
 and the exits reached through *other* arms must owe nothing for it. The
