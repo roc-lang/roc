@@ -19147,175 +19147,147 @@ const BodyContext = struct {
         };
     }
 
-    /// Build an exact iterator procedure request entirely in the active
-    /// instantiation graph. No durable Monotype TypeId is created until the
-    /// graph has received all evidence and is sealed.
-    fn generatedIteratorFunctionNode(
+    /// Produce the exact result node of an iterator procedure from its
+    /// completed immediate operand edges. Call planning does not need to wrap
+    /// those edges in a temporary function node merely to reach this result.
+    fn generatedIteratorResultNode(
         self: *BodyContext,
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
-        request_fn_node: NodeId,
+        request_args: []const NodeId,
+        request_ret: NodeId,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
-        const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (public_fn.args.len != request_fn.args.len) {
+        if (public_fn.args.len != request_args.len) {
             Common.invariant("iterator public/request function arity differed");
         }
         switch (procedure) {
             .iter_from_step => {
-                const produced = try self.generatedIteratorNode(
-                    request_fn.ret,
-                    try self.generatedIteratorItemNode(request_fn.ret),
+                return try self.generatedIteratorNode(
+                    request_ret,
+                    try self.generatedIteratorItemNode(request_ret),
                 );
-                return try self.generatedIteratorConstructorFunctionNode(produced);
             },
-            .range_done => return try self.graphFunctionNode(
-                request_fn.args,
-                try self.generatedIteratorNode(
-                    request_fn.ret,
-                    try self.generatedIteratorItemNode(request_fn.ret),
-                ),
+            .range_done => return try self.generatedIteratorNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_ret),
             ),
             .iter_iter => {
-                if (request_fn.args.len != 1) {
+                if (request_args.len != 1) {
                     Common.invariant("Iter.iter reached Monotype with an unexpected arity");
                 }
-                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
-                    return try self.graphFunctionNode(&.{request_fn.args[0]}, request_fn.args[0]);
+                if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
+                    return request_args[0];
                 }
             },
             .iter_next => {
-                if (request_fn.args.len != 1) {
+                if (request_args.len != 1) {
                     Common.invariant("Iter.next reached Monotype with an unexpected arity");
                 }
-                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
-                    return try self.graphFunctionNode(
-                        &.{request_fn.args[0]},
-                        try self.generatedIteratorStepReturnNode(request_fn.args[0]),
-                    );
+                if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
+                    return try self.generatedIteratorStepReturnNode(request_args[0]);
                 }
             },
             .iter_custom => {
-                if (request_fn.args.len != 3) {
+                if (request_args.len != 3) {
                     Common.invariant("Iter.custom reached Monotype with an unexpected arity");
                 }
-                const advance = try self.graph.functionNodes(request_fn.args[2]);
+                const advance = try self.graph.functionNodes(request_args[2]);
                 const advance_result = try self.graphTryPayloads(advance.ret);
                 const ok_items = try self.graph.tupleItemNodes(advance_result.ok);
                 if (ok_items.len != 2) {
                     Common.invariant("Iter.custom advance Ok payload was not an item/state pair");
                 }
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(
-                        request_fn.ret,
-                        ok_items[0],
-                    ),
+                return try self.generatedIteratorNode(
+                    request_ret,
+                    ok_items[0],
                 );
             },
             .list_iter => {
-                if (request_fn.args.len != 1) {
+                if (request_args.len != 1) {
                     Common.invariant("List.iter reached Monotype with an unexpected arity");
                 }
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(
-                        public_fn.ret,
-                        try self.graph.listElementNode(request_fn.args[0]),
-                    ),
+                return try self.generatedIteratorNode(
+                    public_fn.ret,
+                    try self.graph.listElementNode(request_args[0]),
                 );
             },
             .str_iter_utf8 => {
-                if (request_fn.args.len != 1) {
+                if (request_args.len != 1) {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
                 }
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(
-                        request_fn.ret,
-                        try self.generatedIteratorItemNode(public_fn.ret),
-                    ),
+                return try self.generatedIteratorNode(
+                    request_ret,
+                    try self.generatedIteratorItemNode(public_fn.ret),
                 );
             },
             .iter_single => {
-                if (request_fn.args.len != 1) {
+                if (request_args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(
-                        request_fn.ret,
-                        request_fn.args[0],
-                    ),
+                return try self.generatedIteratorNode(
+                    request_ret,
+                    request_args[0],
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(request_fn.ret, request_fn.args[0]),
-                );
+                return try self.generatedIteratorNode(request_ret, request_args[0]);
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(request_fn.ret, request_fn.args[0]),
-                );
+                return try self.generatedIteratorNode(request_ret, request_args[0]);
             },
             .iter_map => {
-                if (request_fn.args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
-                const transform = try self.graph.functionNodes(request_fn.args[1]);
-                return try self.generatedIteratorAdapterFunctionNode(request_fn.ret, transform.ret, request_fn.args);
+                if (request_args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
+                const transform = try self.graph.functionNodes(request_args[1]);
+                return try self.generatedIteratorAdapterResultNode(request_ret, transform.ret, request_args);
             },
-            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(
-                request_fn.ret,
-                try self.generatedIteratorItemNode(request_fn.args[0]),
-                request_fn.args,
+            .iter_keep_if => return try self.generatedIteratorAdapterResultNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_args[0]),
+                request_args,
             ),
-            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(
-                request_fn.ret,
-                try self.generatedIteratorItemNode(request_fn.args[0]),
-                request_fn.args,
+            .iter_drop_if => return try self.generatedIteratorAdapterResultNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_args[0]),
+                request_args,
             ),
-            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(
-                request_fn.ret,
-                try self.generatedIteratorItemNode(request_fn.args[0]),
-                request_fn.args,
+            .iter_take_first => return try self.generatedIteratorAdapterResultNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_args[0]),
+                request_args,
             ),
-            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(
-                request_fn.ret,
-                try self.generatedIteratorItemNode(request_fn.args[0]),
-                request_fn.args,
+            .iter_drop_first => return try self.generatedIteratorAdapterResultNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_args[0]),
+                request_args,
             ),
             .iter_concat => {
-                if (request_fn.args.len != 2) {
+                if (request_args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
-                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
-                    self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
+                if (self.isGeneratedIteratorEvidenceNode(request_args[0]) or
+                    self.isGeneratedIteratorEvidenceNode(request_args[1]))
                 {
-                    const source = if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))
-                        request_fn.args[0]
+                    const source = if (self.isGeneratedIteratorEvidenceNode(request_args[0]))
+                        request_args[0]
                     else
-                        request_fn.args[1];
-                    return try self.graphFunctionNode(
-                        request_fn.args,
-                        try self.generatedIteratorNode(
-                            request_fn.ret,
-                            try self.generatedIteratorItemNode(source),
-                        ),
+                        request_args[1];
+                    return try self.generatedIteratorNode(
+                        request_ret,
+                        try self.generatedIteratorItemNode(source),
                     );
                 }
             },
-            .iter_append => return try self.generatedIteratorAdapterFunctionNode(
-                request_fn.ret,
-                try self.generatedIteratorItemNode(request_fn.args[0]),
-                request_fn.args,
+            .iter_append => return try self.generatedIteratorAdapterResultNode(
+                request_ret,
+                try self.generatedIteratorItemNode(request_args[0]),
+                request_args,
             ),
         }
         return null;
     }
 
-    fn generatedIteratorAdapterFunctionNode(
+    fn generatedIteratorAdapterResultNode(
         self: *BodyContext,
         public_ret: NodeId,
         item_node: NodeId,
@@ -19325,10 +19297,7 @@ const BodyContext = struct {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
         if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
-        return try self.graphFunctionNode(
-            args,
-            try self.generatedIteratorNode(public_ret, item_node),
-        );
+        return try self.generatedIteratorNode(public_ret, item_node);
     }
 
     fn generatedIteratorItemNode(self: *BodyContext, iterator_node: NodeId) Allocator.Error!NodeId {
@@ -24926,7 +24895,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         _: checked.CheckedTypeId,
-        current_request: NodeId,
+        current_selections: []const solve.DirectRequestSelection,
         produced_args: []const NodeId,
         newly_available: []const bool,
         dispatcher_node: ?NodeId,
@@ -24936,7 +24905,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const solve.DirectRequestSelection {
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
-        try selections.appendSlice(self.allocator, self.graph.directRequestSelections(current_request));
+        try selections.appendSlice(self.allocator, current_selections);
         const target_signature = if (target_signature_node) |node|
             try self.graph.functionNodes(node)
         else
@@ -25229,7 +25198,7 @@ const BodyContext = struct {
         const selections = try self.directSelectionsForCall(
             plan,
             checked_fn_ty,
-            current_request,
+            self.graph.directRequestSelections(current_request),
             produced_args,
             newly_available,
             dispatcher_node,
@@ -25243,6 +25212,34 @@ const BodyContext = struct {
         // boundary.
         try self.graph.recordDirectRequestSelections(current_request, selections);
         return current_request;
+    }
+
+    /// Refine the flat substitutions of an unmaterialized call request. The
+    /// immutable checked function is the request's base; no function graph
+    /// node is allocated merely to carry this span between operand producers.
+    fn directCallSelectionsFromPublishedPlan(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_fn_ty: checked.CheckedTypeId,
+        current_selections: []const solve.DirectRequestSelection,
+        produced_args: []const NodeId,
+        newly_available: []const bool,
+        dispatcher_node: ?NodeId,
+        target_signature_node: ?NodeId,
+        request_ret: NodeId,
+        include_result: bool,
+    ) Allocator.Error![]const solve.DirectRequestSelection {
+        return try self.directSelectionsForCall(
+            plan,
+            checked_fn_ty,
+            current_selections,
+            produced_args,
+            newly_available,
+            dispatcher_node,
+            target_signature_node,
+            request_ret,
+            include_result,
+        );
     }
 
     /// A materialized callable owns an exact result edge even when its initial
@@ -25286,6 +25283,30 @@ const BodyContext = struct {
             self.graph.directRequestSelections(request),
         );
         return try self.instantiateProducedOccurrenceWithSelections(checked_fn.args[index], table);
+    }
+
+    fn callSelectionArgumentNode(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_fn_ty: checked.CheckedTypeId,
+        selections: []const solve.DirectRequestSelection,
+        index: usize,
+    ) Allocator.Error!NodeId {
+        const checked_fn = self.checkedFunctionType(checked_fn_ty);
+        if (index >= checked_fn.args.len) Common.invariant("call request argument index exceeded function arity");
+        const table = try self.checkedSelectionTableForCall(plan, selections);
+        return try self.instantiateProducedOccurrenceWithSelections(checked_fn.args[index], table);
+    }
+
+    fn callSelectionResultNode(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_fn_ty: checked.CheckedTypeId,
+        selections: []const solve.DirectRequestSelection,
+    ) Allocator.Error!NodeId {
+        const checked_fn = self.checkedFunctionType(checked_fn_ty);
+        const table = try self.checkedSelectionTableForCall(plan, selections);
+        return try self.instantiateProducedOccurrenceWithSelections(checked_fn.ret, table);
     }
 
     fn materializeCurrentCallRequest(
@@ -25385,7 +25406,64 @@ const BodyContext = struct {
             try self.instNode(checked_fn.ret);
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
-        self.graph.inheritFunctionResultRelation(source_request, request);
+        if (self.graph.functionResultRelation(source_request)) |relation| {
+            self.graph.registerFunctionResultRelation(request, relation);
+        }
+        try self.graph.recordDirectRequestSelections(request, selections);
+        return request;
+    }
+
+    /// Materialize one completed call request at the specialization boundary.
+    /// Operand scheduling carries only this request's immutable base and flat
+    /// selection span; this is the sole point where those pieces become a
+    /// function graph node.
+    fn materializeCallSelectionSpan(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_fn_ty: checked.CheckedTypeId,
+        checked_fn_node: NodeId,
+        selections: []const solve.DirectRequestSelection,
+        produced_args: []const NodeId,
+        available: []const bool,
+        produced_ret: ?NodeId,
+        request_ret: NodeId,
+        result_relation: solve.FunctionResultRelation,
+    ) Allocator.Error!NodeId {
+        const checked_fn = self.checkedFunctionType(checked_fn_ty);
+        if (produced_args.len != checked_fn.args.len or available.len != produced_args.len) {
+            Common.invariant("completed call edges had a different arity from the checked callable");
+        }
+        const table = try self.checkedSelectionTableForCall(plan, selections);
+        const previous_instantiation = self.instantiation;
+        const previous_selections = self.active_checked_selections;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            self.view.key.bytes,
+            .produced_occurrence,
+        );
+        self.active_checked_selections = table;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.active_checked_selections = previous_selections;
+        }
+        const args = try self.graph.arena().alloc(NodeId, checked_fn.args.len);
+        for (args, checked_fn.args, 0..) |*out, checked_arg, index| {
+            out.* = if (available[index])
+                self.graph.rootNode(produced_args[index])
+            else
+                try self.instNode(checked_arg);
+        }
+        const ret = if (produced_ret) |exact|
+            self.graph.rootNode(exact)
+        else if (result_relation == .exact_destination)
+            self.graph.rootNode(request_ret)
+        else
+            try self.instNode(checked_fn.ret);
+        const request = try self.graphFunctionNode(args, ret);
+        try self.graph.registerRequestCheckedSource(request, checked_fn_node);
+        self.graph.registerFunctionResultRelation(request, result_relation);
         try self.graph.recordDirectRequestSelections(request, selections);
         return request;
     }
@@ -25432,27 +25510,46 @@ const BodyContext = struct {
         produced_args: []const NodeId,
         available: []const bool,
     ) Allocator.Error!?NodeId {
-        if (!iteratorProducerOperandsReady(procedure, available)) return null;
-        const exact_current = try self.materializeCallRequestWithCompletedEdges(
+        const selections = (try self.applyIteratorProducerToSelectionSpan(
             plan,
+            self.graph.directRequestSelections(current_request),
+            procedure,
             checked_fn_ty,
             checked_fn_node,
-            current_request,
             produced_args,
             available,
-            null,
+        )) orelse return null;
+        try self.graph.recordDirectRequestSelections(current_request, selections);
+        return current_request;
+    }
+
+    fn applyIteratorProducerToSelectionSpan(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        current_selections: []const solve.DirectRequestSelection,
+        procedure: checked.IteratorProcedureId,
+        checked_fn_ty: checked.CheckedTypeId,
+        checked_fn_node: NodeId,
+        produced_args: []const NodeId,
+        available: []const bool,
+    ) Allocator.Error!?[]const solve.DirectRequestSelection {
+        if (!iteratorProducerOperandsReady(procedure, available)) return null;
+        const public_result = try self.callSelectionResultNode(
+            plan,
+            checked_fn_ty,
+            current_selections,
         );
-        const generated_fn = (try self.generatedIteratorFunctionNode(
+        const generated_ret = (try self.generatedIteratorResultNode(
             procedure,
             checked_fn_node,
-            exact_current,
+            produced_args,
+            public_result,
         )) orelse return null;
-        const generated_ret = (try self.graph.functionNodes(generated_fn)).ret;
         if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) return null;
 
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
-        try selections.appendSlice(self.allocator, self.graph.directRequestSelections(current_request));
+        try selections.appendSlice(self.allocator, current_selections);
         var matched = false;
         for (plan.slots) |slot| {
             if (slot.kind != .generated_nominal) continue;
@@ -25487,8 +25584,7 @@ const BodyContext = struct {
         if (!matched) {
             Common.invariant("iterator producer result had no checker-published generated-nominal slot");
         }
-        try self.graph.recordDirectRequestSelections(current_request, selections.items);
-        return current_request;
+        return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
     }
 
     fn lowerCall(self: *BodyContext, expr_id: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
@@ -30606,34 +30702,28 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, checked_args.len);
         @memset(newly_available, false);
-        const initial_request = try self.graphFunctionNode(checked_fn.args, request_ret);
-        try self.graph.registerRequestCheckedSource(initial_request, checked_fn_node);
-        self.graph.registerFunctionResultRelation(
-            initial_request,
-            if (include_result) .exact_destination else .produced,
-        );
-        var request = try call_ctx.directCallRequestFromPublishedPlan(
+        var selections: []const solve.DirectRequestSelection = &.{};
+        selections = try call_ctx.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            checked_fn_node,
-            initial_request,
+            selections,
             produced_args,
-            available,
             newly_available,
             null,
             null,
+            request_ret,
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            request = (try call_ctx.applyIteratorProducerToCallRequest(
+            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
                 plan,
+                selections,
+                procedure,
                 checked_fn_ty,
                 checked_fn_node,
-                request,
-                procedure,
                 produced_args,
                 available,
-            )) orelse request;
+            )) orelse selections;
         }
         var lowered = std.ArrayList(PreLoweredOperand).empty;
         errdefer lowered.deinit(self.allocator);
@@ -30652,10 +30742,10 @@ const BodyContext = struct {
                 if (available[index]) continue;
                 const needs_request = plan.operand_flows[index] != .produced;
                 if (needs_request and producer_remaining) continue;
-                const request_arg = try call_ctx.callRequestArgumentNode(
+                const request_arg = try call_ctx.callSelectionArgumentNode(
                     plan,
                     checked_fn_ty,
-                    request,
+                    selections,
                     index,
                 );
                 const value = if (needs_request)
@@ -30687,38 +30777,39 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published call operand dependencies had no exact source");
             }
-            request = try call_ctx.directCallRequestFromPublishedPlan(
+            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
-                checked_fn_node,
-                request,
+                selections,
                 produced_args,
-                available,
                 newly_available,
                 null,
                 null,
+                request_ret,
                 false,
             );
             if (iterator_procedure) |procedure| {
-                request = (try call_ctx.applyIteratorProducerToCallRequest(
+                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
                     plan,
+                    selections,
+                    procedure,
                     checked_fn_ty,
                     checked_fn_node,
-                    request,
-                    procedure,
                     produced_args,
                     available,
-                )) orelse request;
+                )) orelse selections;
             }
         }
-        const materialized_request = try call_ctx.materializeCallRequestWithCompletedEdges(
+        const materialized_request = try call_ctx.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
-            request,
+            selections,
             produced_args,
             available,
             null,
+            request_ret,
+            if (include_result) .exact_destination else .produced,
         );
         return .{
             .request = materialized_request,
@@ -30775,34 +30866,28 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, operands.len);
         @memset(newly_available, false);
-        const initial_request = try self.graphFunctionNode(checked_fn.args, request_ret);
-        try self.graph.registerRequestCheckedSource(initial_request, checked_fn_node);
-        self.graph.registerFunctionResultRelation(
-            initial_request,
-            if (include_result) .exact_destination else .produced,
-        );
-        var request = try call_ctx.directCallRequestFromPublishedPlan(
+        var selections: []const solve.DirectRequestSelection = &.{};
+        selections = try call_ctx.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            checked_fn_node,
-            initial_request,
+            selections,
             produced_args,
-            available,
             newly_available,
             if (dispatcher_arg_index) |index| if (index < produced_args.len and available[index]) produced_args[index] else null else type_only_dispatcher,
             target_signature_node,
+            request_ret,
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            request = (try call_ctx.applyIteratorProducerToCallRequest(
+            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
                 plan,
+                selections,
+                procedure,
                 checked_fn_ty,
                 checked_fn_node,
-                request,
-                procedure,
                 produced_args,
                 available,
-            )) orelse request;
+            )) orelse selections;
         }
         var lowered = std.ArrayList(PreLoweredOperand).empty;
         errdefer lowered.deinit(self.allocator);
@@ -30830,10 +30915,10 @@ const BodyContext = struct {
                 const request_arg = if (needs_request and target_signature != null)
                     target_signature.?.args[index]
                 else
-                    try call_ctx.callRequestArgumentNode(
+                    try call_ctx.callSelectionArgumentNode(
                         plan,
                         checked_fn_ty,
-                        request,
+                        selections,
                         index,
                     );
                 const value = if (needs_request) switch (operand) {
@@ -30868,41 +30953,42 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published dispatch operand dependencies had no exact source");
             }
-            request = try call_ctx.directCallRequestFromPublishedPlan(
+            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
-                checked_fn_node,
-                request,
+                selections,
                 produced_args,
-                available,
                 newly_available,
                 if (dispatcher_arg_index) |index|
                     if (newly_available[index]) produced_args[index] else null
                 else
                     null,
                 null,
+                request_ret,
                 false,
             );
             if (iterator_procedure) |procedure| {
-                request = (try call_ctx.applyIteratorProducerToCallRequest(
+                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
                     plan,
+                    selections,
+                    procedure,
                     checked_fn_ty,
                     checked_fn_node,
-                    request,
-                    procedure,
                     produced_args,
                     available,
-                )) orelse request;
+                )) orelse selections;
             }
         }
-        const materialized = try call_ctx.materializeCallRequestWithCompletedEdges(
+        const materialized = try call_ctx.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
-            request,
+            selections,
             produced_args,
             available,
             null,
+            request_ret,
+            if (include_result) .exact_destination else .produced,
         );
         return .{
             .request = materialized,
