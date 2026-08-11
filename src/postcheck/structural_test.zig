@@ -1021,9 +1021,20 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     );
     try expectNotContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
     try expectNotContains(inst_node, "self.graph.importMono(closed_ty)");
-    try expectContains(inst_node, "if (self.scopedNode(scoped_ty)) |existing|");
-    try expectContains(inst_node, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
-    try expectNotContains(inst_node, "self.graph.unify(placeholder");
+    try expectContains(inst_node, "if (self.scopedNodeState(scoped_ty)) |state|");
+    try expectContains(inst_node, "try self.putScopedNodeState(scoped_ty, .{ .building = null })");
+    try expectContains(inst_node, ".content => |content| try self.graph.newNode(content)");
+    try expectContains(inst_node, ".content => |content| try self.graph.completeReservedProducedNode(reserved, content)");
+    try expectNotContains(inst_node, "self.graph.unify(");
+
+    const child_context = sourceSliceBetween(
+        lower_source,
+        "fn childContextWithTypeCells(",
+        "fn enterRestoredLocalProcScope(",
+    );
+    try expectContains(child_context, "entry.value_ptr.* = .{ .building = node }");
+    try expectContains(child_context, ".{ .ready = inherited }");
+    try expectNotContains(child_context, "node_map.put(entry.key_ptr.*, entry.value_ptr.*)");
 
     const nominal_backing = sourceSliceBetween(
         lower_source,

@@ -4010,6 +4010,17 @@ checked source identities, method scopes, or evidence can never share an entry.
 Work is therefore proportional to unique explicit substitutions and unique
 specializations, not to the size of matching checked and produced type trees.
 
+Checked-node construction is lazy about recursion. Entering a checked type
+records an unfinished scope entry but does not allocate a graph node. After its
+immediate children have produced their exact nodes, an acyclic parent is
+interned directly and the scope entry becomes that canonical node. Only a
+recursive backedge turns the unfinished entry into a reserved forward node;
+the original traversal later fills that same reservation. Consequently an
+acyclic checked occurrence may not allocate a placeholder and redirect it to a
+second canonical root. A child body context that must inherit an unfinished
+parent entry first gives that entry a real forward node and inherits the node,
+never the private unfinished marker.
+
 Those constraints are not a fallback mechanism and are not best-effort
 inference after checking. They are the Monotype-stage representation of checked
 data that are already present in the checked module. If a required relation is

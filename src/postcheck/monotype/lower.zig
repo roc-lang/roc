@@ -11883,6 +11883,15 @@ const InstantiationAuthority = enum {
     produced_occurrence,
 };
 
+/// One checked identity's construction state inside an exact instantiation
+/// scope. Acyclic nodes remain `.building = null` until all of their children
+/// have been produced, then enter the graph through ordinary canonical
+/// interning. Only a recursive backedge allocates a forward cell.
+const InstantiationNodeState = union(enum) {
+    building: ?NodeId,
+    ready: NodeId,
+};
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -11892,12 +11901,12 @@ const TypeInstantiationContext = struct {
     id: InstantiationScopeId,
     module_bytes: [32]u8,
     authority: InstantiationAuthority,
-    node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    node_map: collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState),
     /// Exact generated nominal selected for a checked-public node by this
     /// procedure's complete function request.
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
-    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+    decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState)) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -11910,7 +11919,7 @@ const TypeInstantiationContext = struct {
             .id = id,
             .module_bytes = module_bytes,
             .authority = authority,
-            .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .node_map = collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState).init(allocator),
         };
     }
 
@@ -14038,7 +14047,17 @@ const BodyContext = struct {
         if (copy_type_cells) {
             var node_iter = self.instantiation.node_map.iterator();
             while (node_iter.next()) |entry| {
-                try child.instantiation.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
+                const inherited = switch (entry.value_ptr.*) {
+                    .ready => |node| node,
+                    .building => |maybe_reserved| if (maybe_reserved) |reserved|
+                        reserved
+                    else reserved: {
+                        const node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                        entry.value_ptr.* = .{ .building = node };
+                        break :reserved node;
+                    },
+                };
+                try child.instantiation.node_map.put(entry.key_ptr.*, .{ .ready = inherited });
             }
         }
 
@@ -15165,8 +15184,12 @@ const BodyContext = struct {
         if (self.active_checked_selections) |selections| {
             if (selections.get(.{ .module_bytes = self.view.key.bytes, .checked = checked_ty })) |selection| {
                 const produced = self.graph.rootNode(selection);
-                if (self.scopedNode(scoped_ty)) |existing| {
+                if (self.scopedNodeState(scoped_ty)) |state| {
                     self.builder.countBodyDiagnostic("checked_node_cache_hits");
+                    const existing = switch (state.*) {
+                        .ready => |node| node,
+                        .building => Common.invariant("exact selection arrived while the same checked identity was being constructed without that selection"),
+                    };
                     if (self.instantiation.authority == .produced_occurrence and
                         !self.graph.sameClass(existing, produced))
                     {
@@ -15186,32 +15209,49 @@ const BodyContext = struct {
                 return produced;
             }
         }
-        if (self.scopedNode(scoped_ty)) |existing| {
+        if (self.scopedNodeState(scoped_ty)) |state| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
-            return existing;
+            return switch (state.*) {
+                .ready => |node| node,
+                .building => |maybe_reserved| if (maybe_reserved) |reserved|
+                    reserved
+                else blk: {
+                    const reserved = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                    state.* = .{ .building = reserved };
+                    break :blk reserved;
+                },
+            };
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
-        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.putScopedNode(scoped_ty, placeholder);
-        if (self.instantiation.authority == .checked_base) {
+        try self.putScopedNodeState(scoped_ty, .{ .building = null });
+        errdefer self.removeScopedNodeState(scoped_ty);
+        const build = if (self.instantiation.authority == .checked_base) build: {
             self.graph.beginCheckedBaseConstruction();
             defer self.graph.endCheckedBaseConstruction();
-            switch (try self.instNodeBuild(checked_ty)) {
-                .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
-                .existing => |existing| if (self.graph.nodeIsCheckedBase(existing)) {
-                    try self.graph.attachCheckedBaseAlias(placeholder, existing);
-                } else {
-                    try self.graph.completeProducedSelection(placeholder, existing);
-                },
+            break :build try self.instNodeBuild(checked_ty);
+        } else try self.instNodeBuild(checked_ty);
+
+        const state = self.scopedNodeState(scoped_ty) orelse
+            Common.invariant("checked node construction lost its scoped state");
+        const maybe_reserved = switch (state.*) {
+            .building => |reserved| reserved,
+            .ready => Common.invariant("checked node construction was completed by another producer"),
+        };
+        const completed = if (maybe_reserved) |reserved| completed: {
+            switch (build) {
+                .content => |content| try self.graph.completeReservedProducedNode(reserved, content),
+                .existing => |existing| try self.graph.completeProducedSelection(reserved, existing),
             }
-            self.graph.markCheckedBase(placeholder);
-        } else {
-            switch (try self.instNodeBuild(checked_ty)) {
-                .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
-                .existing => |existing| try self.graph.completeProducedSelection(placeholder, existing),
-            }
+            break :completed self.graph.rootNode(reserved);
+        } else switch (build) {
+            .content => |content| try self.graph.newNode(content),
+            .existing => |existing| self.graph.rootNode(existing),
+        };
+        state.* = .{ .ready = completed };
+        if (self.instantiation.authority == .checked_base) {
+            self.graph.markCheckedBase(completed);
         }
-        return placeholder;
+        return completed;
     }
 
     /// Return the stable runtime cell for an expression occurrence. The cell
@@ -15240,22 +15280,38 @@ const BodyContext = struct {
         return try self.producedOccurrenceNode(pattern.ty);
     }
 
-    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?NodeId {
+    fn scopedNodeState(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?*InstantiationNodeState {
         var index = self.instantiation.decl_scopes.items.len;
         while (index > 0) {
             index -= 1;
-            if (self.instantiation.decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+            if (self.instantiation.decl_scopes.items[index].getPtr(checked_ty)) |state| return state;
         }
         if (self.instantiation.decl_scopes.items.len != 0) return null;
-        return self.instantiation.node_map.get(checked_ty);
+        return self.instantiation.node_map.getPtr(checked_ty);
+    }
+
+    fn putScopedNodeState(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        state: InstantiationNodeState,
+    ) Allocator.Error!void {
+        if (self.instantiation.decl_scopes.items.len != 0) {
+            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, state);
+            return;
+        }
+        try self.instantiation.node_map.put(checked_ty, state);
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        try self.putScopedNodeState(checked_ty, .{ .ready = node });
+    }
+
+    fn removeScopedNodeState(self: *BodyContext, checked_ty: checked.CheckedTypeId) void {
         if (self.instantiation.decl_scopes.items.len != 0) {
-            try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, node);
+            _ = self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].remove(checked_ty);
             return;
         }
-        try self.instantiation.node_map.put(checked_ty, node);
+        _ = self.instantiation.node_map.remove(checked_ty);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -15572,15 +15628,15 @@ const BodyContext = struct {
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
         }
-        var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
+        var scope = collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState).init(self.allocator);
         defer scope.deinit();
         for (formal_args, args) |formal, arg| {
-            try scope.put(self.scopedCheckedType(formal), arg);
+            try scope.put(self.scopedCheckedType(formal), .{ .ready = arg });
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
         const backing = self.scopedCheckedType(declaration.backing);
-        if (self.scopedNode(backing) != null) {
+        if (self.scopedNodeState(backing) != null) {
             Common.invariant("nominal declaration backing was already instantiated before its reservation");
         }
         try self.putScopedNode(backing, placeholder);
@@ -50081,9 +50137,9 @@ test "checked type instantiation scopes have exact isolated identities" {
     try std.testing.expect(first.id != second.id);
     const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
     const node: NodeId = @enumFromInt(13);
-    try first.node_map.put(checked_ty, node);
-    try std.testing.expectEqual(@as(?NodeId, node), first.node_map.get(checked_ty));
-    try std.testing.expectEqual(@as(?NodeId, null), second.node_map.get(checked_ty));
+    try first.node_map.put(checked_ty, .{ .ready = node });
+    try std.testing.expectEqual(InstantiationNodeState{ .ready = node }, first.node_map.get(checked_ty).?);
+    try std.testing.expectEqual(@as(?InstantiationNodeState, null), second.node_map.get(checked_ty));
     try std.testing.expectEqual(@as(u64, 2), diagnostics.body.instantiation_scopes_created);
 }
 
