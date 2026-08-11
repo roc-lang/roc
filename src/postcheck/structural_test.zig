@@ -1022,7 +1022,18 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectNotContains(inst_node, "self.builder.lowerType(self.view, checked_ty)");
     try expectNotContains(inst_node, "self.graph.importMono(closed_ty)");
     try expectContains(inst_node, "if (self.scopedNode(scoped_ty)) |existing|");
-    try expectContains(inst_node, "self.graph.completeProducedSelection(placeholder, built)");
+    try expectContains(inst_node, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
+    try expectNotContains(inst_node, "self.graph.unify(placeholder");
+
+    const solve_source = @embedFile("monotype/solve.zig");
+    const complete_reserved = sourceSliceBetween(
+        solve_source,
+        "pub fn completeReservedProducedNode(",
+        "pub fn addRecursiveNode(",
+    );
+    try expectContains(complete_reserved, "try self.redirectRoot(node, root, false)");
+    try expectNotContains(complete_reserved, "invalidateActiveSnapshots");
+    try expectNotContains(complete_reserved, "try self.setContent(root");
 
     const produced_occurrence = sourceSliceBetween(
         lower_source,

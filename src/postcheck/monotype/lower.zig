@@ -15196,16 +15196,20 @@ const BodyContext = struct {
         if (self.instantiation.authority == .checked_base) {
             self.graph.beginCheckedBaseConstruction();
             defer self.graph.endCheckedBaseConstruction();
-            const built = try self.instNodeContent(checked_ty);
-            if (self.graph.nodeIsCheckedBase(built)) {
-                try self.graph.attachCheckedBaseAlias(placeholder, built);
-            } else {
-                try self.graph.unify(placeholder, built);
+            switch (try self.instNodeBuild(checked_ty)) {
+                .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
+                .existing => |existing| if (self.graph.nodeIsCheckedBase(existing)) {
+                    try self.graph.attachCheckedBaseAlias(placeholder, existing);
+                } else {
+                    try self.graph.completeProducedSelection(placeholder, existing);
+                },
             }
             self.graph.markCheckedBase(placeholder);
         } else {
-            const built = try self.instNodeContent(checked_ty);
-            try self.graph.completeProducedSelection(placeholder, built);
+            switch (try self.instNodeBuild(checked_ty)) {
+                .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
+                .existing => |existing| try self.graph.completeProducedSelection(placeholder, existing),
+            }
         }
         return placeholder;
     }
@@ -15262,21 +15266,26 @@ const BodyContext = struct {
         return out;
     }
 
-    fn instNodeContent(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+    const InstNodeBuild = union(enum) {
+        content: InstNode,
+        existing: NodeId,
+    };
+
+    fn instNodeBuild(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!InstNodeBuild {
         return switch (checkedPayload(self.view, checked_ty)) {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
             .flex, .rigid => |variable| blk: {
                 const key = self.view.types.rootKey(checked_ty).bytes;
-                break :blk try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+                break :blk .{ .content = .{ .unresolved = InstVariable.checkedVariableAtKey(
                     variable.numeric_default_phase,
                     variable.row_default,
                     key,
-                ) });
+                ) } };
             },
-            .empty_record => try self.graph.newNode(.empty_record),
-            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
-            .alias => |alias| try self.graph.newNode(.{ .named = .{
+            .empty_record => .{ .content = .empty_record },
+            .empty_tag_union => .{ .content = .empty_tag_union },
+            .alias => |alias| .{ .content = .{ .named = .{
                 .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
                 .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
                 .kind = .alias,
@@ -15286,25 +15295,25 @@ const BodyContext = struct {
                     .node = try self.instNode(alias.backing),
                     .use = .inspectable,
                 },
-            } }),
-            .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
+            } } },
+            .record_unbound => |fields| .{ .content = .{ .record = .{
                 .fields = try self.instFields(fields),
                 .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-            } }),
-            .record => |record| try self.graph.newNode(.{ .record = .{
+            } } },
+            .record => |record| .{ .content = .{ .record = .{
                 .fields = try self.instFields(record.fields),
                 .ext = try self.instNode(record.ext),
-            } }),
-            .tuple => |items| try self.graph.newNode(.{ .tuple = try self.instNodeSlice(items) }),
-            .function => |function| try self.graph.newNode(.{ .func = .{
+            } } },
+            .tuple => |items| .{ .content = .{ .tuple = try self.instNodeSlice(items) } },
+            .function => |function| .{ .content = .{ .func = .{
                 .args = try self.instNodeSlice(function.args),
                 .ret = try self.instNode(function.ret),
-            } }),
-            .tag_union => |tag_union| try self.graph.newNode(.{ .tag_union = .{
+            } } },
+            .tag_union => |tag_union| .{ .content = .{ .tag_union = .{
                 .tags = try self.instTags(tag_union.tags),
                 .ext = try self.instNode(tag_union.ext),
-            } }),
-            .nominal => |nominal| try self.instNominalNode(checked_ty, nominal),
+            } } },
+            .nominal => |nominal| try self.instNominalBuild(checked_ty, nominal),
         };
     }
 
@@ -15331,22 +15340,22 @@ const BodyContext = struct {
         return out;
     }
 
-    fn instNominalNode(
+    fn instNominalBuild(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         nominal: checked.CheckedNominalType,
-    ) Allocator.Error!NodeId {
+    ) Allocator.Error!InstNodeBuild {
         switch (nominal.representation) {
             .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .primitive => |primitive| return try self.graph.newNode(.{ .primitive = primitive }),
+                .primitive => |primitive| return .{ .content = .{ .primitive = primitive } },
                 .bool_tag_union => {},
                 .list => {
                     if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                    return try self.graph.newNode(.{ .list = try self.instNode(nominal.args[0]) });
+                    return .{ .content = .{ .list = try self.instNode(nominal.args[0]) } };
                 },
                 .box => {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                    return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
+                    return .{ .content = .{ .box = try self.instNode(nominal.args[0]) } };
                 },
                 .try_nominal,
                 .iterator,
@@ -15374,7 +15383,7 @@ const BodyContext = struct {
                 args.len == 1 and sameTypeDef(def, active.public_def) and
                 self.graph.sameClass(args[0], active.item_node))
             {
-                return active.self_node;
+                return .{ .existing = active.self_node };
             }
         }
         const backing_node: ?NodeId = switch (nominal.representation) {
@@ -15385,7 +15394,7 @@ const BodyContext = struct {
             .node = node,
             .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
         } else null;
-        const public_node = try self.graph.newNode(.{ .named = .{
+        return .{ .content = .{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = def,
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
@@ -15393,8 +15402,7 @@ const BodyContext = struct {
             .args = args,
             .backing = backing,
             .declared_order = declared_order,
-        } });
-        return public_node;
+        } } };
     }
 
     /// Construct the exact generated iterator nominal directly at its checked

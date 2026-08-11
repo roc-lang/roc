@@ -1535,14 +1535,51 @@ pub const InstGraph = struct {
     pub fn completeReservedProducedNode(
         self: *InstGraph,
         reserved: NodeId,
-        produced_content: InstNode,
+        raw_content: InstNode,
     ) Allocator.Error!void {
         const root = self.find(reserved);
         const existing = self.nodes.items[@intFromEnum(root)];
         if (existing != .unresolved or existing.unresolved.origin != .placeholder) {
             Common.invariant("produced node reservation was completed more than once");
         }
-        try self.setContent(root, produced_content);
+        const completed_content = if (raw_content == .named)
+            if (try self.canonicalizeNamedArguments(raw_content.named)) |canonical|
+                InstNode{ .named = canonical }
+            else
+                raw_content
+        else
+            raw_content;
+        const canonical: ?NodeId = switch (completed_content) {
+            .primitive => |primitive| if (self.primitive_nodes[@intFromEnum(primitive)]) |node| self.find(node) else null,
+            .empty_tag_union => if (self.empty_tag_union_node) |node| self.find(node) else null,
+            .empty_record => if (self.empty_record_node) |node| self.find(node) else null,
+            .zst => if (self.zst_node) |node| self.find(node) else null,
+            .list => |element| self.existingListElement(element),
+            .box => |element| self.existingBoxElement(element),
+            .tuple => |items| self.existingTupleShape(items),
+            .record => self.existingRecordShape(completed_content),
+            .tag_union => |tag_union| self.existingTagUnionShape(tag_union),
+            .named => |named| self.existingNamedIdentity(named),
+            .redirect, .unresolved, .func, .erased => null,
+        };
+        if (canonical) |node| {
+            try self.redirectRoot(node, root, false);
+            return;
+        }
+        _ = try self.replaceContentWithoutSnapshotInvalidation(root, completed_content);
+        switch (completed_content) {
+            .primitive => |primitive| self.primitive_nodes[@intFromEnum(primitive)] = root,
+            .empty_tag_union => self.empty_tag_union_node = root,
+            .empty_record => self.empty_record_node = root,
+            .zst => self.zst_node = root,
+            .list => |element| try self.list_nodes_by_element.put(self.find(element), root),
+            .box => |element| try self.box_nodes_by_element.put(self.find(element), root),
+            .tuple => |items| try self.registerTupleShape(root, items),
+            .record => try self.registerRecordShape(root, completed_content),
+            .tag_union => |tag_union| try self.registerTagUnionShape(root, tag_union),
+            .named => |named| try self.registerNamedIdentity(root, named),
+            .redirect, .unresolved, .func, .erased => {},
+        }
     }
 
     /// Reserve a graph node before constructing content that recursively
@@ -2176,6 +2213,18 @@ pub const InstGraph = struct {
         {
             Common.invariant("exact lowering attempted to merge an immutable checked base node");
         }
+        try self.redirectRoot(winner, loser, true);
+    }
+
+    /// Redirect one reserved or related root while preserving every exact row
+    /// back-reference to its canonical target.
+    fn redirectRoot(
+        self: *InstGraph,
+        winner: NodeId,
+        loser: NodeId,
+        invalidate_snapshots: bool,
+    ) Allocator.Error!void {
+        if (winner == loser) return;
         try self.unregisterRowParent(loser);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
@@ -2189,7 +2238,7 @@ pub const InstGraph = struct {
             moved_list.deinit(self.allocator);
         }
         self.countDiagnostic("class_unions");
-        self.invalidateActiveSnapshots(winner);
+        if (invalidate_snapshots) self.invalidateActiveSnapshots(winner);
     }
 
     /// Select a named exact type over an unresolved request cell without ever

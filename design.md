@@ -2773,6 +2773,15 @@ child nodes. The checker may precompute a shared call shape because a call owns
 an explicit interface relation; it may not precompute a whole-value relation in
 case some later descendant happens to need it.
 
+Instantiating one checked occurrence reserves its dense graph `NodeId` before
+constructing children and fills that same node with the completed content. The
+reservation exists solely so a recursive child can refer to its eventual
+parent. Instantiation must not allocate a second root and then unify or redirect
+the two roots. Initial fill cannot invalidate active snapshots: unresolved
+reservations cannot be snapshotted, and every prior snapshot is independent of
+the newly filled node. If canonical interning finds an existing node, the
+reservation redirects to it while preserving row back-references.
+
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
 makes one forward pass over those slots. It must not retry unresolved slots to
