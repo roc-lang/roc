@@ -3915,8 +3915,13 @@ candidate index. A relation copied
 from another scheme is already detached from the receiver descriptor, so it
 remains explicit even when the receiver happens to share the enclosing
 boundary's rank. Every copied candidate also retains the exact structurally
-attached creation relation from which it descends, mapped through every
-intervening instantiation. This carries requirements transitively through
+attached creation relation from which it descends. An intervening
+instantiation maps that recorded origin only when it substitutes the origin
+receiver: the attached creation relation is copied exactly when its receiver
+is, so a substitution that leaves the receiver shared keeps the recorded
+origin fn var original rather than pointing it at the use's independent
+callable copy, which is never attached to the shared receiver. This carries
+requirements transitively through
 helper definitions without turning ordinary same-rank creation sites into
 schemes or reconstructing ownership from solved type shape.
 
@@ -3968,7 +3973,15 @@ value stays shared, while a receiver quantified by an enclosing scheme is
 copied. The callable root is copied even though its outer receiver keeps that
 root below generalized rank; everything below the callable root follows
 ordinary rank behavior, so its generalized argument and result variables are
-fresh per use. Each copied relation enters the instantiation ambiguity and
+fresh per use. Derived-shape validation is the one exception: it instantiates
+a method's scheme only to narrow the root copy against an expected callable
+shape, it is not a value use, and no definition boundary owns the validation
+site. A validation instantiation therefore keeps a requirement whose receiver
+it leaves shared on that receiver's original callable relation instead of
+minting a per-use copy—the original relation is already registered and its
+open literals stay protected by the scheme that owns it, while a copy's
+literals would default with no owning boundary before the shared receiver
+grounds. Each copied relation enters the instantiation ambiguity and
 compatibility worklists. A copy whose receiver is still flex stays on a
 dedicated pending index instead of the per-expression deferred queue. When a
 generalization boundary grounds such a receiver, the copied relation is

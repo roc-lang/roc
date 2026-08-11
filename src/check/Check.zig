@@ -350,6 +350,15 @@ predeclared_annotation_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
 /// this append-only pool until their caller boundary replays off-root
 /// requirements; storage is reclaimed with the checker.
 pending_predeclared_use_pairs: std.ArrayListUnmanaged(VarPair) = .empty,
+/// Handoff to the next `instantiateVarHelp` call: that instantiation validates
+/// a method's shape (derived-shape validation) rather than performing a value
+/// use. Validation only narrows the root copy against an expected callable
+/// shape, and no definition boundary owns the validation site, so a scheme
+/// requirement whose receiver this substitution leaves shared keeps its
+/// original callable relation: minting a per-use copy would strand the copy's
+/// open literals with no owning boundary to protect them until the shared
+/// receiver grounds.
+pending_shape_validation_instantiation: bool = false,
 /// Annotated top-level body currently being checked. Closure wrappers delegate
 /// annotation generation to their inner lambda, so this explicit def identity
 /// carries the predeclared correspondence across that delegation.
@@ -4498,6 +4507,31 @@ fn failInstantiationRecursionOverflow(
     return self.freshFromContent(.err, env, overflow_region);
 }
 
+/// Map a requirement's recorded creation relation through an instantiation
+/// substitution. The origin names the constraint attached to its receiver, and
+/// that attached relation is copied exactly when the receiver is: a receiver
+/// the substitution leaves shared keeps its original attached fn var, so the
+/// origin fn var must stay original too. Mapping the fn var alone would point
+/// the origin at this use's independent callable copy—a relation never
+/// attached to the shared receiver—and publication could then never match the
+/// origin against the receiver's constraint list to retire the copy.
+fn substitutedStructuralOrigin(
+    self: *Self,
+    origin: StructuralSchemeRequirementOrigin,
+    var_map: *const std.AutoHashMap(Var, Var),
+) StructuralSchemeRequirementOrigin {
+    const receiver_root = self.types.resolveVar(origin.receiver_var).var_;
+    const fn_root = self.types.resolveVar(origin.constraint_fn_var).var_;
+    const substituted_receiver = var_map.get(receiver_root) orelse return .{
+        .receiver_var = receiver_root,
+        .constraint_fn_var = fn_root,
+    };
+    return .{
+        .receiver_var = substituted_receiver,
+        .constraint_fn_var = var_map.get(fn_root) orelse fn_root,
+    };
+}
+
 /// Instantiate a variable
 fn instantiateVarHelp(
     self: *Self,
@@ -4511,6 +4545,8 @@ fn instantiateVarHelp(
 
     const nested_function_use = self.pending_nested_function_use;
     self.pending_nested_function_use = null;
+    const shape_validation = self.pending_shape_validation_instantiation;
+    self.pending_shape_validation_instantiation = false;
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
@@ -4538,21 +4574,26 @@ fn instantiateVarHelp(
             if (instantiator.recursion_overflow) {
                 return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
             }
+            // A shape-validation instantiation narrows only the root copy. A
+            // requirement whose receiver stays shared keeps its original
+            // callable relation as the single live obligation on that
+            // receiver; the relation is already registered and its literals
+            // are protected by the scheme that owns it.
+            if (shape_validation and
+                self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
+            {
+                continue;
+            }
             const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
             if (instantiator.recursion_overflow) {
                 return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
             }
-            const structural_origin_receiver_root = self.types.resolveVar(requirement.structural_origin.receiver_var).var_;
-            const structural_origin_fn_root = self.types.resolveVar(requirement.structural_origin.constraint_fn_var).var_;
             try instantiated_requirements.append(self.gpa, .{
                 .scheme_receiver_var = requirement.receiver_var,
                 .receiver_var = receiver_var,
                 .scheme_fn_var = requirement.constraint.fn_var,
                 .constraint = constraint,
-                .structural_origin = .{
-                    .receiver_var = instantiator.var_map.get(structural_origin_receiver_root) orelse structural_origin_receiver_root,
-                    .constraint_fn_var = instantiator.var_map.get(structural_origin_fn_root) orelse structural_origin_fn_root,
-                },
+                .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
             });
         }
     }
@@ -10889,17 +10930,12 @@ fn replayPredeclaredSchemeUse(
             _ = try self.unify(pending.use_var, err_var, env);
             return;
         }
-        const structural_origin_receiver_root = self.types.resolveVar(requirement.structural_origin.receiver_var).var_;
-        const structural_origin_fn_root = self.types.resolveVar(requirement.structural_origin.constraint_fn_var).var_;
         try instantiated_requirements.append(self.gpa, .{
             .scheme_receiver_var = requirement.receiver_var,
             .receiver_var = receiver_var,
             .scheme_fn_var = requirement.constraint.fn_var,
             .constraint = constraint,
-            .structural_origin = .{
-                .receiver_var = instantiator.var_map.get(structural_origin_receiver_root) orelse structural_origin_receiver_root,
-                .constraint_fn_var = instantiator.var_map.get(structural_origin_fn_root) orelse structural_origin_fn_root,
-            },
+            .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
         });
     }
 
@@ -16442,6 +16478,7 @@ fn derivedMethodValidationVar(
     const def_var: Var = ModuleEnv.varFrom(binding.type_node_idx);
     const scheme_var = self.predeclaredSchemeVar(binding.def_idx) orelse def_var;
     if (self.types.resolveVar(scheme_var).desc.rank == .generalized) {
+        self.pending_shape_validation_instantiation = true;
         return try self.instantiateVar(scheme_var, env, .use_last_var);
     }
     return scheme_var;
