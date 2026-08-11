@@ -11,10 +11,9 @@ f]
 # EXPECTED
 MOD NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
-
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_054.md:1:20
 
-The mod `S` was not found in this Roc project.
+The mod S was not found in this Roc project.
 
 app[]{f:platform""}import S exposing[c as
 f]

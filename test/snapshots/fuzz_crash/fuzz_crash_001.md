@@ -12,7 +12,6 @@ UNEXPECTED STATEMENT - fuzz_crash_001.md:1:1:1:3
 UNEXPECTED STATEMENT - fuzz_crash_001.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_001.md:1:4:1:5
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_001.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -26,7 +25,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `mo` here.
+I found mo here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -43,7 +42,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_001.md:1:4
 
@@ -58,7 +57,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `%` here.
+I found % here.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpBar,OpPercent,

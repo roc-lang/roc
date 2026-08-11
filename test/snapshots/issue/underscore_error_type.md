@@ -43,7 +43,6 @@ TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
-
 ── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
 
 Underscores are not allowed in type alias declarations.
@@ -180,6 +179,7 @@ It has the type:
 But the annotation says it should be:
 
     BadTuple
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

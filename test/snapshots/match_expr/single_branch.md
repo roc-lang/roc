@@ -12,7 +12,6 @@ match value {
 # EXPECTED
 POLYMORPHIC VALUE - single_branch.md:1:1:3:2
 # PROBLEMS
-
 ── ✗ polymorphic value ──────────────────────────────────── single_branch.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
@@ -24,6 +23,7 @@ match value {
 Its type is:
 a where [a.plus : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

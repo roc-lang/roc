@@ -14,7 +14,6 @@ describe = |value| value.to_str()
 RECURSIVE WHERE ALIAS - where_alias_recursive.md:1:21:1:29
 MISSING METHOD - where_alias_recursive.md:4:26:4:32
 # PROBLEMS
-
 ── ✗ recursive where alias ─────────────────────── where_alias_recursive.md:1:21
 
 The where alias Looping names itself.
@@ -27,18 +26,19 @@ or through other where aliases.
 
 ── ✗ missing method ────────────────────────────── where_alias_recursive.md:4:26
 
-This `to_str` method is being called on a value whose type doesn't have that
+This to_str method is being called on a value whose type doesn't have that
 method.
 
 describe = |value| value.to_str()
                          ^^^^^^
 
-The value's type, which does not have a method named `to_str`, is:
+The value's type, which does not have a method named to_str, is:
 
     a
 
-Hint: For this to work, the type would need to have a method named `to_str`
+Hint: For this to work, the type would need to have a method named to_str
 associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotUpperIdent,OpColon,KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

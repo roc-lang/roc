@@ -10,7 +10,6 @@ match 42 {}
 # EXPECTED
 EMPTY MATCH - empty_match.md:1:1:1:6
 # PROBLEMS
-
 ── ✗ empty match ──────────────────────────────────────────── empty_match.md:1:1
 
 I was parsing a match expression, but it has no branches.
@@ -25,8 +24,9 @@ For example:
         Ok(value) => value
     }
 
-I found `match` here.
+I found match here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+
 # TOKENS
 ~~~zig
 KwMatch,Int,OpenCurly,CloseCurly,

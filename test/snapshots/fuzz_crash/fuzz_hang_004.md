@@ -15,7 +15,6 @@ INVALID TUPLE ACCESS - fuzz_hang_004.md:1:27:1:35
 REDUNDANT PATTERN - fuzz_hang_004.md:1:4:1:37
 NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:37
 # PROBLEMS
-
 ── ✗ empty tuple not allowed ───────────────────────────── fuzz_hang_004.md:1:24
 
 I am part way through parsing this tuple, but it is empty.
@@ -23,7 +22,7 @@ I am part way through parsing this tuple, but it is empty.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
                        ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+If you want to represent nothing, try using an empty record: {}.
 
 ── ✗ type mismatch ─────────────────────────────────────── fuzz_hang_004.md:1:10
 
@@ -32,8 +31,7 @@ This number is being used where a non-number type is needed.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
          ^
 
-
-The type was determined to be non-numeric here fuzz_hang_004.md:1:12:
+The type was determined to be non-numeric here:
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
            ^^
@@ -48,10 +46,9 @@ This value is not a tuple, so it has no .70000 element.
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
                           ^^^^^^^^
 
-
 ── ● redundant pattern ──────────────────────────────────── fuzz_hang_004.md:1:4
 
-The second branch of this `match` is redundant.
+The second branch of this match is redundant.
 
 s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -72,7 +69,8 @@ The value being matched on has type:
 Missing patterns:
         [_, ..]
 
-Hint: Add branches to handle these cases, or use `_` to match anything.
+Hint: Add branches to handle these cases, or use _ to match anything.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,KwMatch,Int,OpenCurly,OpenSquare,CloseSquare,OpFatArrow,OpenSquare,CloseSquare,OpenSquare,CloseSquare,OpFatArrow,OpenCurly,OpenCurly,NoSpaceOpenRound,CloseRound,CloseCurly,OpenCurly,CloseCurly,NoSpaceDotInt,CloseCurly,CloseCurly,CloseCurly,LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,CloseCurly,

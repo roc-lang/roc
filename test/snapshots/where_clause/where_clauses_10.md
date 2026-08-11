@@ -17,14 +17,12 @@ decode_things # After member name
 UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
-
 ── ✗ undeclared type ─────────────────────────────────── where_clauses_10.md:7:7
 
-The type `Decode` is not declared in this scope.
+The type Decode is not declared in this scope.
 
 [a.Decode]
   ^^^^^^^
-
 
 ── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
@@ -38,6 +36,7 @@ decode_things # After member name
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

@@ -18,7 +18,6 @@ UNEXPECTED STATEMENT - fuzz_crash_094.md:1:16:1:17
 UNEXPECTED STATEMENT - fuzz_crash_094.md:1:17:1:18
 UNEXPECTED STATEMENT - fuzz_crash_094.md:1:18:1:19
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -32,7 +31,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `dapkage` here.
+I found dapkage here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -49,7 +48,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:9
 
@@ -64,7 +63,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `e` here.
+I found e here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -81,7 +80,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_094.md:1:12
@@ -92,13 +91,13 @@ parentheses.
 dapkage[e,E.a.*]{}
            ^^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `.a` here.
+I found .a here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -115,7 +114,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.*` here.
+I found .* here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:16
 
@@ -130,7 +129,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -147,7 +146,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:18
 
@@ -162,9 +161,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpenSquare,LowerIdent,Comma,UpperIdent,NoSpaceDotLowerIdent,DotStar,CloseSquare,OpenCurly,CloseCurly,

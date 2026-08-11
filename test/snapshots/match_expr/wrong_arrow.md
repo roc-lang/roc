@@ -14,7 +14,6 @@ match l {
 WRONG MATCH ARROW - wrong_arrow.md:2:8:2:8
 WRONG MATCH ARROW - wrong_arrow.md:3:13:3:13
 # PROBLEMS
-
 ── ✗ wrong match arrow ────────────────────────────────────── wrong_arrow.md:2:8
 
 I was parsing a match branch, and I found `->` where Roc uses `=>`.
@@ -38,6 +37,7 @@ Match branches use a fat arrow between the pattern and the branch body.
 
 For example:
     Ok(value) => value
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

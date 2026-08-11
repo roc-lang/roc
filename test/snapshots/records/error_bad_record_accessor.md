@@ -10,7 +10,6 @@ person.@
 # EXPECTED
 EXPECTED RECORD ACCESSOR - error_bad_record_accessor.md:1:7:1:8
 # PROBLEMS
-
 ── ✗ expected record accessor ───────────────── error_bad_record_accessor.md:1:7
 
 I was parsing access after `.`, and I expected a field name or tuple index.
@@ -18,15 +17,16 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 person.@
       ^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.` here.
+I found . here.
+
 # TOKENS
 ~~~zig
 LowerIdent,Dot,MalformedOpaqueNameWithoutName,

@@ -21,40 +21,37 @@ MOD NOT FOUND - nominal_external_fully_qualified.md:6:17:6:27
 MOD NOT FOUND - nominal_external_fully_qualified.md:7:17:7:27
 UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 # PROBLEMS
-
 ── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:3:21
 
-This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
+This MyTryType type is declared to be in MyTryMod, which does not exist.
 
 handleTry : MyTryMod.MyTryType(Str, I32) -> Str
                     ^^^^^^^^^^
 
-
 ── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:6:17
 
-This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
+This MyTryType type is declared to be in MyTryMod, which does not exist.
 
 MyTryMod.MyTryType.Ok(value) => value
         ^^^^^^^^^^
 
-
 ── ✗ mod not found ───────────────── nominal_external_fully_qualified.md:7:17
 
-This `MyTryType` type is declared to be in `MyTryMod`, which does not exist.
+This MyTryType type is declared to be in MyTryMod, which does not exist.
 
 MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
         ^^^^^^^^^^
 
-
 ── ● unused variable ────────────────── nominal_external_fully_qualified.md:7:32
 
-Variable `code` is defined here and then never used:
+Variable code is defined here and then never used:
 
 MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
                        ^^^^
 
-If you don't need this variable, prefix it with an underscore like `_code` to
+If you don't need this variable, prefix it with an underscore like _code to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,

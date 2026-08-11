@@ -15,7 +15,6 @@ match result {
 # EXPECTED
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
-
 ── ✗ polymorphic value ─────────────────────────────────── branch_scoping.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
@@ -36,6 +35,7 @@ a
     a.times : a, Dec -> a,
   ]
 Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

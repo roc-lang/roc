@@ -34,16 +34,16 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 # PROBLEMS
-
 ── ● unused variable ────────────────────── bound_type_var_no_annotation.md:19:5
 
-Variable `pair` is defined here and then never used:
+Variable pair is defined here and then never used:
 
 pair = combine(num, text)
 ^^^^
 
-If you don't need this variable, prefix it with an underscore like `_pair` to
+If you don't need this variable, prefix it with an underscore like _pair to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

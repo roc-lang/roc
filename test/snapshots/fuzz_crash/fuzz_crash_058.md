@@ -11,7 +11,6 @@ app[]{f:platform"",r:"
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_058.md:1:22:1:23
 # PROBLEMS
-
 ── ✗ unclosed string ──────────────────────────────────── fuzz_crash_058.md:1:22
 
 This string is missing a closing quote.

@@ -19,7 +19,6 @@ UNEXPECTED STATEMENT - fuzz_crash_059.md:2:14:2:15
 UNEXPECTED STATEMENT - fuzz_crash_059.md:2:15:2:16
 MOD NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:3
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -33,7 +32,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `if` here.
+I found if here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:6
@@ -49,7 +48,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:7
 
@@ -64,7 +63,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:8
 
@@ -79,7 +78,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -96,7 +95,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `else` here.
+I found else here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:13
@@ -112,7 +111,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:14
 
@@ -127,7 +126,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:15
 
@@ -142,11 +141,11 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_059.md:1:20
 
-The mod `B` was not found in this Roc project.
+The mod B was not found in this Roc project.
 
 app[]{f:platform""}import B as
 G if 0{}else||0

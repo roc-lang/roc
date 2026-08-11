@@ -16,7 +16,6 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
-
 ── ✗ invalid nominal tag ──────────────────────────── nominal_tag_simple.md:7:10
 
 I'm having trouble with this nominal tag.
@@ -31,6 +30,7 @@ The tag is:
 But the nominal type needs it to one of:
 
     [Blue, Green, Red]
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

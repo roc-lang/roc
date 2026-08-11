@@ -13,10 +13,9 @@ UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
-ascii control character
+── ✗ ascii control character ───────────────────────────────────────────────────
 
 ASCII control characters are not allowed in Roc source code.
-
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:1
 
@@ -31,7 +30,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:3
 
@@ -46,7 +45,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:4
 
@@ -61,7 +60,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `1` here.
+I found 1 here.
+
 # TOKENS
 ~~~zig
 OpBar,OpBar,Int,

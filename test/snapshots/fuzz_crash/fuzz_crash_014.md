@@ -15,7 +15,6 @@ UNEXPECTED STATEMENT - fuzz_crash_014.md:1:3:1:5
 UNEXPECTED STATEMENT - fuzz_crash_014.md:2:1:2:6
 UNEXPECTED STATEMENT - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -29,7 +28,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0b` here.
+I found 0b here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:1:3
 
@@ -44,7 +43,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.0` here.
+I found .0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:2:1
 
@@ -59,7 +58,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0bu22` here.
+I found 0bu22 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:3:1
 
@@ -74,7 +73,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0u22` here.
+I found 0u22 here.
+
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,NoSpaceDotInt,

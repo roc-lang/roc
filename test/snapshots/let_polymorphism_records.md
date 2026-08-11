@@ -62,7 +62,6 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────────── let_polymorphism_records.md:48:6
 
 I'm having trouble with this bool operation.
@@ -70,7 +69,7 @@ I'm having trouble with this bool operation.
 1 + update_data
     ^^^^^^^^^^^
 
-Both sides of `and` must be `Bool` values, but the right side is:
+Both sides of and must be Bool values, but the right side is:
 
     { data: a, ..b }, a -> { data: a, ..b }
 
@@ -86,6 +85,7 @@ str = "hello"
 The type was determined to be:
 
     Dec
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -41,7 +41,6 @@ UNEXPECTED STATEMENT - fuzz_crash_025.md:13:3:13:4
 UNEXPECTED STATEMENT - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
-
 ── ✗ type application needs parentheses ────────────────── fuzz_crash_025.md:9:1
 
 I was parsing a type annotation, and I found a type argument without
@@ -50,13 +49,13 @@ parentheses.
 d = 18446744073709551615
 ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `d` here.
+I found d here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -73,7 +72,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here.
+I found = here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
 
@@ -88,7 +87,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `18446744073709551615` here.
+I found 18446744073709551615 here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
 
@@ -103,7 +102,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here.
+I found : here.
 
 ── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
 
@@ -113,13 +112,13 @@ parentheses.
 f =8
 ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `f` here.
+I found f here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -136,7 +135,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here.
+I found = here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
 
@@ -151,7 +150,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `8` here.
+I found 8 here.
 
 ── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
 
@@ -163,6 +162,7 @@ e = 3402823669209384634633746074317682114553.14: I8
 The inferred type is:
 
     U128
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

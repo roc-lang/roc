@@ -11,8 +11,7 @@ x }
 # EXPECTED
 UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
-
-── ✗ unexpected associated expression ───── nominal_associated_with_final_expression.md:2:1
+── ✗ unexpected associated expression ─ nominal_associated_with_final_expression.md:2:1
 
 I was parsing associated items for a nominal type, and I found a plain final
 expression.
@@ -28,9 +27,10 @@ For example:
         zero = @Id 0
     ]
 
-I found `x` here.
+I found x here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,

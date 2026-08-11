@@ -21,16 +21,12 @@ Baz : Foo
 TYPE REDECLARED - type_scope_integration.md:5:1:5:10
 UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 # PROBLEMS
-
 ── ✗ type redeclared ───────────────────────────── type_scope_integration.md:5:1
 
-The type `Foo` is being redeclared.
+The type Foo is being redeclared.
 
 Foo : Str
 ^^^^^^^^^
-
-
-The redeclaration is in:
 
 But Foo was already declared in type_scope_integration.md:2:1:
 
@@ -39,7 +35,7 @@ Foo : U64
 
 ── ✗ undeclared type ───────────────────────────── type_scope_integration.md:8:7
 
-The type `SomeUndeclaredType` is not declared in this scope.
+The type SomeUndeclaredType is not declared in this scope.
 
 Bar : SomeUndeclaredType
       ^^^^^^^^^^^^^^^^^^

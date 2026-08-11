@@ -57,36 +57,35 @@ x = {
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-
 ── ✗ missing method ─────────────────────────── multiline_string_complex.md:40:5
 
-This `not` method is being called on a value whose type doesn't have that
-method.
+This not method is being called on a value whose type doesn't have that method.
 
 e: !\\
    ^^^
 
-The value's type, which does not have a method named `not`, is:
+The value's type, which does not have a method named not, is:
 
     Str
 
-Hint: For this to work, the type would need to have a method named `not`
+Hint: For this to work, the type would need to have a method named not
 associated with it in the type's declaration.
 
 ── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
 
-The `minus` method on `Dec` has an incompatible type.
+The minus method on Dec has an incompatible type.
 
 0 - \\
 ^
 
-The method `minus` has the type:
+The method minus has the type:
 
     Dec, Dec -> Dec
 
 But I need it to have the type:
 
     Dec, Str -> Dec
+
 # TOKENS
 ~~~zig
 KwPackage,

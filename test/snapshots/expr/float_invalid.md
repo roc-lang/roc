@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 INVALID TUPLE ACCESS - float_invalid.md:1:1:1:8
 # PROBLEMS
-
 ── ✗ invalid tuple access ───────────────────────────────── float_invalid.md:1:1
 
 This value is not a tuple, so it has no .15 element.

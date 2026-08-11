@@ -18,24 +18,23 @@ main =
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
-
 ── ✗ undeclared type ────────────────────── nominal_type_origin_mismatch.md:3:17
 
-The type `Person` is not declared in this scope.
+The type Person is not declared in this scope.
 
 expectsPerson : Person -> Str
                 ^^^^^^
 
-
 ── ● unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
 
-Variable `p` is defined here and then never used:
+Variable p is defined here and then never used:
 
 expectsPerson = |p| "Got a person"
                  ^
 
-If you don't need this variable, prefix it with an underscore like `_p` to
+If you don't need this variable, prefix it with an underscore like _p to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

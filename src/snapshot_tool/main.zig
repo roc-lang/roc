@@ -327,9 +327,9 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order, as plain-text boxes.
+        // Render all reports in order using the plain terminal layout.
         for (reports.items) |*report| {
-            reporting.renderReportToBoxPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
+            reporting.renderReportToPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
                 std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
             };
 
@@ -416,7 +416,7 @@ fn lastTitleSegment(title: []const u8) []const u8 {
     return std.mem.trim(u8, title, " \t\r\n");
 }
 
-/// Dupe `s` shouted to ALL CAPS via the box renderer's own `writeShouted`, so
+/// Dupe `s` shouted to ALL CAPS via the reporting formatter's `writeShouted`, so
 /// the EXPECTED section's titles can never drift from the rendered PROBLEMS.
 fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
     var shouted = std.Io.Writer.Allocating.init(allocator);
@@ -462,6 +462,7 @@ fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
             .vertical_stack,
             .horizontal_concat,
             .source_code_multi_region,
+            .source_location,
             => {},
         }
     }
@@ -5535,8 +5536,8 @@ fn snapshotReplExpressionStep(
 
                 if (use_expr_fallback) {
                     // These titles are matched against markdown output, which
-                    // preserves the authored title case (the box/snapshot output
-                    // shouts them to ALL CAPS, but this is the markdown render).
+                    // preserves the authored title case (EXPECTED metadata uses
+                    // uppercase, but this is the markdown render).
                     const is_top_level_wrapper_problem =
                         std.mem.find(u8, module_problems, "Effectful Top Level Value") != null or
                         std.mem.find(u8, module_problems, "Polymorphic Value") != null;

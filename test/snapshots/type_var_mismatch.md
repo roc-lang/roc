@@ -25,7 +25,6 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────────────────── type_var_mismatch.md:7:9
 
 This number is being used where a non-number type is needed.
@@ -33,14 +32,14 @@ This number is being used where a non-number type is needed.
 item = 42
        ^^
 
-
-The type was determined to be non-numeric here type_var_mismatch.md:11:11:
+The type was determined to be non-numeric here:
 
 result = List.first(list).ok_or(item)
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Other code expects this to have the type:
 
     item
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

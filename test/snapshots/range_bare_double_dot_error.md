@@ -11,7 +11,6 @@ r = 1..5
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
 UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
-
 ── ✗ not a range operator ─────────────────── range_bare_double_dot_error.md:1:8
 
 I was parsing an expression, and `..` is not a range operator.
@@ -19,7 +18,7 @@ I was parsing an expression, and `..` is not a range operator.
 r = 1..5
        ^
 
-Use `..<` for an exclusive range or `..=` for an inclusive range.
+Use ..< for an exclusive range or ..= for an inclusive range.
 
 For example:
     1..<10
@@ -33,6 +32,7 @@ r = 1..5
        ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,DoubleDot,Int,

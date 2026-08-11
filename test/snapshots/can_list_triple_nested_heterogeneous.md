@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_triple_nested_heterogeneous.md:1:23:1:30
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────── can_list_triple_nested_heterogeneous.md:1:23
 
 This string literal is being used where a non-string type is needed.
@@ -21,6 +20,7 @@ This string literal is being used where a non-string type is needed.
 The type was determined to be:
 
     Dec
+
 # TOKENS
 ~~~zig
 OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,Int,CloseSquare,CloseSquare,Comma,OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,CloseSquare,

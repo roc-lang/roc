@@ -18,25 +18,24 @@ package
 MOD NOT FOUND - package_header_nonempty_multiline_4.md:4:3:4:11
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
 # PROBLEMS
-
 ── ✗ mod not found ─────────────── package_header_nonempty_multiline_4.md:4:3
 
-The mod `SomeType` was not found in this Roc project.
+The mod SomeType was not found in this Roc project.
 
 SomeType,
 ^^^^^^^^
 
-
 ── ✗ exposed but not defined ──────── package_header_nonempty_multiline_4.md:3:3
 
-The mod header says that `something` is exposed, but it is not defined
+The mod header says that something is exposed, but it is not defined
 anywhere in this mod.
 
 something,
 ^^^^^^^^^
 
-You can fix this by either defining `something` in this mod, or by removing
-it from the list of exposed values.
+You can fix this by either defining something in this mod, or by removing it
+from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage,

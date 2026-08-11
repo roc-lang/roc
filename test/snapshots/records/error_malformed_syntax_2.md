@@ -12,7 +12,6 @@ UNEXPECTED TYPE SYNTAX - error_malformed_syntax_2.md:1:8:1:10
 UNEXPECTED EXPRESSION SYNTAX - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
-
 ── ✗ unexpected type syntax ──────────────────── error_malformed_syntax_2.md:1:8
 
 I was parsing a type annotation, and this token cannot start a type here.
@@ -26,7 +25,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `42` here.
+I found 42 here.
 
 ── ✗ unexpected expression syntax ───────────── error_malformed_syntax_2.md:1:10
 
@@ -41,7 +40,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ● declaration has no value ────────────────── error_malformed_syntax_2.md:1:3
@@ -53,6 +52,7 @@ This declaration has a type annotation but no implementation.
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,CloseCurly,

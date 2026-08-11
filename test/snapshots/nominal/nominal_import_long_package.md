@@ -13,10 +13,9 @@ red = ... # not implemented
 # EXPECTED
 MOD NOT FOUND - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-
 ── ✗ mod not found ─────────────────────── nominal_import_long_package.md:3:7
 
-This `CE` type is declared to be in `design.Styles`, which does not exist.
+This CE type is declared to be in design.Styles, which does not exist.
 
 red : CE
       ^^

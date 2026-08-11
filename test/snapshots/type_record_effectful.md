@@ -19,15 +19,15 @@ main! = |_| {}
 # EXPECTED
 NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-
 ── ✗ name not in scope ──────────────────────────── type_record_effectful.md:7:5
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!(person.name)
 ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

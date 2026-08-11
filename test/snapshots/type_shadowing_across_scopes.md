@@ -25,7 +25,6 @@ BUILTIN TYPE SHADOWED - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
-
 ── ✗ expected type field ─────────────────── type_shadowing_across_scopes.md:9:5
 
 I was parsing a record type, and I expected a field name.
@@ -33,13 +32,13 @@ I was parsing a record type, and I expected a field name.
 Try : [Success, Failure]
 ^^^
 
-Record type fields start with lowercase names, `_`, or named underscores,
-followed by `:` and the field type.
+Record type fields start with lowercase names, _, or named underscores,
+followed by : and the field type.
 
 For example:
     { name : Str, age : U64 }
 
-I found `Try` here.
+I found Try here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -50,12 +49,12 @@ I was parsing a record type, and I expected `,` or `}`.
 Try : [Success, Failure]
                 ^^^^^^^
 
-Separate record type fields with commas and close the record type with `}`.
+Separate record type fields with commas and close the record type with }.
 
 For example:
     { name : Str, age : U64 }
 
-I found `Failure` here.
+I found Failure here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -72,7 +71,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -89,29 +88,27 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
 ── ● builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
 
-The type `Try` shadows a builtin type.
+The type Try shadows a builtin type.
 
 Try(a, b) : [Ok(a), Err(b)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in:
-
 ── ● unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
 
-Variable `data` is defined here and then never used:
+Variable data is defined here and then never used:
 
 processData = |data|
                ^^^^
 
-If you don't need this variable, prefix it with an underscore like `_data` to
+If you don't need this variable, prefix it with an underscore like _data to
 suppress this warning.
 
 ── ✗ malformed type ─────────────────────── type_shadowing_across_scopes.md:9:21

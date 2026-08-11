@@ -11,25 +11,24 @@ package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main
 MOD NOT FOUND - package_header_nonempty_singleline_1.md:1:21:1:29
 EXPOSED BUT NOT DEFINED - package_header_nonempty_singleline_1.md:1:10:1:19
 # PROBLEMS
-
 ── ✗ mod not found ───────────── package_header_nonempty_singleline_1.md:1:21
 
-The mod `SomeType` was not found in this Roc project.
+The mod SomeType was not found in this Roc project.
 
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
                     ^^^^^^^^
 
-
 ── ✗ exposed but not defined ────── package_header_nonempty_singleline_1.md:1:10
 
-The mod header says that `something` is exposed, but it is not defined
+The mod header says that something is exposed, but it is not defined
 anywhere in this mod.
 
 package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
          ^^^^^^^^^
 
-You can fix this by either defining `something` in this mod, or by removing
-it from the list of exposed values.
+You can fix this by either defining something in this mod, or by removing it
+from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,UpperIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

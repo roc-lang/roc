@@ -19,10 +19,9 @@ main! = print_msg!("Hello, world!")
 NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
 EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
-
 ── ✗ name not in scope ───────────── effectful_with_effectful_annotation.md:7:20
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 print_msg! = |msg| Stdout.line!(msg)
                    ^^^^^^^^^^^^
@@ -37,6 +36,7 @@ main! = print_msg!("Hello, world!")
         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Move the effect into a function body so it runs when the function is called.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

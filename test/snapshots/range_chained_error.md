@@ -10,11 +10,10 @@ r = 1..<5..<10
 # EXPECTED
 CHAINED RANGE - range_chained_error.md:1:5:1:15
 # PROBLEMS
-
 ── ✗ chained range ────────────────────────────────── range_chained_error.md:1:5
 
-Range operators can't be chained. Write a single range instead, like `a..<b` or
-`a..=b`.
+Range operators can't be chained. Write a single range instead, like a..<b or
+a..=b.
 
 r = 1..<5..<10
     ^^^^^^^^^^

@@ -12,7 +12,6 @@ foo = "hello ${namF
 EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
-
 ── ✗ expected interpolation end ────────────────────────── fuzz_crash_017.md:2:7
 
 I was parsing a string interpolation, and I expected `}` before returning to
@@ -21,13 +20,13 @@ the string.
 foo = "hello ${namF
       ^
 
-String interpolations start with `${` and must close with `}` after the
-embedded expression.
+String interpolations start with ${ and must close with } after the embedded
+expression.
 
 For example:
     "Hello, ${name}!"
 
-I found `"` here.
+I found " here.
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_017.md:2:7
 
@@ -37,6 +36,7 @@ foo = "hello ${namF
       ^^^^^^^^^^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,

@@ -15,10 +15,9 @@ NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
-
 ── ✗ name not in scope ──────────────────── pattern_destructure_with_rest.md:1:7
 
-Nothing is named `person` in this scope.
+Nothing is named person in this scope.
 
 match person {
       ^^^^^^
@@ -27,21 +26,22 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:33
 
-`Str.len` does not exist.
+Str.len does not exist.
 
 { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
                             ^^^^^^^
 
-`Str` is in scope, but it has no associated `len`.
+Str is in scope, but it has no associated len.
 
 ── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:55
 
-`Str.len` does not exist.
+Str.len does not exist.
 
 { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
                                                   ^^^^^^^
 
-`Str` is in scope, but it has no associated `len`.
+Str is in scope, but it has no associated len.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

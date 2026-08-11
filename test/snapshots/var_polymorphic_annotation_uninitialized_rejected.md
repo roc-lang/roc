@@ -16,15 +16,14 @@ main! = |_| {
 UNUSED VARIABLE - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 POLYMORPHIC VAR - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 # PROBLEMS
-
 ── ● unused variable ── var_polymorphic_annotation_uninitialized_rejected.md:4:5
 
-Variable `xs` is defined here and then never used:
+Variable xs is defined here and then never used:
 
 var xs : List(a)
 ^^^^^^^^^^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_xs` to
+If you don't need this variable, prefix it with an underscore like _xs to
 suppress this warning.
 
 ── ✗ polymorphic var ── var_polymorphic_annotation_uninitialized_rejected.md:4:5
@@ -35,8 +34,9 @@ must have a single concrete type.
 var xs : List(a)
 ^^^^^^^^^^^^^^^^
 
-Give it a concrete type, or replace the type variable with `_` to let the type
-be inferred from how the `var` is used.
+Give it a concrete type, or replace the type variable with _ to let the type be
+inferred from how the var is used.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

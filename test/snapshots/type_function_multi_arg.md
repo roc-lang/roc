@@ -18,7 +18,6 @@ UNEXPECTED STATEMENT - type_function_multi_arg.md:3:40:3:42
 UNEXPECTED STATEMENT - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
-
 ── ✗ expected closing parenthesis ────────────── type_function_multi_arg.md:3:27
 
 I was parsing a parenthesized type, and I expected `)`.
@@ -31,7 +30,7 @@ Close the parenthesized type after the final type expression.
 For example:
     (Str -> U64)
 
-I found `(` here.
+I found ( here.
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:40
 
@@ -46,7 +45,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_c` here.
+I found _c here.
 
 ── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:42
 
@@ -61,7 +60,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `)` here.
+I found ) here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 

@@ -17,7 +17,6 @@ DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
-
 ── ● declaration has no value ────────────────────────── ann_effectful_fn.md:2:5
 
 This declaration has a type annotation but no implementation.
@@ -39,8 +38,8 @@ It has the type:
 
     [Bool, ..]
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to {}.
+If you don't need the value, you can ignore it with _ =.
 
 ── ✗ type mismatch ──────────────────────────────────── ann_effectful_fn.md:2:37
 
@@ -53,8 +52,9 @@ It has the type:
 
     [LaunchNukeErr, ..]
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to {}.
+If you don't need the value, you can ignore it with _ =.
+
 # TOKENS
 ~~~zig
 OpenCurly,

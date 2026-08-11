@@ -11,7 +11,6 @@ main!=|0|""_=""
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_088.md:1:8:1:9
 # PROBLEMS
-
 ── ✗ non exhaustive destructure ────────────────────────── fuzz_crash_088.md:1:8
 
 This destructuring pattern doesn't cover all possible cases.
@@ -28,6 +27,7 @@ The value being destructured has type:
 
 Missing patterns:
         _
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Int,OpBar,StringStart,StringPart,StringEnd,Underscore,OpAssign,StringStart,StringPart,StringEnd,

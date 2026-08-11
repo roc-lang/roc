@@ -22,7 +22,6 @@ UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
-
 ── ✗ unexpected statement ────────────────────── nominal_import_wildcard.md:1:13
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -36,27 +35,25 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.*` here.
+I found .* here.
 
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:3:7
 
-The type `Color` is not declared in this scope.
+The type Color is not declared in this scope.
 
 red : Color
       ^^^^^
 
-
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:6:8
 
-The type `Color` is not declared in this scope.
+The type Color is not declared in this scope.
 
 blue : Color
        ^^^^^
 
-
 ── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:9:9
 
-The type `Color` is not declared in this scope.
+The type Color is not declared in this scope.
 
 green : Color
         ^^^^^

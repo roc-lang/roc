@@ -47,7 +47,6 @@ INVALID NUMBER - number_literal_suffixes.md:15:12:15:20
 INVALID NUMBER - number_literal_suffixes.md:16:12:16:20
 INVALID NUMBER - number_literal_suffixes.md:17:12:17:21
 # PROBLEMS
-
 ── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:13:12
 
 This number literal does not fit in the inferred type.
@@ -102,6 +101,7 @@ u128Neg: -123.U128,
 The inferred type is:
 
     U128
+
 # TOKENS
 ~~~zig
 OpenCurly,

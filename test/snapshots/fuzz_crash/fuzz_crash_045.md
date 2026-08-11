@@ -10,7 +10,6 @@ platform""requires{}{}exposes[]packages{}provides[
 # EXPECTED
 EXPECTED OPENING BRACE - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
-
 ── ✗ expected opening brace ───────────────────────────── fuzz_crash_045.md:1:50
 
 I was parsing a `provides` section, and I expected an opening `{`.
@@ -23,7 +22,8 @@ Host symbol mappings are written as record-like entries inside braces.
 For example:
     provides { "roc_main": main }
 
-I found `[` here.
+I found [ here.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenSquare,

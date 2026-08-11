@@ -19,16 +19,15 @@ processString : Str -> Str
 EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:50
 DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
-
 ── ✗ exposed but not defined ────────────────────────────── platform_str.md:7:16
 
-The mod header says that `processString` is exposed, but it is not defined
+The mod header says that processString is exposed, but it is not defined
 anywhere in this mod.
 
 provides { "roc_processString": processString }
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You can fix this by either defining `processString` in this mod, or by
+You can fix this by either defining processString in this mod, or by
 removing it from the list of exposed values.
 
 ── ● declaration has no value ────────────────────────────── platform_str.md:9:1
@@ -40,6 +39,7 @@ processString : Str -> Str
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

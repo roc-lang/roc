@@ -11,7 +11,6 @@ x = -1
 # EXPECTED
 INVALID NUMBER - u8_negative_value.md:2:5:2:7
 # PROBLEMS
-
 ── ✗ invalid number ─────────────────────────────────── u8_negative_value.md:2:5
 
 This number literal does not fit in the inferred type.
@@ -22,6 +21,7 @@ x = -1
 The inferred type is:
 
     U8
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

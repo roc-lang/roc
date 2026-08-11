@@ -24,10 +24,9 @@ good2 = Parent2.Nested.val
 # EXPECTED
 DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
 # PROBLEMS
-
 ── ✗ does not exist ───────── canon_revamp_nested_short_alias_not_mod.md:13:7
 
-`Nested.val` does not exist.
+Nested.val does not exist.
 
 bad = Nested.val
       ^^^^^^^^^^

@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 INVALID RECORD FIELD NAME - dollar_prefix_field_name.md:1:3:1:9
 # PROBLEMS
-
 ── ✗ invalid record field name ───────────────── dollar_prefix_field_name.md:1:3
 
 Record field names cannot start with a dollar sign.
@@ -18,8 +17,9 @@ Record field names cannot start with a dollar sign.
 { $field : "value" }
   ^^^^^^
 
-Names that start with `$` are reassignable variables declared with the `var`
+Names that start with $ are reassignable variables declared with the var
 keyword, so they cannot be used as record field names.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

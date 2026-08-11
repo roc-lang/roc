@@ -22,7 +22,6 @@ UNEXPECTED STATEMENT - fuzz_crash_002.md:1:24:1:25
 MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
 DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 # PROBLEMS
-
 ── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_002.md:1:6
 
 I was parsing a type annotation, and this token cannot start a type here.
@@ -36,7 +35,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `;` here.
+I found ; here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:7
@@ -52,7 +51,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:9
 
@@ -67,7 +66,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:11
 
@@ -82,7 +81,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:13
 
@@ -97,7 +96,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:15
 
@@ -112,7 +111,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:17
 
@@ -127,7 +126,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:19
 
@@ -142,7 +141,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `::` here.
+I found :: here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:21
 
@@ -157,7 +156,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `le` here.
+I found le here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -174,7 +173,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:24
 
@@ -189,7 +188,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `%` here.
+I found % here.
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_002.md:1:6
 
@@ -197,7 +196,6 @@ This type annotation is malformed or contains invalid syntax.
 
 modu:;::::::::::::::le[%
      ^
-
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_002.md:1:1
 
@@ -208,6 +206,7 @@ modu:;::::::::::::::le[%
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,MalformedUnknownToken,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,OpDoubleColon,LowerIdent,OpenSquare,OpPercent,

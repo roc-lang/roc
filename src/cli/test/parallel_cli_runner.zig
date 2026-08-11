@@ -1042,7 +1042,7 @@ const subcommand_cases = [_]CliCase{
     // recursive nominal payload must report the undeclared type variable.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10093: invalid matching nominal type module reports a diagnostic", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10093_matching_type_module/T.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "undeclared type variable" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "annotation-only decls in a non-platform type module are not flagged as effectful", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AnnoOnlyNotEffectful.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{.{ .stream = .stderr, .text = "effectful function name" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "unused variable", .count = 1 }, .{ .stream = .stderr, .text = "Found 0 errors and 1 warning", .count = 1 } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run prints warning diagnostics once (issue 9509)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9509WarningOnly.roc", .exit = .{ .code = 2 }, .stderr_min_len = 1, .occurrences = &.{ .{ .stream = .stderr, .text = "unused variable", .count = 1 }, .{ .stream = .stderr, .text = "0 errors and 1 warning", .count = 1 } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9898: large nested List.repeat lowers without local span overflow", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9898_large_nested_list_repeat.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "integer does not fit in destination type" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9883: imported type alias works as Try error from split module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9883_imported_alias_try_error/Main.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
@@ -1615,7 +1615,7 @@ const subcommand_cases = [_]CliCase{
     // is a type error, never an extern emitted at the wider row (design.md
     // "Host Symbol ABI"). The three mismatches are the annotated binding, the
     // argument position, and the record field.
-    .{ .id = 0, .suite = .subcommands, .name = "hosted widening channels other than ? are rejected", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "FallibleWiden.roc" }, .{ .stream = .stderr, .text = "Found 3 errors" } }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 3 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "hosted widening channels other than ? are rejected", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "FallibleWiden.roc" }, .{ .stream = .stderr, .text = "3 errors" } }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 3 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // The #9966 failure mode, pinned by what the app receives: the host always
     // returns Ok, and a use site that widened the hosted row must not turn that
     // into Err. Run at both native and interpreter execution, since each reaches
@@ -2838,8 +2838,8 @@ fn customWatchInputsRejectAbsoluteImport(
     if (checkExitExpectation(allocator, result, .failure)) |message| {
         return failureFromRun(allocator, timer, result, message);
     }
-    if (std.mem.find(u8, result.stderr, "ABSOLUTE FILE IMPORT") == null) {
-        return failureFromRun(allocator, timer, result, "stderr did not contain ABSOLUTE FILE IMPORT");
+    if (std.mem.find(u8, result.stderr, "absolute file import") == null) {
+        return failureFromRun(allocator, timer, result, "stderr did not contain absolute file import");
     }
 
     const watch_inputs = std.Io.Dir.cwd().readFileAlloc(io, watch_inputs_path, allocator, .limited(1024 * 1024)) catch |err|
@@ -4255,7 +4255,7 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "missing platform required type", "Model", "value named", "type declaration" },
+            .expected_stderr = &.{ "missing platform required type", "Model", "value named", "requirement needs a type" },
         },
         .{
             .dir_name = "sibling-only-type",
@@ -4288,7 +4288,7 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "MISSING PLATFORM REQUIRED DEFINITION", "program", "Define and expose" },
+            .expected_stderr = &.{ "missing platform required definition", "program", "Define and expose" },
         },
         .{
             .dir_name = "required-def-unexposed",
@@ -4305,7 +4305,7 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "MISSING PLATFORM REQUIRED DEFINITION", "program", "not listed in your", "header" },
+            .expected_stderr = &.{ "missing platform required definition", "program", "not listed in your", "header" },
         },
         .{
             .dir_name = "required-def-type-mismatch",
@@ -4322,7 +4322,7 @@ fn customPlatformRequiresCheckerDiagnostics(
             \\main! = |_| {}
             \\
             ,
-            .expected_stderr = &.{ "TYPE MISMATCH", "string literal", "non-string", "type is needed" },
+            .expected_stderr = &.{ "type mismatch", "string literal", "non-string", "type is needed" },
         },
     };
 
@@ -4524,7 +4524,7 @@ fn runRocInCaseEnv(
 }
 
 fn platformRequiresDiagnosticBody(stderr: []const u8) []const u8 {
-    const without_summary = if (std.mem.findLast(u8, stderr, "\n\nFound ")) |summary_idx|
+    const without_summary = if (diagnosticSummaryStart(stderr)) |summary_idx|
         stderr[0..summary_idx]
     else
         stderr;
@@ -4533,6 +4533,26 @@ fn platformRequiresDiagnosticBody(stderr: []const u8) []const u8 {
         end -= 1;
     }
     return without_summary[0..end];
+}
+
+/// Find a summary header in ANSI-free terminal output. Unlike an ordinary
+/// diagnostic header, the text after `── ` starts with the error count.
+fn diagnosticSummaryStart(bytes: []const u8) ?usize {
+    const marker = "── ";
+    var search_from: usize = 0;
+
+    while (std.mem.findPos(u8, bytes, search_from, marker)) |marker_start| {
+        const text_start = marker_start + marker.len;
+        if ((marker_start == 0 or bytes[marker_start - 1] == '\n') and
+            text_start < bytes.len and
+            bytes[text_start] >= '0' and bytes[text_start] <= '9')
+        {
+            return marker_start;
+        }
+        search_from = text_start;
+    }
+
+    return null;
 }
 
 const default_platform_linux_disassembly_app =
@@ -5689,12 +5709,12 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
 }
 
 /// Normalize one verb's stderr for cross-verb comparison: strip ANSI, cut the
-/// per-verb summary trailer ("Found N errors ..."), reduce source-location
+/// per-verb summary header, reduce source-location
 /// lines to basename:line:col (check prints absolute paths where the other
 /// verbs embed workspace-relative ones), and drop trailing blank lines.
 fn parityNormalizedReports(allocator: Allocator, stderr_bytes: []const u8) Allocator.Error![]u8 {
     const stripped = try stripAnsiEscapes(allocator, stderr_bytes);
-    const pre_trailer = if (std.mem.find(u8, stripped, "\nFound ")) |idx| stripped[0..idx] else stripped;
+    const pre_trailer = if (diagnosticSummaryStart(stripped)) |idx| stripped[0..idx] else stripped;
 
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -6514,7 +6534,7 @@ fn customNonVerboseCachesVerboseReports(io: std.Io, allocator: Allocator, env: *
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .not_contains = &.{.{ .stream = .stderr, .text = "expect failed" }} })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "expect" }, .{ .stream = .stderr, .text = "test failure" } } })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "expect" }, .{ .stream = .stderr, .text = "TEST FAILURE" } } })) |failure| return failure;
     return null;
 }
 
@@ -9701,6 +9721,19 @@ fn effectiveTimeoutMs(args: harness.StandardArgs, suites: SuiteSelection) u64 {
     if (args.timeout_provided) return args.timeout_ms;
     if (suites.includes(.glue)) return glue_timeout_ms;
     return default_timeout_ms;
+}
+
+test "diagnostic summary detection ignores later diagnostic headers" {
+    const stderr =
+        \\── ✗ type mismatch ─── app.roc:1:1
+        \\problem
+        \\── 1 error and 0 warnings ─── app.roc
+        \\── ✗ linker failed ──────────
+        \\linker problem
+    ;
+
+    const summary_start = diagnosticSummaryStart(stderr) orelse return error.SummaryNotFound;
+    try std.testing.expectEqualStrings("── 1 error and 0 warnings ─── app.roc\n── ✗ linker failed ──────────\nlinker problem", stderr[summary_start..]);
 }
 
 test "effectiveTimeoutMs extends default for glue suite only" {

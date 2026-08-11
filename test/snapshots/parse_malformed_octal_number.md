@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - parse_malformed_octal_number.md:1:1:1:3
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ────────── parse_malformed_octal_number.md:1:1
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -24,7 +23,8 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `0o` here.
+I found 0o here.
+
 # TOKENS
 ~~~zig
 MalformedNumberNoDigits,

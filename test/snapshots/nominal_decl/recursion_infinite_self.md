@@ -14,10 +14,9 @@ t = T.((t, 1))
 INVALID ASSIGNMENT TO ITSELF - recursion_infinite_self.md:4:9:4:10
 INVALID RECURSIVE TYPE - recursion_infinite_self.md:1:1:1:14
 # PROBLEMS
-
 ── ✗ invalid assignment to itself ─────────────── recursion_infinite_self.md:4:9
 
-The value `t` is assigned to itself, which would cause an infinite loop at
+The value t is assigned to itself, which would cause an infinite loop at
 runtime.
 
 t = T.((t, 1))
@@ -39,7 +38,8 @@ Its definition is:
     (T, U64)
 
 Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
+record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

@@ -13,7 +13,6 @@ match (value, other) {
 # EXPECTED
 POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
-
 ── ✗ polymorphic value ─────────────────────────────── variable_shadowing.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
@@ -26,6 +25,7 @@ match (value, other) {
 Its type is:
 a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
 Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpenCurly,

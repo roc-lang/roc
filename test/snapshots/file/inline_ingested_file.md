@@ -15,7 +15,6 @@ FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
 MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
-
 ── ✗ file not found ──────────────────────────────── inline_ingested_file.md:1:1
 
 The file users.json was not found.
@@ -27,20 +26,19 @@ Make sure the file exists relative to your source file:
 
 ── ● duplicate definition ────────────────────────── inline_ingested_file.md:2:1
 
-The name `Json` is being redeclared here:
+The name Json is being redeclared here:
 
 import Json
 ^^^^^^^^^^^
 
-
-In this scope, `Json` was already defined in inline_ingested_file.md:1:1:
+In this scope, Json was already defined in inline_ingested_file.md:1:1:
 
 import "users.json" as data : Str
 ^
 
 ── ✗ missing method ──────────────────────────────── inline_ingested_file.md:4:7
 
-This is trying to dispatch a method named `parser_for` on an unresolved type
+This is trying to dispatch a method named parser_for on an unresolved type
 variable, but unresolved type variables have no methods.
 
 foo = Json.parse(data)
@@ -49,6 +47,7 @@ foo = Json.parse(data)
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
+
 # TOKENS
 ~~~zig
 KwImport,StringStart,StringPart,StringEnd,KwAs,LowerIdent,OpColon,UpperIdent,

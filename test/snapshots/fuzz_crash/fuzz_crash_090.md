@@ -15,7 +15,6 @@ EXPECTED TUPLE SEPARATOR - fuzz_crash_090.md:3:1:3:1
 EXPECTED CLOSING BRACE - fuzz_crash_090.md:3:1:3:1
 UNRECOGNIZED SYNTAX - fuzz_crash_090.md:1:1:1:1
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_090.md:2:7
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -29,7 +28,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `)` here.
+I found ) here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -58,7 +57,7 @@ I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 ^
 
 Separate tuple elements with commas and close the tuple or parenthesized
-expression with `)`.
+expression with ).
 
 For example:
     (x, y)
@@ -90,6 +89,7 @@ e={({\\
 ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,NoSpaceOpenRound,OpenCurly,MultilineStringStart,StringPart,

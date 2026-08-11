@@ -14,14 +14,12 @@ UNEXPECTED TYPE SYNTAX - fuzz_crash_061.md:2:14:2:15
 EXPECTED CLOSING BRACE - fuzz_crash_061.md:1:1:1:9
 EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
-
 ── ✗ unclosed string ───────────────────────────────────── fuzz_crash_061.md:1:9
 
 This string is missing a closing quote.
 
 platform"
         ^
-
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_061.md:2:14
 
@@ -36,7 +34,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ expected closing brace ────────────────────────────── fuzz_crash_061.md:1:1
 
@@ -50,7 +48,7 @@ Close the requires record after the final entrypoint signature.
 For example:
     requires { main : {} => I32 }
 
-I found `platform` here.
+I found platform here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ expected closing bracket ─────────────────────────── fuzz_crash_061.md:2:16
@@ -65,8 +63,9 @@ Close the exposing list after the final imported name.
 For example:
     import Json exposing [decode, encode]
 
-I found `import` here.
+I found import here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

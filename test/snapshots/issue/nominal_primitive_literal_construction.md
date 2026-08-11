@@ -26,7 +26,6 @@ TYPE MISMATCH - nominal_primitive_literal_construction.md:4:7:4:8
 TYPE MISMATCH - nominal_primitive_literal_construction.md:9:9:9:14
 TYPE MISMATCH - nominal_primitive_literal_construction.md:15:13:15:19
 # PROBLEMS
-
 ── ✗ type mismatch ─────────────── nominal_primitive_literal_construction.md:4:7
 
 This number is being used where a non-number type is needed.
@@ -59,6 +58,7 @@ goodValue = "test"
 The type was determined to be:
 
     GoodDerived
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,

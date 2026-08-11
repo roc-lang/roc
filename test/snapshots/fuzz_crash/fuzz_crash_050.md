@@ -11,7 +11,6 @@ type=snippet
 # EXPECTED
 UNEXPECTED STATEMENT - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_050.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -25,9 +24,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `)` here.
+I found ) here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
+
 # TOKENS
 ~~~zig
 CloseRound,

@@ -27,7 +27,6 @@ UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
-
 ── ✗ import must be top level ─────────────────────── nominal_mixed_scope.md:7:5
 
 I was parsing an import, but imports are only allowed at the top level.
@@ -43,36 +42,33 @@ For example:
 
     main = 1
 
-I found `import` here.
+I found import here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
 
-The type `Color` is not declared in this scope.
+The type Color is not declared in this scope.
 
 import Color.RGB
        ^^^^^
 
-
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:10:9
 
-The type `RGB` is not declared in this scope.
+The type RGB is not declared in this scope.
 
 RGB.Red => LocalStatus.Pending
 ^^^
 
-
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:11:9
 
-The type `RGB` is not declared in this scope.
+The type RGB is not declared in this scope.
 
 RGB.Green => LocalStatus.Complete
 ^^^
 
-
 ── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:12:9
 
-The type `RGB` is not declared in this scope.
+The type RGB is not declared in this scope.
 
 RGB.Blue => LocalStatus.Pending
 ^^^

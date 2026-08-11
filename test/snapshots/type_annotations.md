@@ -39,30 +39,26 @@ DECLARATION HAS NO VALUE - type_annotations.md:11:1:11:32
 DECLARATION HAS NO VALUE - type_annotations.md:13:1:15:2
 DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
 # PROBLEMS
-
 ── ✗ undeclared type ─────────────────────────────────── type_annotations.md:3:7
 
-The type `Thing` is not declared in this scope.
+The type Thing is not declared in this scope.
 
 bar : Thing(_a, _b, _)
       ^^^^^
 
-
 ── ✗ undeclared type ────────────────────────────────── type_annotations.md:9:14
 
-The type `String` is not declared in this scope.
+The type String is not declared in this scope.
 
 main! : List(String) -> Try({}, _)
              ^^^^^^
 
-
 ── ✗ undeclared type ───────────────────────────────── type_annotations.md:11:13
 
-The type `Value` is not declared in this scope.
+The type Value is not declared in this scope.
 
 tag_tuple : Value((_a, _b, _c))
             ^^^^^
-
 
 ── ● declaration has no value ────────────────────────── type_annotations.md:1:1
 
@@ -146,6 +142,7 @@ open_record_with_comma : {
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

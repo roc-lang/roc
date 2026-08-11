@@ -23,7 +23,6 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
 
 This expression is used in an unexpected way.
@@ -38,6 +37,7 @@ It has the type:
 But the annotation says it should be:
 
     Str
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -34,52 +34,47 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
-
 ── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:27
 
-The type `Maybe` is not declared in this scope.
+The type Maybe is not declared in this scope.
 
 processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
                           ^^^^^
 
-
 ── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:48
 
-The type `Error` is not declared in this scope.
+The type Error is not declared in this scope.
 
 processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
                                                ^^^^^
 
-
 ── ● unused variable ─────────────────────────── type_app_complex_nested.md:7:12
 
-Variable `maybeList` is defined here and then never used:
+Variable maybeList is defined here and then never used:
 
 Ok(maybeList) => []
    ^^^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_maybeList`
+If you don't need this variable, prefix it with an underscore like _maybeList
 to suppress this warning.
 
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:12:14
 
-The type `Maybe` is not declared in this scope.
+The type Maybe is not declared in this scope.
 
 deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
              ^^^^^
 
-
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:30
 
-The type `Maybe` is not declared in this scope.
+The type Maybe is not declared in this scope.
 
 ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
                              ^^^^^
 
-
 ── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:51
 
-The type `Error` is not declared in this scope.
+The type Error is not declared in this scope.
 
 ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
                                                   ^^^^^

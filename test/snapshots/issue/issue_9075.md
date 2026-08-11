@@ -15,7 +15,6 @@ main = "${y}"
 # EXPECTED
 TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
-
 ── ✗ type mismatch ────────────────────────────────────────── issue_9075.md:6:11
 
 This expression is used in an unexpected way.
@@ -30,6 +29,7 @@ It has the type:
 But you are trying to use it as:
 
     Str
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,LowerIdent,

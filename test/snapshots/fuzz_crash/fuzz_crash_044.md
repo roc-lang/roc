@@ -20,7 +20,6 @@ UNEXPECTED STATEMENT - fuzz_crash_044.md:4:1:4:2
 UNEXPECTED STATEMENT - fuzz_crash_044.md:4:2:4:2
 UNEXPECTED STATEMENT - fuzz_crash_044.md:4:2:4:3
 # PROBLEMS
-
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_044.md:1:20
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -34,7 +33,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_044.md:1:21
 
@@ -49,7 +48,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_044.md:1:22
 
@@ -64,7 +63,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_044.md:2:1
 
@@ -79,7 +78,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -96,7 +95,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -113,7 +112,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_044.md:4:2
 
@@ -143,7 +142,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,OpenCurly,Int,

@@ -16,7 +16,6 @@ main! = |_| {}
 AMBIGUOUS FUNCTION TYPE - type_function_basic.md:3:26:3:28
 UNEXPECTED STATEMENT - type_function_basic.md:3:29:3:31
 # PROBLEMS
-
 ── ✗ ambiguous function type ─────────────────────── type_function_basic.md:3:26
 
 I was parsing a function type, and multiple arrows need parentheses.
@@ -44,7 +43,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_b` here.
+I found _b here.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -54,46 +54,44 @@ OPEN EXT NOT ALLOWED IN TYPE DECLARATION - type_alias_decl.md:22:18:22:20
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:11
 UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 # PROBLEMS
-
 ── ● builtin type shadowed ────────────────────────────── type_alias_decl.md:7:1
 
-The type `Try` shadows a builtin type.
+The type Try shadows a builtin type.
 
 Try(ok, err) : [Ok(ok), Err(err)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in:
-
 ── ✗ open ext not allowed in type declaration ───────── type_alias_decl.md:22:18
 
-You cannot use a `..` inside a type declaration.
+You cannot use a .. inside a type declaration.
 
 Letters : [A, B, ..]
                  ^^
 
-Hint: You need a named variable, like `..others`, to use this here.
+Hint: You need a named variable, like ..others, to use this here.
 
 ── ● unused variable ─────────────────────────────────── type_alias_decl.md:36:5
 
-Variable `person` is defined here and then never used:
+Variable person is defined here and then never used:
 
 person = { name: "Alice", age: 30 }
 ^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_person` to
+If you don't need this variable, prefix it with an underscore like _person to
 suppress this warning.
 
 ── ● unused variable ─────────────────────────────────── type_alias_decl.md:39:5
 
-Variable `color` is defined here and then never used:
+Variable color is defined here and then never used:
 
 color = Red
 ^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_color` to
+If you don't need this variable, prefix it with an underscore like _color to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 INVALID NUMBER - frac_tiny_scientific.md:1:1:1:9
 # PROBLEMS
-
 ── ✗ invalid number ──────────────────────────────── frac_tiny_scientific.md:1:1
 
 This number literal does not fit in the inferred type.
@@ -21,6 +20,7 @@ This number literal does not fit in the inferred type.
 The inferred type is:
 
     Dec
+
 # TOKENS
 ~~~zig
 Float,

@@ -63,14 +63,12 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
-
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:5:6
 
 This Unicode escape sequence is not valid.
 
 '\u',
  ^^
-
 
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:6:6
 
@@ -79,14 +77,12 @@ This Unicode escape sequence is not valid.
 '\u)',
  ^^
 
-
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:7:6
 
 This Unicode escape sequence is not valid.
 
 '\u(',
  ^^^
-
 
 ── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:8:6
 
@@ -95,14 +91,12 @@ This Unicode escape sequence is not valid.
 '\u()',
  ^^^^
 
-
 ── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:10:6
 
 This Unicode escape sequence is not valid.
 
 '\u(EDA0B5)'
  ^^^^^^^^^^
-
 
 ── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:11:6
 
@@ -111,14 +105,12 @@ This Unicode escape sequence is not valid.
 '\u(K)',
  ^^^^^
 
-
 ── ✗ single quote empty ────────────────────────── unicode_single_quotes.md:14:5
 
 Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 
 '',
 ^^
-
 
 ── ✗ single quote too long ─────────────────────── unicode_single_quotes.md:15:5
 
@@ -127,14 +119,12 @@ Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 'long',
 ^^^^^^
 
-
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:16:5
 
 This single-quoted literal is missing a closing quote.
 
 '\',
 ^^^^
-
 
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:19:5
 
@@ -143,13 +133,11 @@ This single-quoted literal is missing a closing quote.
 y = 'u
     ^^
 
-
 ── ✗ invalid escape sequence ───────────────────── unicode_single_quotes.md:22:2
 
 This escape sequence is not recognized.
 
 '\
-
 
 
 ── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:22:1
@@ -158,7 +146,6 @@ This single-quoted literal is missing a closing quote.
 
 '\
 ^^
-
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:5:5
 
@@ -173,7 +160,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u'` here.
+I found '\u' here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:6:5
 
@@ -188,7 +175,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u)'` here.
+I found '\u)' here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:7:5
 
@@ -203,7 +190,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u('` here.
+I found '\u(' here.
 
 ── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:8:5
 
@@ -218,7 +205,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u()'` here.
+I found '\u()' here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:10:5
 
@@ -233,7 +220,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(EDA0B5)'` here.
+I found '\u(EDA0B5)' here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:11:5
 
@@ -248,7 +235,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\u(K)'` here.
+I found '\u(K)' here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:14:5
 
@@ -263,7 +250,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `''` here.
+I found '' here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:15:5
 
@@ -278,7 +265,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'long'` here.
+I found 'long' here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:16:5
 
@@ -293,7 +280,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'\',` here.
+I found '\', here.
 
 ── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:19:5
 
@@ -308,7 +295,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `'u` here.
+I found 'u here.
 
 ── ✗ unexpected statement ──────────────────────── unicode_single_quotes.md:22:1
 
@@ -323,43 +310,43 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `'\` here.
-invalid tuple element
+I found '\ here.
+
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
 
-invalid tuple element
+── ✗ invalid tuple element ─────────────────────────────────────────────────────
 
 This tuple element is malformed or contains invalid syntax.
-
 
 ── ✗ unrecognized syntax ───────────────────────── unicode_single_quotes.md:19:5
 
@@ -369,6 +356,7 @@ y = 'u
     ^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

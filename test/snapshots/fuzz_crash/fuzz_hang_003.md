@@ -17,7 +17,6 @@ UNEXPECTED STATEMENT - fuzz_hang_003.md:4:11:4:12
 UNDECLARED TYPE - fuzz_hang_003.md:1:3:1:4
 UNDECLARED TYPE - fuzz_hang_003.md:3:3:3:4
 # PROBLEMS
-
 ── ✗ unexpected statement ───────────────────────────────── fuzz_hang_003.md:4:4
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -31,7 +30,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.70000c` here.
+I found .70000c here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_hang_003.md:4:11
 
@@ -46,19 +45,18 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:` here.
+I found : here.
 
 ── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:1:3
 
-The type `F` is not declared in this scope.
+The type F is not declared in this scope.
 
 a:F
   ^
 
-
 ── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:3:3
 
-The type `F` is not declared in this scope.
+The type F is not declared in this scope.
 
 b:F
   ^

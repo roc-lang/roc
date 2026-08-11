@@ -11,7 +11,6 @@ get_sum = |{ x, y }| x + y
 # EXPECTED
 TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 # PROBLEMS
-
 ── ✗ type mismatch ─────────────────────────── destructure_closed_fn_arg.md:2:12
 
 This expression is used in an unexpected way.
@@ -27,7 +26,8 @@ But the annotation says it should be:
 
     { x: U64, y: U64, z: U64 }
 
-Hint: This record is missing the field: `z`
+Hint: This record is missing the field: z
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,OpArrow,UpperIdent,

@@ -87,7 +87,7 @@ fn codepointWidth(cp: u21) usize {
 }
 
 /// The number of terminal columns `bytes` occupies when rendered, accounting
-/// for multi-byte UTF-8, wide/zero-width characters, and tabs (which the box
+/// for multi-byte UTF-8, wide/zero-width characters, and tabs (which the terminal
 /// renderer renders as a single space). Roc reports columns as byte offsets,
 /// so callers map byte spans to display columns through this.
 pub fn displayWidth(bytes: []const u8) usize {

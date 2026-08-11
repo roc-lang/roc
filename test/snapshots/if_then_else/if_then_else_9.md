@@ -19,7 +19,6 @@ TYPE MISMATCH - if_then_else_9.md:3:11:3:13
 MISSING METHOD - if_then_else_9.md:2:2:2:3
 MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
-
 ── ● unconditional condition ──────────────────────────── if_then_else_9.md:3:11
 
 This if condition is known at compile time, so this conditional will always
@@ -27,7 +26,6 @@ make the same choice.
 
 } else if 10 { # Comment after else open
           ^^
-
 
 ── ✗ type mismatch ────────────────────────────────────── if_then_else_9.md:3:11
 
@@ -42,27 +40,28 @@ Other code expects this to have the type:
 
 ── ✗ missing method ────────────────────────────────────── if_then_else_9.md:2:2
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 1
 ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     [A, ..]
 
 ── ✗ missing method ────────────────────────────────────── if_then_else_9.md:6:2
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 3
 ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     [A, ..]
+
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpenCurly,

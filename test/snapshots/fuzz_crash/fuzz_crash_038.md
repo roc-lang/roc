@@ -11,7 +11,6 @@ type=file
 UNEXPECTED STATEMENT - fuzz_crash_038.md:1:1:1:2
 EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_038.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -25,7 +24,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `*` here.
+I found * here.
 
 ── ✗ expected import alias ─────────────────────────────── fuzz_crash_038.md:1:2
 
@@ -39,8 +38,9 @@ Import aliases must start with an uppercase letter.
 For example:
     import Json/Decode as Decode
 
-I found `import` here.
+I found import here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+
 # TOKENS
 ~~~zig
 OpStar,KwImport,UpperIdent,KwAs,

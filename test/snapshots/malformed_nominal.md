@@ -17,7 +17,6 @@ UNEXPECTED STATEMENT - malformed_nominal.md:1:4:1:6
 UNEXPECTED STATEMENT - malformed_nominal.md:1:7:1:8
 UNEXPECTED STATEMENT - malformed_nominal.md:1:8:1:9
 # PROBLEMS
-
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -31,7 +30,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `@2` here.
+I found @2 here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:4
 
@@ -46,7 +45,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:7
 
@@ -61,7 +60,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:8
 
@@ -76,9 +75,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
+
 # TOKENS
 ~~~zig
 OpaqueName,OpColonEqual,OpenCurly,CloseCurly,

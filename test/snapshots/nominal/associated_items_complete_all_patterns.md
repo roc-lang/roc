@@ -806,7 +806,6 @@ TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:4
 POLYMORPHIC VALUE - associated_items_complete_all_patterns.md:51:9:51:13
 MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 # PROBLEMS
-
 ── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -820,7 +819,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d1_forward` here.
+I found d1_forward here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -837,7 +836,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:15
 
@@ -852,9 +851,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:2:17
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:2:17
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -862,13 +861,13 @@ parentheses.
 d1_forward := [A].{
                 ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -885,7 +884,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:2:19
 
@@ -900,7 +899,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ──────── associated_items_complete_all_patterns.md:5:1
 
@@ -915,7 +914,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -932,7 +931,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d1_scope` here.
+I found d1_scope here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -949,7 +948,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:13
 
@@ -964,9 +963,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:8:15
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:8:15
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -974,13 +973,13 @@ parentheses.
 d1_scope := [B].{
               ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -997,7 +996,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:8:17
 
@@ -1012,7 +1011,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:10:1
 
@@ -1027,7 +1026,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1044,7 +1043,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d2_inner_first` here.
+I found d2_inner_first here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1061,7 +1060,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:19
 
@@ -1076,9 +1075,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:13:21
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:13:21
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1086,13 +1085,13 @@ parentheses.
 d2_inner_first := [C].{
                     ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1109,7 +1108,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:13:23
 
@@ -1124,7 +1123,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:19:1
 
@@ -1139,7 +1138,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1150,15 +1149,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_2 = d2_inner_first.Inner.inner_val
                      ^^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.Inner` here.
+I found .Inner here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1175,7 +1174,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d2_outer_val_middle` here.
+I found d2_outer_val_middle here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1192,7 +1191,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:24
 
@@ -1207,9 +1206,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:23:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:23:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1217,13 +1216,13 @@ parentheses.
 d2_outer_val_middle := [G].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1240,7 +1239,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:23:28
 
@@ -1255,7 +1254,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:29:1
 
@@ -1270,7 +1269,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1281,15 +1280,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_3 = d2_outer_val_middle.Inner.inner_val
                           ^^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.Inner` here.
+I found .Inner here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1306,7 +1305,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d2_outer_refs_inner` here.
+I found d2_outer_refs_inner here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1323,7 +1322,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:24
 
@@ -1338,9 +1337,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:32:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:32:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1348,13 +1347,13 @@ parentheses.
 d2_outer_refs_inner := [I].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1371,7 +1370,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:32:28
 
@@ -1386,7 +1385,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:33:36
 
@@ -1395,15 +1394,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 outer_val = d2_outer_refs_inner.Inner.inner_val
                                ^^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.Inner` here.
+I found .Inner here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1420,7 +1419,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1437,7 +1436,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d2_scope_violation` here.
+I found d2_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1454,7 +1453,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:23
 
@@ -1469,9 +1468,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:41:25
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:41:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1479,13 +1478,13 @@ parentheses.
 d2_scope_violation := [K].{
                         ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1502,7 +1501,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:41:27
 
@@ -1517,7 +1516,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:47:1
 
@@ -1532,7 +1531,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1549,7 +1548,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d2_siblings` here.
+I found d2_siblings here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1566,7 +1565,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:16
 
@@ -1581,9 +1580,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:49:18
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:49:18
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1591,13 +1590,13 @@ parentheses.
 d2_siblings := [M].{
                  ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1614,7 +1613,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:49:20
 
@@ -1629,7 +1628,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ expected record accessor ── associated_items_complete_all_patterns.md:51:27
 
@@ -1638,15 +1637,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 valA = d2_siblings.InnerB.valB + 1
                   ^^^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.InnerB` here.
+I found .InnerB here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1663,7 +1662,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1674,15 +1673,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_5 = d2_siblings.InnerA.valA
                   ^^^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.InnerA` here.
+I found .InnerA here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1699,7 +1698,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d3_types_then_vals` here.
+I found d3_types_then_vals here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1716,7 +1715,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:23
 
@@ -1731,9 +1730,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:60:25
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:60:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1741,13 +1740,13 @@ parentheses.
 d3_types_then_vals := [P].{
                         ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1764,7 +1763,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:60:27
 
@@ -1779,7 +1778,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:70:1
 
@@ -1794,7 +1793,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1805,15 +1804,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_2 = d3_types_then_vals.L2.val2
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1824,15 +1823,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_3 = d3_types_then_vals.L2.L3.val3
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1843,15 +1842,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_3 = d3_types_then_vals.L2.L3.val3
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1868,7 +1867,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d3_vals_then_types` here.
+I found d3_vals_then_types here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -1885,7 +1884,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:23
 
@@ -1900,9 +1899,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:75:25
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:75:25
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -1910,13 +1909,13 @@ parentheses.
 d3_vals_then_types := [S].{
                         ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1933,7 +1932,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:75:27
 
@@ -1948,7 +1947,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:85:1
 
@@ -1963,7 +1962,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -1974,15 +1973,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_5 = d3_vals_then_types.L2.val2
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -1993,15 +1992,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_6 = d3_vals_then_types.L2.L3.val3
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2012,15 +2011,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_6 = d3_vals_then_types.L2.L3.val3
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2037,7 +2036,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d3_l1_scope_violation` here.
+I found d3_l1_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2054,7 +2053,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:26
 
@@ -2069,9 +2068,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:90:28
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:90:28
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2079,13 +2078,13 @@ parentheses.
 d3_l1_scope_violation := [V].{
                            ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2102,7 +2101,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:90:30
 
@@ -2117,7 +2116,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ─────── associated_items_complete_all_patterns.md:98:1
 
@@ -2132,7 +2131,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2149,7 +2148,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d3_l2_scope_violation` here.
+I found d3_l2_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2166,7 +2165,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:26
 
@@ -2181,9 +2180,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:100:28
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:100:28
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2191,13 +2190,13 @@ parentheses.
 d3_l2_scope_violation := [Y].{
                            ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2214,7 +2213,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:100:30
 
@@ -2229,7 +2228,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:108:1
 
@@ -2244,7 +2243,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2261,7 +2260,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d3_val_after_nested` here.
+I found d3_val_after_nested here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2278,7 +2277,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:24
 
@@ -2293,9 +2292,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:110:27
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:110:27
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2303,13 +2302,13 @@ parentheses.
 d3_val_after_nested := [AB].{
                           ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2326,7 +2325,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:110:29
 
@@ -2341,7 +2340,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:120:1
 
@@ -2356,7 +2355,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2367,15 +2366,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_8 = d3_val_after_nested.L2.val2
                           ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2386,15 +2385,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_9 = d3_val_after_nested.L2.L3.val3
                           ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2405,15 +2404,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_9 = d3_val_after_nested.L2.L3.val3
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2430,7 +2429,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_all_types_then_vals` here.
+I found d4_all_types_then_vals here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2447,7 +2446,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:27
 
@@ -2462,9 +2461,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:125:30
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:125:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2472,13 +2471,13 @@ parentheses.
 d4_all_types_then_vals := [AE].{
                              ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2495,7 +2494,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:125:32
 
@@ -2510,7 +2509,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:139:1
 
@@ -2525,7 +2524,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2536,15 +2535,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2555,15 +2554,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                                 ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2574,15 +2573,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                                    ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2599,7 +2598,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_all_vals_then_types` here.
+I found d4_all_vals_then_types here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2616,7 +2615,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:27
 
@@ -2631,9 +2630,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:142:30
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:142:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2641,13 +2640,13 @@ parentheses.
 d4_all_vals_then_types := [AI].{
                              ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2664,7 +2663,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:142:32
 
@@ -2679,7 +2678,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:156:1
 
@@ -2694,7 +2693,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2705,15 +2704,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2724,15 +2723,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                                 ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2743,15 +2742,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                                    ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2768,7 +2767,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_reverse_types` here.
+I found d4_reverse_types here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2785,7 +2784,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:21
 
@@ -2800,9 +2799,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:159:24
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:159:24
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2810,13 +2809,13 @@ parentheses.
 d4_reverse_types := [AM].{
                        ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2833,7 +2832,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:159:26
 
@@ -2848,7 +2847,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:173:1
 
@@ -2863,7 +2862,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -2874,15 +2873,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                        ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2893,15 +2892,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                           ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2912,15 +2911,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -2937,7 +2936,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_interleaved` here.
+I found d4_interleaved here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -2954,7 +2953,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:19
 
@@ -2969,9 +2968,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:176:22
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:176:22
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -2979,13 +2978,13 @@ parentheses.
 d4_interleaved := [AQ].{
                      ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3002,7 +3001,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:176:24
 
@@ -3017,7 +3016,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:190:1
 
@@ -3032,7 +3031,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3043,15 +3042,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                      ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3062,15 +3061,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                         ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3081,15 +3080,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                            ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3106,7 +3105,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l3_val_after_l4` here.
+I found d4_l3_val_after_l4 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3123,7 +3122,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:23
 
@@ -3138,9 +3137,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:193:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:193:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3148,13 +3147,13 @@ parentheses.
 d4_l3_val_after_l4 := [BA].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3171,7 +3170,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:193:28
 
@@ -3186,7 +3185,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:202:1
 
@@ -3201,7 +3200,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3212,15 +3211,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3231,15 +3230,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3250,15 +3249,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3275,7 +3274,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l2_val_after_l3` here.
+I found d4_l2_val_after_l3 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3292,7 +3291,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:23
 
@@ -3307,9 +3306,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:205:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:205:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3317,13 +3316,13 @@ parentheses.
 d4_l2_val_after_l3 := [BE].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3340,7 +3339,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:205:28
 
@@ -3355,7 +3354,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:217:1
 
@@ -3370,7 +3369,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3381,15 +3380,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3400,15 +3399,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3419,15 +3418,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3444,7 +3443,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l1_val_after_l2` here.
+I found d4_l1_val_after_l2 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3461,7 +3460,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:23
 
@@ -3476,9 +3475,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:220:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:220:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3486,13 +3485,13 @@ parentheses.
 d4_l1_val_after_l2 := [BI].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3509,7 +3508,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:220:28
 
@@ -3524,7 +3523,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:234:1
 
@@ -3539,7 +3538,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3550,15 +3549,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3569,15 +3568,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3588,15 +3587,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -3613,7 +3612,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l1_scope_violation` here.
+I found d4_l1_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3630,7 +3629,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:26
 
@@ -3645,9 +3644,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:237:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:237:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3655,13 +3654,13 @@ parentheses.
 d4_l1_scope_violation := [BM].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3678,7 +3677,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:237:31
 
@@ -3693,7 +3692,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:247:1
 
@@ -3708,7 +3707,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3725,7 +3724,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l2_scope_violation` here.
+I found d4_l2_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3742,7 +3741,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:26
 
@@ -3757,9 +3756,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:249:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:249:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3767,13 +3766,13 @@ parentheses.
 d4_l2_scope_violation := [BQ].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3790,7 +3789,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:249:31
 
@@ -3805,7 +3804,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:259:1
 
@@ -3820,7 +3819,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3837,7 +3836,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d4_l3_scope_violation` here.
+I found d4_l3_scope_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3854,7 +3853,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:26
 
@@ -3869,9 +3868,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:261:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:261:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3879,13 +3878,13 @@ parentheses.
 d4_l3_scope_violation := [BU].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3902,7 +3901,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:261:31
 
@@ -3917,7 +3916,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:271:1
 
@@ -3932,7 +3931,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -3949,7 +3948,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_all_types_then_vals` here.
+I found d5_all_types_then_vals here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -3966,7 +3965,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:27
 
@@ -3981,9 +3980,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:273:30
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:273:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -3991,13 +3990,13 @@ parentheses.
 d5_all_types_then_vals := [BY].{
                              ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4014,7 +4013,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:273:32
 
@@ -4029,7 +4028,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:291:1
 
@@ -4044,7 +4043,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4055,15 +4054,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4074,15 +4073,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                 ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4093,15 +4092,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                    ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4112,15 +4111,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                       ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4137,7 +4136,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_all_vals_then_types` here.
+I found d5_all_vals_then_types here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -4154,7 +4153,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:27
 
@@ -4169,9 +4168,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:294:30
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:294:30
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4179,13 +4178,13 @@ parentheses.
 d5_all_vals_then_types := [CD].{
                              ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4202,7 +4201,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:294:32
 
@@ -4217,7 +4216,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:312:1
 
@@ -4232,7 +4231,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4243,15 +4242,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                              ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4262,15 +4261,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                 ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4281,15 +4280,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                    ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4300,15 +4299,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                       ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4325,7 +4324,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_deep_interleave` here.
+I found d5_deep_interleave here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -4342,7 +4341,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:23
 
@@ -4357,9 +4356,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:315:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:315:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4367,13 +4366,13 @@ parentheses.
 d5_deep_interleave := [CI].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4390,7 +4389,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:315:28
 
@@ -4405,7 +4404,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:333:1
 
@@ -4420,7 +4419,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4431,15 +4430,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4450,15 +4449,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4469,15 +4468,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4488,15 +4487,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4513,7 +4512,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l4_val_after_l5` here.
+I found d5_l4_val_after_l5 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -4530,7 +4529,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:23
 
@@ -4545,9 +4544,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:336:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:336:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4555,13 +4554,13 @@ parentheses.
 d5_l4_val_after_l5 := [CN].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4578,7 +4577,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:336:28
 
@@ -4593,7 +4592,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:348:1
 
@@ -4608,7 +4607,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4619,15 +4618,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4638,15 +4637,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4657,15 +4656,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4676,15 +4675,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4701,7 +4700,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l3_val_after_l4` here.
+I found d5_l3_val_after_l4 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -4718,7 +4717,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:23
 
@@ -4733,9 +4732,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:351:26
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:351:26
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4743,13 +4742,13 @@ parentheses.
 d5_l3_val_after_l4 := [CS].{
                          ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4766,7 +4765,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:351:28
 
@@ -4781,7 +4780,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:365:1
 
@@ -4796,7 +4795,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4807,15 +4806,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4826,15 +4825,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4845,15 +4844,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4864,15 +4863,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -4889,7 +4888,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l1_val_last` here.
+I found d5_l1_val_last here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -4906,7 +4905,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:19
 
@@ -4921,9 +4920,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:368:22
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:368:22
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -4931,13 +4930,13 @@ parentheses.
 d5_l1_val_last := [DC].{
                      ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4954,7 +4953,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:368:24
 
@@ -4969,7 +4968,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:386:1
 
@@ -4984,7 +4983,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -4995,15 +4994,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_7 = d5_l1_val_last.L2.val2
                      ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5014,15 +5013,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_8 = d5_l1_val_last.L2.L3.val3
                      ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5033,15 +5032,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_8 = d5_l1_val_last.L2.L3.val3
                         ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5052,15 +5051,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                      ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5071,15 +5070,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                         ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5090,15 +5089,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                            ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5109,15 +5108,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                       ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L2` here.
+I found .L2 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5128,15 +5127,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L3` here.
+I found .L3 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5147,15 +5146,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L4` here.
+I found .L4 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5166,15 +5165,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.L5` here.
+I found .L5 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -5191,7 +5190,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l1_to_l5_violation` here.
+I found d5_l1_to_l5_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -5208,7 +5207,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:26
 
@@ -5223,9 +5222,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:393:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:393:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5233,13 +5232,13 @@ parentheses.
 d5_l1_to_l5_violation := [DH].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -5256,7 +5255,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:393:31
 
@@ -5271,7 +5270,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:405:1
 
@@ -5286,7 +5285,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -5303,7 +5302,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l3_to_l5_violation` here.
+I found d5_l3_to_l5_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -5320,7 +5319,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:26
 
@@ -5335,9 +5334,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:407:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:407:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5345,13 +5344,13 @@ parentheses.
 d5_l3_to_l5_violation := [DM].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -5368,7 +5367,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:407:31
 
@@ -5383,7 +5382,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:419:1
 
@@ -5398,7 +5397,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -5415,7 +5414,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `d5_l4_to_l5_violation` here.
+I found d5_l4_to_l5_violation here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -5432,7 +5431,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `:=` here.
+I found := here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:26
 
@@ -5447,9 +5446,9 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
-── ✗ type application needs parentheses ───── associated_items_complete_all_patterns.md:421:29
+── ✗ type application needs parentheses ─ associated_items_complete_all_patterns.md:421:29
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -5457,13 +5456,13 @@ parentheses.
 d5_l4_to_l5_violation := [DR].{
                             ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -5480,7 +5479,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.` here.
+I found . here.
 
 ── ✗ unexpected statement ───── associated_items_complete_all_patterns.md:421:31
 
@@ -5495,7 +5494,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ────── associated_items_complete_all_patterns.md:433:1
 
@@ -5510,13 +5509,13 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
 ── ✗ name not in scope ─────────── associated_items_complete_all_patterns.md:6:8
 
-Nothing is named `d1_forward` in this scope.
+Nothing is named d1_forward in this scope.
 
 d1_1 = d1_forward.first
        ^^^^^^^^^^
@@ -5525,7 +5524,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:11:8
 
-Nothing is named `d1_scope` in this scope.
+Nothing is named d1_scope in this scope.
 
 d1_2 = d1_scope.inner
        ^^^^^^^^
@@ -5534,7 +5533,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:20:8
 
-Nothing is named `d2_inner_first` in this scope.
+Nothing is named d2_inner_first in this scope.
 
 d2_1 = d2_inner_first.outer_val
        ^^^^^^^^^^^^^^
@@ -5552,14 +5551,11 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:24:5
 
-The type `Inner` is being redeclared.
+The type Inner is being redeclared.
 
 Inner := [H].{
     inner_val = outer_val
 }
-
-
-The redeclaration is in:
 
 But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
@@ -5569,13 +5565,12 @@ Inner := [D].{
 
 ── ● duplicate definition ─────── associated_items_complete_all_patterns.md:28:5
 
-The name `outer_val` is being redeclared here:
+The name outer_val is being redeclared here:
 
 outer_val = 500
 ^^^^^^^^^
 
-
-In this scope, `outer_val` was already defined in associated_items_complete_all_patterns.md:15:21:
+In this scope, outer_val was already defined in associated_items_complete_all_patterns.md:15:21:
 
 inner_val = outer_val
             ^^^^^^^^^
@@ -5591,13 +5586,12 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ─────── associated_items_complete_all_patterns.md:33:5
 
-The name `outer_val` is being redeclared here:
+The name outer_val is being redeclared here:
 
 outer_val = d2_outer_refs_inner.Inner.inner_val
 ^^^^^^^^^
 
-
-In this scope, `outer_val` was already defined in associated_items_complete_all_patterns.md:28:5:
+In this scope, outer_val was already defined in associated_items_complete_all_patterns.md:28:5:
 
 outer_val = 500
 ^^^^^^^^^
@@ -5613,14 +5607,11 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:35:5
 
-The type `Inner` is being redeclared.
+The type Inner is being redeclared.
 
 Inner := [J].{
     inner_val = 600
 }
-
-
-The redeclaration is in:
 
 But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
@@ -5630,7 +5621,7 @@ Inner := [D].{
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:39:8
 
-Nothing is named `d2_outer_refs_inner` in this scope.
+Nothing is named d2_outer_refs_inner in this scope.
 
 d2_4 = d2_outer_refs_inner.outer_val
        ^^^^^^^^^^^^^^^^^^^
@@ -5639,14 +5630,11 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:42:5
 
-The type `Inner` is being redeclared.
+The type Inner is being redeclared.
 
 Inner := [L].{
     inner_private = 700
 }
-
-
-The redeclaration is in:
 
 But Inner was already declared in associated_items_complete_all_patterns.md:14:5:
 
@@ -5656,7 +5644,7 @@ Inner := [D].{
 
 ── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:46:26
 
-Nothing is named `inner_private` in this scope.
+Nothing is named inner_private in this scope.
 
 outer_trying_inner = inner_private
                      ^^^^^^^^^^^^^
@@ -5683,7 +5671,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:71:8
 
-Nothing is named `d3_types_then_vals` in this scope.
+Nothing is named d3_types_then_vals in this scope.
 
 d3_1 = d3_types_then_vals.val1
        ^^^^^^^^^^^^^^^^^^
@@ -5710,20 +5698,19 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ─────── associated_items_complete_all_patterns.md:76:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 30
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:63:20:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:63:20:
 
 val3 = val1 + val2
        ^^^^
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:78:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [T].{
     val2 = val1 + 5
@@ -5732,9 +5719,6 @@ L2 := [T].{
         val3 = val1 + val2
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -5748,7 +5732,7 @@ L2 := [Q].{
 
 ── ✗ name not in scope ────────── associated_items_complete_all_patterns.md:86:8
 
-Nothing is named `d3_vals_then_types` in this scope.
+Nothing is named d3_vals_then_types in this scope.
 
 d3_4 = d3_vals_then_types.val1
        ^^^^^^^^^^^^^^^^^^
@@ -5775,16 +5759,13 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ──────────── associated_items_complete_all_patterns.md:91:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [W].{
     L3 := [X].{
         l3_private = 999
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -5798,7 +5779,7 @@ L2 := [Q].{
 
 ── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:97:14
 
-Nothing is named `l3_private` in this scope.
+Nothing is named l3_private in this scope.
 
 bad_l1 = l3_private
          ^^^^^^^^^^
@@ -5807,7 +5788,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:101:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [Z].{
     L3 := [AA].{
@@ -5816,9 +5797,6 @@ L2 := [Z].{
 
     bad_l2 = l3_secret
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -5832,7 +5810,7 @@ L2 := [Q].{
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:111:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [AC].{
     L3 := [AD].{
@@ -5841,9 +5819,6 @@ L2 := [AC].{
 
     val2 = val1 * 3
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -5857,20 +5832,19 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:119:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 5
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:76:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:76:5:
 
 val1 = 30
 ^^^^
 
 ── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:121:8
 
-Nothing is named `d3_val_after_nested` in this scope.
+Nothing is named d3_val_after_nested in this scope.
 
 d3_7 = d3_val_after_nested.val1
        ^^^^^^^^^^^^^^^^^^^
@@ -5897,7 +5871,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:126:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [AF].{
     L3 := [AG].{
@@ -5911,9 +5885,6 @@ L2 := [AF].{
     val2 = 2
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -5926,13 +5897,12 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:138:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 1
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:119:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:119:5:
 
 val1 = 5
 ^^^^
@@ -5948,20 +5918,19 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:143:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 10
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:138:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:138:5:
 
 val1 = 1
 ^^^^
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:145:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [AJ].{
     val2 = val1 + 1
@@ -5974,9 +5943,6 @@ L2 := [AJ].{
         }
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -5999,7 +5965,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:160:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [AN].{
     L3 := [AO].{
@@ -6013,9 +5979,6 @@ L2 := [AN].{
     val2 = val1 + 1
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6028,13 +5991,12 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:172:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 7
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:143:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:143:5:
 
 val1 = 10
 ^^^^
@@ -6050,20 +6012,19 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:177:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 15
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:172:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:172:5:
 
 val1 = 7
 ^^^^
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:179:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [AR].{
     L3 := [AS].{
@@ -6076,9 +6037,6 @@ L2 := [AR].{
 
     val2 = val1 + 5
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6101,7 +6059,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:194:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BB].{
     L3 := [BC].{
@@ -6111,9 +6069,6 @@ L2 := [BB].{
         val3 = 12
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6136,7 +6091,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:206:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BF].{
     L3 := [BG].{
@@ -6149,9 +6104,6 @@ L2 := [BF].{
 
     val2 = 4
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6174,7 +6126,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:221:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BJ].{
     L3 := [BK].{
@@ -6188,9 +6140,6 @@ L2 := [BJ].{
     val2 = val1 + 10
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6203,13 +6152,12 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:233:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 3
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:177:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:177:5:
 
 val1 = 15
 ^^^^
@@ -6225,7 +6173,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:238:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BN].{
     L3 := [BO].{
@@ -6234,9 +6182,6 @@ L2 := [BN].{
         }
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6250,7 +6195,7 @@ L2 := [Q].{
 
 ── ✗ name not in scope ──────── associated_items_complete_all_patterns.md:246:11
 
-Nothing is named `l4_val` in this scope.
+Nothing is named l4_val in this scope.
 
 bad = l4_val
       ^^^^^^
@@ -6259,7 +6204,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:250:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BR].{
     L3 := [BS].{
@@ -6270,9 +6215,6 @@ L2 := [BR].{
 
     bad = l4_secret
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6286,7 +6228,7 @@ L2 := [Q].{
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:262:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BV].{
     L3 := [BW].{
@@ -6297,9 +6239,6 @@ L2 := [BV].{
         attempt = l4_private
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6313,7 +6252,7 @@ L2 := [Q].{
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:274:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [BZ].{
     L3 := [CA].{
@@ -6331,9 +6270,6 @@ L2 := [BZ].{
     val2 = 2
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6346,13 +6282,12 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:290:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 1
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:233:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:233:5:
 
 val1 = 3
 ^^^^
@@ -6368,20 +6303,19 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:295:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 100
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:290:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:290:5:
 
 val1 = 1
 ^^^^
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:297:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [CE].{
     val2 = val1 + 10
@@ -6398,9 +6332,6 @@ L2 := [CE].{
         }
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6423,20 +6354,19 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:316:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 2
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:295:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:295:5:
 
 val1 = 100
 ^^^^
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:318:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [CJ].{
     L3 := [CK].{
@@ -6453,9 +6383,6 @@ L2 := [CJ].{
 
     val2 = val1 + 1
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6478,7 +6405,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:337:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [CO].{
     L3 := [CP].{
@@ -6491,9 +6418,6 @@ L2 := [CO].{
         }
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6516,7 +6440,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:352:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [CT].{
     L3 := [CU].{
@@ -6531,9 +6455,6 @@ L2 := [CT].{
         val3 = 3
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6556,7 +6477,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:369:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [DD].{
     val2 = val1 + 10
@@ -6574,9 +6495,6 @@ L2 := [DD].{
     }
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6589,20 +6507,19 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:385:5
 
-The name `val1` is being redeclared here:
+The name val1 is being redeclared here:
 
 val1 = 5
 ^^^^
 
-
-In this scope, `val1` was already defined in associated_items_complete_all_patterns.md:316:5:
+In this scope, val1 was already defined in associated_items_complete_all_patterns.md:316:5:
 
 val1 = 2
 ^^^^
 
 ── ✗ name not in scope ───────── associated_items_complete_all_patterns.md:387:8
 
-Nothing is named `d5_l1_val_last` in this scope.
+Nothing is named d5_l1_val_last in this scope.
 
 d5_6 = d5_l1_val_last.val1
        ^^^^^^^^^^^^^^
@@ -6647,7 +6564,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:394:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [DI].{
     L3 := [DJ].{
@@ -6658,9 +6575,6 @@ L2 := [DI].{
         }
     }
 }
-
-
-The redeclaration is in:
 
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
@@ -6674,20 +6588,19 @@ L2 := [Q].{
 
 ── ● duplicate definition ────── associated_items_complete_all_patterns.md:404:5
 
-The name `bad` is being redeclared here:
+The name bad is being redeclared here:
 
 bad = deep_secret
 ^^^
 
-
-In this scope, `bad` was already defined in associated_items_complete_all_patterns.md:246:5:
+In this scope, bad was already defined in associated_items_complete_all_patterns.md:246:5:
 
 bad = l4_val
 ^^^
 
 ── ✗ name not in scope ──────── associated_items_complete_all_patterns.md:404:11
 
-Nothing is named `deep_secret` in this scope.
+Nothing is named deep_secret in this scope.
 
 bad = deep_secret
       ^^^^^^^^^^^
@@ -6696,7 +6609,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:408:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [DN].{
     L3 := [DO].{
@@ -6710,9 +6623,6 @@ L2 := [DN].{
     }
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6725,7 +6635,7 @@ L2 := [Q].{
 
 ── ✗ type redeclared ─────────── associated_items_complete_all_patterns.md:422:5
 
-The type `L2` is being redeclared.
+The type L2 is being redeclared.
 
 L2 := [DS].{
     L3 := [DT].{
@@ -6739,9 +6649,6 @@ L2 := [DS].{
     }
 }
 
-
-The redeclaration is in:
-
 But L2 was already declared in associated_items_complete_all_patterns.md:61:5:
 
 L2 := [Q].{
@@ -6752,7 +6659,7 @@ L2 := [Q].{
     val2 = 20
 }
 
-── ✗ type mod missing matching type ───── associated_items_complete_all_patterns.md:2:1
+── ✗ type mod missing matching type ─ associated_items_complete_all_patterns.md:2:1
 
 Type mods must have a nominal type declaration matching the mod name.
 
@@ -7189,13 +7096,12 @@ d5_l4_to_l5_violation := [DR].{
     }
 }
 
-This file is named `Test`.roc, but no top-level nominal type named `Test` was
-found.
+This file is named Test.roc, but no top-level nominal type named Test was found.
 
 Add a nominal type like:
-`Test := ...`
+Test := ...
 or:
-`Test :: ...` (opaque nominal type)
+Test :: ... (opaque nominal type)
 
 ── ✗ polymorphic value ────────── associated_items_complete_all_patterns.md:51:9
 
@@ -7210,7 +7116,7 @@ Add an annotation or use this value in a way that fixes its concrete type.
 
 ── ✗ missing method ──────────── associated_items_complete_all_patterns.md:51:16
 
-This is trying to use the `+` operator on a value whose type is an unresolved
+This is trying to use the + operator on a value whose type is an unresolved
 type variable, which has no methods.
 
 valA = d2_siblings.InnerB.valB + 1
@@ -7219,6 +7125,7 @@ valA = d2_siblings.InnerB.valB + 1
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

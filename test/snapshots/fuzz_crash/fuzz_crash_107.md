@@ -11,7 +11,6 @@ e={{e:\\
 # EXPECTED
 NOT IMPLEMENTED - fuzz_crash_107.md:1:4:2:4
 # PROBLEMS
-
 ── ✗ not implemented ───────────────────────────────────── fuzz_crash_107.md:1:4
 
 This feature is not yet implemented: single-field record builder (minimum 2
@@ -22,6 +21,7 @@ e={{e:\\
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want
 to help improve Roc's error messages!
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,OpenCurly,LowerIdent,OpColon,MultilineStringStart,StringPart,

@@ -45,23 +45,21 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
-
 ── ● duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
 
-The name `Json` is being redeclared here:
+The name Json is being redeclared here:
 
 import json.Json
 ^^^^^^^^^^^^^^^^
 
-
-In this scope, `Json` was already defined in can_import_unresolved_qualified.md:1:1:
+In this scope, Json was already defined in can_import_unresolved_qualified.md:1:1:
 
 import json.Json
 ^
 
 ── ✗ name not in scope ────────────────── can_import_unresolved_qualified.md:5:8
 
-Nothing is named `method` in this scope.
+Nothing is named method in this scope.
 
 main = Json.NonExistent.method
        ^^^^^^^^^^^^^^^^^^^^^^^
@@ -70,15 +68,14 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ mod not found ────────────────── can_import_unresolved_qualified.md:8:17
 
-This `InvalidType` type is declared to be in `json.Json`, which does not exist.
+This InvalidType type is declared to be in json.Json, which does not exist.
 
 parseData : Json.InvalidType -> Str
                 ^^^^^^^^^^^^
 
-
 ── ✗ name not in scope ───────────────── can_import_unresolved_qualified.md:9:20
 
-Nothing is named `stringify` in this scope.
+Nothing is named stringify in this scope.
 
 parseData = |data| Json.stringify(data)
                    ^^^^^^^^^^^^^^
@@ -87,25 +84,22 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:29
 
-This `Server.Request` type is declared to be in `http.Client`, which does not
-exist.
+This Server.Request type is declared to be in http.Client, which does not exist.
 
 processRequest : Http.Server.Request -> Http.Server.Response
                             ^^^^^^^^
 
-
 ── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:52
 
-This `Server.Response` type is declared to be in `http.Client`, which does not
+This Server.Response type is declared to be in http.Client, which does not
 exist.
 
 processRequest : Http.Server.Request -> Http.Server.Response
                                                    ^^^^^^^^^
 
-
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:13:24
 
-Nothing is named `defaultResponse` in this scope.
+Nothing is named defaultResponse in this scope.
 
 processRequest = |req| Http.Server.defaultResponse
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -114,17 +108,17 @@ Is it misspelled, or is there an import missing?
 
 ── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
 
-Variable `req` is defined here and then never used:
+Variable req is defined here and then never used:
 
 processRequest = |req| Http.Server.defaultResponse
                   ^^^
 
-If you don't need this variable, prefix it with an underscore like `_req` to
+If you don't need this variable, prefix it with an underscore like _req to
 suppress this warning.
 
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:16:10
 
-Nothing is named `prase` in this scope.
+Nothing is named prase in this scope.
 
 result = Json.prase("test")
          ^^^^^^^^^^
@@ -133,15 +127,14 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ does not exist ─────────────────── can_import_unresolved_qualified.md:19:10
 
-`Unknown.Mod.config` does not exist.
+Unknown.Mod.config does not exist.
 
 config = Unknown.Mod.config
          ^^^^^^^^^^^^^^^^^^
 
-
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:22:10
 
-Nothing is named `invalidMethod` in this scope.
+Nothing is named invalidMethod in this scope.
 
 client = Http.invalidMethod
          ^^^^^^^^^^^^^^^^^^
@@ -150,12 +143,13 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:25:10
 
-Nothing is named `create` in this scope.
+Nothing is named create in this scope.
 
 parser = Json.Parser.Advanced.NonExistent.create
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

@@ -28,7 +28,6 @@ UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
-
 ── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:12
 
 I was parsing access after `.`, and I expected a field name or tuple index.
@@ -36,15 +35,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 data = json.Core.Utf8.encode("hello")
            ^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.Core` here.
+I found .Core here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
@@ -55,60 +54,57 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 data = json.Core.Utf8.encode("hello")
                 ^^^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.Utf8` here.
+I found .Utf8 here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
 ── ✗ mod not found ─────────────────────────── multi_qualified_import.md:3:16
 
-This `Encoder` type is declared to be in `json.Core`, which does not exist.
+This Encoder type is declared to be in json.Core, which does not exist.
 
 json_encoder : Encoder
                ^^^^^^^
 
-
 ── ✗ does not exist ───────────────────────────── multi_qualified_import.md:4:16
 
-`Json.defaultEncoder` does not exist.
+Json.defaultEncoder does not exist.
 
 json_encoder = Json.Core.Utf8.defaultEncoder
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-`Json` is in scope, but it has no associated `defaultEncoder`.
+Json is in scope, but it has no associated defaultEncoder.
 
 ── ✗ mod not imported ──────────────────────── multi_qualified_import.md:7:11
 
-There is no mod with the name `json.Core.Utf8` imported into this Roc file.
+There is no mod with the name json.Core.Utf8 imported into this Roc file.
 
 process : json.Core.Utf8.Encoder -> Str
           ^^^^^^^^^^^^^^^^^^^^^^
 
-
 ── ● unused variable ──────────────────────────── multi_qualified_import.md:8:12
 
-Variable `encoder` is defined here and then never used:
+Variable encoder is defined here and then never used:
 
 process = |encoder| "processing"
            ^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_encoder`
-to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _encoder to
+suppress this warning.
 
 ── ✗ mod not imported ──────────────────────── multi_qualified_import.md:11:8
 
-There is no mod with the name `json.Core.Utf8` imported into this Roc file.
+There is no mod with the name json.Core.Utf8 imported into this Roc file.
 
 data : json.Core.Utf8.EncodedData
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
 
 ── ✗ unrecognized syntax ──────────────────────── multi_qualified_import.md:12:8
 
@@ -118,6 +114,7 @@ data = json.Core.Utf8.encode("hello")
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

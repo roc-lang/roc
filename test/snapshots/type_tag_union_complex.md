@@ -34,17 +34,15 @@ main! = |_| {}
 # EXPECTED
 BUILTIN TYPE SHADOWED - type_tag_union_complex.md:7:1:7:52
 # PROBLEMS
-
 ── ● builtin type shadowed ─────────────────────── type_tag_union_complex.md:7:1
 
-The type `Try` shadows a builtin type.
+The type Try shadows a builtin type.
 
 Try : [Success(Str), Error(Str), Warning(Str, I32)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in:
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

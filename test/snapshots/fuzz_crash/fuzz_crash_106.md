@@ -13,14 +13,13 @@ UPPERCASE BASE - :0:0:0:0
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 INVALID TUPLE ACCESS - fuzz_crash_106.md:1:3:1:9
 # PROBLEMS
-uppercase base
+── ✗ uppercase base ────────────────────────────────────────────────────────────
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
-misplaced carriage return
+── ✗ misplaced carriage return ─────────────────────────────────────────────────
 
 Carriage return characters (\r) are not allowed in Roc source code.
-
 
 ── ✗ invalid tuple access ──────────────────────────────── fuzz_crash_106.md:1:3
 

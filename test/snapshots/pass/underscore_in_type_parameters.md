@@ -28,7 +28,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:11:13:11:14
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:11:14:12
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_parameters.md:14:14:14:15
 # PROBLEMS
-
 ── ✗ underscore in type alias ───────────── underscore_in_type_parameters.md:2:8
 
 Underscores are not allowed in type alias declarations.
@@ -94,6 +93,7 @@ MultiType(_, _, c) : c
 Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,OpColon,UpperIdent,

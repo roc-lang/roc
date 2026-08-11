@@ -15,19 +15,18 @@ outer = |value| {
 # EXPECTED
 UNBOUND WHERE RECEIVER - where_clause_enclosing_rigid_error.md:3:29:3:46
 # PROBLEMS
-
 ── ✗ unbound where receiver ───────── where_clause_enclosing_rigid_error.md:3:29
 
-The type variable `a` is not introduced by this annotation's type or a
-connected method constraint, so this where clause cannot add the `show` method
-to it.
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the show method to it.
 
 inner : a -> Str where [a.show : a -> Str]
                         ^^^^^^^^^^^^^^^^^
 
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
-`a` to the annotation, or remove this constraint.
+a to the annotation, or remove this constraint.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,

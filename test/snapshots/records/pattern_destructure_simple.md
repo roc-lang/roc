@@ -14,10 +14,9 @@ match person {
 NAME NOT IN SCOPE - pattern_destructure_simple.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_simple.md:2:13:2:16
 # PROBLEMS
-
 ── ✗ name not in scope ─────────────────────── pattern_destructure_simple.md:1:7
 
-Nothing is named `person` in this scope.
+Nothing is named person in this scope.
 
 match person {
       ^^^^^^
@@ -26,13 +25,14 @@ Is it misspelled, or is there an import missing?
 
 ── ● unused variable ──────────────────────── pattern_destructure_simple.md:2:13
 
-Variable `age` is defined here and then never used:
+Variable age is defined here and then never used:
 
 { name, age } => name
         ^^^
 
-If you don't need this variable, prefix it with an underscore like `_age` to
+If you don't need this variable, prefix it with an underscore like _age to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

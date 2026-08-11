@@ -25,34 +25,30 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
-ascii control character
+── ✗ ascii control character ───────────────────────────────────────────────────
 
 ASCII control characters are not allowed in Roc source code.
 
-
 ── ✗ undeclared type ───────────────────────────────────── fuzz_crash_048.md:2:7
 
-The type `Thing` is not declared in this scope.
+The type Thing is not declared in this scope.
 
 bar : Thing(a, b, _)
       ^^^^^
 
-
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_048.md:6:14
 
-The type `String` is not declared in this scope.
+The type String is not declared in this scope.
 
 main! : List(String) -> Try({}, _)
              ^^^^^^
 
-
 ── ✗ undeclared type ──────────────────────────────────── fuzz_crash_048.md:7:13
 
-The type `Value` is not declared in this scope.
+The type Value is not declared in this scope.
 
 tag_tuple : Value((a, b, c))
             ^^^^^
-
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_048.md:1:1
 
@@ -113,6 +109,7 @@ tag_tuple : Value((a, b, c))
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

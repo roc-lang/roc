@@ -11,28 +11,28 @@ app [a1!, a2!] { pf: platform "../basic-cli/main.roc", a: "a" }
 EXPOSED BUT NOT DEFINED - app.md:1:11:1:14
 EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 # PROBLEMS
-
 ── ✗ exposed but not defined ─────────────────────────────────────── app.md:1:11
 
-The mod header says that `a2!` is exposed, but it is not defined anywhere in
+The mod header says that a2! is exposed, but it is not defined anywhere in
 this mod.
 
 app [a1!, a2!] { pf: platform "../basic-cli/main.roc", a: "a" }
           ^^^
 
-You can fix this by either defining `a2!` in this mod, or by removing it
-from the list of exposed values.
+You can fix this by either defining a2! in this mod, or by removing it from
+the list of exposed values.
 
 ── ✗ exposed but not defined ──────────────────────────────────────── app.md:1:6
 
-The mod header says that `a1!` is exposed, but it is not defined anywhere in
+The mod header says that a1! is exposed, but it is not defined anywhere in
 this mod.
 
 app [a1!, a2!] { pf: platform "../basic-cli/main.roc", a: "a" }
      ^^^
 
-You can fix this by either defining `a1!` in this mod, or by removing it
-from the list of exposed values.
+You can fix this by either defining a1! in this mod, or by removing it from
+the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

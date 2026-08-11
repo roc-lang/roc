@@ -24,7 +24,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
 TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
 TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
-
 ── ✗ underscore in type alias ────────────── underscore_error_propagation.md:1:1
 
 Underscores are not allowed in type alias declarations.
@@ -57,6 +56,7 @@ goodValue = "test"
 The type was determined to be:
 
     GoodDerived
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

@@ -45,32 +45,29 @@ POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
-
 ── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:32
 
-The type variable `a` is not introduced by this annotation's type or a
-connected method constraint, so this where clause cannot add the `parse` method
-to it.
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the parse method to it.
 
 parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
                                ^^^^^^^^^^^^^^^^^^
 
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
-`a` to the annotation, or remove this constraint.
+a to the annotation, or remove this constraint.
 
 ── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:52
 
-The type variable `a` is not introduced by this annotation's type or a
-connected method constraint, so this where clause cannot add the `show` method
-to it.
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the show method to it.
 
 parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
                                                    ^^^^^^^^^^^^^^^^^
 
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
-`a` to the annotation, or remove this constraint.
+a to the annotation, or remove this constraint.
 
 ── ✗ polymorphic value ────────── static_dispatch_scheme_position_matrix.md:22:1
 
@@ -85,7 +82,7 @@ Add an annotation or use this value in a way that fixes its concrete type.
 
 ── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:19:5
 
-This is trying to dispatch a method named `gen` on an unresolved type variable,
+This is trying to dispatch a method named gen on an unresolved type variable,
 but unresolved type variables have no methods.
 
 A.gen({})
@@ -97,8 +94,8 @@ type annotation that narrows its type to something that actually has methods.
 
 ── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:28:9
 
-This is trying to dispatch a method named `show` on an unresolved type
-variable, but unresolved type variables have no methods.
+This is trying to dispatch a method named show on an unresolved type variable,
+but unresolved type variables have no methods.
 
 v = A.parse(s)
     ^^^^^^^^^^
@@ -106,6 +103,7 @@ v = A.parse(s)
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

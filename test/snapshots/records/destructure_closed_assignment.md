@@ -14,7 +14,6 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 # PROBLEMS
-
 ── ✗ type mismatch ─────────────────────── destructure_closed_assignment.md:3:16
 
 This expression is used in an unexpected way.
@@ -35,8 +34,9 @@ But you are trying to use it as:
 
     { x: _field, y: a }
       where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z: _`,
-or add `..` to match all the remaining fields.
+Hint: This pattern doesn't bind the z field. Match it explicitly with z: _, or
+add .. to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

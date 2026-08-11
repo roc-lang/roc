@@ -58,113 +58,108 @@ NOT A WHERE ALIAS - everything.md:20:25:20:27
 DECLARATION HAS NO VALUE - everything.md:20:1:20:28
 NON EXHAUSTIVE MATCH - everything.md:29:2:34:3
 # PROBLEMS
-
 ── ✗ where clause not allowed in type declaration ──────────── everything.md:6:1
 
-You cannot define a `where` clause inside a type declaration.
+You cannot define a where clause inside a type declaration.
 
 A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in:
-
 ── ✗ where clause not allowed in type declaration ──────────── everything.md:8:1
 
-You cannot define a `where` clause inside a type declaration.
+You cannot define a where clause inside a type declaration.
 
 B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in:
-
 ── ● unused variable ─────────────────────────────────────── everything.md:30:10
 
-Variable `b` is defined here and then never used:
+Variable b is defined here and then never used:
 
 Z1((a, b)) => a
        ^
 
-If you don't need this variable, prefix it with an underscore like `_b` to
+If you don't need this variable, prefix it with an underscore like _b to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:31:9
 
-Variable `b` is defined here and then never used:
+Variable b is defined here and then never used:
 
 Z2(a, b) => a
       ^
 
-If you don't need this variable, prefix it with an underscore like `_b` to
+If you don't need this variable, prefix it with an underscore like _b to
 suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:32:11
 
-Variable `b` is defined here and then never used:
+Variable b is defined here and then never used:
 
 Z3({ a, b }) => a
         ^
 
-If you don't need this variable, prefix it with an underscore like `_b` to
+If you don't need this variable, prefix it with an underscore like _b to
 suppress this warning.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:33:10
 
-Variable `b` is defined here and then never used:
+Variable b is defined here and then never used:
 
 Z4([a, b]) => a
        ^
 
-If you don't need this variable, prefix it with an underscore like `_b` to
+If you don't need this variable, prefix it with an underscore like _b to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:23:2
 
-Variable `h1` is defined here and then never used:
+Variable h1 is defined here and then never used:
 
 h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
 ^^
 
-If you don't need this variable, prefix it with an underscore like `_h1` to
+If you don't need this variable, prefix it with an underscore like _h1 to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:24:2
 
-Variable `h2` is defined here and then never used:
+Variable h2 is defined here and then never used:
 
 h2 = h(x, y)
 ^^
 
-If you don't need this variable, prefix it with an underscore like `_h2` to
+If you don't need this variable, prefix it with an underscore like _h2 to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:25:2
 
-Variable `h3` is defined here and then never used:
+Variable h3 is defined here and then never used:
 
 h3 = A(x, y)
 ^^
 
-If you don't need this variable, prefix it with an underscore like `_h3` to
+If you don't need this variable, prefix it with an underscore like _h3 to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:26:2
 
-Variable `h4` is defined here and then never used:
+Variable h4 is defined here and then never used:
 
 h4 = [x, y]
 ^^
 
-If you don't need this variable, prefix it with an underscore like `_h4` to
+If you don't need this variable, prefix it with an underscore like _h4 to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:27:2
 
-Variable `h5` is defined here and then never used:
+Variable h5 is defined here and then never used:
 
 h5 = (x, y)
 ^^
 
-If you don't need this variable, prefix it with an underscore like `_h5` to
+If you don't need this variable, prefix it with an underscore like _h5 to
 suppress this warning.
 
 ── ✗ not a where alias ───────────────────────────────────── everything.md:20:20
@@ -174,9 +169,9 @@ A where clause can only name a where alias, but A is a type.
 g : e -> e where [e.A, e.B]
                    ^^
 
-A where alias names a set of method constraints, declared like `a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
-[a.Sortable]`
+A where alias names a set of method constraints, declared like a.Sortable :
+where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
+[a.Sortable]
 
 ── ✗ not a where alias ───────────────────────────────────── everything.md:20:25
 
@@ -185,9 +180,9 @@ A where clause can only name a where alias, but B is a type.
 g : e -> e where [e.A, e.B]
                         ^^
 
-A where alias names a set of method constraints, declared like `a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as `where
-[a.Sortable]`
+A where alias names a set of method constraints, declared like a.Sortable :
+where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
+[a.Sortable]
 
 ── ● declaration has no value ─────────────────────────────── everything.md:20:1
 
@@ -216,7 +211,8 @@ The value being matched on has type:
 Missing patterns:
         Z4 []
 
-Hint: Add branches to handle these cases, or use `_` to match anything.
+Hint: Add branches to handle these cases, or use _ to match anything.
+
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

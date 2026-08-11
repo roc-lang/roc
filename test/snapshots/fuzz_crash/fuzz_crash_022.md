@@ -32,7 +32,6 @@ UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
-
 ── ✗ expected dependency name ──────────────────────────── fuzz_crash_022.md:1:1
 
 I was parsing an app dependency record, and I expected a lowercase field name.
@@ -41,12 +40,12 @@ app [main!] { |f: platform "c" }
 ^^^
 
 Each package or platform entry starts with a lowercase field name, followed by
-`:` and a string path or `platform` path.
+: and a string path or platform path.
 
 For example:
     pf: platform "../platform/main.roc"
 
-I found `app` here.
+I found app here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_022.md:1:19
@@ -62,7 +61,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `platform` here.
+I found platform here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:28
@@ -78,7 +77,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:29
 
@@ -93,7 +92,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `c` here.
+I found c here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:30
 
@@ -108,7 +107,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:32
 
@@ -123,7 +122,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -140,7 +139,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `)` here.
+I found ) here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -157,7 +156,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `else` here.
+I found else here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_022.md:8:7
@@ -173,7 +172,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `=` here.
+I found = here.
 
 ── ✗ expected tuple separator ──────────────────────────── fuzz_crash_022.md:9:1
 
@@ -183,7 +182,7 @@ I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 ^
 
 Separate tuple elements with commas and close the tuple or parenthesized
-expression with `)`.
+expression with ).
 
 For example:
     (x, y)
@@ -212,19 +211,20 @@ This type annotation is malformed or contains invalid syntax.
 app [main!] { |f: platform "c" }
                   ^^^^^^^^
 
-invalid if condition
+── ✗ invalid if condition ──────────────────────────────────────────────────────
 
-The condition in this `if` expression could not be processed.
-The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
+The condition in this if expression could not be processed.
+
+The condition must be a valid expression that evaluates to a Bool value (Bool.true or Bool.false).
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_022.md:6:12
 
-Variable `id` is defined here and then never used:
+Variable id is defined here and then never used:
 
 getUser = |id| if (id > 1!) "big" else "l"
            ^^
 
-If you don't need this variable, prefix it with an underscore like `_id` to
+If you don't need this variable, prefix it with an underscore like _id to
 suppress this warning.
 
 ── ● declaration has no value ─────────────────────────── fuzz_crash_022.md:1:16
@@ -246,6 +246,7 @@ ser : UserId -> Str
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,OpBar,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

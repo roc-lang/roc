@@ -274,7 +274,6 @@ DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
-
 ── ✗ expected record accessor ───────────────────────── syntax_grab_bag.md:154:2
 
 I was parsing access after `.`, and I expected a field name or tuple index.
@@ -282,117 +281,105 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 ...
 ^^^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `...` here.
+I found ... here.
 
 ── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:16:1
 
-The mod `BadName` was not found in this Roc project.
+The mod BadName was not found in this Roc project.
 
 import BadName as GoodName
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-
 ── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:17:1
 
-The mod `BadNameMultiline` was not found in this Roc project.
+The mod BadNameMultiline was not found in this Roc project.
 
 import
     BadNameMultiline
         as
         GoodNameMultiline
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:36:8
 
-The type `Bar` is not declared in this scope.
+The type Bar is not declared in this scope.
 
 Foo : (Bar, Baz)
        ^^^
 
-
 ── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:36:13
 
-The type `Baz` is not declared in this scope.
+The type Baz is not declared in this scope.
 
 Foo : (Bar, Baz)
             ^^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:39:2
 
-The type `Bar` is not declared in this scope.
+The type Bar is not declared in this scope.
 
 Bar, # Comment after pattern tuple item
 ^^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:40:2
 
-The type `Baz` is not declared in this scope.
+The type Baz is not declared in this scope.
 
 Baz, # Another after pattern tuple item
 ^^^
 
-
 ── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:19
 
-The type `Ok` is not declared in this scope.
+The type Ok is not declared in this scope.
 
 Some(a) : { foo : Ok(a), bar : Something }
                   ^^
 
-
 ── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:32
 
-The type `Something` is not declared in this scope.
+The type Something is not declared in this scope.
 
 Some(a) : { foo : Ok(a), bar : Something }
                                ^^^^^^^^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:45:8
 
-The type `Ok` is not declared in this scope.
+The type Ok is not declared in this scope.
 
 foo : Ok(a), # After field
       ^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:46:8
 
-The type `Something` is not declared in this scope.
+The type Something is not declared in this scope.
 
 bar : Something, # After last field
       ^^^^^^^^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:52:4
 
-The type `Ok` is not declared in this scope.
+The type Ok is not declared in this scope.
 
 Ok(a), # Comment after pattern record field
 ^^
 
-
 ── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:53:8
 
-The type `Something` is not declared in this scope.
+The type Something is not declared in this scope.
 
 bar : Something, # Another after pattern record field
       ^^^^^^^^^
 
-
 ── ✗ name not in scope ───────────────────────────────── syntax_grab_bag.md:72:4
 
-Nothing is named `some_func` in this scope.
+Nothing is named some_func in this scope.
 
 some_func() # After debug expr
 ^^^^^^^^^
@@ -401,22 +388,22 @@ Is it misspelled, or is there an import missing?
 
 ── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:97:3
 
-Variable `lower` is defined here and then never used:
+Variable lower is defined here and then never used:
 
 lower # After pattern comment
 ^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_lower` to
+If you don't need this variable, prefix it with an underscore like _lower to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
-Variable `rest` is defined here and then never used:
+Variable rest is defined here and then never used:
 
 # This is a mod comment!
 ^
 
-If you don't need this variable, prefix it with an underscore like `_rest` to
+If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:108:7
@@ -432,12 +419,12 @@ to help improve Roc's error messages!
 
 ── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
-Variable `rest` is defined here and then never used:
+Variable rest is defined here and then never used:
 
 # This is a mod comment!
 ^
 
-If you don't need this variable, prefix it with an underscore like `_rest` to
+If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:111:4
@@ -453,12 +440,12 @@ to help improve Roc's error messages!
 
 ── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
-Variable `rest` is defined here and then never used:
+Variable rest is defined here and then never used:
 
 # This is a mod comment!
 ^
 
-If you don't need this variable, prefix it with an underscore like `_rest` to
+If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
 
 ── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:120:7
@@ -474,7 +461,7 @@ to help improve Roc's error messages!
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:121:37
 
-Nothing is named `add` in this scope.
+Nothing is named add in this scope.
 
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                                   ^^^
@@ -483,22 +470,22 @@ Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────────── syntax_grab_bag.md:121:21
 
-Variable `rest` is defined here and then never used:
+Variable rest is defined here and then never used:
 
 { foo: 1, bar: 2, ..rest } => 12->add(34)
                   ^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_rest` to
+If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:127:4
 
-Variable `rest` is defined here and then never used:
+Variable rest is defined here and then never used:
 
 .. # After spread operator
     rest, # After last field
 
-If you don't need this variable, prefix it with an underscore like `_rest` to
+If you don't need this variable, prefix it with an underscore like _rest to
 suppress this warning.
 
 ── ✗ not implemented ───────────────────────────────── syntax_grab_bag.md:130:18
@@ -525,17 +512,17 @@ to help improve Roc's error messages!
 
 ── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:82:2
 
-Variable `b` is defined here and then never used:
+Variable b is defined here and then never used:
 
 b,
 ^
 
-If you don't need this variable, prefix it with an underscore like `_b` to
+If you don't need this variable, prefix it with an underscore like _b to
 suppress this warning.
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:141:2
 
-Nothing is named `blah` in this scope.
+Nothing is named blah in this scope.
 
 blah == 1 # Comment after expect statement
 ^^^^
@@ -544,15 +531,14 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ undeclared type ───────────────────────────────── syntax_grab_bag.md:143:14
 
-The type `String` is not declared in this scope.
+The type String is not declared in this scope.
 
 main! : List(String) -> Try({}, _)
              ^^^^^^
 
-
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:147:9
 
-Nothing is named `blah` in this scope.
+Nothing is named blah in this scope.
 
 expect blah == 1
        ^^^^
@@ -570,7 +556,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:158:2
 
-Nothing is named `some_func` in this scope.
+Nothing is named some_func in this scope.
 
 some_func(
 ^^^^^^^^^
@@ -579,7 +565,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:175:3
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!("Adding ${n} to ${number}")
 ^^^^^^^^^^^^
@@ -588,7 +574,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:178:63
 
-Nothing is named `punned` in this scope.
+Nothing is named punned in this scope.
 
 record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
                                                              ^^^^^^
@@ -597,7 +583,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:179:42
 
-Nothing is named `nested` in this scope.
+Nothing is named nested in this scope.
 
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
                                         ^^^^^^
@@ -606,7 +592,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ invalid assignment to itself ──────────────────── syntax_grab_bag.md:179:50
 
-The value `tuple` is assigned to itself, which would cause an infinite loop at
+The value tuple is assigned to itself, which would cause an infinite loop at
 runtime.
 
 tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -618,7 +604,7 @@ value being assigned.
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:183:3
 
-Nothing is named `tag1` in this scope.
+Nothing is named tag1 in this scope.
 
 tag1,
 ^^^^
@@ -627,7 +613,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:185:4
 
-Nothing is named `nested` in this scope.
+Nothing is named nested in this scope.
 
 (nested, tuple),
  ^^^^^^
@@ -636,7 +622,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:188:22
 
-Nothing is named `foo` in this scope.
+Nothing is named foo in this scope.
 
 bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
                     ^^^
@@ -645,7 +631,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:26
 
-Nothing is named `some_fn` in this scope.
+Nothing is named some_fn in this scope.
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                         ^^^^^^^
@@ -654,7 +640,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:34
 
-Nothing is named `arg1` in this scope.
+Nothing is named arg1 in this scope.
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
                                 ^^^^
@@ -663,7 +649,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:190:2
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!(interpolated)?
 ^^^^^^^^^^^^
@@ -672,7 +658,7 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:191:2
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!(
 ^^^^^^^^^^^^
@@ -681,73 +667,71 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ does not exist ─────────────────────────────────── syntax_grab_bag.md:193:4
 
-`Num.toStr` does not exist.
+Num.toStr does not exist.
 
 Num.toStr(number) # Comment after string interpolation expr
 ^^^^^^^^^
 
-
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:164:2
 
-Variable `tag_with_payload` is defined here and then never used:
+Variable tag_with_payload is defined here and then never used:
 
 tag_with_payload = Ok(number)
 ^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_tag_with_payload` to suppress this warning.
+_tag_with_payload to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:178:2
 
-Variable `record` is defined here and then never used:
+Variable record is defined here and then never used:
 
 record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 ^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_record` to
+If you don't need this variable, prefix it with an underscore like _record to
 suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:180:2
 
-Variable `multiline_tuple` is defined here and then never used:
+Variable multiline_tuple is defined here and then never used:
 
 multiline_tuple = (
 ^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_multiline_tuple` to suppress this warning.
+_multiline_tuple to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:188:2
 
-Variable `bin_op_result` is defined here and then never used:
+Variable bin_op_result is defined here and then never used:
 
 bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_bin_op_result` to suppress this warning.
+_bin_op_result to suppress this warning.
 
 ── ● unused variable ────────────────────────────────── syntax_grab_bag.md:189:2
 
-Variable `static_dispatch_style` is defined here and then never used:
+Variable static_dispatch_style is defined here and then never used:
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ^^^^^^^^^^^^^^^^^^^^^
 
 If you don't need this variable, prefix it with an underscore like
-`_static_dispatch_style` to suppress this warning.
+_static_dispatch_style to suppress this warning.
 
 ── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:201:9
 
-The type `Value` is not declared in this scope.
+The type Value is not declared in this scope.
 
 tuple : Value((a, b, c))
         ^^^^^
 
-
 ── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:70:5
 
-This `if` condition must evaluate to a `Bool` – either `True` or `False`.
+This if condition must evaluate to a Bool – either True or False.
 
 if num {
    ^^^
@@ -756,35 +740,35 @@ It is:
 
     U64
 
-But I need this to be a `Bool` value.
+But I need this to be a Bool value.
 
 ── ✗ missing method ──────────────────────────────────── syntax_grab_bag.md:99:3
 
-This `from_quote` method is being called on a value whose type doesn't have
-that method.
+This from_quote method is being called on a value whose type doesn't have that
+method.
 
 "foo" => # After arrow comment
 ^^^^^
 
-The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_quote, is:
 
     [Blue, Green, Red, ..]
 
 ── ✗ missing method ─────────────────────────────────── syntax_grab_bag.md:101:3
 
-This `from_quote` method is being called on a value whose type doesn't have
-that method.
+This from_quote method is being called on a value whose type doesn't have that
+method.
 
 "foo" | "bar" => 200
 ^^^^^
 
-The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_quote, is:
 
     [Blue, Green, Red, ..]
 
 ── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:84:3
 
-The sixth branch of this `match` does not match the previous ones.
+The sixth branch of this match does not match the previous ones.
 
 match a {
     Blue | Green | Red => {
@@ -850,7 +834,7 @@ This sixth branch is trying to match:
         d.is_eq : d, d -> Bool,
       ]
 
-But the expression between the `match` parenthesis has the type:
+But the expression between the match parenthesis has the type:
 
     [Blue, Green, Red, ..]
 
@@ -858,13 +842,13 @@ These can never match! Either the pattern or expression has a problem.
 
 ── ✗ too few args ───────────────────────────────────── syntax_grab_bag.md:155:2
 
-The `match_time` function expects 2 arguments, but it got 1 instead.
+The match_time function expects 2 arguments, but it got 1 instead.
 
 match_time(
     ..., # Single args with comment
 )
 
-The `match_time` function has the type:
+The match_time function has the type:
 
     [Blue, Green, Red, ..], _arg -> d
       where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
@@ -884,7 +868,7 @@ This argument has the type:
 
     {}
 
-But `add_one` needs the first argument to be:
+But add_one needs the first argument to be:
 
     U64
 
@@ -900,7 +884,7 @@ they are published through the host boundary.
 
 ── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
 
-This is trying to dispatch a method named `static_dispatch_method` on an
+This is trying to dispatch a method named static_dispatch_method on an
 unresolved type variable, but unresolved type variables have no methods.
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
@@ -912,7 +896,7 @@ type annotation that narrows its type to something that actually has methods.
 
 ── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
 
-This is trying to dispatch a method named `next_static_dispatch_method` on an
+This is trying to dispatch a method named next_static_dispatch_method on an
 unresolved type variable, but unresolved type variables have no methods.
 
 static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
@@ -921,6 +905,7 @@ static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dis
 Hint: You can replace this static dispatch call with an ordinary function call,
 or force the type variable to become more concrete—for example, by adding a
 type annotation that narrows its type to something that actually has methods.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

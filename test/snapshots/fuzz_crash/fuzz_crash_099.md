@@ -17,18 +17,14 @@ UNUSED VARIABLE - fuzz_crash_099.md:3:37:3:39
 UNUSED VARIABLE - fuzz_crash_099.md:3:5:3:8
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 # PROBLEMS
-
 ── ✗ duplicate record field ───────────────────────────── fuzz_crash_099.md:3:28
 
-The record field `a` appears more than once in this record.
+The record field a appears more than once in this record.
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                        ^
 
-
-This field is duplicated in:
-
-The field `a` was first defined in fuzz_crash_099.md:3:22:
+The field a was first defined in fuzz_crash_099.md:3:22:
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                  ^
@@ -37,32 +33,32 @@ removing the duplicate.
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
 
-Variable `insert` is defined here and then never used:
+Variable insert is defined here and then never used:
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
          ^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_insert` to
+If you don't need this variable, prefix it with an underscore like _insert to
 suppress this warning.
 
 ── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
-Variable `nt` is defined here and then never used:
+Variable nt is defined here and then never used:
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
                                 ^^
 
-If you don't need this variable, prefix it with an underscore like `_nt` to
+If you don't need this variable, prefix it with an underscore like _nt to
 suppress this warning.
 
 ── ● unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
-Variable `fn1` is defined here and then never used:
+Variable fn1 is defined here and then never used:
 
 fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 ^^^
 
-If you don't need this variable, prefix it with an underscore like `_fn1` to
+If you don't need this variable, prefix it with an underscore like _fn1 to
 suppress this warning.
 
 ── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
@@ -83,6 +79,7 @@ The value being destructured has type:
 
 Missing patterns:
         ({ a: _ }, _)
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

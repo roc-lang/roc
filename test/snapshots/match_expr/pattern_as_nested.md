@@ -13,10 +13,9 @@ match person {
 # EXPECTED
 TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────────────────── pattern_as_nested.md:1:5
 
-The second branch of this `match` does not match the previous ones.
+The second branch of this match does not match the previous ones.
 
 match person {
     { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
@@ -27,13 +26,14 @@ This second branch is trying to match:
 
     { name: _field }
 
-But the expression between the `match` parenthesis has the type:
+But the expression between the match parenthesis has the type:
 
     { address: { city: _field }, name: _field2 }
 
 These can never match! Either the pattern or expression has a problem.
-Hint: This pattern doesn't bind the `address` field. Match it explicitly with
-`address: _`, or add `..` to match all the remaining fields.
+Hint: This pattern doesn't bind the address field. Match it explicitly with
+address: _, or add .. to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

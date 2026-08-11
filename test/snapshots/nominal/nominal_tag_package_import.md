@@ -16,18 +16,16 @@ blue = CC.Color.RGB(0,0,255)
 MOD NOT FOUND - nominal_tag_package_import.md:5:10:5:16
 MOD NOT FOUND - nominal_tag_package_import.md:6:10:6:16
 # PROBLEMS
-
 ── ✗ mod not found ─────────────────────── nominal_tag_package_import.md:5:10
 
-This `Color` type is declared to be in `styles.Color`, which does not exist.
+This Color type is declared to be in styles.Color, which does not exist.
 
 blue : CC.Color
          ^^^^^^
 
-
 ── ✗ mod not found ─────────────────────── nominal_tag_package_import.md:6:10
 
-This `Color` type is declared to be in `styles.Color`, which does not exist.
+This Color type is declared to be in styles.Color, which does not exist.
 
 blue = CC.Color.RGB(0,0,255)
          ^^^^^^

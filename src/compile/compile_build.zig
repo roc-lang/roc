@@ -1991,6 +1991,19 @@ pub const BuildEnv = struct {
                     }
                 }
             },
+            .source_location => |*location| {
+                const original_path = self.synthetic_root_original_path orelse return;
+                const filename = location.filename orelse return;
+                if (self.syntheticRootDisplayPath(filename) == null) return;
+
+                const header_lines = self.synthetic_root_header_lines;
+                if (header_lines > 0 and location.line <= header_lines) return;
+
+                const owned_filename = try allocator.dupe(u8, original_path);
+                if (location.filename) |old_filename| allocator.free(old_filename);
+                location.filename = owned_filename;
+                if (location.line > header_lines) location.line -= header_lines;
+            },
             .text,
             .annotated,
             .line_break,

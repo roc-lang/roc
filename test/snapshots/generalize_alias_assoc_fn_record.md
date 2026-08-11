@@ -17,7 +17,6 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────── generalize_alias_assoc_fn_record.md:8:42
 
 This string literal is being used where a non-string type is needed.
@@ -28,6 +27,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 The type was determined to be:
 
     Dec
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,

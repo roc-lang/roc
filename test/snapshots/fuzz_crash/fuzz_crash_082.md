@@ -17,14 +17,12 @@ DECLARATION HAS NO VALUE - fuzz_crash_082.md:1:1:1:4
 DECLARATION HAS NO VALUE - fuzz_crash_082.md:2:1:2:4
 MISSING METHOD - fuzz_crash_082.md:3:10:3:11
 # PROBLEMS
-
 ── ✗ undeclared type ───────────────────────────────────── fuzz_crash_082.md:1:3
 
-The type `U` is not declared in this scope.
+The type U is not declared in this scope.
 
 i:U
   ^
-
 
 ── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_082.md:4:4
 
@@ -33,7 +31,7 @@ I am part way through parsing this tuple, but it is empty.
 ()=()
    ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+If you want to represent nothing, try using an empty record: {}.
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_082.md:1:1
 
@@ -57,15 +55,16 @@ they are published through the host boundary.
 
 ── ✗ missing method ───────────────────────────────────── fuzz_crash_082.md:3:10
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 o=||{D()=0}
          ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     [D]
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

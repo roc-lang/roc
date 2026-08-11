@@ -14,10 +14,9 @@ decodeThings = ...
 # EXPECTED
 UNDECLARED TYPE - where_clauses_4.md:4:10:4:17
 # PROBLEMS
-
 ── ✗ undeclared type ─────────────────────────────────── where_clauses_4.md:4:10
 
-The type `Decode` is not declared in this scope.
+The type Decode is not declared in this scope.
 
 where [a.Decode]
         ^^^^^^^

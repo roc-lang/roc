@@ -11,7 +11,6 @@ x = 0.()
 EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
 UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
-
 ── ✗ expected record accessor ──────────────────────────── fuzz_crash_081.md:1:6
 
 I was parsing access after `.`, and I expected a field name or tuple index.
@@ -19,15 +18,15 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 x = 0.()
      ^
 
-Record access uses a lowercase field name like `.name`. Tuple access uses a
-number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-valid accessors.
+Record access uses a lowercase field name like .name. Tuple access uses a
+number like .0. Uppercase names, malformed names, and a bare . are not valid
+accessors.
 
 For example:
     person.name
     pair.0
 
-I found `.` here.
+I found . here.
 
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_081.md:1:5
 
@@ -37,6 +36,7 @@ x = 0.()
     ^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,Dot,NoSpaceOpenRound,CloseRound,

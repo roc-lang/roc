@@ -11,7 +11,6 @@ var topLevelVar_ = 0
 # EXPECTED
 VAR OUTSIDE BODY - can_var_scoping_invalid_top_level.md:2:1:2:4
 # PROBLEMS
-
 ── ✗ var outside body ───────────────── can_var_scoping_invalid_top_level.md:2:1
 
 I was parsing a statement, and `var` appeared outside a function or block body.
@@ -19,8 +18,8 @@ I was parsing a statement, and `var` appeared outside a function or block body.
 var topLevelVar_ = 0
 ^^^
 
-Mutable variables are local body statements. Move this `var` into a body, or
-use an ordinary top-level declaration.
+Mutable variables are local body statements. Move this var into a body, or use
+an ordinary top-level declaration.
 
 For example:
     main = {
@@ -28,8 +27,9 @@ For example:
         count
     }
 
-I found `var` here.
+I found var here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
+
 # TOKENS
 ~~~zig
 KwVar,LowerIdent,OpAssign,Int,

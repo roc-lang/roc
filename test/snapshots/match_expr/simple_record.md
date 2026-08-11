@@ -13,10 +13,9 @@ match person {
 # EXPECTED
 TYPE MISMATCH - simple_record.md:1:1:1:1
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────────────────────── simple_record.md:1:5
 
-The second branch of this `match` does not match the previous ones.
+The second branch of this match does not match the previous ones.
 
 match person {
     { name } => name
@@ -27,13 +26,14 @@ This second branch is trying to match:
 
     { age: _field }
 
-But the expression between the `match` parenthesis has the type:
+But the expression between the match parenthesis has the type:
 
     { name: _field }
 
 These can never match! Either the pattern or expression has a problem.
-Hint: This pattern doesn't bind the `name` field. Match it explicitly with
-`name: _`, or add `..` to match all the remaining fields.
+Hint: This pattern doesn't bind the name field. Match it explicitly with name:
+_, or add .. to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

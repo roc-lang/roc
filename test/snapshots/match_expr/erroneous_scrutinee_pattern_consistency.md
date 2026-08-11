@@ -13,10 +13,9 @@ match undefined_scrutinee {
 # EXPECTED
 TYPE MISMATCH - erroneous_scrutinee_pattern_consistency.md:1:1:1:1
 # PROBLEMS
-
 ── ✗ type mismatch ────────────── erroneous_scrutinee_pattern_consistency.md:1:5
 
-The second branch of this `match` does not match the previous ones.
+The second branch of this match does not match the previous ones.
 
 match undefined_scrutinee {
     { name } => name
@@ -27,11 +26,12 @@ This second branch is trying to match:
 
     { age: _field, name: _field2 }
 
-But the expression between the `match` parenthesis has the type:
+But the expression between the match parenthesis has the type:
 
     { name: _field }
 
 These can never match! Either the pattern or expression has a problem.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

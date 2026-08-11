@@ -49,29 +49,24 @@ MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
-
 ── ● builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
 
-The type `Try` shadows a builtin type.
+The type Try shadows a builtin type.
 
 Try(ok, err) : [Ok(ok), Err(err)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 This may make the builtin type inaccessible in this scope.
 
-The new declaration is in:
-
 ── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:13:1
 
-The type alias `Tree` and `Node` form a recursive cycle.
+The type alias Tree and Node form a recursive cycle.
 
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
 
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
-
-This type is declared in:
 
 And it references Node declared in type_comprehensive_scope.md:16:1:
 
@@ -80,15 +75,13 @@ Node(a) : { value: a, children: List(Tree(a)) }
 
 ── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:16:1
 
-The type alias `Node` and `Tree` form a recursive cycle.
+The type alias Node and Tree form a recursive cycle.
 
 Node(a) : { value: a, children: List(Tree(a)) }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
 
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
-
-This type is declared in:
 
 And it references Tree declared in type_comprehensive_scope.md:13:1:
 
@@ -97,13 +90,10 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 
 ── ✗ type redeclared ────────────────────────── type_comprehensive_scope.md:22:1
 
-The type `Person` is being redeclared.
+The type Person is being redeclared.
 
 Person : U64
 ^^^^^^^^^^^^
-
-
-The redeclaration is in:
 
 But Person was already declared in type_comprehensive_scope.md:7:1:
 
@@ -112,7 +102,7 @@ Person : { name: Str, age: U64 }
 
 ── ✗ undeclared type ───────────────────────── type_comprehensive_scope.md:25:11
 
-The type `SomeUndeclaredType` is not declared in this scope.
+The type SomeUndeclaredType is not declared in this scope.
 
 BadType : SomeUndeclaredType
           ^^^^^^^^^^^^^^^^^^

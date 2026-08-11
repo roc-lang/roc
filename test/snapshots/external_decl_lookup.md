@@ -21,23 +21,21 @@ DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
 NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
 NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
-
 ── ● duplicate definition ────────────────────────── external_decl_lookup.md:4:1
 
-The name `Json` is being redeclared here:
+The name Json is being redeclared here:
 
 import json.Json
 ^^^^^^^^^^^^^^^^
 
-
-In this scope, `Json` was already defined in external_decl_lookup.md:1:1:
+In this scope, Json was already defined in external_decl_lookup.md:1:1:
 
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 ^
 
 ── ✗ name not in scope ──────────────────────────── external_decl_lookup.md:8:14
 
-Nothing is named `utf8` in this scope.
+Nothing is named utf8 in this scope.
 
 result = Json.utf8("Hello from external mod!")
          ^^^^^^^^^
@@ -46,12 +44,13 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ───────────────────────────── external_decl_lookup.md:9:5
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!(result)
 ^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

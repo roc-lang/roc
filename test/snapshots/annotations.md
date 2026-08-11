@@ -33,7 +33,6 @@ TYPE MISMATCH - annotations.md:16:28:16:31
 TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────────────────────── annotations.md:16:28
 
 This string literal is being used where a non-string type is needed.
@@ -70,6 +69,7 @@ The tag is:
 But the nominal type needs it to be:
 
     Pair(a, a)
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseSquare,

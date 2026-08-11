@@ -31,7 +31,6 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
 UNBOUND WHERE RECEIVER - where_clauses_error_cases.md:11:10:11:27
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
-
 ── ✗ expected constraint type ──────────────── where_clauses_error_cases.md:3:10
 
 I was parsing a `where` method constraint, and I expected `:` before the method
@@ -45,7 +44,7 @@ Method constraints use a colon between the method name and its type.
 For example:
     where [a.hash : a -> U64]
 
-I found `a` here.
+I found a here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -61,7 +60,7 @@ Close the where constraint list after the final constraint.
 For example:
     where [a.hash : a -> U64]
 
-I found `where [a.method ->` here.
+I found where [a.method -> here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:22
@@ -77,7 +76,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `b` here.
+I found b here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -94,7 +93,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -105,12 +104,12 @@ I was parsing a `where` clause, and I expected at least one constraint.
 where []
 ^^^^^^^
 
-Remove the empty `where` clause or add a constraint inside the brackets.
+Remove the empty where clause or add a constraint inside the brackets.
 
 For example:
     where [a.hash : a -> U64]
 
-I found `where [` here.
+I found where [ here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:7:10
@@ -126,7 +125,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -170,16 +169,15 @@ they are published through the host boundary.
 
 ── ✗ unbound where receiver ───────────────── where_clauses_error_cases.md:11:10
 
-The type variable `c` is not introduced by this annotation's type or a
-connected method constraint, so this where clause cannot add the `method`
-method to it.
+The type variable c is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the method method to it.
 
 where [c.method : c -> d]
        ^^^^^^^^^^^^^^^^^
 
 A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
-`c` to the annotation, or remove this constraint.
+c to the annotation, or remove this constraint.
 
 ── ● declaration has no value ──────────────── where_clauses_error_cases.md:10:1
 
@@ -190,6 +188,7 @@ broken_fn3 : a -> b
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,

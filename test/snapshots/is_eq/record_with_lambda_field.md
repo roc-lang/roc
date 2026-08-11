@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
 # PROBLEMS
-
 ── ✗ type does not support equality ──────────── record_with_lambda_field.md:1:1
 
 This expression is doing an equality check on a type that doesn't support
@@ -34,6 +33,7 @@ don't support is_eq:
         Function equality is not supported.
 Hint: Anonymous records only have an is_eq method if all of their fields have
 is_eq methods.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,OpEquals,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,

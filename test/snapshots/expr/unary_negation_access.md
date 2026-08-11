@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
-
 ── ✗ polymorphic value ──────────────────────────── unary_negation_access.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
@@ -21,6 +20,7 @@ This top-level value still has an unresolved polymorphic type.
 Its type is:
 a where [a.negate : a -> a]
 Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 OpUnaryMinus,LowerIdent,NoSpaceDotLowerIdent,

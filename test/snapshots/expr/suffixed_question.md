@@ -10,7 +10,6 @@ Stdout.line???
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - suffixed_question.md:1:14:1:15
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ──────────────────── suffixed_question.md:1:14
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -24,7 +23,8 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `?` here.
+I found ? here.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,OpDoubleQuestion,NoSpaceOpQuestion,

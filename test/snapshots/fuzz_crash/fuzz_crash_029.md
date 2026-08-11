@@ -43,7 +43,6 @@ UNEXPECTED STATEMENT - fuzz_crash_029.md:17:3:17:4
 MALFORMED TYPE - fuzz_crash_029.md:13:6:13:7
 DECLARATION HAS NO VALUE - fuzz_crash_029.md:13:1:13:7
 # PROBLEMS
-
 ── ✗ expected opening brace ───────────────────────────── fuzz_crash_029.md:11:3
 
 I was parsing a `packages` section, and I expected an opening `{`.
@@ -56,7 +55,7 @@ Package dependencies are written as record fields inside braces.
 For example:
     packages { base: "../base/main.roc" }
 
-I found `vides` here.
+I found vides here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -67,12 +66,12 @@ I was parsing a platform header, and I expected the `provides` section.
 { # pen
 ^
 
-A platform header must map host symbols to Roc functions in a `provides` record.
+A platform header must map host symbols to Roc functions in a provides record.
 
 For example:
     provides { "roc_main": main }
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_029.md:13:6
 
@@ -87,7 +86,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:13:7
 
@@ -102,7 +101,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `..l` here.
+I found ..l here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:10
 
@@ -117,7 +116,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:11
 
@@ -132,7 +131,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:13:13
@@ -148,7 +147,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `mmen` here.
+I found mmen here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -165,7 +164,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -182,7 +181,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `provides` here.
+I found provides here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:15:3
@@ -198,7 +197,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `[` here.
+I found [ here.
 
 ── ✗ type application needs parentheses ──────────────── fuzz_crash_029.md:15:14
 
@@ -208,13 +207,13 @@ parentheses.
 [ Ok(world), (n # pen
            ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:16
@@ -230,7 +229,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found ( here.
 
 ── ✗ unexpected statement ────────────────────────────── fuzz_crash_029.md:15:17
 
@@ -245,7 +244,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `n` here.
+I found n here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -262,7 +261,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `ar` here.
+I found ar here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -279,7 +278,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_029.md:17:3
@@ -295,7 +294,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -306,7 +305,6 @@ This type annotation is malformed or contains invalid syntax.
 pkg: "..l", mmen  } # Cose
      ^
 
-
 ── ● declaration has no value ─────────────────────────── fuzz_crash_029.md:13:1
 
 This declaration has a type annotation but no implementation.
@@ -316,6 +314,7 @@ pkg: "..l", mmen  } # Cose
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwPlatform,

@@ -14,7 +14,6 @@ main = (picked(1), picked("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
-
 ── ✗ type mismatch ──────────────────────── generalize_alias_if_branches.md:5:27
 
 This string literal is being used where a non-string type is needed.
@@ -25,6 +24,7 @@ main = (picked(1), picked("a"))
 The type was determined to be:
 
     Dec
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

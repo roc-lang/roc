@@ -36,55 +36,54 @@ UNUSED VARIABLE - type_var_underscore_conventions.md:17:17:17:18
 UNUSED VARIABLE - type_var_underscore_conventions.md:22:9:22:10
 TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 # PROBLEMS
-
 ── ● unused variable ─────────────────── type_var_underscore_conventions.md:5:15
 
-Variable `x` is defined here and then never used:
+Variable x is defined here and then never used:
 
 single_use = |x| "hello"
               ^
 
-If you don't need this variable, prefix it with an underscore like `_x` to
+If you don't need this variable, prefix it with an underscore like _x to
 suppress this warning.
 
 ── ● unused variable ─────────────────── type_var_underscore_conventions.md:9:20
 
-Variable `list` is defined here and then never used:
+Variable list is defined here and then never used:
 
 starting_dollar = |list| "default"
                    ^^^^
 
-If you don't need this variable, prefix it with an underscore like `_list` to
+If you don't need this variable, prefix it with an underscore like _list to
 suppress this warning.
 
 ── ● unused variable ────────────────── type_var_underscore_conventions.md:13:17
 
-Variable `x` is defined here and then never used:
+Variable x is defined here and then never used:
 
 combo_single = |x| "combo"
                 ^
 
-If you don't need this variable, prefix it with an underscore like `_x` to
+If you don't need this variable, prefix it with an underscore like _x to
 suppress this warning.
 
 ── ● unused variable ────────────────── type_var_underscore_conventions.md:17:17
 
-Variable `x` is defined here and then never used:
+Variable x is defined here and then never used:
 
 valid_single = |x| "valid"
                 ^
 
-If you don't need this variable, prefix it with an underscore like `_x` to
+If you don't need this variable, prefix it with an underscore like _x to
 suppress this warning.
 
 ── ● unused variable ─────────────────── type_var_underscore_conventions.md:22:9
 
-Variable `x` is defined here and then never used:
+Variable x is defined here and then never used:
 
 main = |x| "done"
         ^
 
-If you don't need this variable, prefix it with an underscore like `_x` to
+If you don't need this variable, prefix it with an underscore like _x to
 suppress this warning.
 
 ── ✗ type mismatch ───────────────────── type_var_underscore_conventions.md:9:26
@@ -97,6 +96,7 @@ starting_dollar = |list| "default"
 The type was determined to be:
 
     $elem
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

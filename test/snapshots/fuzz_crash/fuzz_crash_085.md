@@ -15,7 +15,6 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_085.md:1:23:1:24
 UNDECLARED TYPE VARIABLE - fuzz_crash_085.md:1:27:1:28
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_085.md:1:32:1:34
 # PROBLEMS
-
 ── ✗ underscore in type alias ──────────────────────────── fuzz_crash_085.md:1:3
 
 Underscores are not allowed in type alias declarations.
@@ -29,7 +28,7 @@ variable, use a named type variable like `a` instead.
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:14
 
-The type variable `a` is not declared in this scope.
+The type variable a is not declared in this scope.
 
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
              ^
@@ -38,7 +37,7 @@ Type variables must be introduced in a type annotation before they can be used.
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:16
 
-The type variable `b` is not declared in this scope.
+The type variable b is not declared in this scope.
 
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                ^
@@ -47,7 +46,7 @@ Type variables must be introduced in a type annotation before they can be used.
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:23
 
-The type variable `r` is not declared in this scope.
+The type variable r is not declared in this scope.
 
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                       ^
@@ -56,7 +55,7 @@ Type variables must be introduced in a type annotation before they can be used.
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_085.md:1:27
 
-The type variable `e` is not declared in this scope.
+The type variable e is not declared in this scope.
 
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                           ^
@@ -70,7 +69,8 @@ I am part way through parsing this tuple, but it is empty.
 C(_,b):()D:C(a,b)E:{b:r}F:e r={(){}}
                                ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+If you want to represent nothing, try using an empty record: {}.
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,Underscore,Comma,LowerIdent,CloseRound,OpColon,NoSpaceOpenRound,CloseRound,UpperIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,UpperIdent,OpColon,LowerIdent,LowerIdent,OpAssign,OpenCurly,NoSpaceOpenRound,CloseRound,OpenCurly,CloseCurly,CloseCurly,

@@ -14,7 +14,6 @@ a={
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
 TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
 # PROBLEMS
-
 ── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_101.md:2:8
 
 I am part way through parsing this tuple, but it is empty.
@@ -22,7 +21,7 @@ I am part way through parsing this tuple, but it is empty.
 r=|()|(()())
        ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+If you want to represent nothing, try using an empty record: {}.
 
 ── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_101.md:2:3
 
@@ -40,6 +39,7 @@ But the annotation says it should be:
     (), (({}) -> c), (({}) -> d) -> c
 
 Hint: This function expects 3 arguments but got 1.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,NoSpaceOpenRound,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,Comma,NoSpaceOpenRound,OpArrow,LowerIdent,CloseRound,OpArrow,NoSpaceOpenRound,LowerIdent,Comma,CloseRound,

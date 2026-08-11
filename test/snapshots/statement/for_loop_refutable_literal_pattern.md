@@ -13,7 +13,6 @@ main! = |_args| {
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_literal_pattern.md:2:9:2:10
 # PROBLEMS
-
 ── ✗ non exhaustive destructure ────── for_loop_refutable_literal_pattern.md:2:9
 
 This destructuring pattern doesn't cover all possible cases.
@@ -26,6 +25,7 @@ The value being destructured has type:
 
 Missing patterns:
         _
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

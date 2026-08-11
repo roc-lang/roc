@@ -15,20 +15,20 @@ missing = record.gamma
 # EXPECTED
 TYPE MISMATCH - record_access_missing_field_keeps_record_type.md:6:17:6:23
 # PROBLEMS
-
 ── ✗ type mismatch ─────── record_access_missing_field_keeps_record_type.md:6:17
 
-This record does not have a `gamma` field.
+This record does not have a gamma field.
 
 missing = record.gamma
                 ^^^^^^
 
 This is often due to a typo. The most similar fields are:
 
-    - `beta`
-    - `alpha`
+    - beta
+    - alpha
 
-So maybe `gamma` should be `beta`?
+So maybe gamma should be beta?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,

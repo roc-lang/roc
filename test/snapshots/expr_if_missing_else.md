@@ -11,10 +11,9 @@ foo = if tru 0
 NAME NOT IN SCOPE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
-
 ── ✗ name not in scope ──────────────────────────── expr_if_missing_else.md:1:10
 
-Nothing is named `tru` in this scope.
+Nothing is named tru in this scope.
 
 foo = if tru 0
          ^^^
@@ -23,15 +22,16 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ missing method ─────────────────────────────── expr_if_missing_else.md:1:14
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 foo = if tru 0
              ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     {}
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,KwIf,LowerIdent,Int,

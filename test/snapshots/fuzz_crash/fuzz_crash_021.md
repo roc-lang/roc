@@ -19,14 +19,12 @@ UNEXPECTED STATEMENT - fuzz_crash_021.md:1:14:1:16
 UNEXPECTED STATEMENT - fuzz_crash_021.md:1:16:1:16
 EXPECTED TYPE SEPARATOR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
-
 ── ✗ unclosed string ──────────────────────────────────── fuzz_crash_021.md:1:13
 
 This string is missing a closing quote.
 
 Fli/main.roc" }
             ^^^
-
 
 ── ✗ type application needs parentheses ────────────────── fuzz_crash_021.md:1:4
 
@@ -36,13 +34,13 @@ parentheses.
 Fli/main.roc" }
    ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `/` here.
+I found / here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_021.md:1:5
 
@@ -57,7 +55,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `main` here.
+I found main here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -74,7 +72,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.roc` here.
+I found .roc here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -91,7 +89,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:14
 
@@ -106,7 +104,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found ` }` here.
+I found  } here.
 
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:16
 
@@ -130,14 +128,15 @@ I was parsing type parameters, and I expected `,` or `)`.
 Pair(a, b+ : (
 ^^^^
 
-Separate type parameters with commas and close the parameter list with `)`.
+Separate type parameters with commas and close the parameter list with ).
 
 For example:
     Result(ok, err)
 
-I found `Pair` here.
+I found Pair here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpSlash,LowerIdent,NoSpaceDotLowerIdent,StringStart,StringPart,StringEnd,

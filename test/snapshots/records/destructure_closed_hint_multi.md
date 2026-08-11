@@ -14,7 +14,6 @@ compute = {
 # EXPECTED
 TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
 # PROBLEMS
-
 ── ✗ type mismatch ─────────────────────── destructure_closed_hint_multi.md:3:13
 
 This expression is used in an unexpected way.
@@ -35,10 +34,10 @@ But you are trying to use it as:
 
     { x: _field }
 Hint: This pattern doesn't bind these fields:
- - `y`
- - `z`
-Match them explicitly with `y: _`, or add `..` to match all the remaining
-fields.
+ - y
+ - z
+Match them explicitly with y: _, or add .. to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

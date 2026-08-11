@@ -15,36 +15,31 @@ TYPE PARAMETER CONFLICT - fuzz_crash_083.md:2:6:2:7
 UNDECLARED TYPE VARIABLE - fuzz_crash_083.md:2:12:2:13
 TOO MANY ARGS - fuzz_crash_083.md:3:11:3:18
 # PROBLEMS
-
 ── ✗ where clause not allowed in type declaration ──────── fuzz_crash_083.md:1:1
 
-You cannot define a `where` clause inside a type declaration.
+You cannot define a where clause inside a type declaration.
 
 A(a) : a where [a.a1 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in:
-
 ── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
 
-The type parameter `b` in type `C` conflicts with another declaration.
+The type parameter b in type C conflicts with another declaration.
 
 C(b, b) : (a, b)
      ^
 
-
 Type parameters must have unique names within their scope.
 
-The conflicting parameter is in:
 
-But `b` was already declared in fuzz_crash_083.md:2:3:
+But b was already declared in fuzz_crash_083.md:2:3:
 
 C(b, b) : (a, b)
   ^
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_083.md:2:12
 
-The type variable `a` is not declared in this scope.
+The type variable a is not declared in this scope.
 
 C(b, b) : (a, b)
            ^

@@ -10,15 +10,15 @@ foo = asd.0
 # EXPECTED
 NAME NOT IN SCOPE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-
 ── ✗ name not in scope ──────────────────────────── expr_no_space_dot_int.md:1:7
 
-Nothing is named `asd` in this scope.
+Nothing is named asd in this scope.
 
 foo = asd.0
       ^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,

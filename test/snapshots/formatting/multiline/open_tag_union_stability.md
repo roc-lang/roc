@@ -15,14 +15,12 @@ r : [
 MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
 DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
-
 ── ✗ malformed type ──────────────────────────── open_tag_union_stability.md:2:2
 
 This type annotation is malformed or contains invalid syntax.
 
 a,
 ^
-
 
 ── ● declaration has no value ────────────────── open_tag_union_stability.md:1:1
 
@@ -36,6 +34,7 @@ r : [
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenSquare,

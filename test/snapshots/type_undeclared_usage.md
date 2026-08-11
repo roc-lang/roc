@@ -20,36 +20,33 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
-
 ── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:1:10
 
-The type `UnknownType` is not declared in this scope.
+The type UnknownType is not declared in this scope.
 
 MyType : UnknownType
          ^^^^^^^^^^^
 
-
 ── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:3:16
 
-The type `UndeclaredResult` is not declared in this scope.
+The type UndeclaredResult is not declared in this scope.
 
 processValue : UndeclaredResult -> Str
                ^^^^^^^^^^^^^^^^
 
-
 ── ● unused variable ───────────────────────────── type_undeclared_usage.md:4:17
 
-Variable `value` is defined here and then never used:
+Variable value is defined here and then never used:
 
 processValue = |value| {
                 ^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_value` to
+If you don't need this variable, prefix it with an underscore like _value to
 suppress this warning.
 
 ── ✗ mod not imported ───────────────────────── type_undeclared_usage.md:8:15
 
-There is no mod with the name `SomeMod` imported into this Roc file.
+There is no mod with the name SomeMod imported into this Roc file.
 
 AnotherType : SomeMod.MissingType
               ^^^^^^^^^^^^^^^^^^^

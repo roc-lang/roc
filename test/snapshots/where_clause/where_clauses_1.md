@@ -14,24 +14,20 @@ Decode(a) : a where [a.decode : List(U8) -> a]
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:1:1:2:50
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 # PROBLEMS
-
 ── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:1:1
 
-You cannot define a `where` clause inside a type declaration.
+You cannot define a where clause inside a type declaration.
 
 Hash(a, hasher) : a
     where [a.hash : hasher -> hasher, hasher.Hasher]
 
-You're attempting do this in:
-
 ── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:4:1
 
-You cannot define a `where` clause inside a type declaration.
+You cannot define a where clause inside a type declaration.
 
 Decode(a) : a where [a.decode : List(U8) -> a]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-You're attempting do this in:
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,

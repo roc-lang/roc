@@ -30,18 +30,17 @@ INVALID NUMBER - numbers.md:9:5:9:11
 INVALID NUMBER - numbers.md:10:5:10:10
 INVALID NUMBER - numbers.md:11:5:11:10
 # PROBLEMS
-uppercase base
+── ✗ uppercase base ────────────────────────────────────────────────────────────
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
-uppercase base
+── ✗ uppercase base ────────────────────────────────────────────────────────────
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
 
-uppercase base
+── ✗ uppercase base ────────────────────────────────────────────────────────────
 
 Number base prefixes must be lowercase (0x, 0o, 0b).
-
 
 ── ✗ invalid number ───────────────────────────────────────────── numbers.md:8:5
 
@@ -86,6 +85,7 @@ This number literal does not fit in the inferred type.
 The inferred type is:
 
     Dec
+
 # TOKENS
 ~~~zig
 OpenRound,

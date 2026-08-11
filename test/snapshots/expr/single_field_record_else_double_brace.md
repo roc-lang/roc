@@ -17,7 +17,6 @@ type=expr
 # EXPECTED
 UNCONDITIONAL CONDITION - single_field_record_else_double_brace.md:3:5:3:9
 # PROBLEMS
-
 ── ● unconditional condition ────── single_field_record_else_double_brace.md:3:5
 
 This if condition is known at compile time, so this conditional will always

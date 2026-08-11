@@ -11,7 +11,6 @@ e={0#
 # EXPECTED
 UNRECOGNIZED SYNTAX - fuzz_crash_104.md:1:4:2:6
 # PROBLEMS
-
 ── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_104.md:1:4
 
 I don't recognize this syntax.
@@ -20,6 +19,7 @@ e={0#
 .0.{} }
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,Int,

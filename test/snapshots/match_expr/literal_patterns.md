@@ -17,7 +17,6 @@ UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
-
 ── ● unconditional condition ─────────────────────────── literal_patterns.md:1:7
 
 This match value is known at compile time, so this match will always inspect
@@ -26,16 +25,15 @@ the same value.
 match Answer {
       ^^^^^^
 
-
 ── ✗ missing method ──────────────────────────────────── literal_patterns.md:5:5
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 10 => 4
 ^^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     [Answer, Greeting, Zero, ..]
 
@@ -49,6 +47,7 @@ Zero => "hello"
 The type was determined to be:
 
     Dec
+
 # TOKENS
 ~~~zig
 KwMatch,UpperIdent,OpenCurly,

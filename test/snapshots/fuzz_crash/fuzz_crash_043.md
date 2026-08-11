@@ -16,7 +16,6 @@ UNEXPECTED STATEMENT - fuzz_crash_043.md:2:5:2:6
 MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
-
 ── ✗ unexpected statement ─────────────────────────────── fuzz_crash_043.md:1:20
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -30,7 +29,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_043.md:2:3
 
@@ -45,7 +44,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:4
 
@@ -60,7 +59,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `}` here.
+I found } here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
@@ -77,7 +76,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_043.md:2:3
 
@@ -85,7 +84,6 @@ This type annotation is malformed or contains invalid syntax.
 
 o:0}0
   ^
-
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
 
@@ -96,6 +94,7 @@ o:0}0
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,OpenCurly,

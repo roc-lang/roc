@@ -11,7 +11,6 @@ C:[0]
 UNEXPECTED TYPE SYNTAX - fuzz_crash_066.md:1:4:1:5
 MALFORMED TYPE - fuzz_crash_066.md:1:4:1:5
 # PROBLEMS
-
 ── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_066.md:1:4
 
 I was parsing a type annotation, and this token cannot start a type here.
@@ -25,7 +24,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ malformed type ────────────────────────────────────── fuzz_crash_066.md:1:4
 

@@ -11,7 +11,6 @@ b:r
 # EXPECTED
 DECLARATION HAS NO VALUE - fuzz_crash_079.md:2:1:2:4
 # PROBLEMS
-
 ── ● declaration has no value ──────────────────────────── fuzz_crash_079.md:2:1
 
 This declaration has a type annotation but no implementation.
@@ -21,6 +20,7 @@ b:r
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,

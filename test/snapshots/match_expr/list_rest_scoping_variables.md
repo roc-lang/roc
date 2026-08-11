@@ -18,7 +18,6 @@ OLD LIST REST PATTERN - list_rest_scoping_variables.md:3:13:3:20
 OLD LIST REST PATTERN - list_rest_scoping_variables.md:4:6:4:13
 OLD LIST REST PATTERN - list_rest_scoping_variables.md:5:13:5:20
 # PROBLEMS
-
 ── ✗ old list rest pattern ────────────────── list_rest_scoping_variables.md:2:6
 
 I was parsing a list pattern, and this uses the old rest syntax.
@@ -26,8 +25,8 @@ I was parsing a list pattern, and this uses the old rest syntax.
 [..items] => 1
  ^^^^^^^
 
-List rest patterns now use `.. as name`. The name is optional, but if it is
-present it must come after `as`.
+List rest patterns now use .. as name. The name is optional, but if it is
+present it must come after as.
 
 For example:
     [first, .. as rest]
@@ -39,8 +38,8 @@ I was parsing a list pattern, and this uses the old rest syntax.
 [first, ..items] => first
         ^^^^^^^
 
-List rest patterns now use `.. as name`. The name is optional, but if it is
-present it must come after `as`.
+List rest patterns now use .. as name. The name is optional, but if it is
+present it must come after as.
 
 For example:
     [first, .. as rest]
@@ -52,8 +51,8 @@ I was parsing a list pattern, and this uses the old rest syntax.
 [..items, last] => last
  ^^^^^^^
 
-List rest patterns now use `.. as name`. The name is optional, but if it is
-present it must come after `as`.
+List rest patterns now use .. as name. The name is optional, but if it is
+present it must come after as.
 
 For example:
     [first, .. as rest]
@@ -65,11 +64,12 @@ I was parsing a list pattern, and this uses the old rest syntax.
 [first, ..items, last] => first + last
         ^^^^^^^
 
-List rest patterns now use `.. as name`. The name is optional, but if it is
-present it must come after `as`.
+List rest patterns now use .. as name. The name is optional, but if it is
+present it must come after as.
 
 For example:
     [first, .. as rest]
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

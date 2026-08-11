@@ -19,23 +19,21 @@ DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
 NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
 NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
-
 ── ● duplicate definition ───────────────────────── import_exposing_basic.md:1:1
 
-The name `Json` is being redeclared here:
+The name Json is being redeclared here:
 
 import json.Json exposing [decode, to_str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-
-In this scope, `Json` was already defined in import_exposing_basic.md:1:1:
+In this scope, Json was already defined in import_exposing_basic.md:1:1:
 
 import json.Json exposing [decode, to_str]
 ^
 
 ── ✗ name not in scope ─────────────────────────── import_exposing_basic.md:5:15
 
-Nothing is named `to_str` in this scope.
+Nothing is named to_str in this scope.
 
 encoded = to_str(data)
           ^^^^^^
@@ -44,12 +42,13 @@ Is it misspelled, or is there an import missing?
 
 ── ✗ name not in scope ─────────────────────────── import_exposing_basic.md:6:15
 
-Nothing is named `decode` in this scope.
+Nothing is named decode in this scope.
 
 decoded = decode(encoded)
           ^^^^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,

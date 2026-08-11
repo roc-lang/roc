@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - negative_single_quote.md:1:1:1:2
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ───────────────── negative_single_quote.md:1:1
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -24,7 +23,8 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `-` here.
+I found - here.
+
 # TOKENS
 ~~~zig
 OpBinaryMinus,SingleQuote,

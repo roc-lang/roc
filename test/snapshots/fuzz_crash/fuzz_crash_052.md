@@ -11,7 +11,6 @@ S
 # EXPECTED
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_052.md:2:1:2:2
 # PROBLEMS
-
 ── ✗ type application needs parentheses ────────────────── fuzz_crash_052.md:2:1
 
 I was parsing a type annotation, and I found a type argument without
@@ -20,13 +19,14 @@ parentheses.
 0
 ^
 
-Roc type applications use parentheses around their arguments. Write `List(U8)`,
-not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
 For example:
     List(U8)
 
-I found `0` here.
+I found 0 here.
+
 # TOKENS
 ~~~zig
 UpperIdent,

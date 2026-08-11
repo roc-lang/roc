@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ────────── method_call_inspect_defined.md:1:14
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -24,8 +23,9 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `;` here.
+I found ; here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

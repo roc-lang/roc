@@ -14,14 +14,12 @@ UNEXPECTED STATEMENT - fuzz_crash_003.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_003.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
-
 ── ✗ unclosed string ───────────────────────────────────── fuzz_crash_003.md:1:3
 
 This string is missing a closing quote.
 
 = "te
   ^^^
-
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:1
 
@@ -36,7 +34,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `=` here.
+I found = here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:3
 
@@ -51,7 +49,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:4
 
@@ -66,7 +64,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `te` here.
+I found te here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:6
 
@@ -82,6 +80,7 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
+
 # TOKENS
 ~~~zig
 OpAssign,StringStart,StringPart,StringEnd,

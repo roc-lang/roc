@@ -11,7 +11,6 @@ type=file
 UNEXPECTED STATEMENT - fuzz_crash_013.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_crash_013.md:1:2:1:3
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_013.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -25,7 +24,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_013.md:1:2
 
@@ -40,7 +39,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
+
 # TOKENS
 ~~~zig
 Int,OpenCurly,

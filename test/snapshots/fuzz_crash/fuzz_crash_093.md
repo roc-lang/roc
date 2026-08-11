@@ -10,7 +10,6 @@ d=(0||())
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_093.md:1:7:1:9
 # PROBLEMS
-
 ── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_093.md:1:7
 
 I am part way through parsing this tuple, but it is empty.
@@ -18,7 +17,8 @@ I am part way through parsing this tuple, but it is empty.
 d=(0||())
       ^^
 
-If you want to represent nothing, try using an empty record: `{}`.
+If you want to represent nothing, try using an empty record: {}.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpBar,OpBar,NoSpaceOpenRound,CloseRound,CloseRound,

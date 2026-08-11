@@ -40,7 +40,6 @@ AMBIGUOUS FUNCTION TYPE - underscore_in_regular_annotations.md:28:22:28:24
 UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
-
 ── ✗ ambiguous function type ──────── underscore_in_regular_annotations.md:28:22
 
 I was parsing a function type, and multiple arrows need parentheses.
@@ -68,17 +67,18 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_b` here.
+I found _b here.
 
 ── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
 
-Variable `list` is defined here and then never used:
+Variable list is defined here and then never used:
 
 process = |list| "processed"
            ^^^^
 
-If you don't need this variable, prefix it with an underscore like `_list` to
+If you don't need this variable, prefix it with an underscore like _list to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,Underscore,OpArrow,Underscore,

@@ -12,15 +12,15 @@ main = MyJson.decode
 # EXPECTED
 NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
-
 ── ✗ name not in scope ──────────────────────────── can_import_with_alias.md:3:8
 
-Nothing is named `decode` in this scope.
+Nothing is named decode in this scope.
 
 main = MyJson.decode
        ^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,

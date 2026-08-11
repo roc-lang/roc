@@ -22,10 +22,9 @@ main! = |_| {
 NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-
 ── ✗ name not in scope ────────────────────────── hello_world_with_block.md:11:2
 
-Nothing is named `line!` in this scope.
+Nothing is named line! in this scope.
 
 Stdout.line!("Hello, world!")
 ^^^^^^^^^^^^
@@ -34,13 +33,14 @@ Is it misspelled, or is there an import missing?
 
 ── ● unused variable ───────────────────────────── hello_world_with_block.md:9:2
 
-Variable `world` is defined here and then never used:
+Variable world is defined here and then never used:
 
 world = "World"
 ^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_world` to
+If you don't need this variable, prefix it with an underscore like _world to
 suppress this warning.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

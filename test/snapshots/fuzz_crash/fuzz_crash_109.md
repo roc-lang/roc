@@ -12,36 +12,35 @@ MOD NOT FOUND - fuzz_crash_109.md:1:11:1:16
 EXPOSED BUT NOT DEFINED - fuzz_crash_109.md:1:9:1:10
 EXPOSED BUT NOT DEFINED - fuzz_crash_109.md:1:11:1:16
 # PROBLEMS
-
 ── ✗ mod not found ─────────────────────────────────── fuzz_crash_109.md:1:11
 
-The mod `E` was not found in this Roc project.
+The mod E was not found in this Roc project.
 
 package[e,E.a.*]{}
           ^^^^^
 
-
 ── ✗ exposed but not defined ───────────────────────────── fuzz_crash_109.md:1:9
 
-The mod header says that `e` is exposed, but it is not defined anywhere in
+The mod header says that e is exposed, but it is not defined anywhere in
 this mod.
 
 package[e,E.a.*]{}
         ^
 
-You can fix this by either defining `e` in this mod, or by removing it from
+You can fix this by either defining e in this mod, or by removing it from
 the list of exposed values.
 
 ── ✗ exposed but not defined ──────────────────────────── fuzz_crash_109.md:1:11
 
-The mod header says that `E.a` is exposed, but it is not defined anywhere in
+The mod header says that E.a is exposed, but it is not defined anywhere in
 this mod.
 
 package[e,E.a.*]{}
           ^^^^^
 
-You can fix this by either defining `E.a` in this mod, or by removing it
-from the list of exposed values.
+You can fix this by either defining E.a in this mod, or by removing it from
+the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,UpperIdent,NoSpaceDotLowerIdent,DotStar,CloseSquare,OpenCurly,CloseCurly,

@@ -16,10 +16,9 @@ Foo := [Whatever].{
 NAME NOT IN SCOPE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
-
 ── ✗ name not in scope ─────────── canon_revamp_forward_ref_to_anno_only.md:3:14
 
-Nothing is named `absent` in this scope.
+Nothing is named absent in this scope.
 
 callMe = absent
          ^^^^^^
@@ -35,6 +34,7 @@ absent : Foo
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

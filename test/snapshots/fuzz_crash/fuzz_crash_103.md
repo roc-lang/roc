@@ -13,7 +13,6 @@ EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:31:1:36
 INVALID NUMBER - fuzz_crash_103.md:2:4:2:12
 # PROBLEMS
-
 ── ● effectful function name ───────────────────────────── fuzz_crash_103.md:1:1
 
 This function performs an effect, so its name must end in `!`.
@@ -21,7 +20,7 @@ This function performs an effect, so its name must end in `!`.
 topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
 ^^^^^^^^
 
-Add a trailing `!` to this function name.
+Add a trailing ! to this function name.
 
 ── ● effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
 
@@ -30,7 +29,7 @@ This function performs an effect, so its name must end in `!`.
 topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
                               ^^^^^
 
-Add a trailing `!` to this function name.
+Add a trailing ! to this function name.
 
 ── ✗ invalid number ────────────────────────────────────── fuzz_crash_103.md:2:4
 
@@ -42,6 +41,7 @@ This number literal does not fit in the inferred type.
 The inferred type is:
 
     a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,LowerIdent,OpAssign,OpBar,OpBar,LowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,LowerIdent,NoSpaceOpenRound,CloseRound,LowerIdent,NoSpaceOpenRound,CloseRound,

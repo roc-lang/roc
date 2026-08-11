@@ -15,7 +15,6 @@ main! = |_| {}
 # EXPECTED
 POLYMORPHIC VALUE - generalize_annotated_value_constrained.md:4:1:4:6
 # PROBLEMS
-
 ── ✗ polymorphic value ─────────── generalize_annotated_value_constrained.md:4:1
 
 This top-level value still has an unresolved polymorphic type.
@@ -26,6 +25,7 @@ items = []
 Its type is:
 List(a) where [a.to_str : a -> Str]
 Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -31,14 +31,12 @@ UNEXPECTED STATEMENT - string.md:13:1:13:2
 UNEXPECTED STATEMENT - string.md:13:2:13:3
 UNEXPECTED STATEMENT - string.md:13:3:13:3
 # PROBLEMS
-
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:4:3
 
 This Unicode escape sequence is not valid.
 
 "\u",
  ^^
-
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:5:3
 
@@ -47,14 +45,12 @@ This Unicode escape sequence is not valid.
 "\u)",
  ^^
 
-
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:6:3
 
 This Unicode escape sequence is not valid.
 
 "\u(",
  ^^^
-
 
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:7:3
 
@@ -63,14 +59,12 @@ This Unicode escape sequence is not valid.
 "\u()",
  ^^^^
 
-
 ── ✗ invalid unicode escape sequence ───────────────────────────── string.md:8:3
 
 This Unicode escape sequence is not valid.
 
 "\u(K)",
  ^^^^^
-
 
 ── ✗ invalid escape sequence ──────────────────────────────────── string.md:13:2
 
@@ -79,14 +73,12 @@ This escape sequence is not recognized.
 "\
 
 
-
 ── ✗ unclosed string ──────────────────────────────────────────── string.md:13:1
 
 This string is missing a closing quote.
 
 "\
 ^^
-
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:1
 
@@ -101,7 +93,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:2
 
@@ -116,10 +108,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `\` here.
+I found \ here.
 
-Tip: Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1,
-arg2| body`, and double backslash (`\\`) begins a line in a multiline string.
+Tip: Roc syntax does not use single backslashes. Roc lambda syntax is |arg1,
+arg2| body, and double backslash (\\) begins a line in a multiline string.
 
 ── ✗ unexpected statement ─────────────────────────────────────── string.md:13:3
 
@@ -135,6 +127,7 @@ For example:
     answer = 42
 
 I reached the end of the file before this construct was complete.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenRound,

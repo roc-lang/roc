@@ -20,7 +20,6 @@ AMBIGUOUS FUNCTION TYPE - type_higher_order_multiple_vars.md:3:43:3:45
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:46:3:48
 UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
-
 ── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:36
 
 I was parsing a function type, and multiple arrows need parentheses.
@@ -48,7 +47,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found ( here.
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:40
 
@@ -63,7 +62,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_a` here.
+I found _a here.
 
 ── ✗ ambiguous function type ─────────── type_higher_order_multiple_vars.md:3:43
 
@@ -92,7 +91,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `_c` here.
+I found _c here.
 
 ── ✗ unexpected statement ────────────── type_higher_order_multiple_vars.md:3:48
 
@@ -107,9 +106,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `)` here.
+I found ) here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

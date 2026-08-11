@@ -15,8 +15,7 @@ expect f(["a"]) == "x"
 # EXPECTED
 TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12:3:17
 # PROBLEMS
-
-── ✗ type mismatch ───── unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
+── ✗ type mismatch ─ unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
 
 This expression is used in an unexpected way.
 
@@ -30,6 +29,7 @@ It has the type:
 But you are trying to use it as:
 
     Str
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

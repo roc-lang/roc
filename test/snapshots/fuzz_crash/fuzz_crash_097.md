@@ -12,16 +12,15 @@ a=(0(0->X)
 MISSING METHOD - fuzz_crash_097.md:1:4:1:5
 TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 # PROBLEMS
-
 ── ✗ missing method ────────────────────────────────────── fuzz_crash_097.md:1:4
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 a=(0(0->X)
    ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     [X(b), ..] -> _ret
       where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
@@ -37,7 +36,8 @@ It is:
 
     [X(_b), ..]
 
-But I need a record with a `a` field.
+But I need a record with a a field.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,NoSpaceOpenRound,Int,OpArrow,UpperIdent,CloseRound,

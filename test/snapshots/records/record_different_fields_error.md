@@ -43,7 +43,6 @@ MISSING METHOD - record_different_fields_error.md:5:17:5:24
 DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
 MISSING METHOD - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
-
 ── ✗ stray dollar sign ─────────────────── record_different_fields_error.md:6:10
 
 Dollar sign ($) is only allowed at the very beginning of a name, not in the
@@ -51,7 +50,6 @@ middle or at the end.
 
 field$special: "dollar",
      ^
-
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:2:20
 
@@ -66,7 +64,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:21
 
@@ -81,7 +79,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `leading underscore` here.
+I found leading underscore here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:39
 
@@ -96,7 +94,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:2:40
 
@@ -111,7 +109,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:3:13
@@ -127,7 +125,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:14
 
@@ -142,7 +140,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `trailing underscore` here.
+I found trailing underscore here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:33
 
@@ -157,7 +155,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:3:34
 
@@ -172,7 +170,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:15
@@ -188,7 +186,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here.
+I found : here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:4:25
 
@@ -203,7 +201,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:15
@@ -219,7 +217,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here.
+I found : here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:5:24
 
@@ -234,7 +232,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected type syntax ────────────── record_different_fields_error.md:6:20
@@ -250,7 +248,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:21
 
@@ -265,7 +263,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `dollar` here.
+I found dollar here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:27
 
@@ -280,7 +278,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `"` here.
+I found " here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:6:28
 
@@ -295,7 +293,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:10
@@ -311,7 +309,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `@symbol` here.
+I found @symbol here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:17
 
@@ -326,7 +324,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `:` here.
+I found : here.
 
 ── ✗ unexpected expression syntax ──────── record_different_fields_error.md:7:30
 
@@ -341,7 +339,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ● declaration has no value ───────────── record_different_fields_error.md:2:5
@@ -375,30 +373,30 @@ It has the type:
 
     [PascalCase, ..]
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to {}.
+If you don't need the value, you can ignore it with _ =.
 
 ── ✗ missing method ────────────────────── record_different_fields_error.md:4:17
 
-This `from_quote` method is being called on a value whose type doesn't have
-that method.
+This from_quote method is being called on a value whose type doesn't have that
+method.
 
 PascalCase: "pascal",
             ^^^^^^^^
 
-The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_quote, is:
 
     {}
 
 ── ✗ missing method ────────────────────── record_different_fields_error.md:5:17
 
-This `from_quote` method is being called on a value whose type doesn't have
-that method.
+This from_quote method is being called on a value whose type doesn't have that
+method.
 
 kebab-case: "kebab",
             ^^^^^^^
 
-The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_quote, is:
 
     {}
 
@@ -414,15 +412,16 @@ they are published through the host boundary.
 
 ── ✗ missing method ────────────────────── record_different_fields_error.md:7:19
 
-This `from_quote` method is being called on a value whose type doesn't have
-that method.
+This from_quote method is being called on a value whose type doesn't have that
+method.
 
 field@symbol: "at symbol",
               ^^^^^^^^^^^
 
-The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_quote, is:
 
     {}
+
 # TOKENS
 ~~~zig
 OpenCurly,

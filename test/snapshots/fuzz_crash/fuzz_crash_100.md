@@ -12,7 +12,6 @@ T := [].{
 # EXPECTED
 INVALID RECURSIVE TYPE - fuzz_crash_100.md:2:2:2:9
 # PROBLEMS
-
 ── ✗ invalid recursive type ────────────────────────────── fuzz_crash_100.md:2:2
 
 The nominal type T.A refers to itself in a way that would make it infinite.
@@ -25,7 +24,8 @@ Its definition is:
     T.A
 
 Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
+record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

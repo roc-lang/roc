@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 EXPECTED PIPE TARGET - pipe_invalid_target.md:1:6:1:7
 # PROBLEMS
-
 ── ✗ expected pipe target ─────────────────────────── pipe_invalid_target.md:1:6
 
 I was parsing a pipe expression, and I expected a name or parenthesized
@@ -25,7 +24,8 @@ parenthesized expression.
 For example:
     value |> next
 
-I found `2` here.
+I found 2 here.
+
 # TOKENS
 ~~~zig
 Int,OpPizza,Int,

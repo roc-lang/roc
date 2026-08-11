@@ -16,7 +16,6 @@ UNEXPECTED STATEMENT - fuzz_crash_012.md:1:5:1:6
 UNEXPECTED STATEMENT - fuzz_crash_012.md:1:6:1:16
 UNEXPECTED STATEMENT - fuzz_crash_012.md:1:16:1:17
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -30,7 +29,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:2
 
@@ -45,7 +44,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:3
 
@@ -60,7 +59,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found ( here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:4
 
@@ -75,7 +74,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:5
 
@@ -90,7 +89,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `(` here.
+I found ( here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:6
 
@@ -105,7 +104,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `l888888888` here.
+I found l888888888 here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -122,7 +121,8 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `|` here.
+I found | here.
+
 # TOKENS
 ~~~zig
 OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,

@@ -13,7 +13,6 @@ t = MyList.([])
 # EXPECTED
 INVALID RECURSIVE TYPE - recursion_through_builtin_arg.md:1:1:1:23
 # PROBLEMS
-
 ── ✗ invalid recursive type ─────────────── recursion_through_builtin_arg.md:1:1
 
 The nominal type MyList refers to itself in a way that would make it infinite.
@@ -26,7 +25,8 @@ Its definition is:
     List(MyList)
 
 Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
+record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,

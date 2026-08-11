@@ -12,40 +12,36 @@ B : A
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencies.md:1:1:1:13
 MUTUALLY RECURSIVE TYPE ALIASES - canon_revamp_tag_payloads_are_type_dependencies.md:2:1:2:6
 # PROBLEMS
+── ✗ mutually recursive type aliases ─ canon_revamp_tag_payloads_are_type_dependencies.md:1:1
 
-── ✗ mutually recursive type aliases ───── canon_revamp_tag_payloads_are_type_dependencies.md:1:1
-
-The type alias `A` and `B` form a recursive cycle.
+The type alias A and B form a recursive cycle.
 
 A : [Tag(B)]
 ^^^^^^^^^^^^
 
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
 
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
-
-This type is declared in:
 
 And it references B declared in canon_revamp_tag_payloads_are_type_dependencies.md:2:1:
 
 B : A
 ^^^^^
 
-── ✗ mutually recursive type aliases ───── canon_revamp_tag_payloads_are_type_dependencies.md:2:1
+── ✗ mutually recursive type aliases ─ canon_revamp_tag_payloads_are_type_dependencies.md:2:1
 
-The type alias `B` and `A` form a recursive cycle.
+The type alias B and A form a recursive cycle.
 
 B : A
 ^^^^^
 
+Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (:=) instead.
 
-Type aliases are transparent synonyms and cannot be mutually recursive. If you need recursive types, use nominal types (`:=`) instead.
-
-This type is declared in:
 
 And it references A declared in canon_revamp_tag_payloads_are_type_dependencies.md:1:1:
 
 A : [Tag(B)]
 ^^^^^^^^^^^^
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,

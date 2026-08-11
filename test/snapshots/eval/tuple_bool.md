@@ -13,54 +13,50 @@ MISSING METHOD - tuple_bool.md:1:45:1:51
 MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
-
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:38
 
-This `not` method is being called on a value whose type doesn't have that
-method.
+This not method is being called on a value whose type doesn't have that method.
 
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
                                      ^^^^^
 
-The value's type, which does not have a method named `not`, is:
+The value's type, which does not have a method named not, is:
 
     [True, ..]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
 
-This `not` method is being called on a value whose type doesn't have that
-method.
+This not method is being called on a value whose type doesn't have that method.
 
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
                                             ^^^^^^
 
-The value's type, which does not have a method named `not`, is:
+The value's type, which does not have a method named not, is:
 
     [False, ..]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
 
-This `not` method is being called on a value whose type doesn't have that
-method.
+This not method is being called on a value whose type doesn't have that method.
 
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
                                                                     ^^^^^
 
-The value's type, which does not have a method named `not`, is:
+The value's type, which does not have a method named not, is:
 
     [True, ..]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
 
-This `not` method is being called on a value whose type doesn't have that
-method.
+This not method is being called on a value whose type doesn't have that method.
 
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
                                                                              ^^^^^
 
-The value's type, which does not have a method named `not`, is:
+The value's type, which does not have a method named not, is:
 
     [True, ..]
+
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,

@@ -17,19 +17,18 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-
 ── ✗ missing method ─────────────────── lambda_annotation_mismatch_error.md:3:23
 
-The value before this `+` operator has a type that doesn't have a `plus` method.
+The value before this + operator has a type that doesn't have a plus method.
 
 string_function = |x| x + 42
                       ^^^^^^
 
-The value's type, which does not have a method named `plus`, is:
+The value's type, which does not have a method named plus, is:
 
     Str
 
-Hint: The `+` operator calls a method named `plus` on the value preceding it,
+Hint: The + operator calls a method named plus on the value preceding it,
 passing the value after the operator as the one argument.
 
 ── ✗ invalid number ─────────────────── lambda_annotation_mismatch_error.md:7:31
@@ -42,6 +41,7 @@ wrong_type_function = |x| x * 3.14
 The inferred type is:
 
     I64
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

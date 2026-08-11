@@ -15,10 +15,9 @@ f = |x| match x {
 # EXPECTED
 REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:6:2
 # PROBLEMS
-
 ── ● redundant pattern ──────────────────── match_redundant_exact_numeral.md:2:9
 
-The second branch of this `match` is redundant.
+The second branch of this match is redundant.
 
 f = |x| match x {
     1e-40 => 1
@@ -28,6 +27,7 @@ f = |x| match x {
 
 This pattern can never match because earlier patterns already cover all the
 values it would match.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

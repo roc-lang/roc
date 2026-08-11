@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 INVALID UNICODE ESCAPE SEQUENCE - unicode_overflow_str.md:1:2:1:12
 # PROBLEMS
-
 ── ✗ invalid unicode escape sequence ─────────────── unicode_overflow_str.md:1:2
 
 This Unicode escape sequence is not valid.

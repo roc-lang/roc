@@ -14,7 +14,6 @@ UNEXPECTED STATEMENT - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
-
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
@@ -28,7 +27,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
 
@@ -43,17 +42,16 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `.R` here.
+I found .R here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
 ── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
 
-The type `S` is not declared in this scope.
+The type S is not declared in this scope.
 
 0 b:S
     ^
-
 
 ── ● declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
 
@@ -64,6 +62,7 @@ This declaration has a type annotation but no implementation.
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

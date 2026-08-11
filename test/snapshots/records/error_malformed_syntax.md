@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 EXPECTED RECORD FIELD - error_malformed_syntax.md:1:18:1:19
 # PROBLEMS
-
 ── ✗ expected record field ────────────────────── error_malformed_syntax.md:1:18
 
 I was parsing a record expression, and I expected a lowercase field name.
@@ -18,13 +17,14 @@ I was parsing a record expression, and I expected a lowercase field name.
 { name: "Alice", : 30, , email: , active Bool.true, "invalid": value, 42: "number key", : }
                  ^
 
-Record fields start with lowercase names. After the name, either write `:
-value` or omit the value to use field punning.
+Record fields start with lowercase names. After the name, either write : value
+or omit the value to use field punning.
 
 For example:
     { name: "Ada", age }
 
-I found `:` here.
+I found : here.
+
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,Int,Comma,Comma,LowerIdent,OpColon,Comma,LowerIdent,UpperIdent,NoSpaceDotLowerIdent,Comma,StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,Int,OpColon,StringStart,StringPart,StringEnd,Comma,OpColon,CloseCurly,

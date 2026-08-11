@@ -19,7 +19,6 @@ UNEXPECTED EXPRESSION SYNTAX - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ─────────────────────── record_builder.md:1:15
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -33,7 +32,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `<-` here.
+I found <- here.
 
 ── ✗ unexpected type syntax ────────────────────────────── record_builder.md:2:8
 
@@ -48,7 +47,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `5` here.
+I found 5 here.
 
 ── ✗ unexpected expression syntax ──────────────────────── record_builder.md:2:9
 
@@ -63,7 +62,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected type syntax ────────────────────────────── record_builder.md:3:8
@@ -79,7 +78,7 @@ records, or tag unions.
 For example:
     List(U64)
 
-I found `0` here.
+I found 0 here.
 
 ── ✗ unexpected expression syntax ──────────────────────── record_builder.md:3:9
 
@@ -94,7 +93,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ● declaration has no value ──────────────────────────── record_builder.md:2:5
@@ -116,6 +115,7 @@ y: 0,
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
 # TOKENS
 ~~~zig
 OpenCurly,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,OpBackArrow,

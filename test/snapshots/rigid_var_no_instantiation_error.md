@@ -36,45 +36,45 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:13:5:13:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:17:5:17:12
 UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 # PROBLEMS
-
 ── ✗ does not exist ────────────────── rigid_var_no_instantiation_error.md:17:21
 
-`Bool.true` does not exist.
+Bool.true does not exist.
 
 result2 = swap((Bool.true, [1, 2, 3]))
                 ^^^^^^^^^
 
-`Bool` is in scope, but it has no associated `true`.
+Bool is in scope, but it has no associated true.
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:13:5
 
-Variable `result1` is defined here and then never used:
+Variable result1 is defined here and then never used:
 
 result1 = swap((42, "hello"))
 ^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_result1`
-to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result1 to
+suppress this warning.
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:17:5
 
-Variable `result2` is defined here and then never used:
+Variable result2 is defined here and then never used:
 
 result2 = swap((Bool.true, [1, 2, 3]))
 ^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_result2`
-to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result2 to
+suppress this warning.
 
 ── ● unused variable ────────────────── rigid_var_no_instantiation_error.md:21:5
 
-Variable `result3` is defined here and then never used:
+Variable result3 is defined here and then never used:
 
 result3 = swap(("foo", "bar"))
 ^^^^^^^
 
-If you don't need this variable, prefix it with an underscore like `_result3`
-to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _result3 to
+suppress this warning.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

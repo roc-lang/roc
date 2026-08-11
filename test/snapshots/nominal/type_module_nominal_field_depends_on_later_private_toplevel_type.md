@@ -14,11 +14,10 @@ InternalType := [Some, Other]
 # EXPECTED
 PRIVATE TYPE IN EXPOSED FIELD - type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13:2:25
 # PROBLEMS
+── ● private type in exposed field ─ type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13
 
-── ● private type in exposed field ───── type_mod_nominal_field_depends_on_later_private_toplevel_type.md:2:13
-
-The `field` field of `ModType` refers to `InternalType`, but `InternalType` is
-private to this mod.
+The field field of ModType refers to InternalType, but InternalType is private
+to this mod.
 
 field : InternalType,
         ^^^^^^^^^^^^
@@ -28,8 +27,9 @@ they cannot name this private type.
 
 
 
-Hint: Expose the referenced type, make ModType opaque with `::`, or move the
-type into ModType's associated block.
+Hint: Expose the referenced type, make ModType opaque with ::, or move the type
+into ModType's associated block.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,

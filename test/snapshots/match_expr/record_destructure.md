@@ -14,7 +14,6 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - record_destructure.md:1:7:1:10
 # PROBLEMS
-
 ── ● unconditional condition ───────────────────────── record_destructure.md:1:7
 
 This match value is known at compile time, so this match will always inspect

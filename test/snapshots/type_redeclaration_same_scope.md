@@ -12,21 +12,18 @@ Maybe(a) : [Ok(a), Err]
 # EXPECTED
 TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
-
 ── ✗ type redeclared ────────────────────── type_redeclaration_same_scope.md:3:1
 
-The type `Maybe` is being redeclared.
+The type Maybe is being redeclared.
 
 Maybe(a) : [Ok(a), Err]
 ^^^^^^^^^^^^^^^^^^^^^^^
-
-
-The redeclaration is in:
 
 But Maybe was already declared in type_redeclaration_same_scope.md:1:1:
 
 Maybe(a) : [Some(a), None]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,

@@ -12,22 +12,22 @@ a=(0\r.e)
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 MISSING METHOD - fuzz_crash_098.md:1:4:1:5
 # PROBLEMS
-misplaced carriage return
+── ✗ misplaced carriage return ─────────────────────────────────────────────────
 
 Carriage return characters (\r) are not allowed in Roc source code.
 
-
 ── ✗ missing method ────────────────────────────────────── fuzz_crash_098.md:1:4
 
-This `from_numeral` method is being called on a value whose type doesn't have
+This from_numeral method is being called on a value whose type doesn't have
 that method.
 
 a=(0\r.e)
    ^
 
-The value's type, which does not have a method named `from_numeral`, is:
+The value's type, which does not have a method named from_numeral, is:
 
     { e: _field, .. }
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,DotLowerIdent,CloseRound,

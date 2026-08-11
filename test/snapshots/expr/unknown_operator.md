@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - unknown_operator.md:1:4:1:5
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ────────────────────── unknown_operator.md:1:4
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -24,7 +23,8 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here.
+I found + here.
+
 # TOKENS
 ~~~zig
 Int,OpPlus,OpPlus,Int,

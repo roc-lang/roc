@@ -20,14 +20,12 @@ UNEXPECTED STATEMENT - fuzz_crash_009.md:1:4:1:5
 UNEXPECTED STATEMENT - fuzz_crash_009.md:1:5:1:6
 UNEXPECTED STATEMENT - fuzz_crash_009.md:2:6:2:7
 # PROBLEMS
-
 ── ✗ unclosed string ───────────────────────────────────── fuzz_crash_009.md:6:5
 
 This string is missing a closing quote.
 
 "onmo %
 ^^^^^^^
-
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:2
 
@@ -42,7 +40,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `f` here.
+I found f here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -59,7 +57,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `{` here.
+I found { here.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:1:4
 
@@ -74,7 +72,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `o` here.
+I found o here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -91,7 +89,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `,` here.
+I found , here.
 A comma separates items, but there must be a valid item on both sides of it.
 
 ── ✗ unexpected statement ──────────────────────────────── fuzz_crash_009.md:2:6
@@ -107,9 +105,10 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `]` here.
+I found ] here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpenCurly,LowerIdent,Comma,

@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 INVALID NUMBER - int_i128_max.md:1:1:1:40
 # PROBLEMS
-
 ── ✗ invalid number ──────────────────────────────────────── int_i128_max.md:1:1
 
 This number literal does not fit in the inferred type.
@@ -21,6 +20,7 @@ This number literal does not fit in the inferred type.
 The inferred type is:
 
     Dec
+
 # TOKENS
 ~~~zig
 Int,

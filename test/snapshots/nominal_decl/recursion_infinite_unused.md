@@ -12,7 +12,6 @@ main = 0
 # EXPECTED
 INVALID RECURSIVE TYPE - recursion_infinite_unused.md:1:1:1:14
 # PROBLEMS
-
 ── ✗ invalid recursive type ─────────────────── recursion_infinite_unused.md:1:1
 
 The nominal type T refers to itself in a way that would make it infinite.
@@ -25,7 +24,8 @@ Its definition is:
     (T, U64)
 
 Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example `ConsList(a) := [Nil, Cons(a, ConsList(a))]`.
+record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

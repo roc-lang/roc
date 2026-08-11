@@ -14,7 +14,6 @@ foo = 42
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
-
 ── ✗ underscore in type alias ─────────────────── simple_underscore_error.md:1:1
 
 Underscores are not allowed in type alias declarations.
@@ -36,6 +35,7 @@ foo = 42
 Other code expects this to have the type:
 
     BadType
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

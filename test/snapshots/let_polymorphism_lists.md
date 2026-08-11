@@ -46,7 +46,6 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
-
 ── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:12:26
 
 I was parsing an expression, and this token cannot start an expression here.
@@ -60,7 +59,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here.
+I found + here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:12:28
 
@@ -75,7 +74,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `my_empty_list` here.
+I found my_empty_list here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -92,7 +91,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here.
+I found + here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:13:28
 
@@ -107,7 +106,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `my_empty_list` here.
+I found my_empty_list here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -124,7 +123,7 @@ blocks, conditionals, matches, or function calls.
 For example:
     add(1, 2)
 
-I found `+` here.
+I found + here.
 
 ── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:14:32
 
@@ -139,7 +138,7 @@ returns, crashes, loops, or expression statements inside a block.
 For example:
     answer = 42
 
-I found `my_empty_list` here.
+I found my_empty_list here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
@@ -169,6 +168,7 @@ all_float_list = float_list ++ my_empty_list
                  ^^^^^^^^^^^^^
 
 This might be a syntax error, an unsupported language feature, or a typo.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
