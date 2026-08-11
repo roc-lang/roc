@@ -3368,12 +3368,19 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
 }
 
 fn methodCallPreservesIteratorSourceInput(self: *Self, call: anytype) bool {
+    // Every def that can answer true is reachable only through a method named
+    // `iter` or `iter_rev`: the registered producer table's hoist-preserving
+    // entries, the delegating Dict/Set wrappers, and the FieldNames intrinsic
+    // (`static_dispatch_registry.zig`) all bind those two names. Anything else
+    // skips receiver resolution and the cross-module binding lookup.
+    const method_text = self.cir.getIdentText(call.method_name);
+    if (!Ident.textEql(method_text, "iter") and !Ident.textEql(method_text, "iter_rev")) return false;
     var owner_var = ModuleEnv.varFrom(call.receiver);
     const nominal = while (true) {
         const resolved = self.types.resolveVar(owner_var);
         switch (resolved.desc.content) {
             .alias => |alias| owner_var = self.types.getAliasBackingVar(alias),
-            else => break resolved.desc.content.unwrapNominalType() orelse return false,
+            .flex, .rigid, .structure, .err => break resolved.desc.content.unwrapNominalType() orelse return false,
         }
     };
     const owner_env = self.getNominalOriginEnv(nominal);

@@ -5273,7 +5273,7 @@ test "Dict and Set iteration inherit the minted list representation" {
     // The `Dict.iter` / `Set.iter_rev` procedures themselves may survive as a
     // call: their bodies unwrap the nominal and hand back the backing list,
     // which happens once when the iterator is built rather than once per step.
-    // What must not survive is the stepping machinery — a reachable `Iter.next`
+    // What must not survive is the stepping machinery—a reachable `Iter.next`
     // would mean the loop is running against the public iterator boundary
     // instead of the minted representation.
     for ([_][]const u8{ "Builtin.List.iter", "iter_from_step", "Builtin.Iter.next" }) |name| {
@@ -5284,6 +5284,65 @@ test "Dict and Set iteration inherit the minted list representation" {
     for ([_][]const u8{ "Builtin.List.iter_rev", "iter_from_step", "Builtin.Iter.next" }) |name| {
         const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
         if (reachable) std.debug.print("STILL REACHABLE set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+}
+
+test "closed Dict and Set receivers keep minted iteration" {
+    const allocator = std.testing.allocator;
+    // The receivers are fully closed, so the checker's static-data hoisting
+    // applies. The delegating `.iter()`/`.iter_rev()` dispatch must leave the
+    // collection as the hoist root instead of becoming one itself; a hoisted
+    // dispatch result would step through the public iterator boundary.
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(7)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(7)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // Sanity probes: reachability data must be populated, or every absence
+    // assertion below holds vacuously.
+    try std.testing.expect(try reachableProcDebugName(allocator, &dict_optimized.lowered, "sum_dict"));
+    try std.testing.expect(try reachableProcDebugName(allocator, &set_optimized.lowered, "sum_set"));
+
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed set: {s}\n", .{name});
         try std.testing.expect(!reachable);
     }
 }

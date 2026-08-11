@@ -974,25 +974,14 @@ pub const InstGraph = struct {
             .record => |row| .{ .children = .{ .count = 1 + row.fields.len, .increment = 0 } },
             .named => |named| blk: {
                 if (named.generated_iterator != null) {
-                    break :blk switch (named.def.iterator_kind) {
-                        .custom,
-                        .list,
-                        .list_rev,
-                        .str,
-                        .single,
-                        .range_exclusive,
-                        .range_inclusive,
-                        .numeric_until,
-                        .numeric_to,
-                        => .{ .fixed = 1 },
-                        .map,
-                        .keep_if,
-                        .drop_if,
-                        .take_first,
-                        .drop_first,
-                        .concat,
-                        .append,
-                        => adapter: {
+                    if (named.def.iterator_kind == .forced_dynamic) {
+                        break :blk .{ .fixed = generated_iterator_forced_depth };
+                    }
+                    const topology = named.def.iterator_kind.componentTopology() orelse
+                        Common.invariant("generated iterator had no producer kind");
+                    break :blk switch (topology) {
+                        .source_without_components, .source_with_components => .{ .fixed = 1 },
+                        .adapter => adapter: {
                             if (named.args.len == 0) {
                                 Common.invariant("generated iterator adapter had no item argument");
                             }
@@ -1001,8 +990,6 @@ pub const InstGraph = struct {
                                 .increment = 1,
                             } };
                         },
-                        .forced_dynamic => .{ .fixed = generated_iterator_forced_depth },
-                        .none => Common.invariant("generated iterator had no producer kind"),
                     };
                 }
                 break :blk switch (named.def.iterator_representation) {
@@ -1665,8 +1652,8 @@ pub const InstGraph = struct {
 
     /// Whether this exact graph type contains the public iterator interface at
     /// any structural depth. This consumes the checker-authored builtin owner
-    /// carried by each named node; callers do not reconstruct iterator intent
-    /// from a backing shape.
+    /// carried by each named node; callers do not derive iterator intent from
+    /// a backing shape.
     pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("iterator_interface_scans");
         return try self.containmentResult(
@@ -1966,6 +1953,14 @@ pub const InstGraph = struct {
                         );
                         try self.relatePublicNamedOpaquePair(public_named, private_named, pending);
                         try self.union_(private_node, public_node);
+                        return;
+                    }
+                    if (try self.materializeStructuralRequestPublicInterface(
+                        public_node,
+                        public_var,
+                        private_content,
+                        pending,
+                    )) {
                         return;
                     }
                     Common.invariant("opaque interface relation received unresolved checked structure for generated evidence");
@@ -2374,6 +2369,68 @@ pub const InstGraph = struct {
         return self.nodes.items[@intFromEnum(self.find(public_node))].named;
     }
 
+    /// A generated-private witness can sit behind a structural container—a
+    /// list literal element, a tuple slot, a record field—while the checked
+    /// request position is still an unstructured variable. The public side
+    /// then adopts the container shape with a fresh checked variable in each
+    /// child slot, and every generated-carrying child keeps descending
+    /// through the opaque relation. Returns false for private content this
+    /// relation cannot structure, leaving the caller's invariant to report it.
+    fn materializeStructuralRequestPublicInterface(
+        self: *InstGraph,
+        public_node: NodeId,
+        public_var: InstVariable,
+        private_content: InstNode,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!bool {
+        switch (private_content) {
+            .list, .box, .tuple, .record => {},
+            .redirect, .unresolved, .primitive, .named, .func, .tag_union, .empty_tag_union, .empty_record, .erased, .zst => return false,
+        }
+        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
+            Common.invariant("structural request interface relation received a defaultable public variable");
+        }
+        switch (private_content) {
+            .list => |private_elem| {
+                const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                try self.setContent(public_node, .{ .list = elem });
+                try self.relateOpaqueChild(elem, private_elem, pending);
+            },
+            .box => |private_elem| {
+                const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                try self.setContent(public_node, .{ .box = elem });
+                try self.relateOpaqueChild(elem, private_elem, pending);
+            },
+            .tuple => |private_items| {
+                const items = try self.arena().alloc(NodeId, private_items.len);
+                for (items) |*item| {
+                    item.* = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                }
+                try self.setContent(public_node, .{ .tuple = items });
+                for (items, private_items) |item, private_item| {
+                    try self.relateOpaqueChild(item, private_item, pending);
+                }
+            },
+            .record => |private_row| {
+                const fields = try self.arena().alloc(InstField, private_row.fields.len);
+                for (fields, private_row.fields) |*field, private_field| {
+                    field.* = .{
+                        .name = private_field.name,
+                        .ty = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
+                    };
+                }
+                const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+                try self.setContent(public_node, .{ .record = .{ .fields = fields, .ext = ext } });
+                for (fields, private_row.fields) |field, private_field| {
+                    try self.relateOpaqueChild(field.ty, private_field.ty, pending);
+                }
+                try self.relateOpaqueChild(ext, private_row.ext, pending);
+            },
+            .redirect, .unresolved, .primitive, .named, .func, .tag_union, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+        }
+        return true;
+    }
+
     const BackingAccess = enum { inspectable, runtime_layout };
 
     fn backingAllowsAccess(use: Type.BackingUse, access: BackingAccess) bool {
@@ -2595,7 +2652,7 @@ pub const InstGraph = struct {
         };
     }
 
-    /// Rebuild a named value witness with an exact produced backing while
+    /// Create a named value witness with an exact produced backing while
     /// preserving the checked nominal identity and backing capabilities.
     pub fn namedValueNodeWithBacking(
         self: *InstGraph,

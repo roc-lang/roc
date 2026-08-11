@@ -283,17 +283,17 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
         const roots = test_env.checker.selectedHoistedRoots();
         try std.testing.expectEqual(@as(usize, 1), roots.len);
         try std.testing.expect(roots[0].pattern != null);
-        switch (test_env.module_env.store.getExpr(roots[0].expr)) {
-            .e_method_call => |call| try std.testing.expectEqualStrings(
-                case.method_name,
-                test_env.module_env.getIdent(call.method_name),
-            ),
-            .e_dispatch_call => |call| try std.testing.expectEqualStrings(
-                case.method_name,
-                test_env.module_env.getIdent(call.method_name),
-            ),
-            else => try std.testing.expect(false),
-        }
+        const root_expr = test_env.module_env.store.getExpr(roots[0].expr);
+        const root_tag = std.meta.activeTag(root_expr);
+        try std.testing.expect(root_tag == .e_method_call or root_tag == .e_dispatch_call);
+        const method_name = if (root_tag == .e_method_call)
+            root_expr.e_method_call.method_name
+        else
+            root_expr.e_dispatch_call.method_name;
+        try std.testing.expectEqualStrings(
+            case.method_name,
+            test_env.module_env.getIdent(method_name),
+        );
     }
 }
 

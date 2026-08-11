@@ -4285,6 +4285,100 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "789123987" },
     },
+    // A direct procedure call relates its produced iterator to the element
+    // slot without merging classes, unlike a dispatch child, so this literal
+    // exercises the constructor's element-witness selection across both
+    // producer paths in the order that leaves the selection to the direct
+    // call.
+    .{
+        .name = "for loop over a list literal mixing direct-call and dispatch iterator producers",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [mk(xs), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "1221" },
+    },
+    // A record update stores its updated field values while typed at the
+    // update's record node, so a producer-authored iterator field must carry
+    // its exact representation through the update.
+    .{
+        .name = "record update storing a dispatch-produced iterator field",
+        .source_kind = .module,
+        .source =
+        \\rewrap : { it : Iter(U64), n : U64 }, List(U64) -> { it : Iter(U64), n : U64 }
+        \\rewrap = |w, items| { ..w, it: items.iter_rev() }
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    base = { it: xs.iter(), n: 7 }
+        \\    updated = rewrap(base, xs)
+        \\    var $out = updated.n
+        \\    for x in updated.it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "721" },
+    },
+    // A fully closed receiver is a static-data hoist candidate; its `.iter()`
+    // dispatch must leave the collection as the hoist root instead of
+    // becoming one itself.
+    .{
+        .name = "for loop over a closed Dict receiver's iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_dict(7)
+        ,
+        .expected = .{ .inspect_str = "40" },
+    },
+    .{
+        .name = "for loop over a closed Set receiver's reverse iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_set(7)
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
     .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =

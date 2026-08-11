@@ -3359,7 +3359,7 @@ created, and the expression carries the enclosing continuation's declared cell.
 An unobservable continuation type is not representation evidence.
 
 Structural constructors preserve that distinction recursively. If a record
-field, tag payload, tuple item, list element, or nominal backing is a finished
+field, tag payload, tuple item, list item, or nominal backing is a finished
 generated-private witness, the constructor emits an exact container witness
 that references the child directly and relates matching structure through the
 producer-aware value relation. It never merges the child into the corresponding

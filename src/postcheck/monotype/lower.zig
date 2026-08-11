@@ -10186,7 +10186,7 @@ const DraftTemplateSpec = struct {
     /// Stable public request retained only when eager iterator completion
     /// replaces `request_fn_node` with its producer-completed private callable.
     /// Other completed specs keep their existing representation-sensitive
-    /// matching semantics.
+    /// matching rules.
     lookup_request_fn_node: ?NodeId = null,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
@@ -13843,9 +13843,11 @@ const BodyContext = struct {
         return current;
     }
 
-    /// Rebuild the nominal constructor layers around an exact structural value
-    /// witness. Transparent aliases remain absent from runtime IR, matching
-    /// `addConstructorExprAtNode`.
+    /// Wrap an exact structural value witness in its nominal constructor
+    /// layers. Transparent aliases stay out of the runtime IR but remain part
+    /// of the witness type, matching `addConstructorExprAtNode`, whose
+    /// non-named arm types a structural expression at its original (possibly
+    /// alias-wrapped) node.
     fn constructorWitnessWithStructuralNode(
         self: *BodyContext,
         node: NodeId,
@@ -13861,6 +13863,33 @@ const BodyContext = struct {
                 var witness = raw_named;
                 witness.backing = .{
                     .node = try self.constructorWitnessWithStructuralNode(backing.node, structural_node),
+                    .use = backing.use,
+                    .authority = backing.authority,
+                };
+                break :blk try self.graph.newNode(.{ .named = witness });
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => try self.constructorWitnessAliasLayers(node, structural_node),
+        };
+    }
+
+    /// Wrap the structural value witness in `node`'s transparent alias
+    /// layers. Witness and no-witness branches of the same constructor must
+    /// seal to the same Monotype, and the no-witness branch types the
+    /// expression at the original alias-wrapped node.
+    fn constructorWitnessAliasLayers(
+        self: *BodyContext,
+        node: NodeId,
+        structural_node: NodeId,
+    ) Allocator.Error!NodeId {
+        return switch (self.graph.content(node)) {
+            .named => |raw_named| blk: {
+                const named = self.graph.namedNodes(node);
+                if (named.kind != .alias) break :blk structural_node;
+                const backing = named.backing orelse
+                    Common.invariant("transparent alias graph node had no explicit backing");
+                var witness = raw_named;
+                witness.backing = .{
+                    .node = try self.constructorWitnessAliasLayers(backing.node, structural_node),
                     .use = backing.use,
                     .authority = backing.authority,
                 };
@@ -16784,7 +16813,9 @@ const BodyContext = struct {
             // The structural witness records the representation of the value
             // that was actually produced. Generated-private roots are explicit
             // evidence but intentionally cannot join an ordinary public graph
-            // class.
+            // class; the directed relation still validates the pair's shared
+            // public interface so neither side's expectation is dropped.
+            try relateRequestComponent(self.graph, checked_root, produced_root);
             return produced_node;
         }
         if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
@@ -20090,7 +20121,7 @@ const BodyContext = struct {
                 if (checked_args.len != 3 or request_fn.args.len != 3) {
                     Common.invariant("Iter.custom reached Monotype with an unexpected arity");
                 }
-                if (self.expectedGeneratedIteratorProducerNode(expected_ret, .custom)) |expected| {
+                if (self.expectedGeneratedIteratorProducerNode(expected_ret, mintedProducerKind(procedure))) |expected| {
                     if (self.isForcedDynamicIteratorNode(expected)) {
                         return try self.graphFunctionNode(request_fn.args, expected);
                     }
@@ -20100,7 +20131,7 @@ const BodyContext = struct {
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNode(
-                        .custom,
+                        mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{ request_fn.args[0], request_fn.args[2] },
                         try self.callableArgumentEvidenceDigest(checked_args[2]),
@@ -20111,11 +20142,11 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("List.iter reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.list, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNodeWithItem(
-                        .list,
+                        mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{request_fn.args[0]},
                         null,
@@ -20127,11 +20158,11 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("List.iter_rev reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.list_rev, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNodeWithItem(
-                        .list_rev,
+                        mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{request_fn.args[0]},
                         null,
@@ -20143,21 +20174,21 @@ const BodyContext = struct {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.str, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.str, public_fn.ret, &.{request_fn.args[0]}, null),
+                    try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
             .iter_single => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.single, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
                     try self.generatedIteratorNodeWithItem(
-                        .single,
+                        mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{request_fn.args[0]},
                         null,
@@ -20165,57 +20196,38 @@ const BodyContext = struct {
                     ),
                 );
             },
-            .iter_exclusive_range, .numeric_range_exclusive => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_exclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+            .iter_exclusive_range, .numeric_range_exclusive, .iter_inclusive_range, .numeric_range_inclusive, .numeric_until, .numeric_to => {
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
-                    try self.generatedIteratorNode(.range_exclusive, public_fn.ret, &.{}, null),
+                    try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, &.{}, null),
                 );
             },
-            .iter_inclusive_range, .numeric_range_inclusive => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_inclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(.range_inclusive, public_fn.ret, &.{}, null),
-                );
-            },
-            .numeric_until => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.numeric_until, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(.numeric_until, public_fn.ret, &.{}, null),
-                );
-            },
-            .numeric_to => {
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.numeric_to, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNode(.numeric_to, public_fn.ret, &.{}, null),
-                );
-            },
-            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
-            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
-            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_map, .iter_keep_if, .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
+            .iter_take_first, .iter_drop_first, .iter_append => return try self.generatedIteratorAdapterFunctionNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, checked_args, expected_ret, null),
             .iter_concat => {
                 if (checked_args.len != 2 or request_fn.args.len != 2) {
                     Common.invariant("Iter.concat reached Monotype with an unexpected arity");
                 }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(.concat, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
                     self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
                 {
                     return try self.graphFunctionNode(
                         request_fn.args,
-                        try self.generatedIteratorNode(.concat, public_fn.ret, request_fn.args, null),
+                        try self.generatedIteratorNode(mintedProducerKind(procedure), public_fn.ret, request_fn.args, null),
                     );
                 }
             },
-            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
             .iter_from_step, .range_done => {},
         }
         return null;
+    }
+
+    /// The registry-declared minted kind for a producing iterator procedure.
+    fn mintedProducerKind(procedure: checked.IteratorProcedureId) Type.IteratorKind {
+        return procedure.iteratorKind() orelse
+            Common.invariant("iterator procedure minted no producer kind");
     }
 
     fn generatedIteratorAdapterFunctionNode(
@@ -20262,13 +20274,14 @@ const BodyContext = struct {
     ) Allocator.Error!?NodeId {
         const expected = self.expectedGeneratedIteratorProducerNode(expected_ret, kind) orelse return null;
         if (self.isForcedDynamicIteratorNode(expected)) return try self.graphFunctionNode(args, expected);
-        // Range bounds initialize the generated step state but are not stored as
-        // nominal component arguments. Their producer therefore keeps the
-        // checked two-argument request while returning the exact private range.
-        if (kind == .range_exclusive or kind == .range_inclusive or
-            kind == .numeric_until or kind == .numeric_to)
-        {
-            return try self.graphFunctionNode(args, expected);
+        // A source without nominal components (ranges) initializes the
+        // generated step state from its construction inputs. Its producer
+        // therefore keeps the checked request arguments while returning the
+        // exact private iterator.
+        if (kind.componentTopology()) |topology| {
+            if (topology == .source_without_components) {
+                return try self.graphFunctionNode(args, expected);
+            }
         }
         return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
     }
@@ -20455,27 +20468,12 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         components: []const NodeId,
     ) ?u8 {
-        switch (kind) {
-            .custom,
-            .list,
-            .list_rev,
-            .str,
-            .single,
-            .range_exclusive,
-            .range_inclusive,
-            .numeric_until,
-            .numeric_to,
-            => return 1,
-            .map,
-            .keep_if,
-            .drop_if,
-            .take_first,
-            .drop_first,
-            .concat,
-            .append,
-            => {},
-            .forced_dynamic => return null,
-            .none => Common.invariant("generated iterator mint requested without a producer kind"),
+        if (kind == .forced_dynamic) return null;
+        const topology = kind.componentTopology() orelse
+            Common.invariant("generated iterator mint requested without a producer kind");
+        switch (topology) {
+            .source_without_components, .source_with_components => return 1,
+            .adapter => {},
         }
 
         var component_depth: u8 = 0;
@@ -26533,6 +26531,20 @@ const BodyContext = struct {
             if (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) |node| return node;
             return if (expected_ty) |ty| try self.activeNodeFromType(ty) else null;
         }
+        // A stored const's minted iterator representation lives in its
+        // ConstStore type rather than in any lowered local, so const operands
+        // derive their generated evidence from the stored root directly,
+        // mirroring `lookupExprTypeNode`'s const arms.
+        const const_use: ?checked.ConstUseTemplate = switch (record.ref) {
+            .top_level_const => |const_use| const_use,
+            .imported_const => |const_use| const_use,
+            .platform_required_const => |required| required.const_use,
+            .selected_hoisted_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => null,
+        };
+        if (const_use) |use| {
+            const node = try self.constUseTypeNode(checked_ty, use);
+            if (try self.graph.containsGeneratedPrivate(node)) return node;
+        }
         return if (try self.lookupCallArgumentMonoType(checked_ty, maybe_ref, expected_ty)) |ty|
             try self.activeNodeFromType(ty)
         else
@@ -27889,6 +27901,14 @@ const BodyContext = struct {
             Common.invariant("callee completed an iterator representation for a non-iterator request");
         }
         const source_interface = self.graph.requestSourceInterface(request_node) orelse request_node;
+        // The completed node can be the memoized import shared by every call
+        // site of this specialization, and distinct call sites legitimately
+        // carry distinct public request interfaces. The registered interface
+        // is therefore only a representative (the first caller's) for the
+        // open-interface shape digest and template type-argument constraints;
+        // each caller's own validation is the directed relation recorded
+        // below, so later callers skip registration instead of tripping the
+        // one-source conflict invariant.
         if (self.graph.requestSourceInterface(completed_node) == null) {
             try self.graph.registerRequestSourceInterface(completed_node, source_interface);
         }
@@ -27960,7 +27980,12 @@ const BodyContext = struct {
             .imported => return current_node,
         };
         const completed_node = try self.activeNodeFromType(completed_ty);
-        if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
+        // Adoption is keyed on the produced result representation, the same
+        // predicate `adoptCompletedIteratorResult` applies: a completion whose
+        // private evidence sits only in an argument must not replace the
+        // caller's public request or register lookups for it.
+        const eager_completed_fn = try self.graph.functionNodes(completed_node);
+        if (!try self.graph.containsGeneratedPrivate(eager_completed_fn.ret)) return current_node;
 
         const raw_spec: u32 = @intCast(spec_index);
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
@@ -31629,23 +31654,8 @@ const BodyContext = struct {
         const target_field_count: usize = @intCast(target_fields.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
         defer self.allocator.free(lowered);
-        const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
-        else
-            null;
-        const base_ty = if (base_record) |base_expr| try self.exprType(base_expr) else ty;
-        const base_local = if (base_record) |_| try self.addLocal(self.builder.symbols.fresh(), base_ty) else null;
-        const base_expr = if (base_local) |local| try self.localExpr(local, base_ty) else null;
         const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.builder.program.types.fieldSpan(target_fields));
         defer self.allocator.free(target_field_list);
-
-        // See lowerRecordExprAtNode: spread-carried reads bind before the
-        // update's own field expressions run, so the base's last use precedes
-        // any mutation they perform.
-        const SpreadRead = struct { local: DraftLocalId, value: DraftExprId };
-        const spread_reads = try self.allocator.alloc(?SpreadRead, target_field_count);
-        defer self.allocator.free(spread_reads);
-        @memset(spread_reads, null);
 
         for (0..target_field_count) |i| {
             const field = target_field_list[i];
@@ -31659,42 +31669,14 @@ const BodyContext = struct {
                     try self.lowerExplicitUninhabitedInvocation(field_value, field.ty)
                 else
                     try self.lowerExprAtType(field_value, field.ty)
-            else if (base_expr) |base_value| blk: {
-                const read = try self.addExpr(.{
-                    .ty = field.ty,
-                    .data = .{ .field_access = .{
-                        .receiver = base_value,
-                        .field = field.name,
-                    } },
-                });
-                const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-                spread_reads[i] = .{ .local = read_local, .value = read };
-                break :blk try self.localExpr(read_local, field.ty);
-            } else Common.invariant("closed record literal was missing a checked field value");
+            else
+                Common.invariant("closed record literal was missing a checked field value");
             lowered[i] = .{
                 .name = field.name,
                 .value = value,
             };
         }
-        var record_expr = try self.addConstructorExpr(ty, .{ .record = try self.addFieldExprSpan(lowered) });
-        var spread_index: usize = target_field_count;
-        while (spread_index > 0) {
-            spread_index -= 1;
-            const read = spread_reads[spread_index] orelse continue;
-            record_expr = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
-                .bind = try self.bindPat(read.local, target_field_list[spread_index].ty),
-                .value = read.value,
-                .rest = record_expr,
-            } } });
-        }
-        if (base_record) |base_value| {
-            return try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
-                .bind = try self.bindPat(base_local orelse Common.invariant("record update lowered base without a base local"), base_ty),
-                .value = base_value,
-                .rest = record_expr,
-            } } });
-        }
-        return record_expr;
+        return try self.addConstructorExpr(ty, .{ .record = try self.addFieldExprSpan(lowered) });
     }
 
     fn lowerRecordExprAtNode(
@@ -31715,7 +31697,40 @@ const BodyContext = struct {
                         Common.invariant("record graph update lost its pre-lowered field child"),
                 };
             }
-            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(record_node), .{ .record_update = .{
+            // An updated field's producer-authored child can carry a
+            // representation distinct from the checked-public field slot, so
+            // updates run the same witness selection as closed constructors;
+            // spread-carried fields keep their checked slots from the base.
+            const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
+            const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
+            defer self.allocator.free(produced_fields);
+            var requires_distinct_witness = false;
+            for (0..target_fields.len) |index| {
+                const field = target_fields[index];
+                produced_fields[index] = field;
+                const field_value = (try self.recordUpdateFieldValue(record.fields, field.name)) orelse continue;
+                const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
+                    Common.invariant("record graph update lost its pre-lowered field child");
+                const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
+                if (try self.constructorChildRequiresWitness(
+                    field.ty,
+                    child_node,
+                    "record graph update child differed without explicit representation evidence",
+                )) {
+                    requires_distinct_witness = true;
+                }
+                produced_fields[index] = .{ .name = field.name, .ty = child_node };
+            }
+            const produced_node = if (requires_distinct_witness) blk: {
+                const witness_fields = try self.graph.arena().dupe(InstField, produced_fields);
+                const structural_node = try self.graph.newNode(.{ .record = .{
+                    .fields = witness_fields,
+                    .ext = try self.graph.newNode(.empty_record),
+                } });
+                const witness = try self.constructorWitnessWithStructuralNode(record_node, structural_node);
+                break :blk try self.relateCheckedNodeToProducedValue(record_node, witness);
+            } else record_node;
+            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .record_update = .{
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
             } });
@@ -31727,36 +31742,6 @@ const BodyContext = struct {
         const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
         defer self.allocator.free(produced_fields);
         var requires_distinct_witness = false;
-
-        const base_record = if (record.ext) |ext|
-            self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
-        else
-            null;
-        const base_cell = if (base_record) |base_expr|
-            self.exprTypeCell(base_expr)
-        else
-            DraftTypeCell.fromGraphNode(record_node);
-        const base_local = if (base_record != null)
-            try self.addLocalWithBinderCell(self.builder.symbols.fresh(), base_cell, null)
-        else
-            null;
-        const base_expr = if (base_local) |local|
-            try self.addExprWithTypeCell(base_cell, .{ .local = local })
-        else
-            null;
-
-        // Spread-carried fields are read out of the base before the update's
-        // own field expressions run, each bound to its own local. Each field
-        // read only accesses already-evaluated record storage, so scheduling
-        // the reads first preserves effects and ends the base's last use ahead
-        // of any mutation an updated field performs. Without it, the base stays
-        // live across those mutations and only the field read scheduled last
-        // by ascending field-name order finds its collection
-        // uniquely referenced; every other field copies its whole value.
-        const SpreadRead = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };
-        const spread_reads = try self.allocator.alloc(?SpreadRead, target_fields.len);
-        defer self.allocator.free(spread_reads);
-        @memset(spread_reads, null);
 
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
@@ -31777,16 +31762,6 @@ const BodyContext = struct {
                 }
                 produced_fields[index] = .{ .name = field.name, .ty = child_node };
                 break :blk pre;
-            } else if (base_expr) |base_value| blk: {
-                produced_fields[index] = field;
-                const read_cell = DraftTypeCell.fromGraphNode(field.ty);
-                const read = try self.addExprWithTypeCell(read_cell, .{ .field_access = .{
-                    .receiver = base_value,
-                    .field = field.name,
-                } });
-                const read_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), read_cell, null);
-                spread_reads[index] = .{ .local = read_local, .cell = read_cell, .value = read };
-                break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
             } else Common.invariant("closed record graph constructor was missing a checked field value");
             lowered[index] = .{ .name = field.name, .value = value };
         }
@@ -31800,26 +31775,7 @@ const BodyContext = struct {
             const witness = try self.constructorWitnessWithStructuralNode(record_node, structural_node);
             break :blk try self.relateCheckedNodeToProducedValue(record_node, witness);
         } else record_node;
-        var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
-        var spread_index: usize = target_fields.len;
-        while (spread_index > 0) {
-            spread_index -= 1;
-            const read = spread_reads[spread_index] orelse continue;
-            record_expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .let_ = .{
-                .bind = try self.addPatWithTypeCell(read.cell, .{ .bind = read.local }),
-                .value = read.value,
-                .rest = record_expr,
-            } });
-        }
-        if (base_record) |base_value| {
-            const local = base_local orelse Common.invariant("record graph update lowered base without a base local");
-            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .let_ = .{
-                .bind = try self.addPatWithTypeCell(base_cell, .{ .bind = local }),
-                .value = base_value,
-                .rest = record_expr,
-            } });
-        }
-        return record_expr;
+        return try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
     }
 
     fn lowerTagConstructorAtNode(
@@ -31945,29 +31901,34 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         var produced_element: ?NodeId = null;
-        const element_contains_iterator = try self.graph.containsIteratorInterface(element_node);
         for (items, 0..) |item, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            if (try self.constructorChildRequiresWitness(
+            if (produced_element) |selected| {
+                // A list has exactly one element representation, so every
+                // later child joins the selected witness—including a child
+                // whose class already matches the checked element slot, which
+                // otherwise would silently diverge from the selection.
+                try selectRequestRepresentation(self.graph, selected, child_node);
+            } else if (try self.constructorChildRequiresWitness(
                 element_node,
                 child_node,
                 "list graph constructor child differed without explicit representation evidence",
             )) {
-                if (produced_element) |selected| {
-                    if (element_contains_iterator) {
-                        try selectRequestRepresentation(self.graph, selected, child_node);
-                    } else {
-                        produced_element = child_node;
-                    }
-                } else {
-                    produced_element = child_node;
-                }
+                produced_element = child_node;
             }
         }
         const produced_node = if (produced_element) |element_witness| blk: {
             const structural_node = try self.graph.newNode(.{ .list = element_witness });
             const witness = try self.constructorWitnessWithStructuralNode(list_node, structural_node);
+            // Every element is stored at the list's single element
+            // representation, so each element expression carries the selected
+            // witness cell rather than the checked-public slot it was
+            // requested at.
+            const element_cell = DraftTypeCell.fromGraphNode(element_witness);
+            for (lowered) |element| {
+                self.draft.exprs.items[@intFromEnum(element)].ty = element_cell;
+            }
             break :blk try self.relateCheckedNodeToProducedValue(list_node, witness);
         } else list_node;
         return try self.addExprWithTypeCell(
@@ -32416,7 +32377,7 @@ const BodyContext = struct {
                 callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                     initial_lookup,
                     callable_node,
-                    try self.evidenceForDispatchTarget(plan),
+                    plan,
                     direct_graph_call,
                 );
             },
@@ -33703,11 +33664,10 @@ const BodyContext = struct {
                     callable_node = private_node;
                 }
                 if (phase == .expression_lowering) {
-                    const target_evidence = try self.evidenceForDispatchTarget(plan);
                     callable_node = try self.lowerAndCompleteIteratorMethodResultAtNode(
                         lookup,
                         callable_node,
-                        target_evidence,
+                        plan,
                         self.dispatchUsesDirectGraphCallee(plan),
                     );
                 }
@@ -35209,7 +35169,7 @@ const BodyContext = struct {
         self: *BodyContext,
         lookup: MethodLookup,
         request_fn_node: NodeId,
-        evidence: SpecEvidenceVector,
+        plan: static_dispatch.StaticDispatchCallPlan,
         direct: bool,
     ) Allocator.Error!NodeId {
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -35226,6 +35186,10 @@ const BodyContext = struct {
             .local_proc => {},
             .structural => return request_fn_node,
         }
+        // Materialized only past the guards above: most dispatches return
+        // without consuming evidence, and materialization arena-allocates one
+        // vector per target.
+        const evidence = try self.evidenceForDispatchTarget(plan);
         const slot = if (direct)
             try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, evidence)
         else
@@ -42431,7 +42395,7 @@ const BodyContext = struct {
             .method_eq,
             => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
                 try self.lowerExprTypeNode(checked_expr),
-            else => try self.lowerExprTypeNode(checked_expr),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
         };
     }
 
@@ -44663,15 +44627,26 @@ const BodyContext = struct {
             Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
         }
         const fn_nodes = try self.graph.functionNodes(completed_callable_node);
+        if (fn_nodes.args.len != plan_args.len) {
+            Common.invariant("completed iterator dispatch target changed its argument arity");
+        }
         if (expected_ret_ty) |expected| {
-            if (!self.graph.sameClass(fn_nodes.ret, try expected.toGraphNode(self.graph))) {
+            const expected_node = try expected.toGraphNode(self.graph);
+            // Completion may replace the public return with a producer-minted
+            // private representation that is directionally related to the
+            // request instead of sharing its class, so a generated-private
+            // side is exempt exactly like the dispatcher operand check above.
+            if (!self.graph.sameClass(fn_nodes.ret, expected_node) and
+                !try self.graph.containsGeneratedPrivate(fn_nodes.ret) and
+                !try self.graph.containsGeneratedPrivate(expected_node))
+            {
                 Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");
             }
         }
         const args = try self.allocator.alloc(DraftExprId, plan_args.len);
         defer self.allocator.free(args);
         for (plan_args, 0..) |operand, i| {
-            args[i] = try self.lowerIteratorOperandAtNode(operand, loop_iterator, fn_nodes.args[i]);
+            args[i] = try self.lowerIteratorOperandAtNode(operand, loop_iterator, plan_fn.args[i]);
         }
 
         return try self.addExprWithTypeCell(

@@ -163,6 +163,36 @@ pub const IteratorKind = enum(u8) {
     concat,
     append,
     forced_dynamic,
+
+    /// See `IteratorComponentTopology`. Null for `none` (no minted kind) and
+    /// `forced_dynamic` (no static topology).
+    pub fn componentTopology(self: IteratorKind) ?IteratorComponentTopology {
+        return switch (self) {
+            .none, .forced_dynamic => null,
+            .range_exclusive, .range_inclusive, .numeric_until, .numeric_to => .source_without_components,
+            .custom, .list, .list_rev, .str, .single => .source_with_components,
+            .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append => .adapter,
+        };
+    }
+};
+
+/// Structural role of a minted iterator kind's nominal component arguments.
+/// This is the one partition consumed by Monotype's mint-depth assignment,
+/// graph depth finalization, and expected-producer request shaping; consumers
+/// must never re-derive it independently, since a kind classified as source
+/// in one consumer and adapter in another compiles clean and mis-mints far
+/// from the edit.
+pub const IteratorComponentTopology = enum {
+    /// A source whose construction inputs initialize generated step state
+    /// without being stored as nominal component arguments (ranges). Its
+    /// representation depth is exactly one.
+    source_without_components,
+    /// A source that stores its construction inputs as nominal components.
+    /// Its representation depth is exactly one.
+    source_with_components,
+    /// An adapter over iterator components; its representation depth derives
+    /// from those components.
+    adapter,
 };
 
 /// Semantic identity assigned to compiler-owned iterator procedures while
@@ -223,17 +253,46 @@ pub const IteratorProcedureId = enum(u8) {
         };
     }
 
-    /// Whether the checker must leave a producer call's closed source expression
-    /// available as a separate hoist root.
+    /// The minted iterator kind this procedure constructs, or null for
+    /// procedures that pass through or consume an existing iterator
+    /// (`Iter.iter`, `Iter.next`) and the internal step constructors. This is
+    /// the one producer-to-kind mapping; Monotype's per-procedure request
+    /// construction reads it instead of restating kinds beside each arm.
+    pub fn iteratorKind(self: IteratorProcedureId) ?IteratorKind {
+        return switch (self) {
+            .iter_iter, .iter_next, .iter_from_step, .range_done => null,
+            .iter_custom => .custom,
+            .iter_single => .single,
+            .list_iter => .list,
+            .list_iter_rev => .list_rev,
+            .str_iter_utf8 => .str,
+            .iter_map => .map,
+            .iter_keep_if => .keep_if,
+            .iter_drop_if => .drop_if,
+            .iter_take_first => .take_first,
+            .iter_drop_first => .drop_first,
+            .iter_concat => .concat,
+            .iter_append => .append,
+            .iter_exclusive_range, .numeric_range_exclusive => .range_exclusive,
+            .iter_inclusive_range, .numeric_range_inclusive => .range_inclusive,
+            .numeric_to => .numeric_to,
+            .numeric_until => .numeric_until,
+        };
+    }
+
+    /// Whether the checker must keep a call to this producer out of hoist
+    /// root/cover position so its closed source expression stays available as
+    /// a separate hoist root.
     ///
-    /// Only list-backed conversions need this so an inline collection remains
-    /// available for static-data hoisting. Adapter inputs are already iterator
+    /// List-backed conversions need this so an inline collection remains
+    /// available for static-data hoisting, and the `Iter.iter` identity needs
+    /// it so its step-closure-bearing result is never selected as a
+    /// static-data root itself. Adapter inputs are already iterator
     /// expressions, while ranges and custom iterators have no eager source
     /// expression to preserve.
     pub fn preservesHoistableSourceInput(self: IteratorProcedureId) bool {
         return switch (self) {
-            .list_iter, .list_iter_rev => true,
-            .iter_iter,
+            .list_iter, .list_iter_rev, .iter_iter => true,
             .iter_next,
             .iter_custom,
             .iter_single,
@@ -283,13 +342,12 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.range_done", .range_done },
 };
 
-const iterator_range_numeric_type_names = [_][]const u8{
-    "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64",
-};
+// Single-sourced from BuiltinLowLevel so the numeric rosters cannot drift
+// from the low-level registration tables: ranges cover every numeric type,
+// while `to`/`until` (which need `minus_try`) exclude the IEEE floats.
+const iterator_range_numeric_type_names = can.BuiltinLowLevel.numeric_type_names;
 
-const iterator_to_until_numeric_type_names = [_][]const u8{
-    "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
-};
+const iterator_to_until_numeric_type_names = can.BuiltinLowLevel.non_float_numeric_type_names;
 
 const iterator_procedure_name_entries = blk: {
     var entries: [
@@ -325,15 +383,33 @@ pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?
     return iterator_procedure_by_name.get(env.getIdent(pattern.assign.ident));
 }
 
+/// Builtin methods that delegate to a registered producer (`Dict.iter` calls
+/// `List.iter` on its backing entries, and so on). They carry no
+/// `IteratorProcedureId` of their own—their iterator representation arrives
+/// through procedure-return propagation—but their closed receiver must stay
+/// hoistable exactly like the producer they delegate to.
+const hoist_preserving_delegating_producer_names = std.StaticStringMap(void).initComptime(&.{
+    .{"Builtin.Dict.iter"},
+    .{"Builtin.Dict.iter_rev"},
+    .{"Builtin.Set.iter"},
+    .{"Builtin.Set.iter_rev"},
+});
+
 /// Whether this exact Builtin procedure needs its eager receiver preserved as
-/// a separate hoist root. Iterator identity covers public producers; the
-/// generated FieldNames iterator is an intrinsic with the same source-lifetime
-/// requirement.
+/// a separate hoist root. Iterator identity covers public producers, the
+/// delegating Dict/Set conversions preserve their receiver the same way, and
+/// the generated FieldNames iterator is an intrinsic with the same
+/// source-lifetime requirement.
 pub fn procedurePreservesHoistableSourceInputForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    if (env.module_role != .builtin) return false;
     if (iteratorProcedureForEnvDef(env, def_idx)) |producer| {
         return producer.preservesHoistableSourceInput();
     }
     const def = env.store.getDef(def_idx);
+    const pattern = env.store.getPattern(def.pattern);
+    if (pattern == .assign and hoist_preserving_delegating_producer_names.has(env.getIdent(pattern.assign.ident))) {
+        return true;
+    }
     const expr = env.store.getExpr(def.expr);
     if (expr != .e_anno_only) return false;
     return can.BuiltinLowLevel.intrinsicAnnotation(env, expr.e_anno_only.ident) == .field_names_iter;
