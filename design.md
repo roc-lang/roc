@@ -2756,6 +2756,23 @@ binding. Monotype applies only those recorded edges. It never walks a checked
 type beside a produced type, constructs a relation graph, computes a transitive
 closure, or retries bindings to a fixed point.
 
+The checker compiles the immutable slot and direct-child structure once for
+each distinct tuple of checker-authored call inputs and interns it behind a
+dense `SpecializationCallShapeId`. Each expression edge stores only that dense
+shape ID and its genuinely edge-specific operand directions and direct
+bindings. The interner is consulted before compiling the shape, so repeated
+calls avoid both duplicate storage and duplicate traversal. A composite
+interner key is appropriate here because the identity is a tuple; every table
+key that is itself an assigned ID remains a dense column.
+
+There is no per-checked-type value plan and no precompiled projection tree for
+an arbitrary complete value. Exact destinations stay exact through transparent
+expressions such as blocks and control-flow wrappers. Compounds request or read
+only their immediate children, then construct their exact result from those
+child nodes. The checker may precompute a shared call shape because a call owns
+an explicit interface relation; it may not precompute a whole-value relation in
+case some later descendant happens to need it.
+
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
 makes one forward pass over those slots. It must not retry unresolved slots to

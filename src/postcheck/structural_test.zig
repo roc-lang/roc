@@ -497,6 +497,18 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "replayStoredEvidenceRelations");
 }
 
+test "checked calls share one interned shape and have no whole-value plans" {
+    const CheckedArtifact = check.CheckedArtifact;
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallPlan, "shape"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "slots"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "projections"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "slots"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "projections"));
+    try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
+    try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
+    try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
+}
+
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectContains(solve_source, "immutable Monotype snapshot requested for an unresolved instantiation graph node");

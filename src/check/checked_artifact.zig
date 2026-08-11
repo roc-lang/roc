@@ -15387,12 +15387,21 @@ pub const SpecializationCallSlot = struct {
     occurrences: artifact_serialize.Span,
 };
 
-/// Two compact spans comprise a complete checker-authored call plan. Slots
-/// are the flat substitutions consumed by Monotype; projections are the
-/// direct producer-to-child edges that fill those slots.
-pub const SpecializationCallPlan = struct {
+pub const SpecializationCallShapeId = enum(u32) { _ };
+pub const no_specialization_call_shape: SpecializationCallShapeId = @enumFromInt(std.math.maxInt(u32));
+
+/// The shared checker-authored shape of a call relation. Slots are the flat
+/// substitutions consumed by Monotype; projections are the direct producer-
+/// to-child edges that fill those slots. Every equal checker input tuple owns
+/// one shape, regardless of how many expression edges consume it.
+pub const SpecializationCallShape = struct {
     slots: artifact_serialize.Span = .{},
     projections: artifact_serialize.Span = .{},
+};
+
+/// One expression edge's small delta over a shared call shape.
+pub const SpecializationCallPlan = struct {
+    shape: SpecializationCallShapeId = no_specialization_call_shape,
     operand_flows: artifact_serialize.Span = .{},
     context_bindings: artifact_serialize.Span = .{},
     selection_bindings: artifact_serialize.Span = .{},
@@ -17740,28 +17749,22 @@ fn checkedTypeIsGeneratedIterator(payload: CheckedTypePayload) bool {
 /// Compile one checked callable into the exact occurrence lists consumed by
 /// Monotype. Each occurrence names only its checked identity and direct
 /// function edge; exact values publish the identity-to-node selection.
-fn compileSpecializationCallPlan(
+fn compileSpecializationCallShape(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
     callable_root: CheckedTypeId,
     dispatcher_root: ?CheckedTypeId,
     target_signature_source: bool,
-    expression_operand_flows: ?[]const SpecializationOperandFlow,
     exact_identity_roots: []const CheckedTypeId,
     slots_out: *std.ArrayList(SpecializationCallSlot),
     occurrences_out: *std.ArrayList(SpecializationOccurrence),
     projections_out: *std.ArrayList(SpecializationProjection),
-) Allocator.Error!SpecializationCallPlan {
+) Allocator.Error!SpecializationCallShape {
     const function = checkedFunctionPayload(
         &checked_types.store,
         callable_root,
         "exact call specialization plan",
     );
-    if (expression_operand_flows) |flows| {
-        if (flows.len != function.args.len) {
-            checkedArtifactInvariant("specialization expression operand flow had a different arity", .{});
-        }
-    }
     var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
     defer {
         for (builds.items) |*build| build.deinit(allocator);
@@ -17965,34 +17968,88 @@ fn compileSpecializationCallPlan(
     };
 }
 
-fn publishSpecializationCallPlanForCallable(
+const SpecializationCallShapeKey = struct {
+    callable: CheckedTypeId,
+    dispatcher: ?CheckedTypeId,
+    target_signature_source: bool,
+    target_source_roots: bool,
+};
+
+fn publishSpecializationCallShape(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
-    callable: CheckedTypeId,
-    compiled: []bool,
-    by_type: []SpecializationCallPlan,
+    target_relations: *const PublishedSpecializationTargetRelations,
+    key: SpecializationCallShapeKey,
+    by_key: *std.AutoHashMap(SpecializationCallShapeKey, SpecializationCallShapeId),
+    shapes: *std.ArrayList(SpecializationCallShape),
+    target_source_roots: *std.ArrayList(CheckedTypeId),
     slots: *std.ArrayList(SpecializationCallSlot),
     occurrences: *std.ArrayList(SpecializationOccurrence),
     projections: *std.ArrayList(SpecializationProjection),
-) Allocator.Error!SpecializationCallPlan {
+) Allocator.Error!SpecializationCallShapeId {
+    if (key.target_source_roots) {
+        try appendPublishedTargetSourceRoots(
+            allocator,
+            target_relations,
+            key.callable,
+            target_source_roots,
+        );
+    } else {
+        target_source_roots.clearRetainingCapacity();
+    }
+    if (by_key.get(key)) |existing| return existing;
+
+    const shape: SpecializationCallShapeId = @enumFromInt(@as(u32, @intCast(shapes.items.len)));
+    try shapes.append(allocator, try compileSpecializationCallShape(
+        allocator,
+        checked_types,
+        key.callable,
+        key.dispatcher,
+        key.target_signature_source,
+        target_source_roots.items,
+        slots,
+        occurrences,
+        projections,
+    ));
+    try by_key.put(key, shape);
+    return shape;
+}
+
+fn publishSpecializationCallShapeForCallable(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    target_relations: *const PublishedSpecializationTargetRelations,
+    callable: CheckedTypeId,
+    by_type: []SpecializationCallShapeId,
+    by_key: *std.AutoHashMap(SpecializationCallShapeKey, SpecializationCallShapeId),
+    shapes: *std.ArrayList(SpecializationCallShape),
+    target_source_roots: *std.ArrayList(CheckedTypeId),
+    slots: *std.ArrayList(SpecializationCallSlot),
+    occurrences: *std.ArrayList(SpecializationOccurrence),
+    projections: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallShapeId {
     const raw = @intFromEnum(callable);
     if (raw >= by_type.len) {
         checkedArtifactInvariant("specialization callable exceeded the checked type store", .{});
     }
-    if (!compiled[raw]) {
-        by_type[raw] = try compileSpecializationCallPlan(
+    if (by_type[raw] == no_specialization_call_shape) {
+        by_type[raw] = try publishSpecializationCallShape(
             allocator,
             checked_types,
-            callable,
-            null,
-            false,
-            null,
-            &.{},
+            target_relations,
+            .{
+                .callable = callable,
+                .dispatcher = null,
+                .target_signature_source = false,
+                .target_source_roots = false,
+            },
+            by_key,
+            shapes,
+            target_source_roots,
             slots,
             occurrences,
             projections,
         );
-        compiled[raw] = true;
     }
     return by_type[raw];
 }
@@ -18851,7 +18908,8 @@ fn publishSpecializationCallPlans(
         templates.specialization_target_identity_relations.len != 0 or
         templates.specialization_iterator_iter_plans.len != 0 or
         templates.specialization_iterator_next_plans.len != 0 or
-        templates.specialization_call_plans_by_type.len != 0 or
+        templates.specialization_call_shapes.len != 0 or
+        templates.specialization_call_shapes_by_type.len != 0 or
         templates.specialization_call_slots.len != 0 or
         templates.specialization_call_occurrences.len != 0 or
         templates.specialization_call_projections.len != 0 or
@@ -18884,12 +18942,9 @@ fn publishSpecializationCallPlans(
     }
 
     const type_count = checked_types.store.payloads.items.len;
-    const by_type = try allocator.alloc(SpecializationCallPlan, type_count);
+    const by_type = try allocator.alloc(SpecializationCallShapeId, type_count);
     errdefer allocator.free(by_type);
-    @memset(by_type, .{});
-    const compiled = try allocator.alloc(bool, type_count);
-    defer allocator.free(compiled);
-    @memset(compiled, false);
+    @memset(by_type, no_specialization_call_shape);
 
     const by_expr = try allocator.alloc(SpecializationCallPlan, checked_bodies.exprCount());
     errdefer allocator.free(by_expr);
@@ -18919,6 +18974,10 @@ fn publishSpecializationCallPlans(
 
     var slots = std.ArrayList(SpecializationCallSlot).empty;
     errdefer slots.deinit(allocator);
+    var shapes = std.ArrayList(SpecializationCallShape).empty;
+    errdefer shapes.deinit(allocator);
+    var shape_by_key = std.AutoHashMap(SpecializationCallShapeKey, SpecializationCallShapeId).init(allocator);
+    defer shape_by_key.deinit();
     var occurrences = std.ArrayList(SpecializationOccurrence).empty;
     errdefer occurrences.deinit(allocator);
     var projections = std.ArrayList(SpecializationProjection).empty;
@@ -18943,23 +19002,19 @@ fn publishSpecializationCallPlans(
             &operand_flows,
         );
         const expr_operand_flows = operand_flows.items[flow_span.start .. flow_span.start + flow_span.len];
-        target_source_roots.clearRetainingCapacity();
-        if (expr.data.call.direct_target != null) {
-            try appendPublishedTargetSourceRoots(
-                allocator,
-                &target_relations,
-                source_callable,
-                &target_source_roots,
-            );
-        }
-        by_expr[raw_expr] = try compileSpecializationCallPlan(
+        by_expr[raw_expr].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
-            source_callable,
-            null,
-            false,
-            expr_operand_flows,
-            target_source_roots.items,
+            &target_relations,
+            .{
+                .callable = source_callable,
+                .dispatcher = null,
+                .target_signature_source = false,
+                .target_source_roots = expr.data.call.direct_target != null,
+            },
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19050,6 +19105,19 @@ fn publishSpecializationCallPlans(
                 &consumer_bindings,
             );
         }
+        _ = try publishSpecializationCallShapeForCallable(
+            allocator,
+            checked_types,
+            &target_relations,
+            source_callable,
+            by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
+            &slots,
+            &occurrences,
+            &projections,
+        );
     }
     for (static_dispatch_plans.plans) |plan| {
         if (checked_bodies.exprContainsDiagnosticError(plan.expr)) continue;
@@ -19062,24 +19130,23 @@ fn publishSpecializationCallPlans(
             &operand_flows,
         );
         const dispatch_operand_flows = operand_flows.items[flow_span.start .. flow_span.start + flow_span.len];
-        try appendPublishedTargetSourceRoots(
-            allocator,
-            &target_relations,
-            plan.callable_ty,
-            &target_source_roots,
-        );
-        by_expr[raw_plan_expr] = try compileSpecializationCallPlan(
+        by_expr[raw_plan_expr].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
-            plan.callable_ty,
-            plan.dispatcher_ty,
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric, .evidence_dependent => true,
-                .structural, .checked_error, .@"unreachable" => false,
-                .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached specialization publication", .{}),
+            &target_relations,
+            .{
+                .callable = plan.callable_ty,
+                .dispatcher = plan.dispatcher_ty,
+                .target_signature_source = switch (plan.resolution) {
+                    .direct_closed, .direct_parametric, .evidence_dependent => true,
+                    .structural, .checked_error, .@"unreachable" => false,
+                    .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached specialization publication", .{}),
+                },
+                .target_source_roots = true,
             },
-            dispatch_operand_flows,
-            target_source_roots.items,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19162,6 +19229,19 @@ fn publishSpecializationCallPlans(
                 &consumer_bindings,
             );
         }
+        _ = try publishSpecializationCallShapeForCallable(
+            allocator,
+            checked_types,
+            &target_relations,
+            plan.callable_ty,
+            by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
+            &slots,
+            &occurrences,
+            &projections,
+        );
     }
     // Every procedure body consumes the same directional interface plan as a
     // call site: its completed specialization supplies every argument and the
@@ -19169,24 +19249,30 @@ fn publishSpecializationCallPlans(
     // body lowering never has to reconstruct substitutions from a pair of
     // complete function graphs.
     for (templates.templates) |template| {
-        _ = try publishSpecializationCallPlanForCallable(
+        _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &target_relations,
             template.checked_fn_root,
-            compiled,
             by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
         );
     }
     for (templates.specialization_interface_relations) |relation| switch (relation.data) {
-        .procedure => |procedure| _ = try publishSpecializationCallPlanForCallable(
+        .procedure => |procedure| _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &target_relations,
             procedure.fn_ty,
-            compiled,
             by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19195,24 +19281,30 @@ fn publishSpecializationCallPlans(
     };
     for (static_dispatch_plans.evidence_nodes) |node| switch (node.instantiation) {
         .monomorphic => {},
-        .callable => |callable| _ = try publishSpecializationCallPlanForCallable(
+        .callable => |callable| _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &target_relations,
             callable,
-            compiled,
             by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
         ),
     };
     for (method_registry.entries) |entry| switch (entry.target.kind) {
-        .procedure, .local_proc => _ = try publishSpecializationCallPlanForCallable(
+        .procedure, .local_proc => _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &target_relations,
             entry.target.callable_ty,
-            compiled,
             by_type,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19227,25 +19319,23 @@ fn publishSpecializationCallPlans(
             value_flows_by_expr,
             &operand_flows,
         );
-        const iter_operand_flows = operand_flows.items[iter_flow_span.start .. iter_flow_span.start + iter_flow_span.len];
-        try appendPublishedTargetSourceRoots(
-            allocator,
-            &target_relations,
-            plan.iter.callable_ty,
-            &target_source_roots,
-        );
-        iter_plans[index] = try compileSpecializationCallPlan(
+        iter_plans[index].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
-            plan.iter.callable_ty,
-            plan.iter.dispatcher_ty,
-            switch (plan.iter.resolution) {
-                .direct_closed, .direct_parametric, .evidence_dependent => true,
-                .structural, .checked_error, .@"unreachable" => false,
-                .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+            &target_relations,
+            .{
+                .callable = plan.iter.callable_ty,
+                .dispatcher = plan.iter.dispatcher_ty,
+                .target_signature_source = switch (plan.iter.resolution) {
+                    .direct_closed, .direct_parametric, .evidence_dependent => true,
+                    .structural, .checked_error, .@"unreachable" => false,
+                    .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+                },
+                .target_source_roots = true,
             },
-            iter_operand_flows,
-            target_source_roots.items,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19273,25 +19363,23 @@ fn publishSpecializationCallPlans(
             value_flows_by_expr,
             &operand_flows,
         );
-        const next_operand_flows = operand_flows.items[next_flow_span.start .. next_flow_span.start + next_flow_span.len];
-        try appendPublishedTargetSourceRoots(
-            allocator,
-            &target_relations,
-            plan.next.callable_ty,
-            &target_source_roots,
-        );
-        next_plans[index] = try compileSpecializationCallPlan(
+        next_plans[index].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
-            plan.next.callable_ty,
-            plan.next.dispatcher_ty,
-            switch (plan.next.resolution) {
-                .direct_closed, .direct_parametric, .evidence_dependent => true,
-                .structural, .checked_error, .@"unreachable" => false,
-                .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+            &target_relations,
+            .{
+                .callable = plan.next.callable_ty,
+                .dispatcher = plan.next.dispatcher_ty,
+                .target_signature_source = switch (plan.next.resolution) {
+                    .direct_closed, .direct_parametric, .evidence_dependent => true,
+                    .structural, .checked_error, .@"unreachable" => false,
+                    .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+                },
+                .target_source_roots = true,
             },
-            next_operand_flows,
-            target_source_roots.items,
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
             &slots,
             &occurrences,
             &projections,
@@ -19320,7 +19408,8 @@ fn publishSpecializationCallPlans(
     templates.specialization_target_identity_relations = target_relations.relations;
     templates.specialization_iterator_iter_plans = iter_plans;
     templates.specialization_iterator_next_plans = next_plans;
-    templates.specialization_call_plans_by_type = by_type;
+    templates.specialization_call_shapes = try shapes.toOwnedSlice(allocator);
+    templates.specialization_call_shapes_by_type = by_type;
     templates.specialization_call_slots = try slots.toOwnedSlice(allocator);
     templates.specialization_call_occurrences = try occurrences.toOwnedSlice(allocator);
     templates.specialization_call_projections = try projections.toOwnedSlice(allocator);
@@ -20695,10 +20784,13 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Synthetic iterator-loop call plans, parallel to `iterator_for_plans`.
     specialization_iterator_iter_plans: []SpecializationCallPlan = &.{},
     specialization_iterator_next_plans: []SpecializationCallPlan = &.{},
+    /// Shared immutable slot/projection shapes referenced by the small call-
+    /// edge plans below.
+    specialization_call_shapes: []SpecializationCallShape = &.{},
     /// Dense checked-type column for target-instantiation call plans. This is
     /// published after dispatch target specialization, so a target request is
     /// always built from the target's final checked callable shape.
-    specialization_call_plans_by_type: []SpecializationCallPlan = &.{},
+    specialization_call_shapes_by_type: []SpecializationCallShapeId = &.{},
     /// Flat checker-authored exact-call slots and their occurrences.
     specialization_call_slots: []SpecializationCallSlot = &.{},
     specialization_call_occurrences: []SpecializationOccurrence = &.{},
@@ -20744,7 +20836,8 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_target_identity_relations: SerializedSlice(SpecializationTargetIdentityRelation) = .{},
         specialization_iterator_iter_plans: SerializedSlice(SpecializationCallPlan) = .{},
         specialization_iterator_next_plans: SerializedSlice(SpecializationCallPlan) = .{},
-        specialization_call_plans_by_type: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_call_shapes: SerializedSlice(SpecializationCallShape) = .{},
+        specialization_call_shapes_by_type: SerializedSlice(SpecializationCallShapeId) = .{},
         specialization_call_slots: SerializedSlice(SpecializationCallSlot) = .{},
         specialization_call_occurrences: SerializedSlice(SpecializationOccurrence) = .{},
         specialization_call_projections: SerializedSlice(SpecializationProjection) = .{},
@@ -21004,7 +21097,8 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_target_identity_relations);
         allocator.free(self.specialization_iterator_iter_plans);
         allocator.free(self.specialization_iterator_next_plans);
-        allocator.free(self.specialization_call_plans_by_type);
+        allocator.free(self.specialization_call_shapes);
+        allocator.free(self.specialization_call_shapes_by_type);
         allocator.free(self.specialization_call_slots);
         allocator.free(self.specialization_call_occurrences);
         allocator.free(self.specialization_call_projections);
@@ -21139,10 +21233,12 @@ pub const CheckedProcedureTemplateTable = struct {
         callable: CheckedTypeId,
     ) SpecializationCallPlanView {
         const raw = @intFromEnum(callable);
-        if (raw >= self.specialization_call_plans_by_type.len) {
+        if (raw >= self.specialization_call_shapes_by_type.len) {
             checkedArtifactInvariant("checked callable exceeded its specialization-plan column", .{});
         }
-        return self.specializationCallPlanView(self.specialization_call_plans_by_type[raw]);
+        return self.specializationCallPlanView(.{
+            .shape = self.specialization_call_shapes_by_type[raw],
+        });
     }
 
     pub fn specializationIteratorCallPlan(
@@ -21161,9 +21257,14 @@ pub const CheckedProcedureTemplateTable = struct {
         self: *const CheckedProcedureTemplateTable,
         plan: SpecializationCallPlan,
     ) SpecializationCallPlanView {
+        const raw_shape = @intFromEnum(plan.shape);
+        if (plan.shape == no_specialization_call_shape or raw_shape >= self.specialization_call_shapes.len) {
+            checkedArtifactInvariant("specialization call plan referenced a missing shared shape", .{});
+        }
+        const shape = self.specialization_call_shapes[raw_shape];
         return .{
-            .slots = self.specialization_call_slots[plan.slots.start .. plan.slots.start + plan.slots.len],
-            .projections = self.specialization_call_projections[plan.projections.start .. plan.projections.start + plan.projections.len],
+            .slots = self.specialization_call_slots[shape.slots.start .. shape.slots.start + shape.slots.len],
+            .projections = self.specialization_call_projections[shape.projections.start .. shape.projections.start + shape.projections.len],
             .operand_flows = self.specialization_call_operand_flows[plan.operand_flows.start .. plan.operand_flows.start + plan.operand_flows.len],
             .context_bindings = self.specialization_call_consumer_bindings[plan.context_bindings.start .. plan.context_bindings.start + plan.context_bindings.len],
             .selection_bindings = self.specialization_call_consumer_bindings[plan.selection_bindings.start .. plan.selection_bindings.start + plan.selection_bindings.len],
@@ -30705,7 +30806,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 226);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -30855,7 +30956,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 63;
+    const serialized_layout_version: u32 = 64;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35812,6 +35913,7 @@ fn isSliceField(comptime FT: type) bool {
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
 fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
+    @setEvalBranchQuota(2000);
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (std.meta.fields(Store)) |field| {
@@ -36724,6 +36826,15 @@ test "checked field backing access is private only for a local opaque definition
     );
 }
 
+test "shared call shapes are looked up before compilation" {
+    const source = @embedFile("checked_artifact.zig");
+    const function_start = std.mem.find(u8, source, "fn publishSpecializationCallShape(").?;
+    const function_source = source[function_start..];
+    const cache_hit = std.mem.find(u8, function_source, "if (by_key.get(key)) |existing| return existing;").?;
+    const compile_shape = std.mem.find(u8, function_source, "try compileSpecializationCallShape(").?;
+    try std.testing.expect(cache_hit < compile_shape);
+}
+
 test "SERIALIZED_VERSION_HASH golden value" {
     // Tripwire: an *accidental* change to `CheckedModuleArtifact.Serialized`'s layout
     // would make a previously-baked builtin blob / cached artifact relocate into a
@@ -36731,8 +36842,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF0, 0x35, 0xC3, 0x3D, 0x4A, 0x5F, 0xED, 0x72, 0xDA, 0x8C, 0x0B, 0xAF, 0xE2, 0x3F, 0xE9, 0x72,
-        0x74, 0xF4, 0x90, 0xAA, 0xA9, 0xA6, 0x8C, 0x1B, 0xB9, 0x2A, 0xE1, 0x3C, 0xD7, 0x83, 0xDD, 0x8A,
+        0x3C, 0x37, 0xD2, 0x6A, 0x56, 0xF9, 0x49, 0x5A, 0x4D, 0xD5, 0xC7, 0x74, 0x93, 0xFC, 0x86, 0x87,
+        0xFE, 0xCE, 0x23, 0x60, 0xF8, 0xF0, 0x10, 0xFD, 0x1A, 0x70, 0xB0, 0xCC, 0x8C, 0x71, 0xF5, 0xF3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
