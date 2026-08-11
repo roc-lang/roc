@@ -17965,76 +17965,6 @@ fn compileSpecializationCallPlan(
     };
 }
 
-/// Compile the directional identity projections for one completed value. The
-/// value itself is the sole root; only checker-declared identity leaves and
-/// generated nominal identities become substitution slots.
-fn compileSpecializationValuePlan(
-    allocator: Allocator,
-    checked_types: *const CheckedTypePublication,
-    root: CheckedTypeId,
-    slots_out: *std.ArrayList(SpecializationCallSlot),
-    occurrences_out: *std.ArrayList(SpecializationOccurrence),
-    projections_out: *std.ArrayList(SpecializationProjection),
-) Allocator.Error!SpecializationCallPlan {
-    var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
-    defer {
-        for (builds.items) |*build| build.deinit(allocator);
-        builds.deinit(allocator);
-    }
-    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    var substitutions = std.ArrayList(SpecializationProjectionSubstitution).empty;
-    defer substitutions.deinit(allocator);
-    var projections = std.ArrayList(SpecializationProjection).empty;
-    defer projections.deinit(allocator);
-
-    _ = try collectSpecializationCallOccurrences(
-        allocator,
-        checked_types,
-        root,
-        .{
-            .checked = root,
-            .parent = no_specialization_projection_parent,
-            .index = 0,
-            .payload_index = 0,
-            .step = .argument,
-        },
-        true,
-        &substitutions,
-        &active,
-        &projections,
-        &builds,
-    );
-
-    const slot_start: u32 = @intCast(slots_out.items.len);
-    for (builds.items) |*build| {
-        const occurrence_start: u32 = @intCast(occurrences_out.items.len);
-        try occurrences_out.appendSlice(allocator, build.occurrences.items);
-        try slots_out.append(allocator, .{
-            .checked = build.checked,
-            .kind = build.kind,
-            .exact_identity = build.exact_identity,
-            .generated_source = .producer,
-            .occurrences = .{
-                .start = occurrence_start,
-                .len = @intCast(build.occurrences.items.len),
-            },
-        });
-    }
-    const projection_start: u32 = @intCast(projections_out.items.len);
-    try projections_out.appendSlice(allocator, projections.items);
-    return .{
-        .slots = .{
-            .start = slot_start,
-            .len = @intCast(slots_out.items.len - slot_start),
-        },
-        .projections = .{
-            .start = projection_start,
-            .len = @intCast(projections.items.len),
-        },
-    };
-}
-
 fn publishSpecializationCallPlanForCallable(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
@@ -18922,7 +18852,6 @@ fn publishSpecializationCallPlans(
         templates.specialization_iterator_iter_plans.len != 0 or
         templates.specialization_iterator_next_plans.len != 0 or
         templates.specialization_call_plans_by_type.len != 0 or
-        templates.specialization_value_plans_by_type.len != 0 or
         templates.specialization_call_slots.len != 0 or
         templates.specialization_call_occurrences.len != 0 or
         templates.specialization_call_projections.len != 0 or
@@ -18961,9 +18890,6 @@ fn publishSpecializationCallPlans(
     const compiled = try allocator.alloc(bool, type_count);
     defer allocator.free(compiled);
     @memset(compiled, false);
-    const value_by_type = try allocator.alloc(SpecializationCallPlan, type_count);
-    errdefer allocator.free(value_by_type);
-    @memset(value_by_type, .{});
 
     const by_expr = try allocator.alloc(SpecializationCallPlan, checked_bodies.exprCount());
     errdefer allocator.free(by_expr);
@@ -19005,22 +18931,6 @@ fn publishSpecializationCallPlans(
     errdefer consumer_binding_spans.deinit(allocator);
     var target_source_roots = std.ArrayList(CheckedTypeId).empty;
     defer target_source_roots.deinit(allocator);
-    for (0..type_count) |raw_type| {
-        const checked_ty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(raw_type)));
-        switch (checked_types.store.payload(checked_ty)) {
-            .pending, .err => {},
-            .flex, .rigid, .empty_record, .empty_tag_union, .alias, .nominal, .function, .tuple, .record, .record_unbound, .tag_union => {
-                value_by_type[raw_type] = try compileSpecializationValuePlan(
-                    allocator,
-                    checked_types,
-                    checked_ty,
-                    &slots,
-                    &occurrences,
-                    &projections,
-                );
-            },
-        }
-    }
     for (0..checked_bodies.exprCount()) |raw_expr| {
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
@@ -19411,7 +19321,6 @@ fn publishSpecializationCallPlans(
     templates.specialization_iterator_iter_plans = iter_plans;
     templates.specialization_iterator_next_plans = next_plans;
     templates.specialization_call_plans_by_type = by_type;
-    templates.specialization_value_plans_by_type = value_by_type;
     templates.specialization_call_slots = try slots.toOwnedSlice(allocator);
     templates.specialization_call_occurrences = try occurrences.toOwnedSlice(allocator);
     templates.specialization_call_projections = try projections.toOwnedSlice(allocator);
@@ -20790,11 +20699,6 @@ pub const CheckedProcedureTemplateTable = struct {
     /// published after dispatch target specialization, so a target request is
     /// always built from the target's final checked callable shape.
     specialization_call_plans_by_type: []SpecializationCallPlan = &.{},
-    /// Dense checked-type column for one produced value root. These plans
-    /// publish only identity-bearing immediate descendants; an ordinary
-    /// compound or nominal root is never installed as an identity merely
-    /// because it contains one.
-    specialization_value_plans_by_type: []SpecializationCallPlan = &.{},
     /// Flat checker-authored exact-call slots and their occurrences.
     specialization_call_slots: []SpecializationCallSlot = &.{},
     specialization_call_occurrences: []SpecializationOccurrence = &.{},
@@ -20841,7 +20745,6 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_iterator_iter_plans: SerializedSlice(SpecializationCallPlan) = .{},
         specialization_iterator_next_plans: SerializedSlice(SpecializationCallPlan) = .{},
         specialization_call_plans_by_type: SerializedSlice(SpecializationCallPlan) = .{},
-        specialization_value_plans_by_type: SerializedSlice(SpecializationCallPlan) = .{},
         specialization_call_slots: SerializedSlice(SpecializationCallSlot) = .{},
         specialization_call_occurrences: SerializedSlice(SpecializationOccurrence) = .{},
         specialization_call_projections: SerializedSlice(SpecializationProjection) = .{},
@@ -21102,7 +21005,6 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_iterator_iter_plans);
         allocator.free(self.specialization_iterator_next_plans);
         allocator.free(self.specialization_call_plans_by_type);
-        allocator.free(self.specialization_value_plans_by_type);
         allocator.free(self.specialization_call_slots);
         allocator.free(self.specialization_call_occurrences);
         allocator.free(self.specialization_call_projections);
@@ -21241,17 +21143,6 @@ pub const CheckedProcedureTemplateTable = struct {
             checkedArtifactInvariant("checked callable exceeded its specialization-plan column", .{});
         }
         return self.specializationCallPlanView(self.specialization_call_plans_by_type[raw]);
-    }
-
-    pub fn specializationValuePlanForType(
-        self: *const CheckedProcedureTemplateTable,
-        checked_ty: CheckedTypeId,
-    ) SpecializationCallPlanView {
-        const raw = @intFromEnum(checked_ty);
-        if (raw >= self.specialization_value_plans_by_type.len) {
-            checkedArtifactInvariant("checked type exceeded its exact-value plan column", .{});
-        }
-        return self.specializationCallPlanView(self.specialization_value_plans_by_type[raw]);
     }
 
     pub fn specializationIteratorCallPlan(
@@ -30814,7 +30705,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 226);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
