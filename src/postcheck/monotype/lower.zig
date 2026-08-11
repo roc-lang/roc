@@ -19568,26 +19568,27 @@ const BodyContext = struct {
         const available = try self.graph.arena().alloc(bool, exact_fn.args.len);
         @memset(available, true);
         const plan = self.view.templates.specializationCallPlanForCallable(checked_fn_ty);
-        const request = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            checked_node,
-            exact_node,
+            self.graph.directRequestSelections(exact_node),
             exact_fn.args,
             available,
-            available,
             null,
             null,
+            exact_fn.ret,
             true,
         );
-        return try self.materializeCallRequestWithCompletedEdges(
+        return try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_node,
-            request,
+            selections,
             exact_fn.args,
             available,
             exact_fn.ret,
+            exact_fn.ret,
+            .exact_destination,
         );
     }
 
@@ -25169,51 +25170,6 @@ const BodyContext = struct {
         );
     }
 
-    /// Construct one exact callable from completed top-level values plus the
-    /// checker-published direct selection span. Only unavailable contextual
-    /// arguments are instantiated through that span; no complete checked or
-    /// produced type tree is compared or reconstructed.
-    fn directCallRequestFromPublishedPlan(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_fn_ty: checked.CheckedTypeId,
-        _: NodeId,
-        current_request: NodeId,
-        produced_args: []const NodeId,
-        available: []const bool,
-        newly_available: []const bool,
-        dispatcher_node: ?NodeId,
-        target_signature_node: ?NodeId,
-        include_result: bool,
-    ) Allocator.Error!NodeId {
-        const current = try self.graph.functionNodes(current_request);
-        const checked_fn = self.checkedFunctionType(checked_fn_ty);
-        if (checked_fn.args.len != produced_args.len or
-            produced_args.len != available.len or
-            available.len != newly_available.len or
-            current.args.len != produced_args.len)
-        {
-            Common.invariant("published call plan received a different function arity");
-        }
-        const selections = try self.directSelectionsForCall(
-            plan,
-            checked_fn_ty,
-            self.graph.directRequestSelections(current_request),
-            produced_args,
-            newly_available,
-            dispatcher_node,
-            target_signature_node,
-            current.ret,
-            include_result,
-        );
-        // The checked function node is the persistent base. Refinement only
-        // replaces its small flat selection span; no compound type nodes are
-        // rebuilt until the completed request crosses the specialization
-        // boundary.
-        try self.graph.recordDirectRequestSelections(current_request, selections);
-        return current_request;
-    }
-
     /// Refine the flat substitutions of an unmaterialized call request. The
     /// immutable checked function is the request's base; no function graph
     /// node is allocated merely to carry this span between operand producers.
@@ -25249,40 +25205,24 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         checked_fn_ty: checked.CheckedTypeId,
-        checked_fn_node: NodeId,
+        _: NodeId,
         request: NodeId,
     ) Allocator.Error!void {
         const function = try self.graph.functionNodes(request);
         const no_arguments = try self.graph.arena().alloc(bool, function.args.len);
         @memset(no_arguments, false);
-        _ = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            checked_fn_node,
-            request,
+            self.graph.directRequestSelections(request),
             function.args,
             no_arguments,
-            no_arguments,
             null,
             null,
+            function.ret,
             true,
         );
-    }
-
-    fn callRequestArgumentNode(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_fn_ty: checked.CheckedTypeId,
-        request: NodeId,
-        index: usize,
-    ) Allocator.Error!NodeId {
-        const checked_fn = self.checkedFunctionType(checked_fn_ty);
-        if (index >= checked_fn.args.len) Common.invariant("call request argument index exceeded function arity");
-        const table = try self.checkedSelectionTableForCall(
-            plan,
-            self.graph.directRequestSelections(request),
-        );
-        return try self.instantiateProducedOccurrenceWithSelections(checked_fn.args[index], table);
+        try self.graph.recordDirectRequestSelections(request, selections);
     }
 
     fn callSelectionArgumentNode(
@@ -25328,33 +25268,6 @@ const BodyContext = struct {
             current.args,
             available,
             current.ret,
-        );
-    }
-
-    /// Cross the specialization boundary after every available producer edge
-    /// has selected its checker-published identity slots. A completed edge is
-    /// already the exact runtime node and becomes the callable ABI node
-    /// directly. Only an unavailable contextual edge is instantiated from the
-    /// checked callable plus its flat selection span.
-    fn materializeCallRequestWithCompletedEdges(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_fn_ty: checked.CheckedTypeId,
-        checked_fn_node: NodeId,
-        request: NodeId,
-        produced_args: []const NodeId,
-        available: []const bool,
-        produced_ret: ?NodeId,
-    ) Allocator.Error!NodeId {
-        return try self.materializeCallRequestFromSelections(
-            plan,
-            checked_fn_ty,
-            checked_fn_node,
-            request,
-            self.graph.directRequestSelections(request),
-            produced_args,
-            available,
-            produced_ret,
         );
     }
 
@@ -25495,32 +25408,6 @@ const BodyContext = struct {
             if (index >= available.len or !available[index]) return false;
         }
         return true;
-    }
-
-    /// Run the checker-published iterator producer once its explicit operand
-    /// dependencies are available, then bind every generated-nominal slot
-    /// naming that exact declaration and item node to the one atomic result.
-    fn applyIteratorProducerToCallRequest(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_fn_ty: checked.CheckedTypeId,
-        checked_fn_node: NodeId,
-        current_request: NodeId,
-        procedure: checked.IteratorProcedureId,
-        produced_args: []const NodeId,
-        available: []const bool,
-    ) Allocator.Error!?NodeId {
-        const selections = (try self.applyIteratorProducerToSelectionSpan(
-            plan,
-            self.graph.directRequestSelections(current_request),
-            procedure,
-            checked_fn_ty,
-            checked_fn_node,
-            produced_args,
-            available,
-        )) orelse return null;
-        try self.graph.recordDirectRequestSelections(current_request, selections);
-        return current_request;
     }
 
     fn applyIteratorProducerToSelectionSpan(
@@ -25780,31 +25667,25 @@ const BodyContext = struct {
             expected_ret_node orelse produced_callee.ret
         else
             produced_callee.ret;
-        var request_fn_node = try functionRequestNode(
-            self.graph,
-            checked_callee_node,
-            produced_args,
-            request_ret,
-        );
         const call_plan = self.view.templates.specializationCallPlanForExpr(expr_id);
-        request_fn_node = try self.directCallRequestFromPublishedPlan(
+        var selections: []const solve.DirectRequestSelection = &.{};
+        selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             call.source_fn_ty_payload,
-            checked_callee_node,
-            request_fn_node,
+            selections,
             produced_args,
             produced_available,
-            produced_available,
             null,
             null,
+            request_ret,
             true,
         );
         const preliminary_args = try self.graph.arena().alloc(NodeId, produced_args.len);
         for (preliminary_args, 0..) |*arg, index| {
-            arg.* = try self.callRequestArgumentNode(
+            arg.* = try self.callSelectionArgumentNode(
                 call_plan,
                 call.source_fn_ty_payload,
-                request_fn_node,
+                selections,
                 index,
             );
         }
@@ -25828,26 +25709,27 @@ const BodyContext = struct {
         for (produced_available, newly_available) |was_available, *newly| {
             newly.* = !was_available;
         }
-        request_fn_node = try self.directCallRequestFromPublishedPlan(
+        selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             call.source_fn_ty_payload,
-            checked_callee_node,
-            request_fn_node,
+            selections,
             completed_args,
-            all_available,
             newly_available,
             null,
             null,
+            request_ret,
             false,
         );
-        request_fn_node = try self.materializeCallRequestWithCompletedEdges(
+        const request_fn_node = try self.materializeCallSelectionSpan(
             call_plan,
             call.source_fn_ty_payload,
             checked_callee_node,
-            request_fn_node,
+            selections,
             completed_args,
             all_available,
-            null,
+            request_ret,
+            request_ret,
+            .exact_destination,
         );
         const callee = try self.lowerExprAtExactRequest(
             call.func,
@@ -26156,30 +26038,30 @@ const BodyContext = struct {
             }
             break :blk caller_ret;
         };
-        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
         const call_plan = self.view.templates.specializationCallPlanForCallable(source_fn_ty);
         const available = try self.graph.arena().alloc(bool, request_args.len);
         @memset(available, true);
-        _ = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             source_fn_ty,
-            fn_node,
-            request_fn,
+            &.{},
             request_args,
             available,
-            available,
             null,
             null,
+            request_ret,
             true,
         );
-        const materialized = try self.materializeCallRequestWithCompletedEdges(
+        const materialized = try self.materializeCallSelectionSpan(
             call_plan,
             source_fn_ty,
             fn_node,
-            request_fn,
+            selections,
             request_args,
             available,
             if (expected_ret_node != null) request_ret else null,
+            request_ret,
+            if (expected_ret_node != null) .exact_destination else .produced,
         );
         return materialized;
     }
@@ -26273,7 +26155,6 @@ const BodyContext = struct {
         } else blk: {
             break :blk try caller.checkedTypeOccurrenceNode(checked_ret_ty);
         };
-        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
         const call_plan = self.view.templates.specializationCallPlanForExpr(plan.expr);
         const available = try self.graph.arena().alloc(bool, request_args.len);
         @memset(available, phase == .expression_lowering);
@@ -26281,26 +26162,27 @@ const BodyContext = struct {
             .arg => |index| if (available[index]) request_args[index] else null,
             .type_only => null,
         };
-        const selected = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             source_fn_ty,
-            fn_node,
-            request_fn,
+            &.{},
             request_args,
-            available,
             available,
             dispatcher_node,
             try self.dispatchTargetSignatureNode(plan),
+            request_ret,
             expected_ret_node != null,
         );
-        const materialized = try self.materializeCallRequestWithCompletedEdges(
+        const materialized = try self.materializeCallSelectionSpan(
             call_plan,
             source_fn_ty,
             fn_node,
-            selected,
+            selections,
             request_args,
             available,
             expected_ret_node,
+            request_ret,
+            if (expected_ret_node != null) .exact_destination else .produced,
         );
         const selection_table = try self.checkedSelectionTableForCall(
             call_plan,
@@ -26392,30 +26274,30 @@ const BodyContext = struct {
             request_arg.* = try self.graph.importMono(arg_ty);
         }
         const request_ret = try self.graph.importMono(ret_ty);
-        const request_fn = try functionRequestNode(self.graph, fn_node, request_args, request_ret);
         const call_plan = self.view.templates.specializationCallPlanForCallable(source_fn_ty);
         const available = try self.graph.arena().alloc(bool, request_args.len);
         @memset(available, true);
-        const selected = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             source_fn_ty,
-            fn_node,
-            request_fn,
+            &.{},
             request_args,
             available,
-            available,
             null,
             null,
+            request_ret,
             true,
         );
-        return try self.materializeCallRequestWithCompletedEdges(
+        return try self.materializeCallSelectionSpan(
             call_plan,
             source_fn_ty,
             fn_node,
-            selected,
+            selections,
             request_args,
             available,
             request_ret,
+            request_ret,
+            .exact_destination,
         );
     }
 
@@ -28037,34 +27919,31 @@ const BodyContext = struct {
             Common.invariant("selected definition callable had a different arity from its exact call edge");
         }
 
-        const request = try self.graphFunctionNode(exact.args, exact.ret);
-        try self.graph.registerRequestCheckedSource(request, checked_source);
         const result_relation = self.graph.functionResultRelation(exact_fn_node) orelse .exact_destination;
-        self.graph.registerFunctionResultRelation(request, result_relation);
-        self.graph.inheritDirectRequestSelections(exact_fn_node, request);
         const plan = self.view.templates.specializationCallPlanForCallable(checked_fn_ty);
         const available = try self.graph.arena().alloc(bool, exact.args.len);
         @memset(available, true);
-        const selected = try self.directCallRequestFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            checked_source,
-            request,
+            self.graph.directRequestSelections(exact_fn_node),
             exact.args,
             available,
-            available,
             null,
             null,
+            exact.ret,
             result_relation == .exact_destination,
         );
-        return try self.materializeCallRequestWithCompletedEdges(
+        return try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_source,
-            selected,
+            selections,
             exact.args,
             available,
             if (result_relation == .exact_destination) exact.ret else null,
+            exact.ret,
+            result_relation,
         );
     }
 
@@ -36014,36 +35893,31 @@ const BodyContext = struct {
         if (checked_target_fn.args.len != callsite.args.len) {
             Common.invariant("selected method target arity differed from its checked call site");
         }
-        const initial = try functionRequestNode(
-            self.graph,
-            checked_target,
-            callsite.args,
-            callsite.ret,
-        );
         const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty);
         const no_new_callsite_arguments = try self.graph.arena().alloc(bool, callsite.args.len);
         @memset(no_new_callsite_arguments, false);
         const target_signature = try self.methodTargetSignatureNode(lookup);
-        const request = try target_ctx.directCallRequestFromPublishedPlan(
+        const selections = try target_ctx.directCallSelectionsFromPublishedPlan(
             plan,
             lookup.target.callable_ty,
-            checked_target,
-            initial,
+            &.{},
             callsite.args,
-            available,
             no_new_callsite_arguments,
             null,
             target_signature,
+            callsite.ret,
             include_result,
         );
-        const exact_request = try target_ctx.materializeCallRequestWithCompletedEdges(
+        const exact_request = try target_ctx.materializeCallSelectionSpan(
             plan,
             lookup.target.callable_ty,
             checked_target,
-            request,
+            selections,
             callsite.args,
             available,
             if (include_result) callsite.ret else null,
+            callsite.ret,
+            if (include_result) .exact_destination else .produced,
         );
         // Target selection has now produced one complete function type. Make
         // that exact node an explicit input to the selected procedure's
@@ -45551,49 +45425,44 @@ const BodyContext = struct {
             try expected.toGraphNode(self.graph)
         else
             checked_callable.ret;
-        const initial_request = try functionRequestNode(
-            self.graph,
-            checked_callable_node,
-            produced_nodes,
-            request_ret,
-        );
         const available = try self.graph.arena().alloc(bool, produced_nodes.len);
         @memset(available, true);
         const call_plan = switch (edge) {
             .iter => self.view.templates.specializationIteratorCallPlan(plan_id, .iter),
             .next => self.view.templates.specializationIteratorCallPlan(plan_id, .next),
         };
-        var callsite_request = try call_ctx.directCallRequestFromPublishedPlan(
+        var selections = try call_ctx.directCallSelectionsFromPublishedPlan(
             call_plan,
             plan.callable_ty,
-            checked_callable_node,
-            initial_request,
+            &.{},
             produced_nodes,
-            available,
             available,
             produced_nodes[plan.dispatcher_arg_index],
             try self.methodTargetSignatureNode(lookup),
+            request_ret,
             expected_ret_ty != null,
         );
         if (self.iteratorProcedureForMethodTarget(lookup.target)) |procedure| {
-            callsite_request = (try call_ctx.applyIteratorProducerToCallRequest(
+            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
                 call_plan,
+                selections,
+                procedure,
                 plan.callable_ty,
                 checked_callable_node,
-                callsite_request,
-                procedure,
                 produced_nodes,
                 available,
-            )) orelse callsite_request;
+            )) orelse selections;
         }
-        const callsite_callable = try call_ctx.materializeCallRequestWithCompletedEdges(
+        const callsite_callable = try call_ctx.materializeCallSelectionSpan(
             call_plan,
             plan.callable_ty,
             checked_callable_node,
-            callsite_request,
+            selections,
             produced_nodes,
             available,
             null,
+            request_ret,
+            if (expected_ret_ty != null) .exact_destination else .produced,
         );
         const callable_node = try self.methodTargetRequestFromCallsite(
             lookup,

@@ -146,6 +146,11 @@ pub const InstIteratorPublicSource = struct {
 
 /// Content of an instantiation-graph node. Rows carry explicit extension
 /// links; `redirect` is the union-find edge.
+const InstFunction = struct {
+    args: []NodeId,
+    ret: NodeId,
+};
+
 pub const InstNode = union(enum) {
     redirect: NodeId,
     unresolved: InstVariable,
@@ -153,10 +158,7 @@ pub const InstNode = union(enum) {
     list: NodeId,
     box: NodeId,
     tuple: []NodeId,
-    func: struct {
-        args: []NodeId,
-        ret: NodeId,
-    },
+    func: InstFunction,
     tag_union: InstTagUnion,
     record: struct {
         fields: []InstField,
@@ -410,6 +412,10 @@ pub const InstGraph = struct {
     list_nodes_by_element: collections.DenseMap(NodeId, NodeId),
     box_nodes_by_element: collections.DenseMap(NodeId, NodeId),
     tuple_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Completed function values keyed by their exact immediate argument and
+    /// result nodes. Open requests remain distinct until their producer fills
+    /// the result edge; completion canonicalizes the one finished shape once.
+    function_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     record_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     /// Fast producer lookup by the already-completed dense item node. Buckets
     /// distinguish declarations without re-hashing the item type graph.
@@ -466,6 +472,7 @@ pub const InstGraph = struct {
             .list_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
             .box_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
             .tuple_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .function_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .record_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .generated_nominal_nodes = .empty,
@@ -522,6 +529,9 @@ pub const InstGraph = struct {
         var tuple_shape_buckets = self.tuple_nodes_by_shape_hash.valueIterator();
         while (tuple_shape_buckets.next()) |bucket| bucket.deinit(allocator);
         self.tuple_nodes_by_shape_hash.deinit();
+        var function_shape_buckets = self.function_nodes_by_shape_hash.valueIterator();
+        while (function_shape_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.function_nodes_by_shape_hash.deinit();
         var record_shape_buckets = self.record_nodes_by_shape_hash.valueIterator();
         while (record_shape_buckets.next()) |bucket| bucket.deinit(allocator);
         self.record_nodes_by_shape_hash.deinit();
@@ -676,11 +686,13 @@ pub const InstGraph = struct {
         };
         const result_cell = self.find(function.ret);
         const exact_produced = self.find(produced_ret);
-        if (result_cell == exact_produced) return;
-        if (self.nodes.items[@intFromEnum(result_cell)] != .unresolved) {
-            Common.invariant("function result completion reached an already-produced result cell");
+        if (result_cell != exact_produced) {
+            if (self.nodes.items[@intFromEnum(result_cell)] != .unresolved) {
+                Common.invariant("function result completion reached an already-produced result cell");
+            }
+            try self.setContent(result_cell, .{ .redirect = exact_produced });
         }
-        try self.setContent(result_cell, .{ .redirect = exact_produced });
+        _ = try self.canonicalizeCompletedFunction(fn_node);
     }
 
     /// Resolve one explicit control-flow result cell to the exact node chosen
@@ -1242,6 +1254,56 @@ pub const InstGraph = struct {
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
         try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    fn functionShapeHash(self: *InstGraph, function: InstFunction) u64 {
+        var hasher = std.hash.Wyhash.init(self.nodeSpanShapeHash(function.args));
+        var ret = std.mem.nativeToLittle(u32, @intFromEnum(self.find(function.ret)));
+        hasher.update(std.mem.asBytes(&ret));
+        return hasher.final();
+    }
+
+    fn sameFunctionShape(self: *InstGraph, left: InstFunction, right: InstFunction) bool {
+        return self.sameNodeSpanShape(left.args, right.args) and
+            self.find(left.ret) == self.find(right.ret);
+    }
+
+    fn existingFunctionShape(self: *InstGraph, function: InstFunction) ?NodeId {
+        const bucket = self.function_nodes_by_shape_hash.get(self.functionShapeHash(function)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (candidate_content == .func and self.sameFunctionShape(candidate_content.func, function)) return root;
+        }
+        return null;
+    }
+
+    fn registerFunctionShape(self: *InstGraph, raw_node: NodeId, function: InstFunction) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const bucket = try self.function_nodes_by_shape_hash.getOrPut(self.functionShapeHash(function));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    /// Canonicalize a function only when its producer has completed the exact
+    /// result edge. Open requests retain distinct forward cells; completed
+    /// values with identical immediate children become one runtime type node.
+    fn canonicalizeCompletedFunction(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        const function = switch (self.nodes.items[@intFromEnum(node)]) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("completed function canonicalization received a non-function node"),
+        };
+        if (self.existingFunctionShape(function)) |existing| {
+            if (existing != node) {
+                try self.union_(existing, node);
+                return existing;
+            }
+            return node;
+        }
+        try self.registerFunctionShape(node, function);
+        return node;
     }
 
     fn recordShapeHash(self: *InstGraph, record: InstNode) u64 {
@@ -4304,6 +4366,35 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
+}
+
+test "completed functions with the same exact children share one runtime node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const produced_ret = try graph.newNode(.{ .primitive = .bool });
+    const left_ret = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const right_ret = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const left = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = left_ret,
+    } });
+    const right = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = right_ret,
+    } });
+
+    try graph.completeFunctionResult(left, produced_ret);
+    try graph.completeFunctionResult(right, produced_ret);
+
+    try std.testing.expect(graph.sameClass(left, right));
 }
 
 test "cyclic row extension is not a resolved graph type" {

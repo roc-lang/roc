@@ -111,7 +111,7 @@ test "Monotype record expression lowering does not keep mutable field-store slic
 
 test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const lower_call = sourceSliceBetween(lower_source, "fn lowerCall", "fn indirectCalleeMonoType");
+    const lower_call = sourceSliceBetween(lower_source, "fn lowerCall(self:", "fn indirectCalleeMonoType");
     const lower_expr_type = sourceSliceBetween(lower_source, "fn lowerExprType", "fn lowerExpr(self:");
     const lower_expr_at_type = sourceSliceBetween(lower_source, "fn lowerExprAtType", "fn sameType");
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
@@ -122,9 +122,9 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "try self.lowerExprTypeNode(call.func)");
     try expectContains(lower_call, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
     try expectContains(lower_call, "try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);");
-    try expectContains(lower_call, "var request_fn_node = try functionRequestNode(");
-    try expectContains(lower_call, "request_fn_node = try self.directCallRequestFromPublishedPlan(");
-    try expectContains(lower_call, "request_fn_node = try self.materializeCallRequestWithCompletedEdges(");
+    try expectContains(lower_call, "selections = try self.directCallSelectionsFromPublishedPlan(");
+    try expectContains(lower_call, "const request_fn_node = try self.materializeCallSelectionSpan(");
+    try expectNotContains(lower_call, "functionRequestNode(");
     try expectContains(lower_call, "const callee = try self.lowerExprAtExactRequest(");
     try expectContains(lower_call, "const callee_node = try self.builder.completePendingProducedNode(");
     try expectContains(lower_call, "const callee_fn = try self.graph.functionNodes(callee_node);");
@@ -485,8 +485,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn relateFormalToOperand(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "directCallRequestFromPublishedPlan(");
-    try expectContains(dispatch_instantiation, "materializeCallRequestWithCompletedEdges(");
+    try expectContains(dispatch_instantiation, "directCallSelectionsFromPublishedPlan(");
+    try expectContains(dispatch_instantiation, "materializeCallSelectionSpan(");
     try expectNotContains(dispatch_instantiation, "applyCheckedTypeMapping");
     try expectContains(lower_source, "specializationValueFlowForExpr(checked_expr)");
     try expectNotContains(lower_source, "instantiateTemplateDispatchRelations");
@@ -1386,15 +1386,15 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn lowerGeneratedIteratorDispatch(",
     );
 
-    try expectContains(full_request, "functionRequestNode(self.graph, fn_node, request_args, request_ret)");
-    try expectContains(full_request, "directCallRequestFromPublishedPlan(");
-    try expectContains(full_request, "materializeCallRequestWithCompletedEdges(");
+    try expectContains(full_request, "directCallSelectionsFromPublishedPlan(");
+    try expectContains(full_request, "materializeCallSelectionSpan(");
+    try expectNotContains(full_request, "functionRequestNode(");
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "produced_node.* = try self.exprTypeCell(produced_expr.*).toGraphNode(self.graph)");
-    try expectContains(iterator, "const initial_request = try functionRequestNode(");
-    try expectContains(iterator, "directCallRequestFromPublishedPlan(");
-    try expectContains(iterator, "materializeCallRequestWithCompletedEdges(");
+    try expectContains(iterator, "directCallSelectionsFromPublishedPlan(");
+    try expectContains(iterator, "materializeCallSelectionSpan(");
+    try expectNotContains(iterator, "functionRequestNode(");
     try expectNotContains(lower_source, "checkedMonoRequestNode");
     try expectNotContains(lower_source, "functionRequestFromProducedArgumentsWithGeneratedInterner");
     try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
