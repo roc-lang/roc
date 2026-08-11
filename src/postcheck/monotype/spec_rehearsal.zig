@@ -1321,6 +1321,11 @@ const ReaderMemoKey = struct {
     authoritative: bool,
 };
 
+const DeclaredRowKey = struct {
+    module_bytes: [32]u8,
+    ty: u32,
+};
+
 const ReaderMemoValue = struct {
     answer: ?Type.TypeId,
     binding: Rehearsal.PositionBinding,
@@ -1365,6 +1370,10 @@ pub const Rehearsal = struct {
     /// within one emission generation: any change to the binding state a read
     /// consults bumps the generation, so a stale answer can never be served.
     reader_memo: std.AutoHashMap(ReaderMemoKey, ReaderMemoValue),
+    /// Checked positions whose emitted tag row carries the generated parser's
+    /// MissingRequiredField contribution. A declaration holds for its
+    /// position for the whole run, so entries are never retracted.
+    declared_missing_required_rows: std.AutoHashMap(DeclaredRowKey, void),
     /// Bumped by every mutation of the state the position readers consult:
     /// specialization frames, callee levels, request scopes, and consumer
     /// input declarations.
@@ -1462,6 +1471,7 @@ pub const Rehearsal = struct {
             .use_mints = std.AutoHashMap(RequestingSite, direct_translate.ProducerRepresentation).init(allocator),
             .reach_memo = std.AutoHashMap(ReachMemoKey, bool).init(allocator),
             .reader_memo = std.AutoHashMap(ReaderMemoKey, ReaderMemoValue).init(allocator),
+            .declared_missing_required_rows = std.AutoHashMap(DeclaredRowKey, void).init(allocator),
             .emission_generation = 0,
             .types = types,
             .program_names = program_names,
@@ -1504,6 +1514,7 @@ pub const Rehearsal = struct {
         self.use_mints.deinit();
         self.reach_memo.deinit();
         self.reader_memo.deinit();
+        self.declared_missing_required_rows.deinit();
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
@@ -1818,6 +1829,39 @@ pub const Rehearsal = struct {
         const frame = &self.frames.items[self.frames.items.len - 1];
         const skip = frame.skip orelse return "none";
         return @tagName(skip);
+    }
+
+    /// Declare that the generated parser for a codec boundary can fail with
+    /// MissingRequiredField at this checked error-row position. Bumps the
+    /// emission generation on a new declaration so no reader serves the
+    /// un-merged row.
+    pub fn declareParserMissingRequiredField(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        ty: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        const gop = try self.declared_missing_required_rows.getOrPut(.{
+            .module_bytes = module_bytes,
+            .ty = @intFromEnum(ty),
+        });
+        if (!gop.found_existing) {
+            self.emission_generation +%= 1;
+            if (std.c.getenv("ROC_ROWDECL_PROBE") != null) {
+                std.debug.print("ROWDECL declared\n", .{});
+            }
+        }
+    }
+
+    /// See `declareParserMissingRequiredField`.
+    pub fn parserRowContributesMissingRequiredField(
+        self: *const Rehearsal,
+        module_bytes: [32]u8,
+        ty: checked.CheckedTypeId,
+    ) bool {
+        return self.declared_missing_required_rows.contains(.{
+            .module_bytes = module_bytes,
+            .ty = @intFromEnum(ty),
+        });
     }
 
     fn readerMemoKey(self: *const Rehearsal, address: CheckedAddress, under_callee: bool, edge: ?RequestEdgeName, authoritative: bool) ReaderMemoKey {

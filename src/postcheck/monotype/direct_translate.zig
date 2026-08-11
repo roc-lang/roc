@@ -87,6 +87,12 @@ pub const Resolver = struct {
     context: *anyopaque,
     vtable: *const VTable,
 
+    /// See `VTable.row_missing_required_field`.
+    pub fn rowMissingRequiredField(self: Resolver, module_bytes: [32]u8, ty: checked.CheckedTypeId) bool {
+        const hook = self.vtable.row_missing_required_field orelse return false;
+        return hook(self.context, module_bytes, ty);
+    }
+
     /// The declaration source for a nominal's backing (reunify.md section 9.2):
     /// its own module cursor, its formal binders, and its backing root. A walk
     /// instantiates the backing by binding the formals to the instance's
@@ -122,6 +128,14 @@ pub const Resolver = struct {
         ) ?NominalBacking,
         /// Fills `out` with the declared field order and returns the cursor its
         /// entries read, or null when the nominal has no declared order.
+        /// Whether a declared parser contribution adds MissingRequiredField
+        /// to the tag row at this checked position. Optional: a resolver with
+        /// no declaration source contributes nothing.
+        row_missing_required_field: ?*const fn (
+            context: *anyopaque,
+            module_bytes: [32]u8,
+            ty: checked.CheckedTypeId,
+        ) bool = null,
         declared_order: *const fn (
             context: *anyopaque,
             cursor: ModuleCursor,
@@ -1616,7 +1630,7 @@ const Walk = struct {
             .record_unbound => |fields| .{ .record = try self.recordSpan(fields, null) },
             .record => |record| .{ .record = try self.recordSpan(record.fields, record.ext) },
             .tuple => |items| .{ .tuple = try self.tupleSpan(items) },
-            .tag_union => |tag_union| .{ .tag_union = try self.tagSpan(tag_union.tags, tag_union.ext) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagSpan(checked_ty, tag_union.tags, tag_union.ext) },
             .function => |fn_ty| try self.functionContent(fn_ty),
             .nominal => |nominal_ty| try self.nominalContent(checked_ty, nominal_ty),
             // Leaves and aliases never reach a reserved slot (nodeReserveFill
@@ -1634,7 +1648,7 @@ const Walk = struct {
             .record_unbound => |fields| try self.recordFrom(fields, null),
             .record => |record| try self.recordFrom(record.fields, record.ext),
             .tuple => |items| try self.tupleFrom(items),
-            .tag_union => |tag_union| try self.tagUnionFrom(tag_union.tags, tag_union.ext),
+            .tag_union => |tag_union| try self.tagUnionFrom(checked_ty, tag_union.tags, tag_union.ext),
             .function => |fn_ty| try self.function(fn_ty),
             .alias => |alias_ty| try self.alias(checked_ty, alias_ty),
             .nominal => |nominal_ty| try self.nominal(checked_ty, nominal_ty),
@@ -1805,6 +1819,7 @@ const Walk = struct {
     fn collectTags(
         self: *Walk,
         out: *std.ArrayList(MonoType.Store.TagInput),
+        row_ty: checked.CheckedTypeId,
         head: []const checked.CheckedTag,
         ext: checked.CheckedTypeId,
     ) WalkError!void {
@@ -1825,6 +1840,12 @@ const Walk = struct {
                 .empty_tag_union => break,
                 .flex, .rigid => |v| {
                     if (v.row_default == .empty_tag_union) break;
+                    // A declared parser contribution names everything the
+                    // producer adds to this row, so the declaration is what
+                    // closes it: the leftover row variable contributes
+                    // nothing, exactly as the graph's seal defaults it to
+                    // empty after the evidence relation states the same tag.
+                    if (self.owner.resolver.rowMissingRequiredField(self.cursor.module_bytes, row_ty)) break;
                     return self.skip(.open_row);
                 },
                 .tag_union => |tag_union| {
@@ -1836,19 +1857,46 @@ const Walk = struct {
         }
     }
 
-    fn tagUnionFrom(self: *Walk, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!TypeId {
+    fn tagUnionFrom(self: *Walk, row_ty: checked.CheckedTypeId, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!TypeId {
         var tags = std.ArrayList(MonoType.Store.TagInput).empty;
         defer self.freeTagInputs(&tags);
-        try self.collectTags(&tags, head, ext);
+        try self.collectTags(&tags, row_ty, head, ext);
+        try self.appendDeclaredRowContribution(&tags, row_ty);
         return try self.build_store.internTagUnion(self.owner.target_names, tags.items);
+    }
+
+    /// Merge a declared parser contribution into an emitted row: the generated
+    /// parser's own failure is producer-owned information the checked row does
+    /// not state, so emission states it where a declaration names the position.
+    fn appendDeclaredRowContribution(self: *Walk, tags: *std.ArrayList(MonoType.Store.TagInput), row_ty: checked.CheckedTypeId) WalkError!void {
+        if (!self.owner.resolver.rowMissingRequiredField(self.cursor.module_bytes, row_ty)) return;
+        if (std.c.getenv("ROC_ROWDECL_PROBE") != null) {
+            std.debug.print("ROWDECL visited ty={d} existing_tags={d}\n", .{ @intFromEnum(row_ty), tags.items.len });
+        }
+        const label = try self.owner.target_names.internTagLabel("MissingRequiredField");
+        for (tags.items) |tag| {
+            if (tag.name == label) return;
+        }
+        var payloads = std.ArrayList(TypeId).empty;
+        errdefer payloads.deinit(self.owner.allocator);
+        try payloads.append(self.owner.allocator, try self.build_store.internPrimitive(self.owner.target_names, .str));
+        try tags.append(self.owner.allocator, .{
+            .name = label,
+            .checked_name = label,
+            .payloads = try payloads.toOwnedSlice(self.owner.allocator),
+        });
+        if (std.c.getenv("ROC_ROWDECL_PROBE") != null) {
+            std.debug.print("ROWDECL merged\n", .{});
+        }
     }
 
     /// Reserve-fill tag-union content: the same flattened tags as `tagUnionFrom`,
     /// added to the build store as a tag span rather than interned as a root.
-    fn tagSpan(self: *Walk, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!MonoType.Span {
+    fn tagSpan(self: *Walk, row_ty: checked.CheckedTypeId, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!MonoType.Span {
         var tags = std.ArrayList(MonoType.Store.TagInput).empty;
         defer self.freeTagInputs(&tags);
-        try self.collectTags(&tags, head, ext);
+        try self.collectTags(&tags, row_ty, head, ext);
+        try self.appendDeclaredRowContribution(&tags, row_ty);
 
         var variants = std.ArrayList(MonoType.Tag).empty;
         defer variants.deinit(self.owner.allocator);

@@ -4976,8 +4976,17 @@ const Builder = struct {
     const direct_translate_vtable = direct_translate.Resolver.VTable{
         .builtin_owner = directTranslateBuiltinOwner,
         .nominal_backing = directTranslateNominalBacking,
+        .row_missing_required_field = rehearsalRowMissingRequiredField,
         .declared_order = directTranslateDeclaredOrder,
     };
+
+    /// Whether the rehearsal holds a declared parser contribution for this
+    /// checked row position; without a rehearsal nothing contributes.
+    fn rehearsalRowMissingRequiredField(context: *anyopaque, module_bytes: [32]u8, ty: checked.CheckedTypeId) bool {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const rehearsal = self.rehearsal orelse return false;
+        return rehearsal.parserRowContributesMissingRequiredField(module_bytes, ty);
+    }
 
     /// Resolve a module's content identity to the cursor the rehearsal reads it
     /// by, or null when that module is not in the lowering input.
@@ -6579,6 +6588,7 @@ const Builder = struct {
             kind,
             boundary.shape_node,
             boundary.callable_node,
+            boundary.plan.callable_ty,
         );
     }
 
@@ -30053,6 +30063,7 @@ const BodyContext = struct {
                 .parser,
                 shape_node,
                 callable_node,
+                plan.callable_ty,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
             fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
@@ -30203,6 +30214,7 @@ const BodyContext = struct {
                 .parser,
                 shape_node,
                 callable_node,
+                plan.callable_ty,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
             fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
@@ -30370,6 +30382,7 @@ const BodyContext = struct {
                 .encoder,
                 shape_node,
                 callable_node,
+                plan.callable_ty,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
             fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
@@ -30539,6 +30552,7 @@ const BodyContext = struct {
                 .encoder,
                 shape_node,
                 callable_node,
+                plan.callable_ty,
             );
             runtime_codec_calls = try fn_ctx.resolvedPreparedCodecCallsForBoundary(runtime_boundary);
             fn_ctx.frozen_codec_calls = if (runtime_codec_calls) |*calls| calls else unreachable;
@@ -38722,6 +38736,7 @@ const BodyContext = struct {
         kind: CodecKind,
         shape_node: NodeId,
         boundary_callable_node: NodeId,
+        checked_callable_ty: ?checked.CheckedTypeId,
     ) Allocator.Error!bool {
         var added_relation = false;
         if (kind == .parser) {
@@ -38730,6 +38745,13 @@ const BodyContext = struct {
             const needs_required_error = try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen);
             try self.probeSealedShapeAgreement(shape_node, needs_required_error);
             if (needs_required_error) {
+                if (checked_callable_ty) |callable_ty| {
+                    if (self.checkedParserErrorRowType(callable_ty)) |err_row_ty| {
+                        if (self.builder.rehearsal) |rehearsal| {
+                            try rehearsal.declareParserMissingRequiredField(self.view.key.bytes, err_row_ty);
+                        }
+                    }
+                }
                 added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
             }
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
@@ -40585,6 +40607,27 @@ const BodyContext = struct {
     /// Add the parser producer's explicit error evidence before graph sealing.
     /// Finished Monotypes never participate in this relation and therefore
     /// cannot be reopened or widened by codec emission.
+    /// The checked error-row position of a parser boundary's callable:
+    /// `(encoding) -> (state) -> Try(shape, err)` names `err`. Null when the
+    /// callable's checked type does not have that shape, in which case no
+    /// declaration is made and only the graph evidence states the row.
+    fn checkedParserErrorRowType(self: *BodyContext, callable_ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
+        const outer = switch (checkedPayload(self.view, callable_ty)) {
+            .function => |function| function,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+        const runtime = switch (checkedPayload(self.view, outer.ret)) {
+            .function => |function| function,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+        const result = switch (checkedPayload(self.view, runtime.ret)) {
+            .nominal => |nominal| nominal,
+            .pending, .err, .flex, .rigid, .alias, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+        if (result.args.len != 2) return null;
+        return result.args[1];
+    }
+
     fn ensureGraphParserMissingRequiredFieldError(
         self: *BodyContext,
         boundary_callable_node: NodeId,
