@@ -517,7 +517,7 @@ test "record literals request and retain only immediate exact field nodes" {
         "fn lowerRecordUpdateDirect(",
     );
     try expectContains(record_literal, "self.graph.recordConstructionFieldNode(");
-    try expectContains(record_literal, "self.instantiateProducedOccurrenceWithSelections(child_ty, selections)");
+    try expectContains(record_literal, "self.checkedRecordLiteralFieldType(checked_expr, field.label)");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
     try expectContains(record_literal, ".ty = self.preLoweredChildNodeAt(children, field.value)");
     try expectNotContains(record_literal, "self.view.bodies.expr(checked_expr).ty,\n                selections");

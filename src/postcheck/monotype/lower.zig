@@ -32910,7 +32910,10 @@ const BodyContext = struct {
         for (record.fields) |field| {
             if (!self.valueConsumesCallableRequest(field.value) and !self.valueConsumesContextualRequest(field.value)) continue;
             const child_ty = self.view.bodies.expr(field.value).ty;
-            const request = try self.instantiateProducedOccurrenceWithSelections(child_ty, selections);
+            const request = try self.instantiateProducedOccurrenceWithSelections(
+                try self.checkedRecordLiteralFieldType(checked_expr, field.label),
+                selections,
+            );
             const value = try self.lowerExprAtExactRequest(
                 field.value,
                 DraftTypeCell.fromGraphNode(request),
@@ -32929,6 +32932,44 @@ const BodyContext = struct {
 
         const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
         return try self.lowerRecordLiteralFromExactChildren(record, constructor_node, children.items);
+    }
+
+    fn checkedRecordLiteralFieldType(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        label: names.RecordFieldNameId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        var current = self.view.bodies.expr(checked_expr).ty;
+        var remaining = self.view.types.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (checkedPayload(self.view, current)) {
+                .alias => |alias| {
+                    current = alias.backing;
+                    continue;
+                },
+                .record => |record| {
+                    for (record.fields) |field| {
+                        if (self.builder.program.names.recordFieldLabelTextEql(
+                            try self.builder.recordFieldName(self.view, field.name),
+                            try self.builder.recordFieldName(self.view, label),
+                        )) return field.ty;
+                    }
+                    current = record.ext;
+                    continue;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| {
+                        if (self.builder.program.names.recordFieldLabelTextEql(
+                            try self.builder.recordFieldName(self.view, field.name),
+                            try self.builder.recordFieldName(self.view, label),
+                        )) return field.ty;
+                    }
+                    Common.invariant("record literal field was absent from its checker-authored result type");
+                },
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .tuple, .nominal, .function, .tag_union => Common.invariant("record literal had no checker-authored structural field type"),
+            }
+        }
+        Common.invariant("record literal checked type contained an alias cycle");
     }
 
     fn lowerRecordLiteralFromExactChildren(
