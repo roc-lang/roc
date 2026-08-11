@@ -26593,7 +26593,7 @@ const BodyContext = struct {
                 // A root that reaches a variable is not ground, but under the
                 // innermost binding frame it is still one stated type; the
                 // bound reader answers it below, under the stricter walk.
-                const bound_request = rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty);
+                const bound_request = rehearsal.checkedRootReachesVariable(self.view.key.bytes, self.view.types, source_fn_ty);
                 // A callable anywhere in the return may lower erased and
                 // boxed, and erased-reuse ownership is decided across graph
                 // relations a frozen constant never joins.
@@ -26608,7 +26608,7 @@ const BodyContext = struct {
                     // A defaultable variable's value comes from the other
                     // operand under the literal-leaves law, never from the
                     // binding, so a signature that reaches one cannot freeze.
-                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.types, source_fn_ty)) {
+                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.key.bytes, self.view.types, source_fn_ty)) {
                         break :born_final;
                     }
                     // A bound request freezes at the binding's answer, so no
@@ -26770,7 +26770,7 @@ const BodyContext = struct {
                 // A root that reaches a variable is not ground, but under the
                 // innermost binding frame it is still one stated type; the
                 // bound reader answers it below, under the stricter walk.
-                const bound_request = rehearsal.checkedRootReachesVariable(self.view.types, source_fn_ty);
+                const bound_request = rehearsal.checkedRootReachesVariable(self.view.key.bytes, self.view.types, source_fn_ty);
                 // As on the direct-call path: a callable anywhere in the
                 // return may lower erased and boxed, and erased-reuse
                 // ownership is decided across graph relations a frozen
@@ -26786,7 +26786,7 @@ const BodyContext = struct {
                     // A defaultable variable's value comes from the other
                     // operand under the literal-leaves law, never from the
                     // binding, so a signature that reaches one cannot freeze.
-                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.types, source_fn_ty)) {
+                    if (rehearsal.checkedRootReachesDefaultableVariable(self.view.key.bytes, self.view.types, source_fn_ty)) {
                         break :born_final;
                     }
                     // A bound request freezes at the binding's answer, so no

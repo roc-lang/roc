@@ -1309,6 +1309,14 @@ const UnresolvedDetail = struct {
     skip: Rehearsal.EdgeSkip,
 };
 
+const ReachKind = enum(u8) { function, variable, row_or_function, defaultable };
+
+const ReachMemoKey = struct {
+    module_bytes: [32]u8,
+    ty: checked.CheckedTypeId,
+    kind: ReachKind,
+};
+
 /// The rehearsal: one per lowering run, holding the active environment stack,
 /// its own emission store, and its own representation closure engine.
 pub const Rehearsal = struct {
@@ -1334,6 +1342,10 @@ pub const Rehearsal = struct {
     /// The representation the most recent rule declaration stated for its
     /// scheme's return, consumed by the frame that ran the declaration.
     last_declared_mint: ?direct_translate.ProducerRepresentation = null,
+    /// Memoized answers for the checked-reachability predicates. A checked
+    /// root's answer depends only on immutable checked module data, so one
+    /// lowering run never walks the same root twice for the same question.
+    reach_memo: std.AutoHashMap(ReachMemoKey, bool),
     /// The produced representation each requesting use expression's
     /// specialization derived, keyed per call site so two uses of one
     /// interned checked type never share an entry. Entries are owned by the
@@ -1425,6 +1437,7 @@ pub const Rehearsal = struct {
             .allocator = allocator,
             .component_arena = std.heap.ArenaAllocator.init(allocator),
             .use_mints = std.AutoHashMap(RequestingSite, direct_translate.ProducerRepresentation).init(allocator),
+            .reach_memo = std.AutoHashMap(ReachMemoKey, bool).init(allocator),
             .types = types,
             .program_names = program_names,
             .translator = undefined,
@@ -1464,6 +1477,7 @@ pub const Rehearsal = struct {
         self.frames.deinit(self.allocator);
         self.component_arena.deinit();
         self.use_mints.deinit();
+        self.reach_memo.deinit();
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
@@ -4777,6 +4791,19 @@ pub const Rehearsal = struct {
     /// judging whether a callable is ground.
     pub fn checkedRootReachesVariable(
         self: *Rehearsal,
+        module_bytes: [32]u8,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const key = ReachMemoKey{ .module_bytes = module_bytes, .ty = root, .kind = .variable };
+        if (self.reach_memo.get(key)) |hit| return hit;
+        const answer = self.checkedRootReachesVariableWalk(view, root);
+        self.reach_memo.put(key, answer) catch return answer;
+        return answer;
+    }
+
+    fn checkedRootReachesVariableWalk(
+        self: *Rehearsal,
         view: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
     ) bool {
@@ -4796,6 +4823,18 @@ pub const Rehearsal = struct {
     /// widening lives and functions are where capture evidence lives, so a
     /// bound request that reaches either cannot be born as a frozen constant.
     pub fn checkedRootReachesRowOrFunction(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const key = ReachMemoKey{ .module_bytes = cursor.module_bytes, .ty = root, .kind = .row_or_function };
+        if (self.reach_memo.get(key)) |hit| return hit;
+        const answer = self.checkedRootReachesRowOrFunctionWalk(cursor, root);
+        self.reach_memo.put(key, answer) catch return answer;
+        return answer;
+    }
+
+    fn checkedRootReachesRowOrFunctionWalk(
         self: *Rehearsal,
         cursor: direct_translate.ModuleCursor,
         root: checked.CheckedTypeId,
@@ -4847,6 +4886,18 @@ pub const Rehearsal = struct {
         return false;
     }
     pub fn checkedRootReachesFunction(
+        self: *Rehearsal,
+        cursor: direct_translate.ModuleCursor,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const key = ReachMemoKey{ .module_bytes = cursor.module_bytes, .ty = root, .kind = .function };
+        if (self.reach_memo.get(key)) |hit| return hit;
+        const answer = self.checkedRootReachesFunctionWalk(cursor, root);
+        self.reach_memo.put(key, answer) catch return answer;
+        return answer;
+    }
+
+    fn checkedRootReachesFunctionWalk(
         self: *Rehearsal,
         cursor: direct_translate.ModuleCursor,
         root: checked.CheckedTypeId,
@@ -4909,6 +4960,19 @@ pub const Rehearsal = struct {
     /// literal-leaves law). A plain binder either binds under the reading
     /// frame or declines; only a defaultable one can answer wrongly.
     pub fn checkedRootReachesDefaultableVariable(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+    ) bool {
+        const key = ReachMemoKey{ .module_bytes = module_bytes, .ty = root, .kind = .defaultable };
+        if (self.reach_memo.get(key)) |hit| return hit;
+        const answer = self.checkedRootReachesDefaultableVariableWalk(view, root);
+        self.reach_memo.put(key, answer) catch return answer;
+        return answer;
+    }
+
+    fn checkedRootReachesDefaultableVariableWalk(
         self: *Rehearsal,
         view: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
