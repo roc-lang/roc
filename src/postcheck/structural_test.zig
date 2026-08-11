@@ -509,6 +509,20 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
 }
 
+test "record literals request and retain only immediate exact field nodes" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const record_literal = sourceSliceBetween(
+        lower_source,
+        "fn lowerRecordLiteralDirect(",
+        "fn lowerRecordUpdateDirect(",
+    );
+    try expectContains(record_literal, "self.graph.recordConstructionFieldNode(");
+    try expectContains(record_literal, "self.instantiateProducedOccurrenceWithSelections(child_ty, selections)");
+    try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
+    try expectContains(record_literal, ".ty = self.preLoweredChildNodeAt(children, field.value)");
+    try expectNotContains(record_literal, "self.view.bodies.expr(checked_expr).ty,\n                selections");
+}
+
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectContains(solve_source, "immutable Monotype snapshot requested for an unresolved instantiation graph node");

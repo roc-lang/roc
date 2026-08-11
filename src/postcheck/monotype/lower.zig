@@ -32846,7 +32846,12 @@ const BodyContext = struct {
         // particular, an unresolved function-result request is not a record
         // from which lowering can project field requests.
         if (record.ext == null) {
-            return try self.lowerRecordLiteralDirect(checked_expr, record, request_node);
+            return try self.lowerRecordLiteralDirect(
+                checked_expr,
+                record,
+                request_node,
+                destination_relation,
+            );
         }
 
         return try self.lowerRecordUpdateDirect(record, request_node, destination_relation);
@@ -32857,9 +32862,32 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         record: anytype,
         request_node: ?NodeId,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         var children = std.ArrayList(PreLoweredChild).empty;
         defer children.deinit(self.allocator);
+
+        if (destination_relation == .exact_request) {
+            const exact_record = request_node orelse
+                Common.invariant("exact record literal destination had no request node");
+            for (record.fields) |field| {
+                const field_node = try self.graph.recordConstructionFieldNode(
+                    exact_record,
+                    try self.builder.recordFieldName(self.view, field.label),
+                );
+                const value = try self.lowerExprAtExactRequest(
+                    field.value,
+                    DraftTypeCell.fromGraphNode(field_node),
+                );
+                try children.append(self.allocator, .{
+                    .checked_expr = field.value,
+                    .expr = value,
+                    .node = try self.exprTypeCell(value).toGraphNode(self.graph),
+                });
+            }
+            return try self.lowerRecordLiteralFromExactChildren(record, exact_record, children.items);
+        }
+
         const selections = try self.newExactCheckedSelections();
         selections.parent = self.active_checked_selections;
 
@@ -32882,14 +32910,7 @@ const BodyContext = struct {
         for (record.fields) |field| {
             if (!self.valueConsumesCallableRequest(field.value) and !self.valueConsumesContextualRequest(field.value)) continue;
             const child_ty = self.view.bodies.expr(field.value).ty;
-            const record_request = try self.instantiateProducedOccurrenceWithSelections(
-                self.view.bodies.expr(checked_expr).ty,
-                selections,
-            );
-            const request = try self.graph.recordConstructionFieldNode(
-                record_request,
-                try self.builder.recordFieldName(self.view, field.label),
-            );
+            const request = try self.instantiateProducedOccurrenceWithSelections(child_ty, selections);
             const value = try self.lowerExprAtExactRequest(
                 field.value,
                 DraftTypeCell.fromGraphNode(request),
@@ -32906,11 +32927,21 @@ const BodyContext = struct {
             );
         }
 
+        const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
+        return try self.lowerRecordLiteralFromExactChildren(record, constructor_node, children.items);
+    }
+
+    fn lowerRecordLiteralFromExactChildren(
+        self: *BodyContext,
+        record: anytype,
+        constructor_node: NodeId,
+        children: []const PreLoweredChild,
+    ) Allocator.Error!DraftExprId {
         const produced_fields = try self.graph.arena().alloc(InstField, record.fields.len);
         for (record.fields, produced_fields) |field, *produced_field| {
             produced_field.* = .{
                 .name = try self.builder.recordFieldName(self.view, field.label),
-                .ty = self.preLoweredChildNodeAt(children.items, field.value) orelse
+                .ty = self.preLoweredChildNodeAt(children, field.value) orelse
                     Common.invariant("record literal lost its field node"),
             };
         }
@@ -32919,9 +32950,8 @@ const BodyContext = struct {
             .fields = produced_fields,
             .ext = try self.graph.newNode(.empty_record),
         } });
-        const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
         const result_node = try self.producedConstructorNode(constructor_node, produced_node);
-        return try self.lowerRecordExprAtNode(record, result_node, children.items);
+        return try self.lowerRecordExprAtNode(record, result_node, children);
     }
 
     fn lowerRecordUpdateDirect(
