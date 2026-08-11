@@ -8402,18 +8402,16 @@ fn expectResidualDispatchReportShape(test_env: *TestEnv, expected_dispatch_text:
     var polymorphic_value_count: usize = 0;
     var unresolved_dispatcher_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
-        switch (problem) {
-            .polymorphic_value => polymorphic_value_count += 1,
-            .static_dispatch => |static_dispatch_problem| switch (static_dispatch_problem) {
-                .unresolved_dispatcher => |data| {
-                    unresolved_dispatcher_count += 1;
-                    const source = test_env.module_env.common.source;
-                    const region_text = source[data.region.start.offset..data.region.end.offset];
-                    try testing.expectEqualStrings(expected_dispatch_text, region_text);
-                },
-                else => return error.TestUnexpectedResult,
-            },
-            else => return error.TestUnexpectedResult,
+        if (problem == .polymorphic_value) {
+            polymorphic_value_count += 1;
+        } else if (problem == .static_dispatch and problem.static_dispatch == .unresolved_dispatcher) {
+            const data = problem.static_dispatch.unresolved_dispatcher;
+            unresolved_dispatcher_count += 1;
+            const source = test_env.module_env.common.source;
+            const region_text = source[data.region.start.offset..data.region.end.offset];
+            try testing.expectEqualStrings(expected_dispatch_text, region_text);
+        } else {
+            return error.TestUnexpectedResult;
         }
     }
     try testing.expectEqual(@as(usize, 2), polymorphic_value_count);
@@ -8469,10 +8467,12 @@ fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) !void {
     var type_mismatch_count: usize = 0;
     var polymorphic_value_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
-        switch (problem) {
-            .type_mismatch => type_mismatch_count += 1,
-            .polymorphic_value => polymorphic_value_count += 1,
-            else => return error.TestUnexpectedResult,
+        if (problem == .type_mismatch) {
+            type_mismatch_count += 1;
+        } else if (problem == .polymorphic_value) {
+            polymorphic_value_count += 1;
+        } else {
+            return error.TestUnexpectedResult;
         }
     }
     try testing.expectEqual(@as(usize, 1), type_mismatch_count);

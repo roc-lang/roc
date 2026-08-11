@@ -3936,9 +3936,11 @@ union-find representative, since unification may replace that representative.
 For a recursive SCC, capture happens after its members were checked, so the
 group boundary registers the pattern and definition aliases immediately after
 capture. Annotated members use their predeclared schemes for polymorphic
-recursive references while checking, but their RHS types still generalize
-together at that shared SCC boundary; a source-forward member can therefore
-make body-inferred requirements available before any member freezes. An
+recursive references—by name or by method-syntax dispatch, including a
+dispatch into an already-checked member whose group has not reached that
+boundary—while checking, but their RHS types still generalize together at
+that shared SCC boundary; a source-forward member can therefore make
+body-inferred requirements available before any member freezes. An
 annotated predeclared scheme var is registered when the checked
 body's scheme becomes available. A lookup made before that body is checked
 uses the declared annotation immediately, but its group retains the exact use
@@ -3962,10 +3964,12 @@ body.
 A receiver already at `Rank.generalized` is never captured as an outer-rank
 pending requirement. Generalization boundaries cannot run inside a commit
 probe; probes may append candidates, but rollback rewinds those candidates and
-can never leave a TypeScheme pointing into rolled-back store data. Rejected
-method-target attempts rewind the same candidate, ambiguity, derivation,
-deferred-constraint, and evidence tails, so records from an implementation that
-failed compatibility cannot enter a later scheme.
+can never leave a TypeScheme pointing into rolled-back store data. A
+speculatively validated method target that fails rolls back its store
+speculation together with the same candidate, ambiguity, derivation,
+deferred-constraint, and evidence tails, so neither records nor partial
+unifications from an implementation that failed compatibility can outlive the
+rejection or enter a later scheme.
 
 Instantiation copies the root type and every pending requirement under one
 substitution. The receiver follows ordinary rank behavior: an enclosing weak
@@ -4085,7 +4089,13 @@ therefore unrelated sibling constraints on the receiver cannot accidentally
 protect their callable variables. The same receiver-blocked callable closure is
 part of the ambiguity judgment's external-pinnable interface, so variables that
 exist only in a side-table relation receive exactly the same ambiguity treatment
-as variables reachable from the root type.
+as variables reachable from the root type. Receiver-blocked walks collect into
+their own overlay, merged into a pinnable or protection set only after every
+full-closure walk into that set has run: membership in those sets promises that
+a member's entire closure is present (the walks early-return on it), and a
+receiver-pruned entry planted mid-build would silently truncate a later full
+walk—which is a def-order dependence, since which walk reaches a shared
+variable first depends on definition order.
 
 When the receiver settles, ordinary static-dispatch checking discharges the
 original relation and every registered use copy independently. Normal
@@ -4180,7 +4190,13 @@ Other solved-graph mutations:
 —policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
-  committed probes of ordinary unification.
+  committed probes of ordinary unification. When no candidate satisfies a
+  numeral's method constraints, the documented head default is still
+  committed so the dispatch pass reports the conflicts against it—but that
+  is a type the program never chose, so each failing validation against it
+  rewinds its own unification: the diagnostic is reported and the relation
+  rejected without retyping anything reachable through the relation's
+  argument graph.
 - `captureSchemeDispatchRequirements` /
   `Instantiator.instantiateStaticDispatchConstraint(force_root_copy = true)`—policy: Pending Dispatch
   Requirements In Type Schemes (above). Capturing records no solved-graph

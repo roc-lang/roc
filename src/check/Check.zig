@@ -578,6 +578,14 @@ open_literal_vars: std.ArrayListUnmanaged(Var),
 /// a concrete number type, so range validation does not depend on flex content
 /// still being present in the union-find root.
 open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral),
+/// Literal receivers committed to their documented head default after every
+/// numeric candidate failed validation. The dispatch pass reports each such
+/// receiver's conflicts against the default type, and its failure path
+/// consults this list to rewind the failed unify: the program never chose the
+/// default, so a rejected default target must not retype anything reachable
+/// through the relation's argument graph. Membership is checked by resolved
+/// root at query time (error path only, so the list stays tiny).
+conflicted_default_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Tuple field accesses whose receiver was still unresolved when checked.
 /// A later call-site or annotation may resolve the receiver to a concrete tuple;
 /// otherwise the final sweep reports that the tuple arity needs an annotation.
@@ -600,6 +608,14 @@ external_pinnable: std.AutoHashMap(Var, void),
 /// Different receiver exclusions cannot share visitation state, while repeated
 /// requirements with the same receiver can reuse the completed walk.
 scheme_relation_reachability: std.AutoHashMap(SchemeReachabilityVisit, void),
+/// Vars reachable through explicit scheme-requirement relations, whose walks
+/// treat the shared receiver as an opaque boundary (`collectReachableVarsExcluding`).
+/// Kept apart from the plain-walk sets by construction: a receiver-excluding
+/// walk prunes every path through the receiver, so entries here may lack part
+/// of their closure, while the plain walks' membership early-return is only
+/// sound over sets whose every member carries its full closure. Consumers merge
+/// this overlay into their set once all plain walks into it have run.
+scheme_relation_reachable_vars: std.AutoHashMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
@@ -2058,6 +2074,7 @@ fn initAssumePrepared(
         .ambiguity_verdict_vars = std.AutoHashMap(Var, void).init(gpa),
         .external_pinnable = std.AutoHashMap(Var, void).init(gpa),
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
+        .scheme_relation_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
@@ -2203,12 +2220,14 @@ pub fn deinit(self: *Self) void {
     self.scratch_evidence_pair_set.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
+    self.conflicted_default_literal_vars.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.ambiguity_verdict_vars.deinit();
     self.external_pinnable.deinit();
     self.scheme_relation_reachability.deinit();
+    self.scheme_relation_reachable_vars.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
     self.boundary_eql_edges.deinit(self.gpa);
@@ -7580,23 +7599,27 @@ fn hoistedRootRecordDependenciesAreKept(
 fn beginAmbiguityPinnableSets(self: *Self) void {
     self.external_pinnable.clearRetainingCapacity();
     self.scheme_relation_reachability.clearRetainingCapacity();
+    self.scheme_relation_reachable_vars.clearRetainingCapacity();
 }
 
-/// Add one scheme root's complete interface closure to `external_pinnable`.
+/// Add one scheme root's complete interface closure to `external_pinnable`
+/// (plain walk) and its requirement relations to the receiver-excluded overlay.
 /// See `finishAmbiguityPinnableSets`.
 fn addAmbiguityPinnableRoot(self: *Self, interface_root: Var, scheme_root: Var) std.mem.Allocator.Error!void {
     try self.collectReachableVars(interface_root, &self.external_pinnable);
-    try self.addSchemeRequirementRelationsToReachableSet(scheme_root, &self.external_pinnable);
+    try self.addSchemeRequirementRelationsToReachableSet(scheme_root);
 }
 
 /// Add the callable side of a root scheme's explicit requirements without
 /// traversing through the shared receiver. The relation is part of the
 /// published interface; the receiver and its unrelated constraint graph are
 /// not made reachable merely because the callable names it as argument zero.
+/// The walk collects into `scheme_relation_reachable_vars`—never into a
+/// plain-walk set, whose membership early-return demands closure-complete
+/// entries the receiver pruning cannot provide.
 fn addSchemeRequirementRelationsToReachableSet(
     self: *Self,
     scheme_root: Var,
-    out: *std.AutoHashMap(Var, void),
 ) Allocator.Error!void {
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_root) orelse return;
     for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
@@ -7604,7 +7627,7 @@ fn addSchemeRequirementRelationsToReachableSet(
         try self.collectReachableVarsExcluding(
             requirement.constraint.fn_var,
             receiver_root,
-            out,
+            &self.scheme_relation_reachable_vars,
         );
     }
 }
@@ -7632,6 +7655,16 @@ fn finishAmbiguityPinnableSets(
         for (self.cir.store.slicePatterns(arg_span)) |pattern_idx| {
             try self.collectReachableVars(ModuleEnv.varFrom(pattern_idx), &self.pinnable_vars);
         }
+    }
+
+    // The receiver-excluded relation walks contribute pinnable vars too. Merge
+    // them last, after every plain walk into either set has completed, so no
+    // plain walk can early-return on a receiver-pruned entry and drop part of
+    // its own closure.
+    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
+    while (relation_iter.next()) |var_| {
+        try self.external_pinnable.put(var_.*, {});
+        try self.pinnable_vars.put(var_.*, {});
     }
 }
 
@@ -7777,8 +7810,12 @@ fn recordAmbiguityCandidate(
     if (entry.found_existing) {
         // Repeated observations of one obligation are one judgment candidate,
         // but the payload is monotone: any direct executable observation makes
-        // current resolution mandatory.
-        if (requires_current_resolution) {
+        // current resolution mandatory. A speculative commit-probe must not
+        // flip the flag on a candidate recorded before the probe began—the
+        // probe's rollback truncates candidate entries, not their payloads, so
+        // an in-probe observation of a pre-probe candidate would survive the
+        // rollback as a phantom escalation.
+        if (requires_current_resolution and !self.commit_probe_active) {
             self.ambiguity_candidates.items[entry.value_ptr.*].requires_current_resolution = true;
         }
         return;
@@ -8332,6 +8369,10 @@ fn checkInstantiatedStaticDispatchConstraints(
     env: *Env,
     is_numeric_default_pass: bool,
 ) std.mem.Allocator.Error!void {
+    // This fixpoint compacts the pending index and advances the checked-prefix
+    // cursor—positional state no probe savepoint captures. It must only run
+    // outside every speculative save/restore window.
+    std.debug.assert(self.probe_depth == 0);
     while (true) {
         const start = self.instantiation_dispatchers_checked;
         const end = self.instantiation_dispatchers.items.len;
@@ -10834,6 +10875,8 @@ fn instantiatePendingPredeclaredSchemeUse(
         }
     }
 
+    // Pending predeclared uses are only minted while a group frame is open.
+    std.debug.assert(self.group_stack.items.len > 0);
     const current_group = self.group_stack.items[self.group_stack.items.len - 1].group_index;
     if (self.defGroupIndex(target_def).? != current_group) {
         try self.pinVarAtGroupBoundaryRank(use_var, env);
@@ -11076,6 +11119,8 @@ fn resolvePendingPredeclaredSchemeUses(
         const target_def = self.cir.store.getDef(pending.target_def);
         const target_scheme_root = ModuleEnv.varFrom(target_def.expr);
         const has_pending_requirements = self.typeSchemeIndexForRoot(target_scheme_root) != null;
+        // Replays drain a frame's own pending list, so that frame is open.
+        std.debug.assert(self.group_stack.items.len > 0);
         const current_group = self.group_stack.items[self.group_stack.items.len - 1].group_index;
         const target_boundary_finished = self.group_states.items[target_group] == .checked or
             (current_boundary_captured and target_group == current_group);
@@ -20807,11 +20852,18 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
     // No candidate satisfies the group: commit each driver's documented head
     // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
     // conflicts. (All drivers are flex again—every failed probe rolled back—
-    // but re-check defensively.)
-    for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
+    // but re-check defensively.) Numeral drivers with method constraints are
+    // recorded as conflicted so the dispatch pass's failure path rewinds its
+    // speculative merges (see `conflicted_default_literal_vars`).
+    for (drivers, self.literal_defaulting_kinds.items, self.literal_defaulting_constraint_ranges.items) |driver, kind, range| {
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
         switch (kind) {
-            .numeral => _ = try self.commitLiteralDefaultHead(driver, env),
+            .numeral => {
+                if (self.rangeHasNonLiteralConstraint(range)) {
+                    try self.conflicted_default_literal_vars.append(self.gpa, driver);
+                }
+                _ = try self.commitLiteralDefaultHead(driver, env);
+            },
             .quote, .interpolation => _ = try self.commitQuoteDefault(driver, env),
         }
     }
@@ -21256,9 +21308,19 @@ fn addSchemeDispatchRequirementsToBoundaryReachability(
     roots: []const BoundaryRoot,
 ) Allocator.Error!void {
     self.scheme_relation_reachability.clearRetainingCapacity();
+    self.scheme_relation_reachable_vars.clearRetainingCapacity();
     for (roots) |root| {
-        try self.addSchemeRequirementRelationsToReachableSet(root.owner, &self.boundary_reachable_vars);
+        try self.addSchemeRequirementRelationsToReachableSet(root.owner);
     }
+}
+
+/// Boundary reachability including the receiver-excluded relation overlay,
+/// which is merged into `boundary_reachable_vars` only after the `eql`-edge
+/// fixpoint's plain walks have all run.
+fn boundaryReachableIncludingRelations(self: *const Self, var_: Var) bool {
+    const root = self.types.resolveVar(var_).var_;
+    return self.boundary_reachable_vars.contains(root) or
+        self.scheme_relation_reachable_vars.contains(root);
 }
 
 fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const BoundaryRoot) void {
@@ -21347,13 +21409,21 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     while (changed) {
         changed = false;
         for (self.boundary_eql_edges.items) |eql| {
-            const expected_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.expected).var_);
-            const actual_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.actual).var_);
+            const expected_in = self.boundaryReachableIncludingRelations(eql.expected);
+            const actual_in = self.boundaryReachableIncludingRelations(eql.actual);
             if (expected_in == actual_in) continue;
             try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
             try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
             changed = true;
         }
+    }
+
+    // Every plain walk into the boundary set is done; fold in the
+    // receiver-excluded relation overlay for the membership-only consumers
+    // (defaulting protection and leak detection).
+    var relation_iter = self.scheme_relation_reachable_vars.keyIterator();
+    while (relation_iter.next()) |var_| {
+        try self.boundary_reachable_vars.put(var_.*, {});
     }
 
     // Default every unreachable candidate through the shared component machinery—
@@ -21846,6 +21916,11 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                         return committed_var;
                     }
                 }
+                // No candidate satisfied the constraints: the head commit
+                // below is a documented conflict. Record the receiver so the
+                // dispatch pass's failure path rewinds its speculative merges
+                // (see `conflicted_default_literal_vars`).
+                try self.conflicted_default_literal_vars.append(self.gpa, literal_var);
             }
             return try self.commitLiteralDefaultHead(literal_var, env);
         },
@@ -21903,6 +21978,19 @@ fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
     return switch (target) {
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |t| @field(CIR.NumKind, @tagName(t)),
     };
+}
+
+/// Whether `var_` resolves to a literal whose documented head default was
+/// committed despite failing candidate validation (see
+/// `conflicted_default_literal_vars`). Both sides re-resolve at query time:
+/// the class root can drift as later unifications merge into it.
+fn varIsConflictedDefaultLiteral(self: *const Self, var_: Var) bool {
+    if (self.conflicted_default_literal_vars.items.len == 0) return false;
+    const root = self.types.resolveVar(var_).var_;
+    for (self.conflicted_default_literal_vars.items) |recorded| {
+        if (self.types.resolveVar(recorded).var_ == root) return true;
+    }
+    return false;
 }
 
 /// Whether the constraint range carries any obligation besides literal-conversion
@@ -23373,7 +23461,19 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
                                     }
                                 },
-                                .processed => {},
+                                .processed => if (mb_predeclared_scheme) |scheme_var| {
+                                    if (self.defInOnStackGroup(def_idx)) {
+                                        // A previously checked member of this
+                                        // still-open recursive group has not
+                                        // reached the shared generalization
+                                        // boundary, so its def var is not a
+                                        // scheme yet. Dispatch instantiates
+                                        // the predeclared scheme—the same
+                                        // polymorphic-recursion rule a name
+                                        // reference to such a member follows.
+                                        predeclared_scheme_for_method = scheme_var;
+                                    }
+                                },
                             }
                         }
                     }
@@ -23404,13 +23504,49 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     }
 
-                    const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                    const fn_ctx: problem.Context = .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
                             .dispatcher_name = nominal_type.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
-                    });
+                    };
+                    const fn_result = fn_result: {
+                        if (self.probe_depth != 0 or !self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
+                            break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                        }
+                        // This receiver's type is the documented head default,
+                        // committed after every candidate failed validation—a
+                        // type the program never chose. The unifier still owns
+                        // the diagnostic (its problem and snapshots live
+                        // outside the type store and survive the rollback),
+                        // but the failed validation must not retype anything
+                        // the relation's argument graph reaches: bracket the
+                        // unify in a probe and rewind the store, the deferred
+                        // queue, and the var-pool tails on mismatch. Success
+                        // commits—a default target that satisfies a
+                        // constraint is real. (Inside an enclosing probe the
+                        // ordinary path is fine: the outer speculation never
+                        // commits a nested dispatch failure.)
+                        self.probe_var_pool_lens.clearRetainingCapacity();
+                        const rank_count = @intFromEnum(env.rank()) + 1;
+                        try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
+                        for (0..rank_count) |rank_idx| {
+                            const rank: Rank = @enumFromInt(rank_idx);
+                            self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
+                        }
+                        var probe = try self.beginProbe(env);
+                        const probed_result = try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                        if (probed_result.isProblem()) {
+                            probe.rollback();
+                            for (self.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
+                                env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
+                            }
+                        } else {
+                            probe.commit();
+                        }
+                        break :fn_result probed_result;
+                    };
                     if (fn_result.isProblem()) {
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
@@ -23684,7 +23820,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         cycle_method_expr_var = ModuleEnv.varFrom(def.expr);
                                     }
                                 },
-                                .processed => {},
+                                .processed => if (mb_predeclared_scheme) |scheme_var| {
+                                    if (self.defInOnStackGroup(def_idx)) {
+                                        // See the nominal branch: a checked
+                                        // member of a still-open group
+                                        // dispatches through its predeclared
+                                        // scheme until the shared boundary
+                                        // publishes the body scheme.
+                                        predeclared_scheme_for_method = scheme_var;
+                                    }
+                                },
                             }
                         }
                     }
@@ -29035,52 +29180,63 @@ fn checkFlexVarConstraintCompatibility(
             continue;
         };
 
-        const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
-        const instantiation_dispatchers_checked = self.instantiation_dispatchers_checked;
-        const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
-        const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
-        const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
-        const dispatch_derivations_len = self.dispatch_derivations.items.len;
-        const deferred_constraints_len = env.deferred_static_dispatch_constraints.items.items.len;
-        const open_literal_vars_len = self.open_literal_vars.items.len;
-        const open_numeral_literals_len = self.open_numeral_literals.items.len;
-        const scheme_uses_len = self.cir.scheme_uses.items.items.len;
-        const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
-        const method_var = method_var: {
-            self.evidence_target_site = .{
-                .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
-                .constraint_fn_var = constraint.fn_var,
+        // Validate the target speculatively: instantiate the default owner's
+        // method and unify it against the recorded relation inside a
+        // commit-probe. Success commits in place—the real unify wrapper
+        // already propagated regions, ranks, and deferred constraints into the
+        // live env. Failure rolls the entire attempt back as one unit: the
+        // store's partial merges, the nested obligations the incompatible
+        // target's own scheme recorded, and every evidence buffer the attempt
+        // grew—so a rejected target leaves the receiver, and every var
+        // reachable through the relation's argument graph, exactly as they
+        // stood. (Obligations deferred before this attempt survive; only the
+        // attempt's own recordings vanish with the store rewind.)
+        const target_accepted = accepted: {
+            var commit_probe = try self.beginCommitProbe(env);
+            var committed = false;
+            defer if (!committed) commit_probe.rollback();
+
+            const method_var = method_var: {
+                self.evidence_target_site = .{
+                    .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+                    .constraint_fn_var = constraint.fn_var,
+                };
+                defer self.evidence_target_site = null;
+
+                const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
+                break :method_var try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
             };
-            defer self.evidence_target_site = null;
 
-            const imported_scheme = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
-            break :method_var try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
+            // The mismatch is reported below, after the rollback, against the
+            // pristine relation—occurrence-directed poisoning must not run
+            // under the savepoint.
+            const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
+            if (!result.isOk()) break :accepted false;
+
+            committed = true;
+            commit_probe.commit();
+            break :accepted true;
         };
-
-        const result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
-            .method_type = .{
-                .constraint_var = var_,
-                .dispatcher_name = default_type_ident,
-                .method_name = constraint.fn_name,
-            },
-        });
-        if (result.isProblem()) {
-            // Instantiating the incompatible target may have recorded nested
-            // obligations from that target's own scheme. They cannot execute
-            // after this constraint is marked erroneous, so discard only
-            // those append-only records instead of reporting cascades from an
-            // implementation that was never a valid target.
-            self.instantiation_dispatchers.shrinkRetainingCapacity(instantiation_dispatchers_len);
-            self.instantiation_dispatchers_checked = instantiation_dispatchers_checked;
-            self.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(pending_scheme_requirement_dispatchers_len);
-            self.shrinkAmbiguityCandidatesTo(ambiguity_candidates_len);
-            self.shrinkSchemeRequirementCandidatesTo(scheme_requirement_candidates_len);
-            self.shrinkDispatchDerivationsTo(dispatch_derivations_len);
-            env.deferred_static_dispatch_constraints.items.shrinkRetainingCapacity(deferred_constraints_len);
-            self.open_literal_vars.shrinkRetainingCapacity(open_literal_vars_len);
-            self.open_numeral_literals.shrinkRetainingCapacity(open_numeral_literals_len);
-            self.cir.scheme_uses.items.shrinkRetainingCapacity(scheme_uses_len);
-            self.cir.scheme_use_pairs.items.shrinkRetainingCapacity(scheme_use_pairs_len);
+        if (!target_accepted) {
+            // Report the signature mismatch against the untouched types the
+            // rollback restored: the default owner's declared scheme versus
+            // the relation as the program actually constrained it.
+            const scheme_var = try self.importedMethodSchemeFromSource(builtin_env, method_binding.type_node_idx);
+            const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, scheme_var);
+            const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, constraint.fn_var);
+            _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+                .types = .{
+                    .expected_var = scheme_var,
+                    .expected_snapshot = expected_snapshot,
+                    .actual_var = constraint.fn_var,
+                    .actual_snapshot = actual_snapshot,
+                },
+                .context = .{ .method_type = .{
+                    .constraint_var = var_,
+                    .dispatcher_name = default_type_ident,
+                    .method_name = constraint.fn_name,
+                } },
+            } });
 
             // Checking owns both the diagnostic and the executable failure.
             // The source expression becomes a runtime error, while the exact
