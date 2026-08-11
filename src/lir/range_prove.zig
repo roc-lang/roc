@@ -284,6 +284,11 @@ const MergeState = struct {
     /// the values it relates.
     entry_captures: u32,
     entry_facts: std.ArrayList(Fact),
+    /// Value meet of the path environment over the entry edges alone. A
+    /// local the body subtree never assigns holds its entry value at every
+    /// head arrival, so the body can be seeded with it even though the
+    /// fact-free first walk of the back edge could never re-derive it.
+    entry_env: std.ArrayList(EnvMeet),
 };
 
 /// One endpoint of a cross-round persisted fact, in round-stable form.
@@ -352,6 +357,12 @@ const Pass = struct {
     joins_in_order: std.ArrayList(CFStmtId),
     jump_records: std.ArrayList(JumpRecord),
     merge_states: collections.DenseMap(CFStmtId, MergeState),
+    /// Locals assigned anywhere in a join body's statement subtree, cached
+    /// per body head within a round. Statement folds change the subtree, so
+    /// the cache resets with the round.
+    body_assigned: collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)),
+    body_assigned_scan: std.ArrayList(CFStmtId),
+    body_assigned_seen: std.AutoHashMapUnmanaged(u32, void),
     /// Region head that was being walked when each region was first
     /// enqueued: the lexical nesting of join bodies. Edge classification at
     /// a merge asks whether the arriving walk is nested anywhere inside the
@@ -422,6 +433,9 @@ const Pass = struct {
             .joins_in_order = .empty,
             .jump_records = .empty,
             .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
+            .body_assigned = collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)).init(allocator),
+            .body_assigned_scan = .empty,
+            .body_assigned_seen = .empty,
             .region_parents = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
             .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -465,6 +479,10 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.clearMergeStates();
         self.merge_states.deinit();
+        self.clearBodyAssigned();
+        self.body_assigned.deinit();
+        self.body_assigned_scan.deinit(self.allocator);
+        self.body_assigned_seen.deinit(self.allocator);
         self.region_parents.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
@@ -501,6 +519,7 @@ const Pass = struct {
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
+        self.clearBodyAssigned();
         self.region_parents.clearRetainingCapacity();
         self.body_joins.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
@@ -958,8 +977,84 @@ const Pass = struct {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
             state.entry_facts.deinit(self.allocator);
+            state.entry_env.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
+    }
+
+    fn clearBodyAssigned(self: *Pass) void {
+        var it = self.body_assigned.valueIterator();
+        while (it.next()) |set| set.deinit(self.allocator);
+        self.body_assigned.clearRetainingCapacity();
+    }
+
+    /// Locals assigned anywhere in the statement subtree reachable from
+    /// `head` without following jumps: reassignments a loop iteration could
+    /// perform. Jump targets either re-enter this subtree through their
+    /// declarations (nested joins, already reachable) or leave it entirely.
+    fn bodyAssignedLocals(self: *Pass, head: CFStmtId) ResourceError!*const std.AutoHashMapUnmanaged(u32, void) {
+        if (self.body_assigned.get(head) != null) return self.body_assigned.getPtr(head).?;
+        var set = std.AutoHashMapUnmanaged(u32, void).empty;
+        errdefer set.deinit(self.allocator);
+        self.body_assigned_scan.clearRetainingCapacity();
+        self.body_assigned_seen.clearRetainingCapacity();
+        try self.body_assigned_scan.append(self.allocator, head);
+        while (self.body_assigned_scan.pop()) |current| {
+            const seen = try self.body_assigned_seen.getOrPut(self.allocator, @intFromEnum(current));
+            if (seen.found_existing) continue;
+            switch (self.store.getCFStmt(current)) {
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local => |stmt| {
+                    try set.put(self.allocator, @intFromEnum(stmt.target), {});
+                    try self.body_assigned_scan.append(self.allocator, stmt.next);
+                },
+                inline .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try self.body_assigned_scan.append(self.allocator, stmt.next),
+                .switch_stmt => |stmt| {
+                    const branches = self.store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try self.body_assigned_scan.append(self.allocator, GuardedList.at(branches, i).body);
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.default_branch);
+                    if (stmt.continuation) |continuation| try self.body_assigned_scan.append(self.allocator, continuation);
+                },
+                .switch_initialized_payload => |stmt| {
+                    try self.body_assigned_scan.append(self.allocator, stmt.initialized_branch);
+                    try self.body_assigned_scan.append(self.allocator, stmt.uninitialized_branch);
+                },
+                .str_match => |stmt| {
+                    const steps = self.store.getStrMatchSteps(stmt.steps);
+                    for (0..GuardedList.borrowLen(steps)) |i| {
+                        switch (GuardedList.at(steps, i).capture) {
+                            .discard => {},
+                            .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
+                        }
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_match);
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
+                },
+                .str_match_set => |stmt| {
+                    const arms = self.store.getStrMatchArms(stmt.arms);
+                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
+                        const steps = self.store.getStrMatchSteps(arm.steps);
+                        for (0..GuardedList.borrowLen(steps)) |i| {
+                            switch (GuardedList.at(steps, i).capture) {
+                                .discard => {},
+                                .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
+                            }
+                        }
+                        try self.body_assigned_scan.append(self.allocator, arm.on_match);
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
+                },
+                .join => |stmt| {
+                    try self.body_assigned_scan.append(self.allocator, stmt.body);
+                    try self.body_assigned_scan.append(self.allocator, stmt.remainder);
+                },
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            }
+        }
+        try self.body_assigned.put(head, set);
+        return self.body_assigned.getPtr(head).?;
     }
 
     /// A binding is worth carrying through a merge when it says something a
@@ -984,7 +1079,7 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty, .entry_env = .empty };
         }
         const state = entry.value_ptr;
 
@@ -995,7 +1090,37 @@ const Pass = struct {
         if (!self.walkIsWithin(head)) {
             if (state.entry_captures == 0) {
                 try state.entry_facts.appendSlice(self.allocator, self.facts.items);
+                var entry_it = self.path_env.iterator();
+                while (entry_it.next()) |kv| {
+                    if (state.entry_env.items.len >= merge_env_cap) break;
+                    if (!self.captureWorthy(kv.value_ptr.node)) continue;
+                    const node = self.nodes.items[kv.value_ptr.node];
+                    try state.entry_env.append(self.allocator, .{
+                        .local = kv.key_ptr.*,
+                        .root = node.root,
+                        .off_lo = node.off_lo,
+                        .off_hi = node.off_hi,
+                        .valid = true,
+                        .bounds = .{},
+                        .len_bounds = .{},
+                        .len_bounds_any = .{},
+                    });
+                }
             } else {
+                for (state.entry_env.items) |*meet| {
+                    if (!meet.valid) continue;
+                    const binding = self.path_env.get(meet.local) orelse {
+                        meet.valid = false;
+                        continue;
+                    };
+                    const node = self.nodes.items[binding.node];
+                    if (node.root == meet.root) {
+                        meet.off_lo = @min(meet.off_lo, node.off_lo);
+                        meet.off_hi = @max(meet.off_hi, node.off_hi);
+                    } else {
+                        meet.valid = false;
+                    }
+                }
                 var keep_entry: usize = 0;
                 for (state.entry_facts.items) |fact| {
                     for (self.facts.items) |mine| {
@@ -1147,6 +1272,28 @@ const Pass = struct {
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         try self.seedLoopParam(join_id, GuardedList.at(params, i));
+                    }
+                }
+                // A local every entry edge binds compatibly and the body
+                // subtree never assigns holds its entry value at every head
+                // arrival; the back edge could never re-derive it before
+                // its own region is seeded, so seed it from the entry meet.
+                if (state) |st| {
+                    if (st.entry_captures > 0 and st.entry_env.items.len > 0) {
+                        const assigned = try self.bodyAssignedLocals(head);
+                        for (st.entry_env.items) |meet| {
+                            if (!meet.valid) continue;
+                            if (assigned.contains(@intFromEnum(meet.local))) continue;
+                            if (self.lookup(meet.local) != null) continue;
+                            const node = (try self.addNode(.{
+                                .root = meet.root,
+                                .off_lo = meet.off_lo,
+                                .off_hi = meet.off_hi,
+                                .lo = 0,
+                                .hi = 0,
+                            })) orelse continue;
+                            try self.bind(meet.local, .{ .node = node });
+                        }
                     }
                 }
                 return;
@@ -2442,6 +2589,18 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .num_times, .num_times_wrap, .num_times_checked => {
+                // A multiply by a non-negative constant whose product range
+                // fits the operand type cannot wrap, so every variant is the
+                // exact product and its range is the operand's scaled.
+                if (arg_count == 2) {
+                    if (try self.mulConstExact(args, self.localLayout(s.target))) |node| {
+                        try self.bind(s.target, .{ .node = node });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .num_shift_right_zf_by => {
                 if (arg_count == 2) {
                     if (try self.valueOf(GuardedList.at(args, 1))) |amount_node| {
@@ -2570,9 +2729,6 @@ const Pass = struct {
             .num_abs_diff,
             .num_plus_wrap,
             .num_minus_wrap,
-            .num_times,
-            .num_times_wrap,
-            .num_times_checked,
             .num_div_by,
             .num_div_by_checked,
             .num_div_trunc_by,
@@ -3104,6 +3260,28 @@ const Pass = struct {
             }
         }
         return null;
+    }
+
+    /// Bounded node for a constant multiply proven not to wrap, or null.
+    fn mulConstExact(self: *Pass, args: anytype, target_layout: layout_mod.Idx) ResourceError!?NodeId {
+        const max = trackedIntMax(target_layout) orelse return null;
+        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
+        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
+        var factor: i128 = undefined;
+        var operand: NodeId = undefined;
+        if (self.constValueOf(rhs)) |c| {
+            factor = c;
+            operand = lhs;
+        } else if (self.constValueOf(lhs)) |c| {
+            factor = c;
+            operand = rhs;
+        } else return null;
+        if (factor < 0) return null;
+        const lo = self.absLoOf(operand);
+        const hi = self.absHiOf(operand);
+        if (lo < 0) return null;
+        if (factor != 0 and hi > @divTrunc(max, factor)) return null;
+        return try self.freshRoot(lo * factor, hi * factor);
     }
 
     /// Bounded node for a wrapping subtract proven not to wrap, or null.

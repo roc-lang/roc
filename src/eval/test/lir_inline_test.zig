@@ -7975,8 +7975,29 @@ test "length guard plus masked index elides loop bounds checks" {
     // early return, whose switch tests the guard, not a per-element check.
     var len_targets = std.AutoHashMapUnmanaged(u32, void).empty;
     defer len_targets.deinit(allocator);
+    var mask_targets = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer mask_targets.deinit(allocator);
     var lt_of_len = std.AutoHashMapUnmanaged(u32, void).empty;
     defer lt_of_len.deinit(allocator);
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |s| {
+                switch (s.op) {
+                    .num_bitwise_and => try mask_targets.put(allocator, @intFromEnum(s.target), {}),
+                    else => {},
+                }
+            },
+            .assign_ref => |s| {
+                switch (s.op) {
+                    .local => |src| if (mask_targets.contains(@intFromEnum(src))) {
+                        try mask_targets.put(allocator, @intFromEnum(s.target), {});
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
     for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_low_level => |s| {
@@ -7986,7 +8007,7 @@ test "length guard plus masked index elides loop bounds checks" {
                     .num_is_lt => {
                         if (collections.GuardedList.borrowLen(args) == 2 and
                             len_targets.contains(@intFromEnum(collections.GuardedList.at(args, 1))) and
-                            !len_targets.contains(@intFromEnum(collections.GuardedList.at(args, 0))))
+                            mask_targets.contains(@intFromEnum(collections.GuardedList.at(args, 0))))
                         {
                             try lt_of_len.put(allocator, @intFromEnum(s.target), {});
                         }
@@ -8001,6 +8022,115 @@ test "length guard plus masked index elides loop bounds checks" {
         switch (stmt) {
             .switch_stmt => |s| {
                 if (lt_of_len.contains(@intFromEnum(s.cond))) len_guarded_switches += 1;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), len_guarded_switches);
+}
+
+
+// The matchfinder tables reach their loops through a rebased `var`: the
+// local is assigned in both arms of a pre-loop branch and only read inside
+// the loop. Its binding must survive into the loop body from the entry
+// edges alone — the fact-free first walk of the back edge can never
+// re-derive it — or the dominating length guard proves nothing.
+test "entry bindings of body-unassigned locals reach loop bounds proofs" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\rebase : List(I16) -> Try(List(I16), [Bug])
+        \\rebase = |t| {
+        \\    match List.set(t, 0, 0.I16) {
+        \\        Ok(u) => Ok(u)
+        \\        Err(_) => Err(Bug)
+        \\    }
+        \\}
+        \\
+        \\walk : List(I16), U64, U64 -> Try(U64, [Bug])
+        \\walk = |tab0, start, n| {
+        \\    var $tab = tab0
+        \\    if start == 99 {
+        \\        $tab = rebase($tab)?
+        \\    } else {
+        \\    }
+        \\    tab = $tab
+        \\    if List.len(tab) < 32768 {
+        \\        return Err(Bug)
+        \\    } else {
+        \\    }
+        \\    var $node = start
+        \\    var $acc = 0.U64
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        $acc = $acc + $node
+        \\        $node = (List.get(tab, $node.bitwise_and(32767)) ?? 0).to_u64_wrap()
+        \\        $i = $i + 1
+        \\    }
+        \\    Ok($acc)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    match walk(List.repeat(0.I16, 32768), n, n) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    ;
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer optimized.deinit(allocator);
+
+    const store = &optimized.lowered.lir_result.store;
+    var len_targets = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer len_targets.deinit(allocator);
+    var mask_targets = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer mask_targets.deinit(allocator);
+    var lt_of_len = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer lt_of_len.deinit(allocator);
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |s| {
+                switch (s.op) {
+                    .num_bitwise_and => try mask_targets.put(allocator, @intFromEnum(s.target), {}),
+                    else => {},
+                }
+            },
+            .assign_ref => |s| {
+                switch (s.op) {
+                    .local => |src| if (mask_targets.contains(@intFromEnum(src))) {
+                        try mask_targets.put(allocator, @intFromEnum(s.target), {});
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |s| {
+                const args = store.getLocalSpan(s.args);
+                switch (s.op) {
+                    .list_len => try len_targets.put(allocator, @intFromEnum(s.target), {}),
+                    .num_is_lt => {
+                        if (collections.GuardedList.borrowLen(args) == 2 and
+                            len_targets.contains(@intFromEnum(collections.GuardedList.at(args, 1))) and
+                            mask_targets.contains(@intFromEnum(collections.GuardedList.at(args, 0))))
+                        {
+                            try lt_of_len.put(allocator, @intFromEnum(s.target), {});
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+    var len_guarded_switches: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .switch_stmt => |sw| {
+                if (lt_of_len.contains(@intFromEnum(sw.cond))) len_guarded_switches += 1;
             },
             else => {},
         }
