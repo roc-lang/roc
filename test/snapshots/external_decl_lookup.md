@@ -22,7 +22,7 @@ NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
 NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 
-── ● DUPLICATE DEFINITION ────────────────────────── external_decl_lookup.md:4:1
+── ● duplicate definition ────────────────────────── external_decl_lookup.md:4:1
 
 The name `Json` is being redeclared here:
 
@@ -35,7 +35,7 @@ In this scope, `Json` was already defined in external_decl_lookup.md:1:1:
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 ^
 
-── ✗ NAME NOT IN SCOPE ──────────────────────────── external_decl_lookup.md:8:14
+── ✗ name not in scope ──────────────────────────── external_decl_lookup.md:8:14
 
 Nothing is named `utf8` in this scope.
 
@@ -44,7 +44,7 @@ result = Json.utf8("Hello from external mod!")
 
 Is it misspelled, or is there an import missing?
 
-── ✗ NAME NOT IN SCOPE ───────────────────────────── external_decl_lookup.md:9:5
+── ✗ name not in scope ───────────────────────────── external_decl_lookup.md:9:5
 
 Nothing is named `line!` in this scope.
 

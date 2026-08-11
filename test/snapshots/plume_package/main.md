@@ -13,7 +13,7 @@ package [
 MOD NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
 
-── ✗ MOD NOT FOUND ────────────────────────────────────────────── main.md:2:5
+── ✗ mod not found ────────────────────────────────────────────── main.md:2:5
 
 The mod `Color` was not found in this Roc project.
 

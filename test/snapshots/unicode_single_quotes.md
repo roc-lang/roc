@@ -64,7 +64,7 @@ INVALID TUPLE ELEMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - unicode_single_quotes.md:19:5:19:7
 # PROBLEMS
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ────────────── unicode_single_quotes.md:5:6
+── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:5:6
 
 This Unicode escape sequence is not valid.
 
@@ -72,7 +72,7 @@ This Unicode escape sequence is not valid.
  ^^
 
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ────────────── unicode_single_quotes.md:6:6
+── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:6:6
 
 This Unicode escape sequence is not valid.
 
@@ -80,7 +80,7 @@ This Unicode escape sequence is not valid.
  ^^
 
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ────────────── unicode_single_quotes.md:7:6
+── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:7:6
 
 This Unicode escape sequence is not valid.
 
@@ -88,7 +88,7 @@ This Unicode escape sequence is not valid.
  ^^^
 
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ────────────── unicode_single_quotes.md:8:6
+── ✗ invalid unicode escape sequence ────────────── unicode_single_quotes.md:8:6
 
 This Unicode escape sequence is not valid.
 
@@ -96,7 +96,7 @@ This Unicode escape sequence is not valid.
  ^^^^
 
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────── unicode_single_quotes.md:10:6
+── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:10:6
 
 This Unicode escape sequence is not valid.
 
@@ -104,7 +104,7 @@ This Unicode escape sequence is not valid.
  ^^^^^^^^^^
 
 
-── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────── unicode_single_quotes.md:11:6
+── ✗ invalid unicode escape sequence ───────────── unicode_single_quotes.md:11:6
 
 This Unicode escape sequence is not valid.
 
@@ -112,7 +112,7 @@ This Unicode escape sequence is not valid.
  ^^^^^
 
 
-── ✗ SINGLE QUOTE EMPTY ────────────────────────── unicode_single_quotes.md:14:5
+── ✗ single quote empty ────────────────────────── unicode_single_quotes.md:14:5
 
 Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 
@@ -120,7 +120,7 @@ Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 ^^
 
 
-── ✗ SINGLE QUOTE TOO LONG ─────────────────────── unicode_single_quotes.md:15:5
+── ✗ single quote too long ─────────────────────── unicode_single_quotes.md:15:5
 
 Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 
@@ -128,7 +128,7 @@ Single-quoted literals must contain exactly one valid UTF-8 codepoint.
 ^^^^^^
 
 
-── ✗ UNCLOSED SINGLE QUOTE ─────────────────────── unicode_single_quotes.md:16:5
+── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:16:5
 
 This single-quoted literal is missing a closing quote.
 
@@ -136,7 +136,7 @@ This single-quoted literal is missing a closing quote.
 ^^^^
 
 
-── ✗ UNCLOSED SINGLE QUOTE ─────────────────────── unicode_single_quotes.md:19:5
+── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:19:5
 
 This single-quoted literal is missing a closing quote.
 
@@ -144,7 +144,7 @@ y = 'u
     ^^
 
 
-── ✗ INVALID ESCAPE SEQUENCE ───────────────────── unicode_single_quotes.md:22:2
+── ✗ invalid escape sequence ───────────────────── unicode_single_quotes.md:22:2
 
 This escape sequence is not recognized.
 
@@ -152,7 +152,7 @@ This escape sequence is not recognized.
 
 
 
-── ✗ UNCLOSED SINGLE QUOTE ─────────────────────── unicode_single_quotes.md:22:1
+── ✗ unclosed single quote ─────────────────────── unicode_single_quotes.md:22:1
 
 This single-quoted literal is missing a closing quote.
 
@@ -160,7 +160,7 @@ This single-quoted literal is missing a closing quote.
 ^^
 
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ───────────────── unicode_single_quotes.md:5:5
+── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:5:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -175,7 +175,7 @@ For example:
 
 I found `'\u'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ───────────────── unicode_single_quotes.md:6:5
+── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:6:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -190,7 +190,7 @@ For example:
 
 I found `'\u)'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ───────────────── unicode_single_quotes.md:7:5
+── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:7:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -205,7 +205,7 @@ For example:
 
 I found `'\u('` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ───────────────── unicode_single_quotes.md:8:5
+── ✗ unexpected expression syntax ───────────────── unicode_single_quotes.md:8:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -220,7 +220,7 @@ For example:
 
 I found `'\u()'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:10:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:10:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -235,7 +235,7 @@ For example:
 
 I found `'\u(EDA0B5)'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:11:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:11:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -250,7 +250,7 @@ For example:
 
 I found `'\u(K)'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:14:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:14:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -265,7 +265,7 @@ For example:
 
 I found `''` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:15:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:15:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -280,7 +280,7 @@ For example:
 
 I found `'long'` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:16:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:16:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -295,7 +295,7 @@ For example:
 
 I found `'\',` here.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────── unicode_single_quotes.md:19:5
+── ✗ unexpected expression syntax ──────────────── unicode_single_quotes.md:19:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -310,7 +310,7 @@ For example:
 
 I found `'u` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────── unicode_single_quotes.md:22:1
+── ✗ unexpected statement ──────────────────────── unicode_single_quotes.md:22:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -361,7 +361,7 @@ INVALID TUPLE ELEMENT
 This tuple element is malformed or contains invalid syntax.
 
 
-── ✗ UNRECOGNIZED SYNTAX ───────────────────────── unicode_single_quotes.md:19:5
+── ✗ unrecognized syntax ───────────────────────── unicode_single_quotes.md:19:5
 
 I don't recognize this syntax.
 

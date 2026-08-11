@@ -14,7 +14,7 @@ match person {
 TYPE MISMATCH - simple_record.md:1:1:1:1
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────────────────── simple_record.md:1:5
+── ✗ type mismatch ──────────────────────────────────────── simple_record.md:1:5
 
 The second branch of this `match` does not match the previous ones.
 

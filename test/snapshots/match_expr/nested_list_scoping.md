@@ -16,7 +16,7 @@ MISSING METHOD - nested_list_scoping.md:4:17:4:22
 POLYMORPHIC VALUE - nested_list_scoping.md:1:1:5:2
 # PROBLEMS
 
-── ✗ MISSING METHOD ──────────────────────────────── nested_list_scoping.md:4:17
+── ✗ missing method ──────────────────────────────── nested_list_scoping.md:4:17
 
 The value before this `*` operator has a type that doesn't have a `times`
 method.
@@ -31,7 +31,7 @@ The value's type, which does not have a method named `times`, is:
 Hint: The `*` operator calls a method named `times` on the value preceding it,
 passing the value after the operator as the one argument.
 
-── ✗ POLYMORPHIC VALUE ────────────────────────────── nested_list_scoping.md:1:1
+── ✗ polymorphic value ────────────────────────────── nested_list_scoping.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

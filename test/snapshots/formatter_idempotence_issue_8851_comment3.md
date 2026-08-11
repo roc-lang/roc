@@ -11,7 +11,7 @@ a=0->b .c()
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment3.md:1:6:1:7
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────── formatter_idempotence_issue_8851_comment3.md:1:6
+── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment3.md:1:6
 
 Nothing is named `b` in this scope.
 

@@ -18,7 +18,7 @@ TYPE APPLICATION NEEDS PARENTHESES - mod_multiline_with_comments.md:3:11:3:12
 UNEXPECTED STATEMENT - mod_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ──────────────── mod_multiline_with_comments.md:1:2
+── ✗ unexpected statement ──────────────── mod_multiline_with_comments.md:1:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -33,7 +33,7 @@ For example:
 
 I found `[` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────── mod_multiline_with_comments.md:2:3
+── ✗ unexpected statement ──────────────── mod_multiline_with_comments.md:2:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -50,7 +50,7 @@ I found `something` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED STATEMENT ─────────────── mod_multiline_with_comments.md:2:12
+── ✗ unexpected statement ─────────────── mod_multiline_with_comments.md:2:12
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -66,7 +66,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ TYPE APPLICATION NEEDS PARENTHESES ─ mod_multiline_with_comments.md:3:11
+── ✗ type application needs parentheses ─ mod_multiline_with_comments.md:3:11
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -83,7 +83,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ UNEXPECTED STATEMENT ──────────────── mod_multiline_with_comments.md:4:2
+── ✗ unexpected statement ──────────────── mod_multiline_with_comments.md:4:2
 
 I was parsing a statement, and this token cannot start a statement here.
 

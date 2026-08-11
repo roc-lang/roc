@@ -17,7 +17,7 @@ MISPLACED CARRIAGE RETURN
 Carriage return characters (\r) are not allowed in Roc source code.
 
 
-── ✗ NOT IMPLEMENTED ───────────────────────────────────── fuzz_crash_084.md:1:5
+── ✗ not implemented ───────────────────────────────────── fuzz_crash_084.md:1:5
 
 This feature is not yet implemented: alternatives pattern outside match
 expression.

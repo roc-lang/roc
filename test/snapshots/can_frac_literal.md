@@ -15,7 +15,7 @@ z = 0.5
 INVALID NUMBER - can_frac_literal.md:3:5:3:12
 # PROBLEMS
 
-── ✗ INVALID NUMBER ──────────────────────────────────── can_frac_literal.md:3:5
+── ✗ invalid number ──────────────────────────────────── can_frac_literal.md:3:5
 
 This number literal does not fit in the inferred type.
 

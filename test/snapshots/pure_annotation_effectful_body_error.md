@@ -19,7 +19,7 @@ main! = bad_function("This should fail")
 NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────────── pure_annotation_effectful_body_error.md:7:22
+── ✗ name not in scope ──────────── pure_annotation_effectful_body_error.md:7:22
 
 Nothing is named `line!` in this scope.
 

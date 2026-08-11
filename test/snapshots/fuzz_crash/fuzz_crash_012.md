@@ -17,7 +17,7 @@ UNEXPECTED STATEMENT - fuzz_crash_012.md:1:6:1:16
 UNEXPECTED STATEMENT - fuzz_crash_012.md:1:16:1:17
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -32,7 +32,7 @@ For example:
 
 I found `|` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:2
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -47,7 +47,7 @@ For example:
 
 I found `|` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -62,7 +62,7 @@ For example:
 
 I found `(` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -77,7 +77,7 @@ For example:
 
 I found `|` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:5
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:5
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -92,7 +92,7 @@ For example:
 
 I found `(` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_012.md:1:6
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:6
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -109,7 +109,7 @@ I found `l888888888` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_012.md:1:16
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_012.md:1:16
 
 I was parsing a statement, and this token cannot start a statement here.
 

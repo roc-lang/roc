@@ -13,7 +13,7 @@ Maybe(a) : [Ok(a), Err]
 TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
 
-── ✗ TYPE REDECLARED ────────────────────── type_redeclaration_same_scope.md:3:1
+── ✗ type redeclared ────────────────────── type_redeclaration_same_scope.md:3:1
 
 The type `Maybe` is being redeclared.
 

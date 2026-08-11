@@ -14,7 +14,7 @@ match undefined_scrutinee {
 TYPE MISMATCH - erroneous_scrutinee_pattern_consistency.md:1:1:1:1
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ────────────── erroneous_scrutinee_pattern_consistency.md:1:5
+── ✗ type mismatch ────────────── erroneous_scrutinee_pattern_consistency.md:1:5
 
 The second branch of this `match` does not match the previous ones.
 

@@ -15,7 +15,7 @@ UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_018.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -30,7 +30,7 @@ For example:
 
 I found `0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_018.md:2:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -47,7 +47,7 @@ I found `.R` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
-── ✗ UNDECLARED TYPE ───────────────────────────────────── fuzz_crash_018.md:1:5
+── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
 
 The type `S` is not declared in this scope.
 
@@ -55,7 +55,7 @@ The type `S` is not declared in this scope.
     ^
 
 
-── ● DECLARATION HAS NO VALUE ──────────────────────────── fuzz_crash_018.md:1:3
+── ● declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
 
 This declaration has a type annotation but no implementation.
 

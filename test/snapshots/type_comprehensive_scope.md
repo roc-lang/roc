@@ -50,7 +50,7 @@ TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
 
-── ● BUILTIN TYPE SHADOWED ──────────────────── type_comprehensive_scope.md:10:1
+── ● builtin type shadowed ──────────────────── type_comprehensive_scope.md:10:1
 
 The type `Try` shadows a builtin type.
 
@@ -61,7 +61,7 @@ This may make the builtin type inaccessible in this scope.
 
 The new declaration is in:
 
-── ✗ MUTUALLY RECURSIVE TYPE ALIASES ────────── type_comprehensive_scope.md:13:1
+── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:13:1
 
 The type alias `Tree` and `Node` form a recursive cycle.
 
@@ -78,7 +78,7 @@ And it references Node declared in type_comprehensive_scope.md:16:1:
 Node(a) : { value: a, children: List(Tree(a)) }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-── ✗ MUTUALLY RECURSIVE TYPE ALIASES ────────── type_comprehensive_scope.md:16:1
+── ✗ mutually recursive type aliases ────────── type_comprehensive_scope.md:16:1
 
 The type alias `Node` and `Tree` form a recursive cycle.
 
@@ -95,7 +95,7 @@ And it references Tree declared in type_comprehensive_scope.md:13:1:
 Tree(a) : [Branch(Node(a)), Leaf(a)]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-── ✗ TYPE REDECLARED ────────────────────────── type_comprehensive_scope.md:22:1
+── ✗ type redeclared ────────────────────────── type_comprehensive_scope.md:22:1
 
 The type `Person` is being redeclared.
 
@@ -110,7 +110,7 @@ But Person was already declared in type_comprehensive_scope.md:7:1:
 Person : { name: Str, age: U64 }
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-── ✗ UNDECLARED TYPE ───────────────────────── type_comprehensive_scope.md:25:11
+── ✗ undeclared type ───────────────────────── type_comprehensive_scope.md:25:11
 
 The type `SomeUndeclaredType` is not declared in this scope.
 

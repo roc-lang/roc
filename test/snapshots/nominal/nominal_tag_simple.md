@@ -17,7 +17,7 @@ yellow = Color.Yellow
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
 
-── ✗ INVALID NOMINAL TAG ──────────────────────────── nominal_tag_simple.md:7:10
+── ✗ invalid nominal tag ──────────────────────────── nominal_tag_simple.md:7:10
 
 I'm having trouble with this nominal tag.
 

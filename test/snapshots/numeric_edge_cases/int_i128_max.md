@@ -11,7 +11,7 @@ type=expr
 INVALID NUMBER - int_i128_max.md:1:1:1:40
 # PROBLEMS
 
-── ✗ INVALID NUMBER ──────────────────────────────────────── int_i128_max.md:1:1
+── ✗ invalid number ──────────────────────────────────────── int_i128_max.md:1:1
 
 This number literal does not fit in the inferred type.
 

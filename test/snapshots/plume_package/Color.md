@@ -84,7 +84,7 @@ MISSING METHOD - Color.md:47:26:47:32
 MISSING METHOD - Color.md:48:32:48:38
 # PROBLEMS
 
-── ● UNUSED VARIABLE ───────────────────────────────────────────── Color.md:21:5
+── ● unused variable ───────────────────────────────────────────── Color.md:21:5
 
 Variable `is_char_in_hex_range` is defined here and then never used:
 
@@ -94,7 +94,7 @@ is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or
 If you don't need this variable, prefix it with an underscore like
 `_is_char_in_hex_range` to suppress this warning.
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:41:34
+── ✗ does not exist ───────────────────────────────────────────── Color.md:41:34
 
 `Num.to_str` does not exist.
 
@@ -102,7 +102,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
                              ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:41:52
+── ✗ does not exist ───────────────────────────────────────────── Color.md:41:52
 
 `Num.to_str` does not exist.
 
@@ -110,7 +110,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
                                                ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:41:70
+── ✗ does not exist ───────────────────────────────────────────── Color.md:41:70
 
 `Num.to_str` does not exist.
 
@@ -118,7 +118,7 @@ Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})
                                                                  ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:42:39
+── ✗ does not exist ───────────────────────────────────────────── Color.md:42:39
 
 `Num.to_str` does not exist.
 
@@ -126,7 +126,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
                                   ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:42:57
+── ✗ does not exist ───────────────────────────────────────────── Color.md:42:57
 
 `Num.to_str` does not exist.
 
@@ -134,7 +134,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
                                                     ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:42:75
+── ✗ does not exist ───────────────────────────────────────────── Color.md:42:75
 
 `Num.to_str` does not exist.
 
@@ -142,7 +142,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
                                                                       ^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ───────────────────────────────────────────── Color.md:42:93
+── ✗ does not exist ───────────────────────────────────────────── Color.md:42:93
 
 `Num.to_str` does not exist.
 
@@ -150,7 +150,7 @@ Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str
                                                                                         ^^^^^^^^^^
 
 
-── ✗ MISSING METHOD ───────────────────────────────────────────── Color.md:13:17
+── ✗ missing method ───────────────────────────────────────────── Color.md:13:17
 
 This `to_frac` method is being called on a value whose type doesn't have that
 method.
@@ -165,7 +165,7 @@ The value's type, which does not have a method named `to_frac`, is:
 Hint: For this to work, the type would need to have a method named `to_frac`
 associated with it in the type's declaration.
 
-── ✗ MISSING METHOD ───────────────────────────────────────────── Color.md:26:19
+── ✗ missing method ───────────────────────────────────────────── Color.md:26:19
 
 This `is_char_in_hex_range` method is being called on a value whose type
 doesn't have that method.
@@ -180,7 +180,7 @@ The value's type, which does not have a method named `is_char_in_hex_range`, is:
 Hint: For this to work, the type would need to have a method named
 `is_char_in_hex_range` associated with it in the type's declaration.
 
-── ✗ MISSING METHOD ───────────────────────────────────────────── Color.md:53:12
+── ✗ missing method ───────────────────────────────────────────── Color.md:53:12
 
 This `is_named_color` method is being called on a value whose type doesn't have
 that method.
@@ -195,7 +195,7 @@ The value's type, which does not have a method named `is_named_color`, is:
 Hint: For this to work, the type would need to have a method named
 `is_named_color` associated with it in the type's declaration.
 
-── ✗ MISSING METHOD ───────────────────────────────────────────── Color.md:47:26
+── ✗ missing method ───────────────────────────────────────────── Color.md:47:26
 
 This `to_str` method is being called on a value whose type doesn't have that
 method.
@@ -210,7 +210,7 @@ The value's type, which does not have a method named `to_str`, is:
 Hint: For this to work, the type would need to have a method named `to_str`
 associated with it in the type's declaration.
 
-── ✗ MISSING METHOD ───────────────────────────────────────────── Color.md:48:32
+── ✗ missing method ───────────────────────────────────────────── Color.md:48:32
 
 This `to_str` method is being called on a value whose type doesn't have that
 method.

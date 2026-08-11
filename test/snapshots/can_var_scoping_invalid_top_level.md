@@ -12,7 +12,7 @@ var topLevelVar_ = 0
 VAR OUTSIDE BODY - can_var_scoping_invalid_top_level.md:2:1:2:4
 # PROBLEMS
 
-── ✗ VAR OUTSIDE BODY ───────────────── can_var_scoping_invalid_top_level.md:2:1
+── ✗ var outside body ───────────────── can_var_scoping_invalid_top_level.md:2:1
 
 I was parsing a statement, and `var` appeared outside a function or block body.
 

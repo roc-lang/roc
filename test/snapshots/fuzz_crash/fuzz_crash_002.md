@@ -23,7 +23,7 @@ MALFORMED TYPE - fuzz_crash_002.md:1:6:1:7
 DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
 # PROBLEMS
 
-── ✗ UNEXPECTED TYPE SYNTAX ────────────────────────────── fuzz_crash_002.md:1:6
+── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_002.md:1:6
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -39,7 +39,7 @@ For example:
 I found `;` here.
 This token is malformed, so it cannot be used as ordinary Roc syntax.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_002.md:1:7
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:7
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -54,7 +54,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_002.md:1:9
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_002.md:1:9
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -69,7 +69,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:11
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:11
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -84,7 +84,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:13
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:13
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -99,7 +99,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:15
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:15
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -114,7 +114,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:17
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:17
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -129,7 +129,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:19
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:19
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -144,7 +144,7 @@ For example:
 
 I found `::` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:21
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:21
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -161,7 +161,7 @@ I found `le` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:23
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -176,7 +176,7 @@ For example:
 
 I found `[` here.
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_002.md:1:24
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_002.md:1:24
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -191,7 +191,7 @@ For example:
 
 I found `%` here.
 
-── ✗ MALFORMED TYPE ────────────────────────────────────── fuzz_crash_002.md:1:6
+── ✗ malformed type ────────────────────────────────────── fuzz_crash_002.md:1:6
 
 This type annotation is malformed or contains invalid syntax.
 
@@ -199,7 +199,7 @@ modu:;::::::::::::::le[%
      ^
 
 
-── ● DECLARATION HAS NO VALUE ──────────────────────────── fuzz_crash_002.md:1:1
+── ● declaration has no value ──────────────────────────── fuzz_crash_002.md:1:1
 
 This declaration has a type annotation but no implementation.
 

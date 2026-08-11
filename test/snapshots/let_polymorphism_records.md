@@ -63,7 +63,7 @@ TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────── let_polymorphism_records.md:48:6
+── ✗ type mismatch ──────────────────────────── let_polymorphism_records.md:48:6
 
 I'm having trouble with this bool operation.
 
@@ -76,7 +76,7 @@ Both sides of `and` must be `Bool` values, but the right side is:
 
 Note: Roc does not have "truthiness". You must convert values to bools yourself.
 
-── ✗ TYPE MISMATCH ───────────────────────────── let_polymorphism_records.md:8:7
+── ✗ type mismatch ───────────────────────────── let_polymorphism_records.md:8:7
 
 This string literal is being used where a non-string type is needed.
 

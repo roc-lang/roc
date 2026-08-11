@@ -11,7 +11,7 @@ Person : { $name : Str }
 INVALID RECORD FIELD NAME - error_dollar_prefix_type_field.md:1:12:1:17
 # PROBLEMS
 
-── ✗ INVALID RECORD FIELD NAME ────────── error_dollar_prefix_type_field.md:1:12
+── ✗ invalid record field name ────────── error_dollar_prefix_type_field.md:1:12
 
 Record field names cannot start with a dollar sign.
 

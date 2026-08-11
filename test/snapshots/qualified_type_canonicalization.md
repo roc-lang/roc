@@ -69,7 +69,7 @@ DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 # PROBLEMS
 
-── ● DUPLICATE DEFINITION ─────────────── qualified_type_canonicalization.md:1:1
+── ● duplicate definition ─────────────── qualified_type_canonicalization.md:1:1
 
 The name `Try` is being redeclared here:
 
@@ -82,7 +82,7 @@ In this scope, `Try` was already defined in qualified_type_canonicalization.md:1
 import Basics.Try
 ^
 
-── ✗ MOD NOT FOUND ─────────────────── qualified_type_canonicalization.md:1:1
+── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:1:1
 
 The mod `Basics` was not found in this Roc project.
 
@@ -90,7 +90,7 @@ import Basics.Try
 ^^^^^^^^^^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ─────────────────── qualified_type_canonicalization.md:2:1
+── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:2:1
 
 The mod `Color` was not found in this Roc project.
 
@@ -98,7 +98,7 @@ import Color
 ^^^^^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ─────────────────── qualified_type_canonicalization.md:3:1
+── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:3:1
 
 The mod `ModA/ModB` was not found in this Roc project.
 
@@ -106,7 +106,7 @@ import ModA/ModB exposing [TypeC]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ─────────────────── qualified_type_canonicalization.md:4:1
+── ✗ mod not found ─────────────────── qualified_type_canonicalization.md:4:1
 
 The mod `ExternalMod` was not found in this Roc project.
 
@@ -114,7 +114,7 @@ import ExternalMod as ExtMod
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ────────────────── qualified_type_canonicalization.md:7:24
+── ✗ mod not found ────────────────── qualified_type_canonicalization.md:7:24
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -122,7 +122,7 @@ simpleQualified : Color.RGB
                        ^^^^
 
 
-── ✗ MOD NOT FOUND ────────────────── qualified_type_canonicalization.md:8:19
+── ✗ mod not found ────────────────── qualified_type_canonicalization.md:8:19
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -130,7 +130,7 @@ simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })
                   ^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:11:26
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:11:26
 
 This `DataType` type is declared to be in `ExternalMod`, which does not exist.
 
@@ -138,7 +138,7 @@ aliasedQualified : ExtMod.DataType
                          ^^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:12:26
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:12:26
 
 This `DataType` type is declared to be in `ExternalMod`, which does not exist.
 
@@ -146,7 +146,7 @@ aliasedQualified = ExtMod.DataType.Default
                          ^^^^^^^^^
 
 
-── ✗ MOD NOT IMPORTED ────────────── qualified_type_canonicalization.md:15:23
+── ✗ mod not imported ────────────── qualified_type_canonicalization.md:15:23
 
 There is no mod with the name `ModA.ModB` imported into this Roc file.
 
@@ -154,7 +154,7 @@ multiLevelQualified : ModA.ModB.TypeC
                       ^^^^^^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ─────────────────── qualified_type_canonicalization.md:16:23
+── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:16:23
 
 `TypeC.new` does not exist.
 
@@ -162,7 +162,7 @@ multiLevelQualified = TypeC.new
                       ^^^^^^^^^
 
 
-── ✗ MISSING NESTED TYPE ────────────── qualified_type_canonicalization.md:19:14
+── ✗ missing nested type ────────────── qualified_type_canonicalization.md:19:14
 
 `Try` is in scope, but it doesn't have a nested type that's also named `Try`.
 
@@ -170,7 +170,7 @@ resultType : Try.Try(I32, Str)
              ^^^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:23:23
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:23:23
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -178,7 +178,7 @@ getColor : {} -> Color.RGB
                       ^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:24:16
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:24:16
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -186,7 +186,7 @@ getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })
                ^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:27:21
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:27:21
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -194,7 +194,7 @@ processColor : Color.RGB -> Str
                     ^^^^
 
 
-── ● UNUSED VARIABLE ────────────────── qualified_type_canonicalization.md:28:17
+── ● unused variable ────────────────── qualified_type_canonicalization.md:28:17
 
 Variable `color` is defined here and then never used:
 
@@ -204,7 +204,7 @@ processColor = |color|
 If you don't need this variable, prefix it with an underscore like `_color` to
 suppress this warning.
 
-── ✗ MISSING NESTED TYPE ────────────── qualified_type_canonicalization.md:32:13
+── ✗ missing nested type ────────────── qualified_type_canonicalization.md:32:13
 
 `Try` is in scope, but it doesn't have a nested type that's also named `Try`.
 
@@ -212,7 +212,7 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
             ^^^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:32:26
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:32:26
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -220,7 +220,7 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
                          ^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── qualified_type_canonicalization.md:32:38
+── ✗ mod not found ───────────────── qualified_type_canonicalization.md:32:38
 
 This `Error` type is declared to be in `ExternalMod`, which does not exist.
 
@@ -228,7 +228,7 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
                                      ^^^^^^
 
 
-── ✗ MOD NOT IMPORTED ────────────── qualified_type_canonicalization.md:32:49
+── ✗ mod not imported ────────────── qualified_type_canonicalization.md:32:49
 
 There is no mod with the name `ModA.ModB` imported into this Roc file.
 
@@ -236,7 +236,7 @@ transform : Try.Try(Color.RGB, ExtMod.Error) -> ModA.ModB.TypeC
                                                 ^^^^^^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ─────────────────── qualified_type_canonicalization.md:35:24
+── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:35:24
 
 `TypeC.fromColor` does not exist.
 
@@ -244,7 +244,7 @@ Try.Ok(rgb) => TypeC.fromColor(rgb)
                ^^^^^^^^^^^^^^^
 
 
-── ✗ DOES NOT EXIST ─────────────────── qualified_type_canonicalization.md:36:25
+── ✗ does not exist ─────────────────── qualified_type_canonicalization.md:36:25
 
 `TypeC.default` does not exist.
 
@@ -252,7 +252,7 @@ Try.Err(err) => TypeC.default
                 ^^^^^^^^^^^^^
 
 
-── ● UNUSED VARIABLE ────────────────── qualified_type_canonicalization.md:36:17
+── ● unused variable ────────────────── qualified_type_canonicalization.md:36:17
 
 Variable `err` is defined here and then never used:
 

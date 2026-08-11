@@ -14,7 +14,7 @@ match list {
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
 
-── ✗ POLYMORPHIC VALUE ───────────────────────── list_destructure_scoping.md:1:1
+── ✗ polymorphic value ───────────────────────── list_destructure_scoping.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

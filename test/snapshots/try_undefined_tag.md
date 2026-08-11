@@ -13,7 +13,7 @@ TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
 TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 # PROBLEMS
 
-── ✗ TRY OPERATOR OUTSIDE FUNCTION ──────────────────── try_undefined_tag.md:1:1
+── ✗ try operator outside function ──────────────────── try_undefined_tag.md:1:1
 
 The `?` operator can only be used inside function bodies because it can cause
 an early return.
@@ -22,7 +22,7 @@ A?
 ^^
 
 
-── ✗ TYPE MISMATCH ──────────────────────────────────── try_undefined_tag.md:1:1
+── ✗ type mismatch ──────────────────────────────────── try_undefined_tag.md:1:1
 
 The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and
 `Err` tags), but I found.

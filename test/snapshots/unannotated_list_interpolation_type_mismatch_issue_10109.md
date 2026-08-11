@@ -16,7 +16,7 @@ expect f(["a"]) == "x"
 TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12:3:17
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ───── unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
+── ✗ type mismatch ───── unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
 
 This expression is used in an unexpected way.
 

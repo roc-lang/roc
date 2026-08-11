@@ -16,7 +16,7 @@ match result {
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
 
-── ✗ POLYMORPHIC VALUE ─────────────────────────────────── branch_scoping.md:1:1
+── ✗ polymorphic value ─────────────────────────────────── branch_scoping.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

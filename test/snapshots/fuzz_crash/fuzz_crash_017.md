@@ -13,7 +13,7 @@ EXPECTED INTERPOLATION END - fuzz_crash_017.md:2:7:2:8
 UNRECOGNIZED SYNTAX - fuzz_crash_017.md:2:7:2:20
 # PROBLEMS
 
-── ✗ EXPECTED INTERPOLATION END ────────────────────────── fuzz_crash_017.md:2:7
+── ✗ expected interpolation end ────────────────────────── fuzz_crash_017.md:2:7
 
 I was parsing a string interpolation, and I expected `}` before returning to
 the string.
@@ -29,7 +29,7 @@ For example:
 
 I found `"` here.
 
-── ✗ UNRECOGNIZED SYNTAX ───────────────────────────────── fuzz_crash_017.md:2:7
+── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_017.md:2:7
 
 I don't recognize this syntax.
 

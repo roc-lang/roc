@@ -19,7 +19,7 @@ Foo := [Whatever].{
 DECLARATION HAS NO VALUE - canon_revamp_anno_only_between_pairs.md:5:5:5:17
 # PROBLEMS
 
-── ● DECLARATION HAS NO VALUE ────── canon_revamp_anno_only_between_pairs.md:5:5
+── ● declaration has no value ────── canon_revamp_anno_only_between_pairs.md:5:5
 
 This declaration has a type annotation but no implementation.
 

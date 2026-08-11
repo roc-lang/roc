@@ -12,7 +12,7 @@ e={{e:\\
 NOT IMPLEMENTED - fuzz_crash_107.md:1:4:2:4
 # PROBLEMS
 
-── ✗ NOT IMPLEMENTED ───────────────────────────────────── fuzz_crash_107.md:1:4
+── ✗ not implemented ───────────────────────────────────── fuzz_crash_107.md:1:4
 
 This feature is not yet implemented: single-field record builder (minimum 2
 fields required).

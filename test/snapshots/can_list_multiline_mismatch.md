@@ -15,7 +15,7 @@ type=expr
 TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ────────────────────────── can_list_multiline_mismatch.md:3:5
+── ✗ type mismatch ────────────────────────── can_list_multiline_mismatch.md:3:5
 
 This string literal is being used where a non-string type is needed.
 

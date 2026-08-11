@@ -58,7 +58,7 @@ MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 
-── ✗ MISSING METHOD ─────────────────────────── multiline_string_complex.md:40:5
+── ✗ missing method ─────────────────────────── multiline_string_complex.md:40:5
 
 This `not` method is being called on a value whose type doesn't have that
 method.
@@ -73,7 +73,7 @@ The value's type, which does not have a method named `not`, is:
 Hint: For this to work, the type would need to have a method named `not`
 associated with it in the type's declaration.
 
-── ✗ TYPE MISMATCH ──────────────────────────── multiline_string_complex.md:37:3
+── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
 
 The `minus` method on `Dec` has an incompatible type.
 

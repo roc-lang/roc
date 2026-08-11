@@ -17,7 +17,7 @@ AMBIGUOUS FUNCTION TYPE - type_function_basic.md:3:26:3:28
 UNEXPECTED STATEMENT - type_function_basic.md:3:29:3:31
 # PROBLEMS
 
-── ✗ AMBIGUOUS FUNCTION TYPE ─────────────────────── type_function_basic.md:3:26
+── ✗ ambiguous function type ─────────────────────── type_function_basic.md:3:26
 
 I was parsing a function type, and multiple arrows need parentheses.
 
@@ -31,7 +31,7 @@ For example:
     a -> (b -> c)
     (a -> b) -> c
 
-── ✗ UNEXPECTED STATEMENT ────────────────────────── type_function_basic.md:3:29
+── ✗ unexpected statement ────────────────────────── type_function_basic.md:3:29
 
 I was parsing a statement, and this token cannot start a statement here.
 

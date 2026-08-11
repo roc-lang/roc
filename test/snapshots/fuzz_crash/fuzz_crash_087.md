@@ -11,7 +11,7 @@ a=(0->b .c())
 NAME NOT IN SCOPE - fuzz_crash_087.md:1:7:1:8
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ─────────────────────────────────── fuzz_crash_087.md:1:7
+── ✗ name not in scope ─────────────────────────────────── fuzz_crash_087.md:1:7
 
 Nothing is named `b` in this scope.
 

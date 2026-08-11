@@ -11,7 +11,7 @@ add2 = x +      2
 NAME NOT IN SCOPE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ────────────────────────────── add_var_with_spaces.md:1:8
+── ✗ name not in scope ────────────────────────────── add_var_with_spaces.md:1:8
 
 Nothing is named `x` in this scope.
 

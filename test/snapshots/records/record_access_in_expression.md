@@ -11,7 +11,7 @@ person.age + 5
 POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 # PROBLEMS
 
-── ✗ POLYMORPHIC VALUE ────────────────────── record_access_in_expression.md:1:1
+── ✗ polymorphic value ────────────────────── record_access_in_expression.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

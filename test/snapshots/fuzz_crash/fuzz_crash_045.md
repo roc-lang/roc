@@ -11,7 +11,7 @@ platform""requires{}{}exposes[]packages{}provides[
 EXPECTED OPENING BRACE - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
 
-── ✗ EXPECTED OPENING BRACE ───────────────────────────── fuzz_crash_045.md:1:50
+── ✗ expected opening brace ───────────────────────────── fuzz_crash_045.md:1:50
 
 I was parsing a `provides` section, and I expected an opening `{`.
 

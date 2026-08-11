@@ -18,7 +18,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────── generalize_alias_assoc_fn_record.md:8:42
+── ✗ type mismatch ──────────────────── generalize_alias_assoc_fn_record.md:8:42
 
 This string literal is being used where a non-string type is needed.
 

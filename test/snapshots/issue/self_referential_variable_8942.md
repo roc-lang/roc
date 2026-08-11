@@ -11,7 +11,7 @@ a = a
 INVALID ASSIGNMENT TO ITSELF - self_referential_variable_8942.md:1:5:1:6
 # PROBLEMS
 
-── ✗ INVALID ASSIGNMENT TO ITSELF ──────── self_referential_variable_8942.md:1:5
+── ✗ invalid assignment to itself ──────── self_referential_variable_8942.md:1:5
 
 The value `a` is assigned to itself, which would cause an infinite loop at
 runtime.

@@ -11,7 +11,7 @@ foo = asd.0
 NAME NOT IN SCOPE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────────────────────────── expr_no_space_dot_int.md:1:7
+── ✗ name not in scope ──────────────────────────── expr_no_space_dot_int.md:1:7
 
 Nothing is named `asd` in this scope.
 

@@ -13,7 +13,7 @@ main = MyJson.decode
 NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────────────────────────── can_import_with_alias.md:3:8
+── ✗ name not in scope ──────────────────────────── can_import_with_alias.md:3:8
 
 Nothing is named `decode` in this scope.
 

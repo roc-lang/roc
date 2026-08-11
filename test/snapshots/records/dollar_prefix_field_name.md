@@ -11,7 +11,7 @@ type=expr
 INVALID RECORD FIELD NAME - dollar_prefix_field_name.md:1:3:1:9
 # PROBLEMS
 
-── ✗ INVALID RECORD FIELD NAME ───────────────── dollar_prefix_field_name.md:1:3
+── ✗ invalid record field name ───────────────── dollar_prefix_field_name.md:1:3
 
 Record field names cannot start with a dollar sign.
 

@@ -18,7 +18,7 @@ MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
 
-── ● UNCONDITIONAL CONDITION ─────────────────────────── literal_patterns.md:1:7
+── ● unconditional condition ─────────────────────────── literal_patterns.md:1:7
 
 This match value is known at compile time, so this match will always inspect
 the same value.
@@ -27,7 +27,7 @@ match Answer {
       ^^^^^^
 
 
-── ✗ MISSING METHOD ──────────────────────────────────── literal_patterns.md:5:5
+── ✗ missing method ──────────────────────────────────── literal_patterns.md:5:5
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.
@@ -39,7 +39,7 @@ The value's type, which does not have a method named `from_numeral`, is:
 
     [Answer, Greeting, Zero, ..]
 
-── ✗ TYPE MISMATCH ──────────────────────────────────── literal_patterns.md:3:13
+── ✗ type mismatch ──────────────────────────────────── literal_patterns.md:3:13
 
 This string literal is being used where a non-string type is needed.
 

@@ -16,7 +16,7 @@ DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────────────────── pattern_destructure_with_rest.md:1:7
+── ✗ name not in scope ──────────────────── pattern_destructure_with_rest.md:1:7
 
 Nothing is named `person` in this scope.
 
@@ -25,7 +25,7 @@ match person {
 
 Is it misspelled, or is there an import missing?
 
-── ✗ DOES NOT EXIST ────────────────────── pattern_destructure_with_rest.md:2:33
+── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:33
 
 `Str.len` does not exist.
 
@@ -34,7 +34,7 @@ Is it misspelled, or is there an import missing?
 
 `Str` is in scope, but it has no associated `len`.
 
-── ✗ DOES NOT EXIST ────────────────────── pattern_destructure_with_rest.md:2:55
+── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:55
 
 `Str.len` does not exist.
 

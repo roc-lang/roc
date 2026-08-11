@@ -11,7 +11,7 @@ type=expr
 TYPE MISMATCH - list_type_err.md:1:8:1:15
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────────────────── list_type_err.md:1:8
+── ✗ type mismatch ──────────────────────────────────────── list_type_err.md:1:8
 
 This string literal is being used where a non-string type is needed.
 

@@ -25,7 +25,7 @@ good2 = Parent2.Nested.val
 DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
 # PROBLEMS
 
-── ✗ DOES NOT EXIST ───────── canon_revamp_nested_short_alias_not_mod.md:13:7
+── ✗ does not exist ───────── canon_revamp_nested_short_alias_not_mod.md:13:7
 
 `Nested.val` does not exist.
 

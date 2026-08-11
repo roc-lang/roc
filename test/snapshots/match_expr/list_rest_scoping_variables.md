@@ -19,7 +19,7 @@ OLD LIST REST PATTERN - list_rest_scoping_variables.md:4:6:4:13
 OLD LIST REST PATTERN - list_rest_scoping_variables.md:5:13:5:20
 # PROBLEMS
 
-── ✗ OLD LIST REST PATTERN ────────────────── list_rest_scoping_variables.md:2:6
+── ✗ old list rest pattern ────────────────── list_rest_scoping_variables.md:2:6
 
 I was parsing a list pattern, and this uses the old rest syntax.
 
@@ -32,7 +32,7 @@ present it must come after `as`.
 For example:
     [first, .. as rest]
 
-── ✗ OLD LIST REST PATTERN ───────────────── list_rest_scoping_variables.md:3:13
+── ✗ old list rest pattern ───────────────── list_rest_scoping_variables.md:3:13
 
 I was parsing a list pattern, and this uses the old rest syntax.
 
@@ -45,7 +45,7 @@ present it must come after `as`.
 For example:
     [first, .. as rest]
 
-── ✗ OLD LIST REST PATTERN ────────────────── list_rest_scoping_variables.md:4:6
+── ✗ old list rest pattern ────────────────── list_rest_scoping_variables.md:4:6
 
 I was parsing a list pattern, and this uses the old rest syntax.
 
@@ -58,7 +58,7 @@ present it must come after `as`.
 For example:
     [first, .. as rest]
 
-── ✗ OLD LIST REST PATTERN ───────────────── list_rest_scoping_variables.md:5:13
+── ✗ old list rest pattern ───────────────── list_rest_scoping_variables.md:5:13
 
 I was parsing a list pattern, and this uses the old rest syntax.
 

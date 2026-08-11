@@ -11,7 +11,7 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - negative_single_quote.md:1:1:1:2
 # PROBLEMS
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ───────────────── negative_single_quote.md:1:1
+── ✗ unexpected expression syntax ───────────────── negative_single_quote.md:1:1
 
 I was parsing an expression, and this token cannot start an expression here.
 

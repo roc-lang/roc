@@ -16,7 +16,7 @@ main! = |_| processNested([])
 UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
 
-── ✗ UNDECLARED TYPE ─────────────────────────────────── type_app_nested.md:3:31
+── ✗ undeclared type ─────────────────────────────────── type_app_nested.md:3:31
 
 The type `Err` is not declared in this scope.
 

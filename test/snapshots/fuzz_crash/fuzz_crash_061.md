@@ -15,7 +15,7 @@ EXPECTED CLOSING BRACE - fuzz_crash_061.md:1:1:1:9
 EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
 
-── ✗ UNCLOSED STRING ───────────────────────────────────── fuzz_crash_061.md:1:9
+── ✗ unclosed string ───────────────────────────────────── fuzz_crash_061.md:1:9
 
 This string is missing a closing quote.
 
@@ -23,7 +23,7 @@ platform"
         ^
 
 
-── ✗ UNEXPECTED TYPE SYNTAX ───────────────────────────── fuzz_crash_061.md:2:14
+── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_061.md:2:14
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -38,7 +38,7 @@ For example:
 
 I found `0` here.
 
-── ✗ EXPECTED CLOSING BRACE ────────────────────────────── fuzz_crash_061.md:1:1
+── ✗ expected closing brace ────────────────────────────── fuzz_crash_061.md:1:1
 
 I was parsing a `requires` section, and I expected a closing `}`.
 
@@ -53,7 +53,7 @@ For example:
 I found `platform` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ EXPECTED CLOSING BRACKET ─────────────────────────── fuzz_crash_061.md:2:16
+── ✗ expected closing bracket ─────────────────────────── fuzz_crash_061.md:2:16
 
 I was parsing an import exposing clause, and I expected a closing `]`.
 

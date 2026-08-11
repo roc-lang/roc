@@ -34,7 +34,7 @@ TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────────────────── annotations.md:16:28
+── ✗ type mismatch ──────────────────────────────────────── annotations.md:16:28
 
 This string literal is being used where a non-string type is needed.
 
@@ -45,7 +45,7 @@ The type was determined to be:
 
     U8
 
-── ✗ TYPE MISMATCH ──────────────────────────────────────── annotations.md:19:35
+── ✗ type mismatch ──────────────────────────────────────── annotations.md:19:35
 
 This string literal is being used where a non-string type is needed.
 
@@ -56,7 +56,7 @@ The type was determined to be:
 
     U64
 
-── ✗ INVALID NOMINAL TAG ────────────────────────────────── annotations.md:22:24
+── ✗ invalid nominal tag ────────────────────────────────── annotations.md:22:24
 
 I'm having trouble with this nominal tag.
 

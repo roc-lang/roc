@@ -46,7 +46,7 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
 
-── ● DUPLICATE DEFINITION ─────────────── can_import_unresolved_qualified.md:1:1
+── ● duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
 
 The name `Json` is being redeclared here:
 
@@ -59,7 +59,7 @@ In this scope, `Json` was already defined in can_import_unresolved_qualified.md:
 import json.Json
 ^
 
-── ✗ NAME NOT IN SCOPE ────────────────── can_import_unresolved_qualified.md:5:8
+── ✗ name not in scope ────────────────── can_import_unresolved_qualified.md:5:8
 
 Nothing is named `method` in this scope.
 
@@ -68,7 +68,7 @@ main = Json.NonExistent.method
 
 Is it misspelled, or is there an import missing?
 
-── ✗ MOD NOT FOUND ────────────────── can_import_unresolved_qualified.md:8:17
+── ✗ mod not found ────────────────── can_import_unresolved_qualified.md:8:17
 
 This `InvalidType` type is declared to be in `json.Json`, which does not exist.
 
@@ -76,7 +76,7 @@ parseData : Json.InvalidType -> Str
                 ^^^^^^^^^^^^
 
 
-── ✗ NAME NOT IN SCOPE ───────────────── can_import_unresolved_qualified.md:9:20
+── ✗ name not in scope ───────────────── can_import_unresolved_qualified.md:9:20
 
 Nothing is named `stringify` in this scope.
 
@@ -85,7 +85,7 @@ parseData = |data| Json.stringify(data)
 
 Is it misspelled, or is there an import missing?
 
-── ✗ MOD NOT FOUND ───────────────── can_import_unresolved_qualified.md:12:29
+── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:29
 
 This `Server.Request` type is declared to be in `http.Client`, which does not
 exist.
@@ -94,7 +94,7 @@ processRequest : Http.Server.Request -> Http.Server.Response
                             ^^^^^^^^
 
 
-── ✗ MOD NOT FOUND ───────────────── can_import_unresolved_qualified.md:12:52
+── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:52
 
 This `Server.Response` type is declared to be in `http.Client`, which does not
 exist.
@@ -103,7 +103,7 @@ processRequest : Http.Server.Request -> Http.Server.Response
                                                    ^^^^^^^^^
 
 
-── ✗ NAME NOT IN SCOPE ──────────────── can_import_unresolved_qualified.md:13:24
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:13:24
 
 Nothing is named `defaultResponse` in this scope.
 
@@ -112,7 +112,7 @@ processRequest = |req| Http.Server.defaultResponse
 
 Is it misspelled, or is there an import missing?
 
-── ● UNUSED VARIABLE ────────────────── can_import_unresolved_qualified.md:13:19
+── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
 
 Variable `req` is defined here and then never used:
 
@@ -122,7 +122,7 @@ processRequest = |req| Http.Server.defaultResponse
 If you don't need this variable, prefix it with an underscore like `_req` to
 suppress this warning.
 
-── ✗ NAME NOT IN SCOPE ──────────────── can_import_unresolved_qualified.md:16:10
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:16:10
 
 Nothing is named `prase` in this scope.
 
@@ -131,7 +131,7 @@ result = Json.prase("test")
 
 Is it misspelled, or is there an import missing?
 
-── ✗ DOES NOT EXIST ─────────────────── can_import_unresolved_qualified.md:19:10
+── ✗ does not exist ─────────────────── can_import_unresolved_qualified.md:19:10
 
 `Unknown.Mod.config` does not exist.
 
@@ -139,7 +139,7 @@ config = Unknown.Mod.config
          ^^^^^^^^^^^^^^^^^^
 
 
-── ✗ NAME NOT IN SCOPE ──────────────── can_import_unresolved_qualified.md:22:10
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:22:10
 
 Nothing is named `invalidMethod` in this scope.
 
@@ -148,7 +148,7 @@ client = Http.invalidMethod
 
 Is it misspelled, or is there an import missing?
 
-── ✗ NAME NOT IN SCOPE ──────────────── can_import_unresolved_qualified.md:25:10
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:25:10
 
 Nothing is named `create` in this scope.
 

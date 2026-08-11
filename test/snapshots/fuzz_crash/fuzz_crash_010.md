@@ -24,7 +24,7 @@ ASCII CONTROL CHARACTER
 ASCII control characters are not allowed in Roc source code.
 
 
-── ✗ UNCLOSED STRING ───────────────────────────────────── fuzz_crash_010.md:5:5
+── ✗ unclosed string ───────────────────────────────────── fuzz_crash_010.md:5:5
 
 This string is missing a closing quote.
 
@@ -32,7 +32,7 @@ This string is missing a closing quote.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ TYPE APPLICATION NEEDS PARENTHESES ────────────────── fuzz_crash_010.md:1:2
+── ✗ type application needs parentheses ────────────────── fuzz_crash_010.md:1:2
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.
@@ -48,7 +48,7 @@ For example:
 
 I found `{` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_010.md:1:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -65,7 +65,7 @@ I found `o` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_010.md:1:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -81,7 +81,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_010.md:2:6
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:2:6
 
 I was parsing a statement, and this token cannot start a statement here.
 

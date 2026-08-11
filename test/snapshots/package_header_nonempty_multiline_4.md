@@ -19,7 +19,7 @@ MOD NOT FOUND - package_header_nonempty_multiline_4.md:4:3:4:11
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_4.md:3:3:3:12
 # PROBLEMS
 
-── ✗ MOD NOT FOUND ─────────────── package_header_nonempty_multiline_4.md:4:3
+── ✗ mod not found ─────────────── package_header_nonempty_multiline_4.md:4:3
 
 The mod `SomeType` was not found in this Roc project.
 
@@ -27,7 +27,7 @@ SomeType,
 ^^^^^^^^
 
 
-── ✗ EXPOSED BUT NOT DEFINED ──────── package_header_nonempty_multiline_4.md:3:3
+── ✗ exposed but not defined ──────── package_header_nonempty_multiline_4.md:3:3
 
 The mod header says that `something` is exposed, but it is not defined
 anywhere in this mod.

@@ -13,7 +13,7 @@ QualSelf := [].{
 INVALID ASSIGNMENT TO ITSELF - assoc_value_self_reference_qualified.md:2:16:2:33
 # PROBLEMS
 
-── ✗ INVALID ASSIGNMENT TO ITSELF ─ assoc_value_self_reference_qualified.md:2:16
+── ✗ invalid assignment to itself ─ assoc_value_self_reference_qualified.md:2:16
 
 The value `QualSelf.with_uri` is assigned to itself, which would cause an
 infinite loop at runtime.

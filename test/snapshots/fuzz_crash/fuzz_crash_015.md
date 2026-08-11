@@ -24,7 +24,7 @@ LEADING ZERO
 Numbers cannot have leading zeros.
 
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -39,7 +39,7 @@ For example:
 
 I found `0o0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:1:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -54,7 +54,7 @@ For example:
 
 I found `.0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:2:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -69,7 +69,7 @@ For example:
 
 I found `0_0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:3:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -84,7 +84,7 @@ For example:
 
 I found `0u8` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:3:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -99,7 +99,7 @@ For example:
 
 I found `.0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_015.md:4:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:4:1
 
 I was parsing a statement, and this token cannot start a statement here.
 

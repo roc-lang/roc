@@ -18,7 +18,7 @@ UNDECLARED TYPE - fuzz_hang_003.md:1:3:1:4
 UNDECLARED TYPE - fuzz_hang_003.md:3:3:3:4
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ───────────────────────────────── fuzz_hang_003.md:4:4
+── ✗ unexpected statement ───────────────────────────────── fuzz_hang_003.md:4:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -33,7 +33,7 @@ For example:
 
 I found `.70000c` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_hang_003.md:4:11
+── ✗ unexpected statement ──────────────────────────────── fuzz_hang_003.md:4:11
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -48,7 +48,7 @@ For example:
 
 I found `:` here.
 
-── ✗ UNDECLARED TYPE ────────────────────────────────────── fuzz_hang_003.md:1:3
+── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:1:3
 
 The type `F` is not declared in this scope.
 
@@ -56,7 +56,7 @@ a:F
   ^
 
 
-── ✗ UNDECLARED TYPE ────────────────────────────────────── fuzz_hang_003.md:3:3
+── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:3:3
 
 The type `F` is not declared in this scope.
 

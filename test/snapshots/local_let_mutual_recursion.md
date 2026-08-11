@@ -16,7 +16,7 @@ canonicalize_diagnostics=true
 MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 # PROBLEMS
 
-── ✗ MUTUALLY RECURSIVE LOCAL DEFINITIONS ─── local_let_mutual_recursion.md:2:46
+── ✗ mutually recursive local definitions ─── local_let_mutual_recursion.md:2:46
 
 The local definitions `is_even` and `is_odd` are mutually recursive, which
 isn't supported for local definitions.

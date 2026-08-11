@@ -15,7 +15,7 @@ INVALID ASSIGNMENT TO ITSELF - recursion_infinite_self.md:4:9:4:10
 INVALID RECURSIVE TYPE - recursion_infinite_self.md:1:1:1:14
 # PROBLEMS
 
-── ✗ INVALID ASSIGNMENT TO ITSELF ─────────────── recursion_infinite_self.md:4:9
+── ✗ invalid assignment to itself ─────────────── recursion_infinite_self.md:4:9
 
 The value `t` is assigned to itself, which would cause an infinite loop at
 runtime.
@@ -27,7 +27,7 @@ Only functions can reference themselves (for recursion). For non-function
 values, the right-hand side must be fully computable without referring to the
 value being assigned.
 
-── ✗ INVALID RECURSIVE TYPE ───────────────────── recursion_infinite_self.md:1:1
+── ✗ invalid recursive type ───────────────────── recursion_infinite_self.md:1:1
 
 The nominal type T refers to itself in a way that would make it infinite.
 

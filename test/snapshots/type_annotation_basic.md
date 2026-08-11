@@ -37,7 +37,7 @@ main! = |_| {
 UNUSED VARIABLE - type_annotation_basic.md:21:5:21:9
 # PROBLEMS
 
-── ● UNUSED VARIABLE ───────────────────────────── type_annotation_basic.md:21:5
+── ● unused variable ───────────────────────────── type_annotation_basic.md:21:5
 
 Variable `pair` is defined here and then never used:
 

@@ -14,7 +14,7 @@ match (value, other) {
 POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
 
-── ✗ POLYMORPHIC VALUE ─────────────────────────────── variable_shadowing.md:1:1
+── ✗ polymorphic value ─────────────────────────────── variable_shadowing.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

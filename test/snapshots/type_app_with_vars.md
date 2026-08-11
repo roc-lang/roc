@@ -16,7 +16,7 @@ main! = |_| mapList([1,2,3,4,5])
 TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
 
-── ✗ TOO FEW ARGS ─────────────────────────────────── type_app_with_vars.md:6:13
+── ✗ too few args ─────────────────────────────────── type_app_with_vars.md:6:13
 
 The `mapList` function expects 2 arguments, but it got 1 instead.
 

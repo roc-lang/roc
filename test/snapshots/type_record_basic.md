@@ -16,7 +16,7 @@ main! = |_| getName({namee: "luke", age:21})
 TYPE MISMATCH - type_record_basic.md:6:13:6:13
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ─────────────────────────────────── type_record_basic.md:6:21
+── ✗ type mismatch ─────────────────────────────────── type_record_basic.md:6:21
 
 The first argument being passed to this function has the wrong type.
 

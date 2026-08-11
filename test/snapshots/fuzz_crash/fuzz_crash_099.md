@@ -18,7 +18,7 @@ UNUSED VARIABLE - fuzz_crash_099.md:3:5:3:8
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 # PROBLEMS
 
-── ✗ DUPLICATE RECORD FIELD ───────────────────────────── fuzz_crash_099.md:3:28
+── ✗ duplicate record field ───────────────────────────── fuzz_crash_099.md:3:28
 
 The record field `a` appears more than once in this record.
 
@@ -35,7 +35,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 Record fields must have unique names. Consider renaming one of these fields or
 removing the duplicate.
 
-── ● UNUSED VARIABLE ──────────────────────────────────── fuzz_crash_099.md:3:14
+── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
 
 Variable `insert` is defined here and then never used:
 
@@ -45,7 +45,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 If you don't need this variable, prefix it with an underscore like `_insert` to
 suppress this warning.
 
-── ● UNUSED VARIABLE ──────────────────────────────────── fuzz_crash_099.md:3:37
+── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
 
 Variable `nt` is defined here and then never used:
 
@@ -55,7 +55,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 If you don't need this variable, prefix it with an underscore like `_nt` to
 suppress this warning.
 
-── ● UNUSED VARIABLE ───────────────────────────────────── fuzz_crash_099.md:3:5
+── ● unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
 
 Variable `fn1` is defined here and then never used:
 
@@ -65,7 +65,7 @@ fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
 If you don't need this variable, prefix it with an underscore like `_fn1` to
 suppress this warning.
 
-── ✗ NON EXHAUSTIVE DESTRUCTURE ───────────────────────── fuzz_crash_099.md:3:20
+── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
 
 This destructuring pattern doesn't cover all possible cases.
 

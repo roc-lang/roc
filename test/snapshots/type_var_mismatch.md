@@ -26,7 +26,7 @@ main! = |_| {}
 TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────────────── type_var_mismatch.md:7:9
+── ✗ type mismatch ──────────────────────────────────── type_var_mismatch.md:7:9
 
 This number is being used where a non-number type is needed.
 

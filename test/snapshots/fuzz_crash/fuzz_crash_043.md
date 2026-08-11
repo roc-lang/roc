@@ -17,7 +17,7 @@ MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_043.md:1:20
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_043.md:1:20
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -32,7 +32,7 @@ For example:
 
 I found `{` here.
 
-── ✗ UNEXPECTED TYPE SYNTAX ────────────────────────────── fuzz_crash_043.md:2:3
+── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_043.md:2:3
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -47,7 +47,7 @@ For example:
 
 I found `0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_043.md:2:4
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -64,7 +64,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_043.md:2:5
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:5
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -79,7 +79,7 @@ For example:
 
 I found `0` here.
 
-── ✗ MALFORMED TYPE ────────────────────────────────────── fuzz_crash_043.md:2:3
+── ✗ malformed type ────────────────────────────────────── fuzz_crash_043.md:2:3
 
 This type annotation is malformed or contains invalid syntax.
 
@@ -87,7 +87,7 @@ o:0}0
   ^
 
 
-── ● DECLARATION HAS NO VALUE ──────────────────────────── fuzz_crash_043.md:2:1
+── ● declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
 
 This declaration has a type annotation but no implementation.
 

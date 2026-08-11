@@ -11,7 +11,7 @@ sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 NAME NOT IN SCOPE - fold_closure.md:1:13:1:17
 # PROBLEMS
 
-── ✗ NAME NOT IN SCOPE ──────────────────────────────────── fold_closure.md:1:13
+── ✗ name not in scope ──────────────────────────────────── fold_closure.md:1:13
 
 Nothing is named `fold` in this scope.
 

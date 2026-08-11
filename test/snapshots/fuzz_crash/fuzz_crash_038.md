@@ -12,7 +12,7 @@ UNEXPECTED STATEMENT - fuzz_crash_038.md:1:1:1:2
 EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_038.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_038.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -27,7 +27,7 @@ For example:
 
 I found `*` here.
 
-── ✗ EXPECTED IMPORT ALIAS ─────────────────────────────── fuzz_crash_038.md:1:2
+── ✗ expected import alias ─────────────────────────────── fuzz_crash_038.md:1:2
 
 I was parsing an import alias, and I expected an uppercase name after `as`.
 

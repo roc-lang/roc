@@ -20,7 +20,7 @@ UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 
-── ✗ UNCLOSED SINGLE QUOTE ────────────────────────────── fuzz_crash_031.md:4:10
+── ✗ unclosed single quote ────────────────────────────── fuzz_crash_031.md:4:10
 
 This single-quoted literal is missing a closing quote.
 
@@ -28,7 +28,7 @@ vavar t= '
          ^
 
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_031.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -45,7 +45,7 @@ I found `mule` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_031.md:1:6
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:6
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -60,7 +60,7 @@ For example:
 
 I found `[` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_031.md:1:7
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:7
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -77,7 +77,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_031.md:4:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:4:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -94,7 +94,7 @@ I found `vavar` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ UNEXPECTED EXPRESSION SYNTAX ─────────────────────── fuzz_crash_031.md:4:10
+── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_031.md:4:10
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -109,7 +109,7 @@ For example:
 
 I found `'` here.
 
-── ✗ UNRECOGNIZED SYNTAX ──────────────────────────────── fuzz_crash_031.md:4:10
+── ✗ unrecognized syntax ──────────────────────────────── fuzz_crash_031.md:4:10
 
 I don't recognize this syntax.
 

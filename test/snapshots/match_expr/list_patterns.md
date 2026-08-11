@@ -19,7 +19,7 @@ UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
 
-── ✗ OLD LIST REST PATTERN ─────────────────────────────── list_patterns.md:3:13
+── ✗ old list rest pattern ─────────────────────────────── list_patterns.md:3:13
 
 I was parsing a list pattern, and this uses the old rest syntax.
 
@@ -32,7 +32,7 @@ present it must come after `as`.
 For example:
     [first, .. as rest]
 
-── ✗ NAME NOT IN SCOPE ──────────────────────────────────── list_patterns.md:1:7
+── ✗ name not in scope ──────────────────────────────────── list_patterns.md:1:7
 
 Nothing is named `numbers` in this scope.
 
@@ -41,7 +41,7 @@ match numbers {
 
 Is it misspelled, or is there an import missing?
 
-── ✗ NAME NOT IN SCOPE ─────────────────────────────────── list_patterns.md:2:11
+── ✗ name not in scope ─────────────────────────────────── list_patterns.md:2:11
 
 Nothing is named `acc` in this scope.
 
@@ -50,7 +50,7 @@ Nothing is named `acc` in this scope.
 
 Is it misspelled, or is there an import missing?
 
-── ● UNUSED VARIABLE ────────────────────────────────────── list_patterns.md:3:6
+── ● unused variable ────────────────────────────────────── list_patterns.md:3:6
 
 Variable `first` is defined here and then never used:
 
@@ -60,7 +60,7 @@ Variable `first` is defined here and then never used:
 If you don't need this variable, prefix it with an underscore like `_first` to
 suppress this warning.
 
-── ● UNUSED VARIABLE ───────────────────────────────────── list_patterns.md:3:15
+── ● unused variable ───────────────────────────────────── list_patterns.md:3:15
 
 Variable `rest` is defined here and then never used:
 

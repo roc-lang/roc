@@ -19,7 +19,7 @@ UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
 
-── ✗ UNDECLARED TYPE ────────────────────── nominal_type_origin_mismatch.md:3:17
+── ✗ undeclared type ────────────────────── nominal_type_origin_mismatch.md:3:17
 
 The type `Person` is not declared in this scope.
 
@@ -27,7 +27,7 @@ expectsPerson : Person -> Str
                 ^^^^^^
 
 
-── ● UNUSED VARIABLE ────────────────────── nominal_type_origin_mismatch.md:4:18
+── ● unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
 
 Variable `p` is defined here and then never used:
 

@@ -16,7 +16,7 @@ UNEXPECTED STATEMENT - fuzz_crash_014.md:2:1:2:6
 UNEXPECTED STATEMENT - fuzz_crash_014.md:3:1:3:5
 # PROBLEMS
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_014.md:1:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -31,7 +31,7 @@ For example:
 
 I found `0b` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_014.md:1:3
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -46,7 +46,7 @@ For example:
 
 I found `.0` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_014.md:2:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -61,7 +61,7 @@ For example:
 
 I found `0bu22` here.
 
-── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_014.md:3:1
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_014.md:3:1
 
 I was parsing a statement, and this token cannot start a statement here.
 

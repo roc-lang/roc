@@ -16,7 +16,7 @@ main = 123.Foo
 TYPE MISMATCH - number_suffix_custom_type.md:6:8:6:15
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────── number_suffix_custom_type.md:6:8
+── ✗ type mismatch ──────────────────────────── number_suffix_custom_type.md:6:8
 
 The `from_numeral` method on `Foo` has an incompatible type.
 

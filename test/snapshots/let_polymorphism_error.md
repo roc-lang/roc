@@ -11,7 +11,7 @@ type=expr
 TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ────────────────────────────── let_polymorphism_error.md:1:11
+── ✗ type mismatch ────────────────────────────── let_polymorphism_error.md:1:11
 
 This string literal is being used where a non-string type is needed.
 

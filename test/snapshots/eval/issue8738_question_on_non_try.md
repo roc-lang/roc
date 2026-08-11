@@ -23,7 +23,7 @@ result = do_something()
 TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────── issue8738_question_on_non_try.md:9:7
+── ✗ type mismatch ──────────────────────── issue8738_question_on_non_try.md:9:7
 
 The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and
 `Err` tags), but I found.

@@ -14,7 +14,7 @@ match person {
 TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 # PROBLEMS
 
-── ✗ TYPE MISMATCH ──────────────────────────────────── pattern_as_nested.md:1:5
+── ✗ type mismatch ──────────────────────────────────── pattern_as_nested.md:1:5
 
 The second branch of this `match` does not match the previous ones.
 
