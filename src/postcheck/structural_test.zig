@@ -460,9 +460,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn generatedIteratorNode(",
         "fn generatedIteratorBackingNode(",
     );
-    try expectContains(generated_iterator_producer, "lookupGeneratedIteratorFromNamed(");
-    try expectContains(generated_iterator_producer, "existing_identity");
-    try expectContains(generated_iterator_producer, "&identity.bytes, &lookup.digest.bytes");
+    try expectContains(generated_iterator_producer, "generatedIteratorPublicSource(public_iterator)");
+    try expectContains(generated_iterator_producer, "lookupGeneratedIterator(public_source.def, item_node)");
+    try expectNotContains(generated_iterator_producer, "existing_identity");
     try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
     try expectContains(generated_iterator_producer, "generatedIteratorBackingNode(");
 

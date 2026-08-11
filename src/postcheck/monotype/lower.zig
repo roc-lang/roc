@@ -19155,7 +19155,6 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_args: []const NodeId,
-        request_ret: NodeId,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         if (public_fn.args.len != request_args.len) {
@@ -19163,15 +19162,18 @@ const BodyContext = struct {
         }
         switch (procedure) {
             .iter_from_step => {
+                if (request_args.len != 2) {
+                    Common.invariant("iter_from_step reached Monotype with an unexpected arity");
+                }
                 return try self.generatedIteratorNode(
-                    request_ret,
-                    try self.generatedIteratorItemNode(request_ret),
+                    public_fn.ret,
+                    try self.iteratorStepItemNode((try self.graph.functionNodes(request_args[1])).ret),
                 );
             },
-            .range_done => return try self.generatedIteratorNode(
-                request_ret,
-                try self.generatedIteratorItemNode(request_ret),
-            ),
+            .range_done => {
+                const item = try self.generatedIteratorItemNode(public_fn.ret);
+                return try self.generatedIteratorNode(public_fn.ret, item);
+            },
             .iter_iter => {
                 if (request_args.len != 1) {
                     Common.invariant("Iter.iter reached Monotype with an unexpected arity");
@@ -19199,7 +19201,7 @@ const BodyContext = struct {
                     Common.invariant("Iter.custom advance Ok payload was not an item/state pair");
                 }
                 return try self.generatedIteratorNode(
-                    request_ret,
+                    public_fn.ret,
                     ok_items[0],
                 );
             },
@@ -19217,7 +19219,7 @@ const BodyContext = struct {
                     Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
                 }
                 return try self.generatedIteratorNode(
-                    request_ret,
+                    public_fn.ret,
                     try self.generatedIteratorItemNode(public_fn.ret),
                 );
             },
@@ -19226,38 +19228,38 @@ const BodyContext = struct {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
                 }
                 return try self.generatedIteratorNode(
-                    request_ret,
+                    public_fn.ret,
                     request_args[0],
                 );
             },
             .iter_exclusive_range, .numeric_range_exclusive => {
-                return try self.generatedIteratorNode(request_ret, request_args[0]);
+                return try self.generatedIteratorNode(public_fn.ret, request_args[0]);
             },
             .iter_inclusive_range, .numeric_range_inclusive => {
-                return try self.generatedIteratorNode(request_ret, request_args[0]);
+                return try self.generatedIteratorNode(public_fn.ret, request_args[0]);
             },
             .iter_map => {
                 if (request_args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
                 const transform = try self.graph.functionNodes(request_args[1]);
-                return try self.generatedIteratorAdapterResultNode(request_ret, transform.ret, request_args);
+                return try self.generatedIteratorAdapterResultNode(public_fn.ret, transform.ret, request_args);
             },
             .iter_keep_if => return try self.generatedIteratorAdapterResultNode(
-                request_ret,
+                public_fn.ret,
                 try self.generatedIteratorItemNode(request_args[0]),
                 request_args,
             ),
             .iter_drop_if => return try self.generatedIteratorAdapterResultNode(
-                request_ret,
+                public_fn.ret,
                 try self.generatedIteratorItemNode(request_args[0]),
                 request_args,
             ),
             .iter_take_first => return try self.generatedIteratorAdapterResultNode(
-                request_ret,
+                public_fn.ret,
                 try self.generatedIteratorItemNode(request_args[0]),
                 request_args,
             ),
             .iter_drop_first => return try self.generatedIteratorAdapterResultNode(
-                request_ret,
+                public_fn.ret,
                 try self.generatedIteratorItemNode(request_args[0]),
                 request_args,
             ),
@@ -19273,13 +19275,13 @@ const BodyContext = struct {
                     else
                         request_args[1];
                     return try self.generatedIteratorNode(
-                        request_ret,
+                        public_fn.ret,
                         try self.generatedIteratorItemNode(source),
                     );
                 }
             },
             .iter_append => return try self.generatedIteratorAdapterResultNode(
-                request_ret,
+                public_fn.ret,
                 try self.generatedIteratorItemNode(request_args[0]),
                 request_args,
             ),
@@ -19306,6 +19308,12 @@ const BodyContext = struct {
             Common.invariant("iterator producer input did not carry one explicit item type");
         }
         return content.named.args[0];
+    }
+
+    fn iteratorStepItemNode(self: *BodyContext, step_node: NodeId) Allocator.Error!NodeId {
+        const topology = try self.iteratorRepresentationNames();
+        const one_payload = try self.graph.tagPayloadNode(step_node, topology.one_tag, 0);
+        return try self.graph.recordFieldNode(one_payload, topology.item_field);
     }
 
     /// Complete a directly encountered public iterator occurrence as its
@@ -19369,30 +19377,20 @@ const BodyContext = struct {
         public_iterator: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        var public_named = switch (self.graph.content(public_iterator)) {
+        const public_named = switch (self.graph.content(public_iterator)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
         };
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
         }
-        const existing_identity = public_named.def.generated;
-        var lookup_args = [_]NodeId{item_node};
-        public_named.args = &lookup_args;
         const owner = public_named.builtin_owner orelse
             Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
         if (!static_dispatch.isIteratorOwner(owner)) {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
         const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
-        const lookup = try self.graph.lookupGeneratedIteratorFromNamed(public_named);
-        if (existing_identity) |identity| {
-            if (!std.mem.eql(u8, &identity.bytes, &lookup.digest.bytes)) {
-                Common.invariant("iterator producer received a content-addressed result for a different exact item type");
-            }
-            return (try self.existingGeneratedIteratorNode(lookup)) orelse
-                Common.invariant("content-addressed iterator identity was absent from its interner");
-        }
+        const lookup = try self.graph.lookupGeneratedIterator(public_source.def, item_node);
         if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
 
         const Context = struct {
@@ -25238,17 +25236,6 @@ const BodyContext = struct {
         return try self.instantiateProducedOccurrenceWithSelections(checked_fn.args[index], table);
     }
 
-    fn callSelectionResultNode(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_fn_ty: checked.CheckedTypeId,
-        selections: []const solve.DirectRequestSelection,
-    ) Allocator.Error!NodeId {
-        const checked_fn = self.checkedFunctionType(checked_fn_ty);
-        const table = try self.checkedSelectionTableForCall(plan, selections);
-        return try self.instantiateProducedOccurrenceWithSelections(checked_fn.ret, table);
-    }
-
     fn materializeCurrentCallRequest(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
@@ -25386,7 +25373,8 @@ const BodyContext = struct {
         available: []const bool,
     ) bool {
         const required: []const usize = switch (procedure) {
-            .iter_from_step, .range_done, .str_iter_utf8 => &.{},
+            .range_done, .str_iter_utf8 => &.{},
+            .iter_from_step => &.{1},
             .iter_iter,
             .iter_next,
             .list_iter,
@@ -25415,22 +25403,15 @@ const BodyContext = struct {
         plan: checked.SpecializationCallPlanView,
         current_selections: []const solve.DirectRequestSelection,
         procedure: checked.IteratorProcedureId,
-        checked_fn_ty: checked.CheckedTypeId,
         checked_fn_node: NodeId,
         produced_args: []const NodeId,
         available: []const bool,
     ) Allocator.Error!?[]const solve.DirectRequestSelection {
         if (!iteratorProducerOperandsReady(procedure, available)) return null;
-        const public_result = try self.callSelectionResultNode(
-            plan,
-            checked_fn_ty,
-            current_selections,
-        );
         const generated_ret = (try self.generatedIteratorResultNode(
             procedure,
             checked_fn_node,
             produced_args,
-            public_result,
         )) orelse return null;
         if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) return null;
 
@@ -30598,7 +30579,6 @@ const BodyContext = struct {
                 plan,
                 selections,
                 procedure,
-                checked_fn_ty,
                 checked_fn_node,
                 produced_args,
                 available,
@@ -30672,7 +30652,6 @@ const BodyContext = struct {
                     plan,
                     selections,
                     procedure,
-                    checked_fn_ty,
                     checked_fn_node,
                     produced_args,
                     available,
@@ -30762,7 +30741,6 @@ const BodyContext = struct {
                 plan,
                 selections,
                 procedure,
-                checked_fn_ty,
                 checked_fn_node,
                 produced_args,
                 available,
@@ -30851,7 +30829,6 @@ const BodyContext = struct {
                     plan,
                     selections,
                     procedure,
-                    checked_fn_ty,
                     checked_fn_node,
                     produced_args,
                     available,
@@ -45447,7 +45424,6 @@ const BodyContext = struct {
                 call_plan,
                 selections,
                 procedure,
-                plan.callable_ty,
                 checked_callable_node,
                 produced_nodes,
                 available,
