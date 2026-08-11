@@ -15032,6 +15032,20 @@ pub const DispatchRelationKind = enum(u8) {
 /// instantiations.
 pub const SpecializationInterfaceRelation = struct {
     scope: DispatchScope,
+    /// Exact checked procedure expression that owns this relation. Non-
+    /// procedure relations have no owner expression.
+    procedure_expr: ?CheckedExprId = null,
+    /// Identity occurrences in a procedure relation's own checked function
+    /// interface. Empty for non-procedure relations.
+    identity_slots: artifact_serialize.Span = .{},
+    /// Checker-published identity-slot correspondence for this relation. The
+    /// checked artifact computes this once from solved checked types; Monotype
+    /// consumes these direct pairs and never re-walks the two type graphs.
+    identity_relations: artifact_serialize.Span = .{},
+    /// Checker-selected concrete sources for internal identity components in
+    /// this procedure relation, including components absent from its public
+    /// interface.
+    concrete_selections: artifact_serialize.Span = .{},
     data: Data,
 
     pub const Data = union(enum) {
@@ -15054,6 +15068,342 @@ pub const SpecializationInterfaceRelation = struct {
         local_proc_use: ResolvedValueRefId,
     };
 };
+
+/// One directional identity-slot edge in a specialization interface.
+/// `dependent` is the checked occurrence whose Monotype selection is supplied
+/// by `source`. Both ids name identity leaves in this artifact's checked type
+/// store unless `source` is a concrete root selected for a whole dependent
+/// variable.
+pub const SpecializationIdentityRelation = extern struct {
+    source: CheckedTypeId,
+    dependent: CheckedTypeId,
+};
+
+/// One directional identity edge from the callable instantiation that selected
+/// a dispatch target to that target's own checked declaration. The two ids are
+/// intentionally relative to different artifacts: `source` belongs to the
+/// entry's source callable artifact, while `dependent` belongs to
+/// `target_artifact`.
+pub const SpecializationTargetIdentityRelation = extern struct {
+    source: CheckedTypeId,
+    dependent: CheckedTypeId,
+};
+
+/// Checker-authored correspondence for one concrete dispatch-target
+/// instantiation. Entries are grouped by `source_callable` in the dense span
+/// column on `CheckedProcedureTemplateTable`.
+pub const SpecializationTargetRelationEntry = struct {
+    target_artifact: CheckedModuleArtifactKey,
+    target_callable: CheckedTypeId,
+    relations: artifact_serialize.Span,
+};
+
+/// One checker-authored concrete source for an identity at a call edge. The
+/// checker chooses this from the solved relation while publishing the
+/// artifact; Monotype instantiates exactly this source and never searches the
+/// relation endpoints for a usable type.
+pub const SpecializationConcreteSelection = extern struct {
+    dependent: CheckedTypeId,
+    source: CheckedTypeId,
+};
+
+const SpecializationIdentityRelationGraph = struct {
+    allocator: Allocator,
+    adjacency: collections.DenseMap(CheckedTypeId, std.ArrayList(CheckedTypeId)),
+
+    fn init(
+        allocator: Allocator,
+        relations: []const SpecializationIdentityRelation,
+    ) Allocator.Error!SpecializationIdentityRelationGraph {
+        var graph = SpecializationIdentityRelationGraph{
+            .allocator = allocator,
+            .adjacency = collections.DenseMap(CheckedTypeId, std.ArrayList(CheckedTypeId)).init(allocator),
+        };
+        errdefer graph.deinit();
+        for (relations) |relation| {
+            const entry = try graph.adjacency.getOrPut(relation.source);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            for (entry.value_ptr.items) |existing| {
+                if (existing == relation.dependent) break;
+            } else try entry.value_ptr.append(allocator, relation.dependent);
+        }
+        return graph;
+    }
+
+    fn deinit(self: *SpecializationIdentityRelationGraph) void {
+        var values = self.adjacency.valueIterator();
+        while (values.next()) |value| value.deinit(self.allocator);
+        self.adjacency.deinit();
+    }
+
+    /// Publish each procedure-interface seed directly to every checked
+    /// identity in its solved equality component. Monotype consumes this flat
+    /// span once; it never reconstructs or searches the relation graph.
+    fn appendClosure(
+        self: *const SpecializationIdentityRelationGraph,
+        allocator: Allocator,
+        seeds: []SpecializationIdentitySlot,
+        concrete_sources: *SpecializationConcreteSourceIndex,
+        out: *std.ArrayList(SpecializationIdentityRelation),
+    ) Allocator.Error!artifact_serialize.Span {
+        const start: u32 = @intCast(out.items.len);
+        var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
+        defer visited.deinit();
+        var pending = std.ArrayList(CheckedTypeId).empty;
+        defer pending.deinit(allocator);
+        for (seeds) |*seed| {
+            visited.clearRetainingCapacity();
+            pending.clearRetainingCapacity();
+            try visited.put(seed.checked, {});
+            try pending.append(allocator, seed.checked);
+            var concrete_source = no_specialization_concrete_source;
+            var cursor: usize = 0;
+            while (cursor < pending.items.len) : (cursor += 1) {
+                const current = pending.items[cursor];
+                // The relation graph is checker-authored in semantic source
+                // order. The first concrete node reached is the component's
+                // explicit source; checked-id magnitude carries no meaning.
+                if (concrete_source == no_specialization_concrete_source and
+                    try concrete_sources.isConcrete(current))
+                {
+                    concrete_source = current;
+                }
+                const dependents = self.adjacency.get(current) orelse continue;
+                for (dependents.items) |dependent| {
+                    const entry = try visited.getOrPut(dependent);
+                    if (entry.found_existing) continue;
+                    try pending.append(allocator, dependent);
+                    if (dependent != seed.checked) {
+                        try out.append(allocator, .{
+                            .source = seed.checked,
+                            .dependent = dependent,
+                        });
+                    }
+                }
+            }
+            seed.concrete_source = concrete_source;
+        }
+        return .{
+            .start = start,
+            .len = @intCast(out.items.len - start),
+        };
+    }
+};
+
+const SpecializationConcreteSourceIndex = struct {
+    const State = enum(u8) { unknown, visiting, concrete, contextual };
+
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    states: []State,
+
+    fn init(
+        allocator: Allocator,
+        checked_types: *const CheckedTypePublication,
+    ) Allocator.Error!SpecializationConcreteSourceIndex {
+        const states = try allocator.alloc(State, checked_types.store.payloads.items.len);
+        @memset(states, .unknown);
+        return .{ .allocator = allocator, .checked_types = checked_types, .states = states };
+    }
+
+    fn deinit(self: *SpecializationConcreteSourceIndex) void {
+        self.allocator.free(self.states);
+    }
+
+    /// Whether this checked root can be instantiated without a substitution
+    /// supplied by a runtime value edge. Cycles are concrete coinductively:
+    /// only an encountered identity leaf makes the component contextual.
+    fn isConcrete(self: *SpecializationConcreteSourceIndex, root: CheckedTypeId) Allocator.Error!bool {
+        const raw = @intFromEnum(root);
+        if (raw >= self.states.len) {
+            checkedArtifactInvariant("specialization concrete source exceeded the checked type store", .{});
+        }
+        switch (self.states[raw]) {
+            .concrete => return true,
+            .contextual => return false,
+            .visiting => return true,
+            .unknown => self.states[raw] = .visiting,
+        }
+        const payload = self.checked_types.store.payload(root);
+        const concrete = switch (payload) {
+            .pending => checkedArtifactInvariant("specialization concrete source reached an unfinished checked type", .{}),
+            .err, .flex, .rigid => false,
+            .empty_record, .empty_tag_union => true,
+            .alias => |alias| blk: {
+                for (alias.args) |arg| if (!try self.isConcrete(arg)) break :blk false;
+                break :blk try self.isConcrete(alias.backing);
+            },
+            .nominal => |nominal| blk: {
+                if (checkedTypeIsGeneratedNominal(payload)) break :blk false;
+                for (nominal.args) |arg| if (!try self.isConcrete(arg)) break :blk false;
+                break :blk true;
+            },
+            .function => |function| blk: {
+                for (function.args) |arg| if (!try self.isConcrete(arg)) break :blk false;
+                break :blk try self.isConcrete(function.ret);
+            },
+            .tuple => |items| blk: {
+                for (items) |item| if (!try self.isConcrete(item)) break :blk false;
+                break :blk true;
+            },
+            .record, .record_unbound => blk: {
+                const parts = recordParts(payload).?;
+                for (parts.fields) |field| if (!try self.isConcrete(field.ty)) break :blk false;
+                if (parts.ext) |ext| if (!try self.isConcrete(ext)) break :blk false;
+                break :blk true;
+            },
+            .tag_union => |tag_union| blk: {
+                for (tag_union.tags) |tag| for (tag.argsSlice(&self.checked_types.store)) |arg| {
+                    if (!try self.isConcrete(arg)) break :blk false;
+                };
+                break :blk try self.isConcrete(tag_union.ext);
+            },
+        };
+        self.states[raw] = if (concrete) .concrete else .contextual;
+        return concrete;
+    }
+};
+
+/// The function-interface edge that owns one specialization occurrence.
+pub const SpecializationOccurrenceRoot = enum(u8) {
+    argument,
+    result,
+    dispatcher,
+    /// Selected dispatch targets are ordinary producers too. These roots
+    /// project an exact component from the checker-recorded target callable
+    /// before any contextual call operand is lowered.
+    target_argument,
+    target_result,
+};
+
+/// Whether a checked occurrence consumes or produces its exact node.
+pub const SpecializationOccurrenceProduction = enum(u8) {
+    consumer,
+    producer,
+};
+
+/// One node in a checker-authored projection tree. Root steps select one
+/// explicit call edge. Every other step selects exactly one immediate child
+/// from the preceding projection node. The tree is stored in parent-before-
+/// child order, so Monotype evaluates every declared edge at most once into a
+/// dense parallel node column.
+pub const SpecializationProjectionStep = enum(u8) {
+    argument,
+    result,
+    dispatcher,
+    target_argument,
+    target_result,
+    alias_argument,
+    alias_backing,
+    nominal_argument,
+    /// Enter the declaration backing at this nominal occurrence. At runtime
+    /// this is the named node's direct backing when the constructor is
+    /// retained, or the current node when an enclosing checked relation has
+    /// already supplied the backing representation.
+    nominal_representation,
+    function_argument,
+    function_result,
+    tuple_item,
+    record_field,
+    record_remainder,
+    tag_payload,
+    tag_remainder,
+};
+
+pub const no_specialization_projection_parent = std.math.maxInt(u32);
+
+pub const SpecializationProjection = extern struct {
+    /// The checked node reached by this projection. This is explicit checker
+    /// metadata used to interpret named row/nominal edges; lowering never
+    /// infers it by inspecting the produced graph.
+    checked: CheckedTypeId,
+    parent: u32,
+    /// Root/argument/item/field/tag index, according to `step`.
+    index: u32,
+    /// Payload index for `tag_payload`; zero for every other step.
+    payload_index: u32,
+    step: SpecializationProjectionStep,
+    reserved: [3]u8 = .{ 0, 0, 0 },
+};
+
+/// One exact checked occurrence within a function argument or result. Its
+/// projection is a dense index into the owning plan's checker-authored
+/// projection tree. There is no structural path to walk at consumption time.
+pub const SpecializationOccurrence = extern struct {
+    checked: CheckedTypeId,
+    projection: u32,
+    root: SpecializationOccurrenceRoot,
+    production: SpecializationOccurrenceProduction,
+    reserved: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
+};
+
+/// Direction of one checked call operand's runtime type flow. A produced
+/// operand is lowered independently and publishes its exact node into the
+/// call's substitution span. A requested operand is lowered only after those
+/// substitutions are available and consumes its exact destination from them.
+/// Checking publishes this once; Monotype never classifies expression syntax.
+pub const SpecializationOperandFlow = enum(u8) {
+    produced,
+    requested_callable,
+    requested_value,
+};
+
+pub const SpecializationCallSlotKind = enum(u8) {
+    identity,
+    generated_nominal,
+};
+
+/// How a generated-capable public nominal occurrence obtains its atomic exact
+/// identity at this call edge. Ordinary calls accept only an identity supplied
+/// by a completed value producer. Compiler-authored representation operations
+/// may construct the content-addressed identity directly from the slot's exact
+/// public arguments before lowering a callback that mentions it.
+pub const SpecializationGeneratedSlotSource = enum(u8) {
+    producer,
+    exact_arguments,
+};
+
+/// One checker-authored call substitution slot and all of its exact
+/// occurrences. Runtime lowering chooses a source only from the listed
+/// occurrences and never compares complete checked and produced type trees.
+pub const SpecializationCallSlot = struct {
+    checked: CheckedTypeId,
+    kind: SpecializationCallSlotKind,
+    /// The selected producer is also consumed atomically as specialization
+    /// identity. This is orthogonal to `kind`: a generated nominal may still
+    /// need its normal construction policy while serving as an exact
+    /// dispatcher edge.
+    exact_identity: bool,
+    generated_source: SpecializationGeneratedSlotSource,
+    occurrences: artifact_serialize.Span,
+};
+
+/// Two compact spans comprise a complete checker-authored call plan. Slots
+/// are the flat substitutions consumed by Monotype; projections are the
+/// direct producer-to-child edges that fill those slots.
+pub const SpecializationCallPlan = struct {
+    slots: artifact_serialize.Span = .{},
+    projections: artifact_serialize.Span = .{},
+    operand_flows: artifact_serialize.Span = .{},
+};
+
+pub const SpecializationCallPlanView = struct {
+    slots: []const SpecializationCallSlot,
+    projections: []const SpecializationProjection,
+    operand_flows: []const SpecializationOperandFlow,
+};
+
+/// One identity-bearing checked occurrence in a procedure's immutable base
+/// interface and its semantic path from that function root.
+pub const SpecializationIdentitySlot = extern struct {
+    checked: CheckedTypeId,
+    /// Checker-selected member of this identity's solved equality component
+    /// that can be instantiated without any runtime substitution. The
+    /// sentinel means this component must be supplied by an exact value edge.
+    concrete_source: CheckedTypeId,
+};
+
+pub const no_specialization_concrete_source: CheckedTypeId = @enumFromInt(std.math.maxInt(u32));
 
 const CollectedSchemeUseSite = struct {
     record_idx: u32,
@@ -15192,6 +15542,12 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer scope_site_pool.deinit(allocator);
     var specialization_relation_pool = std.ArrayList(SpecializationInterfaceRelation).empty;
     errdefer specialization_relation_pool.deinit(allocator);
+    var specialization_identity_relation_pool = std.ArrayList(SpecializationIdentityRelation).empty;
+    errdefer specialization_identity_relation_pool.deinit(allocator);
+    var specialization_identity_slot_pool = std.ArrayList(SpecializationIdentitySlot).empty;
+    errdefer specialization_identity_slot_pool.deinit(allocator);
+    var specialization_concrete_selection_pool = std.ArrayList(SpecializationConcreteSelection).empty;
+    errdefer specialization_concrete_selection_pool.deinit(allocator);
     var specialization_type_pool = std.ArrayList(CheckedTypeId).empty;
     errdefer specialization_type_pool.deinit(allocator);
     const iterator_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.len);
@@ -15200,14 +15556,38 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer allocator.free(scheme_use_spans);
     const scope_site_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.len);
     errdefer allocator.free(scope_site_spans);
+    const specialization_procedure_relations_by_expr = try allocator.alloc(u32, checked_bodies.exprCount());
+    errdefer allocator.free(specialization_procedure_relations_by_expr);
+    @memset(specialization_procedure_relations_by_expr, CheckedProcedureTemplateTable.no_specialization_relation);
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, checked_types);
+    defer concrete_sources.deinit();
 
     for (templates.templates, 0..) |*template, template_index| {
         collector.clear();
+
+        const identity_slot_start: u32 = @intCast(specialization_identity_slot_pool.items.len);
+        var identity_visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
+        defer identity_visited.deinit();
+        try collectSpecializationIdentitySlots(
+            allocator,
+            checked_types,
+            template.checked_fn_root,
+            &identity_visited,
+            &specialization_identity_slot_pool,
+        );
+        template.identity_slots = .{
+            .start = identity_slot_start,
+            .len = @intCast(specialization_identity_slot_pool.items.len - identity_slot_start),
+        };
 
         switch (template.body) {
             .checked_body => |body_id| {
                 const body = checked_bodies.body(body_id);
                 collector.template_root_expr = body.root_expr;
+                try collector.appendBidirectionalSpecializationIdentityRelations(
+                    template.checked_fn_root,
+                    checked_bodies.expr(body.root_expr).ty,
+                );
                 try collector.collectExpr(body.root_expr);
             },
             .entry_wrapper => |wrapper_id| {
@@ -15230,6 +15610,10 @@ fn sealCheckedProcedureTemplateRefs(
             if (seen.found_existing) continue;
             const record = resolved_value_refs.records[@intFromEnum(ref_id)];
             if (checked_bodies.exprContainsDiagnosticError(record.expr)) continue;
+            try collector.appendBidirectionalSpecializationIdentityRelations(
+                record.checked_ty,
+                checked_bodies.expr(record.expr).ty,
+            );
             try collector.specialization_relations.append(allocator, .{
                 .scope = use_scope,
                 .data = .{ .type_equality = .{
@@ -15244,6 +15628,10 @@ fn sealCheckedProcedureTemplateRefs(
                 .pattern_binder,
                 => |binding| {
                     const binder_pattern = checked_bodies.patternBinder(binding.binder).pattern;
+                    try collector.appendBidirectionalSpecializationIdentityRelations(
+                        record.checked_ty,
+                        checked_bodies.pattern(binder_pattern).ty,
+                    );
                     try collector.specialization_relations.append(allocator, .{
                         .scope = use_scope,
                         .data = .{ .type_equality = .{
@@ -15268,6 +15656,10 @@ fn sealCheckedProcedureTemplateRefs(
                 => continue,
             };
             if (collector.scope_by_checked_expr.get(local.expr) == null) {
+                try collector.appendBidirectionalSpecializationIdentityRelations(
+                    record.checked_ty,
+                    checked_bodies.expr(local.expr).ty,
+                );
                 try collector.specialization_relations.append(allocator, .{
                     .scope = use_scope,
                     .data = .{ .type_equality = .{
@@ -15287,13 +15679,70 @@ fn sealCheckedProcedureTemplateRefs(
         template.static_dispatch_plans = try artifact_serialize.appendSpan(@TypeOf(template.static_dispatch_plans), static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
         const specialization_type_base: u32 = @intCast(specialization_type_pool.items.len);
         try specialization_type_pool.appendSlice(allocator, collector.specialization_types.items);
+        var identity_relation_graph = try SpecializationIdentityRelationGraph.init(
+            allocator,
+            collector.specialization_identity_relations.items,
+        );
+        defer identity_relation_graph.deinit();
+        template.identity_relations = try identity_relation_graph.appendClosure(
+            allocator,
+            specialization_identity_slot_pool.items[template.identity_slots.start .. template.identity_slots.start + template.identity_slots.len],
+            &concrete_sources,
+            &specialization_identity_relation_pool,
+        );
+        template.concrete_selections = try compileCallConcreteSelections(
+            allocator,
+            checked_types,
+            &concrete_sources,
+            collector.specialization_identity_relations.items,
+            &specialization_concrete_selection_pool,
+        );
         const specialization_relation_start: u32 = @intCast(specialization_relation_pool.items.len);
         try specialization_relation_pool.ensureUnusedCapacity(allocator, collector.specialization_relations.items.len);
         for (collector.specialization_relations.items) |raw_relation| {
             var relation = raw_relation;
+            relation.concrete_selections = try compileCallConcreteSelections(
+                allocator,
+                checked_types,
+                &concrete_sources,
+                collector.specialization_identity_relations.items[raw_relation.identity_relations.start .. raw_relation.identity_relations.start + raw_relation.identity_relations.len],
+                &specialization_concrete_selection_pool,
+            );
+            relation.identity_relations = .{};
             switch (relation.data) {
                 .call => |*call| call.args.start += specialization_type_base,
-                .type_equality, .procedure, .local_proc_use => {},
+                .procedure => |procedure| {
+                    const slot_start: u32 = @intCast(specialization_identity_slot_pool.items.len);
+                    var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
+                    defer visited.deinit();
+                    try collectSpecializationIdentitySlots(
+                        allocator,
+                        checked_types,
+                        procedure.fn_ty,
+                        &visited,
+                        &specialization_identity_slot_pool,
+                    );
+                    relation.identity_slots = .{
+                        .start = slot_start,
+                        .len = @intCast(specialization_identity_slot_pool.items.len - slot_start),
+                    };
+                    relation.identity_relations = try identity_relation_graph.appendClosure(
+                        allocator,
+                        specialization_identity_slot_pool.items[relation.identity_slots.start .. relation.identity_slots.start + relation.identity_slots.len],
+                        &concrete_sources,
+                        &specialization_identity_relation_pool,
+                    );
+                    const procedure_expr = relation.procedure_expr orelse
+                        checkedArtifactInvariant("procedure specialization relation had no owning expression", .{});
+                    const relation_index: u32 = @intCast(specialization_relation_pool.items.len);
+                    const relation_slot = &specialization_procedure_relations_by_expr[@intFromEnum(procedure_expr)];
+                    if (relation_slot.* != CheckedProcedureTemplateTable.no_specialization_relation) {
+                        checkedArtifactInvariant("checked procedure expression owned more than one specialization relation", .{});
+                    }
+                    relation_slot.* = relation_index;
+                    _ = procedure.owns_scope;
+                },
+                .type_equality, .local_proc_use => {},
             }
             specialization_relation_pool.appendAssumeCapacity(relation);
         }
@@ -15325,6 +15774,10 @@ fn sealCheckedProcedureTemplateRefs(
     templates.dispatch_relation_kinds = try dispatch_relation_kind_pool.toOwnedSlice(allocator);
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
     templates.specialization_interface_relations = try specialization_relation_pool.toOwnedSlice(allocator);
+    templates.specialization_procedure_relations_by_expr = specialization_procedure_relations_by_expr;
+    templates.specialization_identity_relations = try specialization_identity_relation_pool.toOwnedSlice(allocator);
+    templates.specialization_identity_slots = try specialization_identity_slot_pool.toOwnedSlice(allocator);
+    templates.specialization_concrete_selections = try specialization_concrete_selection_pool.toOwnedSlice(allocator);
     templates.specialization_interface_types = try specialization_type_pool.toOwnedSlice(allocator);
     publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
     publishLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
@@ -17130,6 +17583,1782 @@ fn sealConstEvalTemplatesForRoots(
     }
 }
 
+/// Publish every identity-bearing checked slot once. Repeated occurrences of
+/// one checked identity deliberately share one slot; the checker already
+/// proved those occurrences equal. The resulting column contains identities,
+/// never structural paths for Monotype to replay.
+fn collectSpecializationIdentitySlots(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    root: CheckedTypeId,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+    slots: *std.ArrayList(SpecializationIdentitySlot),
+) Allocator.Error!void {
+    const function = checkedFunctionPayload(
+        &checked_types.store,
+        root,
+        "procedure specialization identity slots",
+    );
+    for (function.args) |arg| {
+        try collectSpecializationIdentitySlotsInner(
+            allocator,
+            checked_types,
+            arg,
+            visited,
+            slots,
+        );
+    }
+    try collectSpecializationIdentitySlotsInner(
+        allocator,
+        checked_types,
+        function.ret,
+        visited,
+        slots,
+    );
+}
+
+fn collectSpecializationIdentitySlotsInner(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    root: CheckedTypeId,
+    visited: *collections.DenseMap(CheckedTypeId, void),
+    slots: *std.ArrayList(SpecializationIdentitySlot),
+) Allocator.Error!void {
+    const seen = try visited.getOrPut(root);
+    if (seen.found_existing) return;
+
+    const payload = checked_types.store.payload(root);
+    if (checkedTypeIsGeneratedNominal(payload)) {
+        try slots.append(allocator, .{
+            .checked = root,
+            .concrete_source = no_specialization_concrete_source,
+        });
+    }
+    switch (payload) {
+        .flex, .rigid => try slots.append(allocator, .{
+            .checked = root,
+            .concrete_source = no_specialization_concrete_source,
+        }),
+        .alias => |alias| {
+            for (alias.args) |arg| try collectSpecializationIdentitySlotsInner(allocator, checked_types, arg, visited, slots);
+            try collectSpecializationIdentitySlotsInner(allocator, checked_types, alias.backing, visited, slots);
+        },
+        .nominal => |nominal| {
+            for (nominal.args) |arg| try collectSpecializationIdentitySlotsInner(allocator, checked_types, arg, visited, slots);
+        },
+        .function => |function| {
+            for (function.args) |arg| try collectSpecializationIdentitySlotsInner(allocator, checked_types, arg, visited, slots);
+            try collectSpecializationIdentitySlotsInner(allocator, checked_types, function.ret, visited, slots);
+        },
+        .tuple => |items| {
+            for (items) |item| try collectSpecializationIdentitySlotsInner(allocator, checked_types, item, visited, slots);
+        },
+        .record, .record_unbound => {
+            const parts = recordParts(payload).?;
+            for (parts.fields) |field| try collectSpecializationIdentitySlotsInner(allocator, checked_types, field.ty, visited, slots);
+            if (parts.ext) |ext| try collectSpecializationIdentitySlotsInner(allocator, checked_types, ext, visited, slots);
+        },
+        .tag_union => |tag_union| {
+            for (tag_union.tags) |tag| for (tag.argsSlice(&checked_types.store)) |arg| {
+                try collectSpecializationIdentitySlotsInner(allocator, checked_types, arg, visited, slots);
+            };
+            try collectSpecializationIdentitySlotsInner(allocator, checked_types, tag_union.ext, visited, slots);
+        },
+        .pending => checkedArtifactInvariant("specialization identity publication reached an unfinished checked type", .{}),
+        .err, .empty_record, .empty_tag_union => {},
+    }
+}
+
+const SpecializationCallSlotBuild = struct {
+    checked: CheckedTypeId,
+    kind: SpecializationCallSlotKind,
+    exact_identity: bool = false,
+    occurrences: std.ArrayList(SpecializationOccurrence) = .empty,
+
+    fn deinit(self: *SpecializationCallSlotBuild, allocator: Allocator) void {
+        self.occurrences.deinit(allocator);
+    }
+};
+
+const SpecializationProjectionSubstitution = struct {
+    formal: CheckedTypeId,
+    actual: CheckedTypeId,
+};
+
+fn specializationProjectionSubstitute(
+    substitutions: []const SpecializationProjectionSubstitution,
+    root: CheckedTypeId,
+) CheckedTypeId {
+    var current = root;
+    var remaining = substitutions.len + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        var index = substitutions.len;
+        while (index > 0) {
+            index -= 1;
+            const substitution = substitutions[index];
+            if (substitution.formal != current) continue;
+            if (substitution.actual == current) return current;
+            current = substitution.actual;
+            break;
+        } else return current;
+    }
+    checkedArtifactInvariant("specialization projection substitutions contained a cycle", .{});
+}
+
+fn checkedTypeIsGeneratedNominal(payload: CheckedTypePayload) bool {
+    if (payload != .nominal) return false;
+    const builtin_nominal = payload.nominal.builtin orelse return false;
+    return switch (builtinRuntimeEncoding(builtin_nominal)) {
+        .iterator, .parse_tag_union_spec, .fields, .field => true,
+        .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
+    };
+}
+
+fn checkedTypeIsGeneratedIterator(payload: CheckedTypePayload) bool {
+    if (payload != .nominal) return false;
+    const builtin_nominal = payload.nominal.builtin orelse return false;
+    return builtinRuntimeEncoding(builtin_nominal) == .iterator;
+}
+
+/// Compile one checked callable into the exact occurrence lists consumed by
+/// Monotype. Each occurrence names only its checked identity and direct
+/// function edge; exact values publish the identity-to-node selection.
+fn compileSpecializationCallPlan(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    callable_root: CheckedTypeId,
+    dispatcher_root: ?CheckedTypeId,
+    target_signature_source: bool,
+    slots_out: *std.ArrayList(SpecializationCallSlot),
+    occurrences_out: *std.ArrayList(SpecializationOccurrence),
+    projections_out: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallPlan {
+    const function = checkedFunctionPayload(
+        &checked_types.store,
+        callable_root,
+        "exact call specialization plan",
+    );
+    var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
+    defer {
+        for (builds.items) |*build| build.deinit(allocator);
+        builds.deinit(allocator);
+    }
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var substitutions = std.ArrayList(SpecializationProjectionSubstitution).empty;
+    defer substitutions.deinit(allocator);
+    var projections = std.ArrayList(SpecializationProjection).empty;
+    defer projections.deinit(allocator);
+
+    for (function.args, 0..) |arg, index| {
+        _ = try collectSpecializationCallOccurrences(
+            allocator,
+            checked_types,
+            arg,
+            .{
+                .checked = arg,
+                .parent = no_specialization_projection_parent,
+                .index = @intCast(index),
+                .payload_index = 0,
+                .step = .argument,
+            },
+            false,
+            &substitutions,
+            &active,
+            &projections,
+            &builds,
+        );
+    }
+    _ = try collectSpecializationCallOccurrences(
+        allocator,
+        checked_types,
+        function.ret,
+        .{
+            .checked = function.ret,
+            .parent = no_specialization_projection_parent,
+            .index = 0,
+            .payload_index = 0,
+            .step = .result,
+        },
+        true,
+        &substitutions,
+        &active,
+        &projections,
+        &builds,
+    );
+    if (dispatcher_root) |dispatcher| {
+        const projection = (try collectSpecializationCallOccurrences(
+            allocator,
+            checked_types,
+            dispatcher,
+            .{
+                .checked = dispatcher,
+                .parent = no_specialization_projection_parent,
+                .index = 0,
+                .payload_index = 0,
+                .step = .dispatcher,
+            },
+            false,
+            &substitutions,
+            &active,
+            &projections,
+            &builds,
+        )) orelse blk: {
+            const index: u32 = @intCast(projections.items.len);
+            try projections.append(allocator, .{
+                .checked = dispatcher,
+                .parent = no_specialization_projection_parent,
+                .index = 0,
+                .payload_index = 0,
+                .step = .dispatcher,
+            });
+            break :blk index;
+        };
+        // Dispatch target selection depends on the dispatcher's exact runtime
+        // type even when that checked type has no polymorphic leaves. Publish
+        // the complete dispatcher edge as one explicit request input. Append
+        // it after the ordinary occurrence walk so a generated dispatcher
+        // keeps its construction kind while gaining exact identity.
+        try appendSpecializationCallOccurrence(
+            allocator,
+            dispatcher,
+            null,
+            true,
+            .dispatcher,
+            projection,
+            true,
+            &builds,
+        );
+    }
+    if (target_signature_source) {
+        for (function.args, 0..) |arg, index| {
+            _ = try collectSpecializationCallOccurrences(
+                allocator,
+                checked_types,
+                arg,
+                .{
+                    .checked = arg,
+                    .parent = no_specialization_projection_parent,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .target_argument,
+                },
+                true,
+                &substitutions,
+                &active,
+                &projections,
+                &builds,
+            );
+        }
+        _ = try collectSpecializationCallOccurrences(
+            allocator,
+            checked_types,
+            function.ret,
+            .{
+                .checked = function.ret,
+                .parent = no_specialization_projection_parent,
+                .index = 0,
+                .payload_index = 0,
+                .step = .target_result,
+            },
+            true,
+            &substitutions,
+            &active,
+            &projections,
+            &builds,
+        );
+    }
+
+    const slot_start: u32 = @intCast(slots_out.items.len);
+    for (builds.items) |*build| {
+        const occurrence_start: u32 = @intCast(occurrences_out.items.len);
+        try occurrences_out.appendSlice(allocator, build.occurrences.items);
+        var has_produced_value_position = false;
+        for (build.occurrences.items) |occurrence| {
+            if (occurrence.production == .producer) {
+                has_produced_value_position = true;
+            }
+        }
+        try slots_out.append(allocator, .{
+            .checked = build.checked,
+            .kind = build.kind,
+            .exact_identity = build.exact_identity,
+            // A generated-capable nominal is constructed only at a value-
+            // producing edge: the call result or a requested callback result.
+            // Plain argument slots belong to the values that supplied them
+            // and can never trigger construction.
+            // If an exact argument/result/target occurrence already supplied
+            // the slot, Monotype selects that producer before consulting this
+            // construction policy.
+            .generated_source = if (build.kind == .generated_nominal and
+                has_produced_value_position and
+                checkedTypeIsGeneratedIterator(checked_types.store.payload(build.checked)))
+                .exact_arguments
+            else
+                .producer,
+            .occurrences = .{
+                .start = occurrence_start,
+                .len = @intCast(build.occurrences.items.len),
+            },
+        });
+    }
+    const projection_start: u32 = @intCast(projections_out.items.len);
+    try projections_out.appendSlice(allocator, projections.items);
+    return .{
+        .slots = .{
+            .start = slot_start,
+            .len = @intCast(slots_out.items.len - slot_start),
+        },
+        .projections = .{
+            .start = projection_start,
+            .len = @intCast(projections.items.len),
+        },
+    };
+}
+
+/// Compile the directional identity projections for one completed value. The
+/// value itself is the sole root; only checker-declared identity leaves and
+/// generated nominal identities become substitution slots.
+fn compileSpecializationValuePlan(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    root: CheckedTypeId,
+    slots_out: *std.ArrayList(SpecializationCallSlot),
+    occurrences_out: *std.ArrayList(SpecializationOccurrence),
+    projections_out: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallPlan {
+    var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
+    defer {
+        for (builds.items) |*build| build.deinit(allocator);
+        builds.deinit(allocator);
+    }
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var substitutions = std.ArrayList(SpecializationProjectionSubstitution).empty;
+    defer substitutions.deinit(allocator);
+    var projections = std.ArrayList(SpecializationProjection).empty;
+    defer projections.deinit(allocator);
+
+    _ = try collectSpecializationCallOccurrences(
+        allocator,
+        checked_types,
+        root,
+        .{
+            .checked = root,
+            .parent = no_specialization_projection_parent,
+            .index = 0,
+            .payload_index = 0,
+            .step = .argument,
+        },
+        true,
+        &substitutions,
+        &active,
+        &projections,
+        &builds,
+    );
+
+    const slot_start: u32 = @intCast(slots_out.items.len);
+    for (builds.items) |*build| {
+        const occurrence_start: u32 = @intCast(occurrences_out.items.len);
+        try occurrences_out.appendSlice(allocator, build.occurrences.items);
+        try slots_out.append(allocator, .{
+            .checked = build.checked,
+            .kind = build.kind,
+            .exact_identity = build.exact_identity,
+            .generated_source = .producer,
+            .occurrences = .{
+                .start = occurrence_start,
+                .len = @intCast(build.occurrences.items.len),
+            },
+        });
+    }
+    const projection_start: u32 = @intCast(projections_out.items.len);
+    try projections_out.appendSlice(allocator, projections.items);
+    return .{
+        .slots = .{
+            .start = slot_start,
+            .len = @intCast(slots_out.items.len - slot_start),
+        },
+        .projections = .{
+            .start = projection_start,
+            .len = @intCast(projections.items.len),
+        },
+    };
+}
+
+fn publishSpecializationCallPlanForCallable(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    callable: CheckedTypeId,
+    compiled: []bool,
+    by_type: []SpecializationCallPlan,
+    slots: *std.ArrayList(SpecializationCallSlot),
+    occurrences: *std.ArrayList(SpecializationOccurrence),
+    projections: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallPlan {
+    const raw = @intFromEnum(callable);
+    if (raw >= by_type.len) {
+        checkedArtifactInvariant("specialization callable exceeded the checked type store", .{});
+    }
+    if (!compiled[raw]) {
+        by_type[raw] = try compileSpecializationCallPlan(
+            allocator,
+            checked_types,
+            callable,
+            null,
+            false,
+            slots,
+            occurrences,
+            projections,
+        );
+        compiled[raw] = true;
+    }
+    return by_type[raw];
+}
+
+fn collectBidirectionalCallIdentityRelations(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    left: CheckedTypeId,
+    right: CheckedTypeId,
+    out: *std.ArrayList(SpecializationIdentityRelation),
+) Allocator.Error!void {
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+    try collectSpecializationIdentityRelations(
+        allocator,
+        &checked_types.store,
+        left,
+        right,
+        out,
+        &active,
+    );
+    active.clearRetainingCapacity();
+    try collectSpecializationIdentityRelations(
+        allocator,
+        &checked_types.store,
+        right,
+        left,
+        out,
+        &active,
+    );
+}
+
+fn collectDirectionalCallIdentityRelations(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    source: CheckedTypeId,
+    dependent: CheckedTypeId,
+    out: *std.ArrayList(SpecializationIdentityRelation),
+) Allocator.Error!void {
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+    try collectSpecializationIdentityRelations(
+        allocator,
+        &checked_types.store,
+        source,
+        dependent,
+        out,
+        &active,
+    );
+}
+
+/// Checked semantic rule for value direction at a call boundary. Numerals and
+/// empty lists receive their exact runtime type from correlated produced
+/// operands. Callable literals likewise consume the complete function request
+/// so their nested ABI is never specialized from an isolated checked default.
+/// A lookup of a let-bound procedure alias consumes that request too: there is
+/// intentionally no shared runtime local for a polymorphic procedure value.
+fn specializationOperandFlowForExpr(
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    procedure_alias_binders: []const bool,
+    expr_id: CheckedExprId,
+) SpecializationOperandFlow {
+    const expr = checked_bodies.expr(expr_id);
+    return switch (expr.data) {
+        .lambda, .closure => .requested_callable,
+        .numeral, .empty_list => .requested_value,
+        .lookup_local => |lookup| specializationLookupFlow(
+            resolved_value_refs,
+            procedure_alias_binders,
+            lookup.resolved,
+        ),
+        .lookup_external => |resolved| specializationLookupFlow(
+            resolved_value_refs,
+            procedure_alias_binders,
+            resolved,
+        ),
+        .lookup_required => |resolved| specializationLookupFlow(
+            resolved_value_refs,
+            procedure_alias_binders,
+            resolved,
+        ),
+        else => .produced,
+    };
+}
+
+fn specializationLookupFlow(
+    resolved_value_refs: *const ResolvedValueRefTable,
+    procedure_alias_binders: []const bool,
+    maybe_resolved: ?ResolvedValueRefId,
+) SpecializationOperandFlow {
+    const resolved = maybe_resolved orelse return .produced;
+    const raw = @intFromEnum(resolved);
+    if (raw >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("specialization value flow referenced a missing resolved value", .{});
+    }
+    const binder = switch (resolved_value_refs.records[raw].ref) {
+        .local_value, .pattern_binder => |local| local.binder,
+        .local_param, .local_mutable_version, .selected_hoisted_const, .local_proc, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => return .produced,
+    };
+    const binder_raw = @intFromEnum(binder);
+    if (binder_raw >= procedure_alias_binders.len) {
+        checkedArtifactInvariant("specialization value flow referenced a missing pattern binder", .{});
+    }
+    return if (procedure_alias_binders[binder_raw]) .requested_value else .produced;
+}
+
+fn checkedLookupResolvedValue(expr: CheckedExpr) ?ResolvedValueRefId {
+    return switch (expr.data) {
+        .lookup_local => |lookup| lookup.resolved,
+        .lookup_external => |resolved| resolved,
+        .lookup_required => |resolved| resolved,
+        else => null,
+    };
+}
+
+fn resolvedValueIsProcedureAliasSource(
+    resolved_value_refs: *const ResolvedValueRefTable,
+    procedure_alias_binders: []const bool,
+    resolved: ResolvedValueRefId,
+) bool {
+    const raw = @intFromEnum(resolved);
+    if (raw >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("procedure-alias flow referenced a missing resolved value", .{});
+    }
+    return switch (resolved_value_refs.records[raw].ref) {
+        .local_proc, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_proc, .promoted_top_level_proc => true,
+        .local_value, .pattern_binder => |local| blk: {
+            const binder_raw = @intFromEnum(local.binder);
+            if (binder_raw >= procedure_alias_binders.len) {
+                checkedArtifactInvariant("procedure-alias flow referenced a missing pattern binder", .{});
+            }
+            break :blk procedure_alias_binders[binder_raw];
+        },
+        .local_param, .local_mutable_version, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => false,
+    };
+}
+
+fn publishProcedureAliasBinderColumn(
+    allocator: Allocator,
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+) Allocator.Error![]bool {
+    const aliases = try allocator.alloc(bool, checked_bodies.patternBinderCount());
+    @memset(aliases, false);
+
+    // Alias chains may be stored in either arena order. Iterate to the fixed
+    // point over dense statements; this is checked-data publication work, not
+    // a post-check guess from runtime type structure.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (0..checked_bodies.statementCount()) |raw_statement| {
+            const statement = checked_bodies.statement(@enumFromInt(@as(u32, @intCast(raw_statement))));
+            const decl = switch (statement.data) {
+                .decl => |decl| decl,
+                else => continue,
+            };
+            const binder = switch (checked_bodies.pattern(decl.pattern).data) {
+                .assign => |binder| binder,
+                else => continue,
+            };
+            const resolved = checkedLookupResolvedValue(checked_bodies.expr(decl.expr)) orelse continue;
+            if (!resolvedValueIsProcedureAliasSource(resolved_value_refs, aliases, resolved)) continue;
+            const binder_raw = @intFromEnum(binder);
+            if (aliases[binder_raw]) continue;
+            aliases[binder_raw] = true;
+            changed = true;
+        }
+    }
+    return aliases;
+}
+
+fn appendSpecializationOperandFlowsForOrdinaryCall(
+    allocator: Allocator,
+    args: []const CheckedExprId,
+    value_flows_by_expr: []const SpecializationOperandFlow,
+    out: *std.ArrayList(SpecializationOperandFlow),
+) Allocator.Error!artifact_serialize.Span {
+    const start: u32 = @intCast(out.items.len);
+    for (args) |arg| try out.append(allocator, value_flows_by_expr[@intFromEnum(arg)]);
+    return .{ .start = start, .len = @intCast(args.len) };
+}
+
+fn appendCallIdentityRelationSpan(
+    allocator: Allocator,
+    pool: *std.ArrayList(SpecializationIdentityRelation),
+    relations: []const SpecializationIdentityRelation,
+) Allocator.Error!artifact_serialize.Span {
+    const start: u32 = @intCast(pool.items.len);
+    try pool.appendSlice(allocator, relations);
+    return .{ .start = start, .len = @intCast(relations.len) };
+}
+
+fn compileCallConcreteSelections(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    relations: []const SpecializationIdentityRelation,
+    pool: *std.ArrayList(SpecializationConcreteSelection),
+) Allocator.Error!artifact_serialize.Span {
+    const start: u32 = @intCast(pool.items.len);
+    for (relations) |relation| {
+        const dependent_payload = checked_types.store.payload(relation.dependent);
+        if (!checkedTypePayloadIsIdentity(dependent_payload) and
+            !checkedTypeIsGeneratedNominal(dependent_payload)) continue;
+        if (!try concrete_sources.isConcrete(relation.source)) continue;
+        for (pool.items[start..]) |existing| {
+            if (existing.dependent == relation.dependent) break;
+        } else try pool.append(allocator, .{
+            .dependent = relation.dependent,
+            .source = relation.source,
+        });
+    }
+    return .{ .start = start, .len = @intCast(pool.items.len - start) };
+}
+
+fn compileOrdinaryCallIdentityRelations(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    checked_bodies: *const CheckedBodyStore,
+    value_flows_by_expr: []const SpecializationOperandFlow,
+    expr: CheckedExpr,
+    call: anytype,
+    operand_flows: []const SpecializationOperandFlow,
+    pool: *std.ArrayList(SpecializationIdentityRelation),
+) Allocator.Error!artifact_serialize.Span {
+    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    defer relations.deinit(allocator);
+    const function = checkedFunctionPayload(
+        &checked_types.store,
+        call.source_fn_ty_payload,
+        "ordinary call identity relation",
+    );
+    if (function.args.len != call.args.len) {
+        checkedArtifactInvariant("ordinary call identity relation had a different arity", .{});
+    }
+    if (operand_flows.len != call.args.len) {
+        checkedArtifactInvariant("ordinary call operand flow had a different arity", .{});
+    }
+    const callee_ty = checked_bodies.expr(call.func).ty;
+    const callee_flow = value_flows_by_expr[@intFromEnum(call.func)];
+    try collectDirectionalCallIdentityRelations(
+        allocator,
+        checked_types,
+        if (callee_flow == .produced) callee_ty else call.source_fn_ty_payload,
+        if (callee_flow == .produced) call.source_fn_ty_payload else callee_ty,
+        &relations,
+    );
+    for (function.args, call.args, operand_flows) |formal, arg, flow| {
+        const actual = checked_bodies.expr(arg).ty;
+        try collectDirectionalCallIdentityRelations(
+            allocator,
+            checked_types,
+            if (flow == .produced) actual else formal,
+            if (flow == .produced) formal else actual,
+            &relations,
+        );
+    }
+    // A call result may either receive an exact destination from its parent or
+    // become that parent's producer. Publish both explicit directions; only
+    // the edge whose source is present at lowering time fires.
+    try collectBidirectionalCallIdentityRelations(
+        allocator,
+        checked_types,
+        function.ret,
+        expr.ty,
+        &relations,
+    );
+    return try appendCallIdentityRelationSpan(allocator, pool, relations.items);
+}
+
+fn compileDispatchCallIdentityRelations(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    plan: static_dispatch.StaticDispatchCallPlan,
+    operand_flows: []const SpecializationOperandFlow,
+    pool: *std.ArrayList(SpecializationIdentityRelation),
+) Allocator.Error!artifact_serialize.Span {
+    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    defer relations.deinit(allocator);
+    const operands = plan.argsSlice(static_dispatch_plans);
+    const function = checkedFunctionPayload(
+        &checked_types.store,
+        plan.callable_ty,
+        "dispatch call identity relation",
+    );
+    if (function.args.len != operands.len) {
+        checkedArtifactInvariant("dispatch call identity relation had a different arity", .{});
+    }
+    if (operand_flows.len != operands.len) {
+        checkedArtifactInvariant("dispatch call operand flow had a different arity", .{});
+    }
+    switch (plan.resolution) {
+        .direct_closed, .direct_parametric => |direct| {
+            const target = static_dispatch_plans.evidenceNode(direct.evidence);
+            switch (target.instantiation) {
+                .monomorphic => {},
+                .callable => |target_callable| try collectBidirectionalCallIdentityRelations(
+                    allocator,
+                    checked_types,
+                    plan.callable_ty,
+                    target_callable,
+                    &relations,
+                ),
+            }
+        },
+        .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached identity relation publication", .{}),
+        .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+    }
+    for (function.args, operands, operand_flows) |formal, operand, flow| switch (operand) {
+        .checked_expr, .generated_interpolation_iter => |arg| {
+            const actual = checked_bodies.expr(arg).ty;
+            try collectDirectionalCallIdentityRelations(
+                allocator,
+                checked_types,
+                if (flow == .produced) actual else formal,
+                if (flow == .produced) formal else actual,
+                &relations,
+            );
+        },
+        .generated_numeral, .generated_quote => {},
+    };
+    try collectBidirectionalCallIdentityRelations(
+        allocator,
+        checked_types,
+        function.ret,
+        checked_bodies.expr(plan.expr).ty,
+        &relations,
+    );
+    switch (plan.dispatcher) {
+        .arg => |index| {
+            if (index >= function.args.len) {
+                checkedArtifactInvariant("dispatch identity relation dispatcher exceeded its arity", .{});
+            }
+            try collectBidirectionalCallIdentityRelations(
+                allocator,
+                checked_types,
+                plan.dispatcher_ty,
+                function.args[index],
+                &relations,
+            );
+        },
+        .type_only => {},
+    }
+    return try appendCallIdentityRelationSpan(allocator, pool, relations.items);
+}
+
+fn appendSpecializationOperandFlowsForDispatchCall(
+    allocator: Allocator,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    plan: static_dispatch.StaticDispatchCallPlan,
+    value_flows_by_expr: []const SpecializationOperandFlow,
+    out: *std.ArrayList(SpecializationOperandFlow),
+) Allocator.Error!artifact_serialize.Span {
+    const operands = plan.argsSlice(static_dispatch_plans);
+    const start: u32 = @intCast(out.items.len);
+    for (operands) |operand| try out.append(allocator, switch (operand) {
+        .checked_expr => |expr| value_flows_by_expr[@intFromEnum(expr)],
+        // These compiler-authored values are defined by the callable request.
+        .generated_interpolation_iter, .generated_numeral, .generated_quote => .requested_value,
+    });
+    return .{ .start = start, .len = @intCast(operands.len) };
+}
+
+const SpecializationTargetRelationBuild = struct {
+    source_callable: CheckedTypeId,
+    target_artifact: CheckedModuleArtifactKey,
+    target_callable: CheckedTypeId,
+    relations: std.ArrayList(SpecializationTargetIdentityRelation) = .empty,
+
+    fn deinit(self: *SpecializationTargetRelationBuild, allocator: Allocator) void {
+        self.relations.deinit(allocator);
+    }
+};
+
+const PublishedSpecializationTargetRelations = struct {
+    by_type: []artifact_serialize.Span,
+    entries: []SpecializationTargetRelationEntry,
+    relations: []SpecializationTargetIdentityRelation,
+};
+
+fn targetArtifactKey(
+    current_artifact: CheckedModuleArtifactKey,
+    target: static_dispatch.MethodTarget,
+) CheckedModuleArtifactKey {
+    return switch (target.kind) {
+        .procedure => |procedure| checkedArtifactKeyFromArtifactRef(procedure.template.artifact),
+        .local_proc => current_artifact,
+        .structural => checkedArtifactInvariant("structural dispatch target requested a callable artifact", .{}),
+    };
+}
+
+fn importedTargetView(
+    target_artifact: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+) ImportedModuleView {
+    if (importedModuleViewByKey(available_artifacts, target_artifact)) |view| return view;
+    if (importedModuleViewByKey(relation_artifacts, target_artifact)) |view| return view;
+    for (direct_imports) |import| {
+        if (checkedArtifactKeyEql(import.key, target_artifact)) return import.view;
+    }
+    checkedArtifactInvariant("dispatch target artifact was unavailable during specialization relation publication", .{});
+}
+
+fn importedCheckedTypeForProjected(
+    projector: *CheckedTypeStoreImportProjector,
+    projected: CheckedTypeId,
+) ?CheckedTypeId {
+    var iterator = projector.projected.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.value_ptr.* == projected) return entry.key_ptr.*;
+    }
+    return null;
+}
+
+fn directCheckedProcedureTemplateRef(body: anytype) ?canonical.ProcedureTemplateRef {
+    return switch (body) {
+        .callable_eval_template => null,
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |template| template,
+            .synthetic => |synthetic| synthetic.template,
+            .lifted => checkedArtifactInvariant("lifted procedure binding reached checked specialization publication", .{}),
+        },
+    };
+}
+
+fn procedureUseTargetTemplateRef(
+    procedure: ProcedureUseTemplate,
+    current_artifact: CheckedModuleArtifactKey,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+) ?canonical.ProcedureTemplateRef {
+    return switch (procedure.binding) {
+        .top_level => |top_level| blk: {
+            const bindings = if (checkedArtifactKeyEql(top_level.artifact, current_artifact))
+                local_procedure_bindings
+            else
+                importedTargetView(
+                    top_level.artifact,
+                    direct_imports,
+                    available_artifacts,
+                    relation_artifacts,
+                ).top_level_procedure_bindings;
+            break :blk directCheckedProcedureTemplateRef(bindings.get(top_level.binding).body);
+        },
+        .imported => |imported| blk: {
+            const view = importedTargetView(
+                imported.artifact,
+                direct_imports,
+                available_artifacts,
+                relation_artifacts,
+            );
+            for (view.exported_procedure_bindings.bindings) |binding| {
+                if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
+                    break :blk directCheckedProcedureTemplateRef(binding.body);
+                }
+            }
+            checkedArtifactInvariant("imported procedure binding was unavailable during specialization relation publication", .{});
+        },
+        .hosted => |hosted| hosted.template,
+        .platform_required => |required| blk: {
+            const bindings = if (checkedArtifactKeyEql(required.artifact, current_artifact))
+                local_procedure_bindings
+            else
+                importedTargetView(
+                    required.artifact,
+                    direct_imports,
+                    available_artifacts,
+                    relation_artifacts,
+                ).top_level_procedure_bindings;
+            break :blk directCheckedProcedureTemplateRef(bindings.get(required.procedure_binding).body);
+        },
+    };
+}
+
+fn procedureUseFromResolvedValue(ref: ResolvedValueRef) ?ProcedureUseTemplate {
+    return switch (ref) {
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .promoted_top_level_proc,
+        => |procedure| procedure,
+        .platform_required_proc => |required| required.procedure,
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .local_proc,
+        .selected_hoisted_const,
+        .top_level_const,
+        .imported_const,
+        .platform_required_declaration,
+        .platform_required_checked_error,
+        .platform_required_const,
+        => null,
+    };
+}
+
+fn appendSpecializationTargetRelationBuild(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    current_artifact: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+    builds: *std.ArrayList(SpecializationTargetRelationBuild),
+    source_callable: CheckedTypeId,
+    target_artifact: CheckedModuleArtifactKey,
+    target_callable: CheckedTypeId,
+) Allocator.Error!void {
+    for (builds.items) |existing| {
+        if (existing.source_callable == source_callable and
+            checkedArtifactKeyEql(existing.target_artifact, target_artifact) and
+            existing.target_callable == target_callable) return;
+    }
+
+    var build = SpecializationTargetRelationBuild{
+        .source_callable = source_callable,
+        .target_artifact = target_artifact,
+        .target_callable = target_callable,
+    };
+    errdefer build.deinit(allocator);
+
+    var local_relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    defer local_relations.deinit(allocator);
+    var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
+    defer active.deinit();
+    if (checkedArtifactKeyEql(target_artifact, current_artifact)) {
+        try collectSpecializationIdentityRelations(
+            allocator,
+            &checked_types.store,
+            source_callable,
+            target_callable,
+            &local_relations,
+            &active,
+        );
+        for (local_relations.items) |relation| try build.relations.append(allocator, .{
+            .source = relation.source,
+            .dependent = relation.dependent,
+        });
+    } else {
+        const imported = importedTargetView(
+            target_artifact,
+            direct_imports,
+            available_artifacts,
+            relation_artifacts,
+        );
+        var projector = CheckedTypeStoreImportProjector.init(
+            allocator,
+            &checked_types.store,
+            names,
+            imported,
+        );
+        defer projector.deinit();
+        const projected_target = try projector.project(target_callable);
+        try collectSpecializationIdentityRelations(
+            allocator,
+            &checked_types.store,
+            source_callable,
+            projected_target,
+            &local_relations,
+            &active,
+        );
+        for (local_relations.items) |relation| {
+            const target_dependent = importedCheckedTypeForProjected(&projector, relation.dependent) orelse
+                checkedArtifactInvariant("projected specialization target relation lost its target endpoint", .{});
+            try build.relations.append(allocator, .{
+                .source = relation.source,
+                .dependent = target_dependent,
+            });
+        }
+    }
+    try builds.append(allocator, build);
+}
+
+fn appendProcedureUseTargetRelationBuild(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    current_artifact: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    templates: *const CheckedProcedureTemplateTable,
+    builds: *std.ArrayList(SpecializationTargetRelationBuild),
+    source_callable: CheckedTypeId,
+    procedure: ProcedureUseTemplate,
+) Allocator.Error!void {
+    const target_ref = procedureUseTargetTemplateRef(
+        procedure,
+        current_artifact,
+        local_procedure_bindings,
+        direct_imports,
+        available_artifacts,
+        relation_artifacts,
+    ) orelse return;
+    const target_artifact = checkedArtifactKeyFromArtifactRef(target_ref.artifact);
+    const target_table = if (checkedArtifactKeyEql(target_artifact, current_artifact))
+        templates
+    else
+        importedTargetView(
+            target_artifact,
+            direct_imports,
+            available_artifacts,
+            relation_artifacts,
+        ).checked_procedure_templates;
+    const target_callable = target_table.get(target_ref.template).checked_fn_root;
+    try appendSpecializationTargetRelationBuild(
+        allocator,
+        names,
+        checked_types,
+        current_artifact,
+        direct_imports,
+        available_artifacts,
+        relation_artifacts,
+        builds,
+        source_callable,
+        target_artifact,
+        target_callable,
+    );
+}
+
+fn specializationTargetRelationBuildLessThan(
+    _: void,
+    left: SpecializationTargetRelationBuild,
+    right: SpecializationTargetRelationBuild,
+) bool {
+    const left_source = @intFromEnum(left.source_callable);
+    const right_source = @intFromEnum(right.source_callable);
+    if (left_source != right_source) return left_source < right_source;
+    switch (std.mem.order(u8, &left.target_artifact.bytes, &right.target_artifact.bytes)) {
+        .lt => return true,
+        .gt => return false,
+        .eq => return @intFromEnum(left.target_callable) < @intFromEnum(right.target_callable),
+    }
+}
+
+/// Publish every evidence target's explicit instantiation-to-declaration
+/// identity correspondence. Cross-module target types are projected only in
+/// this checker-owned publication pass so canonical labels can be compared in
+/// one store; every dependent endpoint is translated back to its owning
+/// artifact before serialization. Monotype consumes the resulting flat edges
+/// and never compares the two callable graphs.
+fn publishSpecializationTargetRelations(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    current_artifact: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    templates: *const CheckedProcedureTemplateTable,
+) Allocator.Error!PublishedSpecializationTargetRelations {
+    var builds = std.ArrayList(SpecializationTargetRelationBuild).empty;
+    defer {
+        for (builds.items) |*build| build.deinit(allocator);
+        builds.deinit(allocator);
+    }
+
+    for (static_dispatch_plans.evidence_nodes) |node| {
+        const source_callable = switch (node.instantiation) {
+            .monomorphic => continue,
+            .callable => |callable| callable,
+        };
+        const target_artifact = targetArtifactKey(current_artifact, node.target);
+        const target_callable = node.target.callable_ty;
+        try appendSpecializationTargetRelationBuild(
+            allocator,
+            names,
+            checked_types,
+            current_artifact,
+            direct_imports,
+            available_artifacts,
+            relation_artifacts,
+            &builds,
+            source_callable,
+            target_artifact,
+            target_callable,
+        );
+    }
+
+    for (resolved_value_refs.records) |record| {
+        const procedure = procedureUseFromResolvedValue(record.ref) orelse continue;
+        const source_callable = procedure.source_fn_ty_payload orelse
+            checkedArtifactInvariant("direct procedure use had no checked callable during specialization relation publication", .{});
+        try appendProcedureUseTargetRelationBuild(
+            allocator,
+            names,
+            checked_types,
+            current_artifact,
+            direct_imports,
+            available_artifacts,
+            relation_artifacts,
+            local_procedure_bindings,
+            templates,
+            &builds,
+            source_callable,
+            procedure,
+        );
+    }
+
+    for (0..checked_bodies.exprCount()) |raw_expr| {
+        const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+        const expr = checked_bodies.expr(expr_id);
+        if (expr.data != .call or checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
+        const target_id = expr.data.call.direct_target orelse continue;
+        const target_record = resolved_value_refs.records[@intFromEnum(target_id)];
+        const procedure = procedureUseFromResolvedValue(target_record.ref) orelse continue;
+        try appendProcedureUseTargetRelationBuild(
+            allocator,
+            names,
+            checked_types,
+            current_artifact,
+            direct_imports,
+            available_artifacts,
+            relation_artifacts,
+            local_procedure_bindings,
+            templates,
+            &builds,
+            expr.data.call.source_fn_ty_payload,
+            procedure,
+        );
+    }
+
+    std.mem.sort(
+        SpecializationTargetRelationBuild,
+        builds.items,
+        {},
+        specializationTargetRelationBuildLessThan,
+    );
+    const by_type = try allocator.alloc(artifact_serialize.Span, checked_types.store.payloads.items.len);
+    errdefer allocator.free(by_type);
+    @memset(by_type, .{});
+    var entries = std.ArrayList(SpecializationTargetRelationEntry).empty;
+    errdefer entries.deinit(allocator);
+    var relations = std.ArrayList(SpecializationTargetIdentityRelation).empty;
+    errdefer relations.deinit(allocator);
+    var cursor: usize = 0;
+    while (cursor < builds.items.len) {
+        const source = builds.items[cursor].source_callable;
+        const entry_start: u32 = @intCast(entries.items.len);
+        while (cursor < builds.items.len and builds.items[cursor].source_callable == source) : (cursor += 1) {
+            const build = &builds.items[cursor];
+            const relation_start: u32 = @intCast(relations.items.len);
+            try relations.appendSlice(allocator, build.relations.items);
+            try entries.append(allocator, .{
+                .target_artifact = build.target_artifact,
+                .target_callable = build.target_callable,
+                .relations = .{
+                    .start = relation_start,
+                    .len = @intCast(build.relations.items.len),
+                },
+            });
+        }
+        by_type[@intFromEnum(source)] = .{
+            .start = entry_start,
+            .len = @intCast(entries.items.len - entry_start),
+        };
+    }
+    return .{
+        .by_type = by_type,
+        .entries = try entries.toOwnedSlice(allocator),
+        .relations = try relations.toOwnedSlice(allocator),
+    };
+}
+
+/// Publish exact call substitutions only after direct dispatch callables have
+/// been specialized to their selected target shapes. Publishing earlier would
+/// leave stale identity-at-root paths when target selection replaces that
+/// identity with an ordinary nominal or compound checked node.
+fn publishSpecializationCallPlans(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
+    checked_bodies: *const CheckedBodyStore,
+    current_artifact: CheckedModuleArtifactKey,
+    direct_imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    relation_artifacts: []const ImportedModuleView,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    method_registry: *const static_dispatch.MethodRegistry,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    local_procedure_bindings: *const TopLevelProcedureBindingTable,
+    templates: *CheckedProcedureTemplateTable,
+) Allocator.Error!void {
+    if (templates.specialization_call_plans_by_expr.len != 0 or
+        templates.specialization_call_identity_relations_by_expr.len != 0 or
+        templates.specialization_call_identity_relations.len != 0 or
+        templates.specialization_call_concrete_selections_by_expr.len != 0 or
+        templates.specialization_call_concrete_selections.len != 0 or
+        templates.specialization_target_relations_by_type.len != 0 or
+        templates.specialization_target_relation_entries.len != 0 or
+        templates.specialization_target_identity_relations.len != 0 or
+        templates.specialization_iterator_iter_plans.len != 0 or
+        templates.specialization_iterator_next_plans.len != 0 or
+        templates.specialization_call_plans_by_type.len != 0 or
+        templates.specialization_value_plans_by_type.len != 0 or
+        templates.specialization_call_slots.len != 0 or
+        templates.specialization_call_occurrences.len != 0 or
+        templates.specialization_call_projections.len != 0 or
+        templates.specialization_call_operand_flows.len != 0 or
+        templates.specialization_value_flows_by_expr.len != 0)
+    {
+        checkedArtifactInvariant("specialization call plans were published twice", .{});
+    }
+
+    const target_relations = try publishSpecializationTargetRelations(
+        allocator,
+        names,
+        checked_types,
+        current_artifact,
+        direct_imports,
+        available_artifacts,
+        relation_artifacts,
+        static_dispatch_plans,
+        checked_bodies,
+        resolved_value_refs,
+        local_procedure_bindings,
+        templates,
+    );
+    errdefer {
+        allocator.free(target_relations.by_type);
+        allocator.free(target_relations.entries);
+        allocator.free(target_relations.relations);
+    }
+
+    const type_count = checked_types.store.payloads.items.len;
+    const by_type = try allocator.alloc(SpecializationCallPlan, type_count);
+    errdefer allocator.free(by_type);
+    @memset(by_type, .{});
+    const compiled = try allocator.alloc(bool, type_count);
+    defer allocator.free(compiled);
+    @memset(compiled, false);
+    const value_by_type = try allocator.alloc(SpecializationCallPlan, type_count);
+    errdefer allocator.free(value_by_type);
+    @memset(value_by_type, .{});
+
+    const by_expr = try allocator.alloc(SpecializationCallPlan, checked_bodies.exprCount());
+    errdefer allocator.free(by_expr);
+    @memset(by_expr, .{});
+    const procedure_alias_binders = try publishProcedureAliasBinderColumn(
+        allocator,
+        checked_bodies,
+        resolved_value_refs,
+    );
+    defer allocator.free(procedure_alias_binders);
+    const value_flows_by_expr = try allocator.alloc(SpecializationOperandFlow, checked_bodies.exprCount());
+    errdefer allocator.free(value_flows_by_expr);
+    for (value_flows_by_expr, 0..) |*flow, raw_expr| {
+        flow.* = specializationOperandFlowForExpr(
+            checked_bodies,
+            resolved_value_refs,
+            procedure_alias_binders,
+            @enumFromInt(@as(u32, @intCast(raw_expr))),
+        );
+    }
+    const identity_relations_by_expr = try allocator.alloc(artifact_serialize.Span, checked_bodies.exprCount());
+    errdefer allocator.free(identity_relations_by_expr);
+    @memset(identity_relations_by_expr, .{});
+    const concrete_selections_by_expr = try allocator.alloc(artifact_serialize.Span, checked_bodies.exprCount());
+    errdefer allocator.free(concrete_selections_by_expr);
+    @memset(concrete_selections_by_expr, .{});
+    const iter_plans = try allocator.alloc(SpecializationCallPlan, static_dispatch_plans.iterator_for_plans.len);
+    errdefer allocator.free(iter_plans);
+    @memset(iter_plans, .{});
+    const next_plans = try allocator.alloc(SpecializationCallPlan, static_dispatch_plans.iterator_for_plans.len);
+    errdefer allocator.free(next_plans);
+    @memset(next_plans, .{});
+
+    var slots = std.ArrayList(SpecializationCallSlot).empty;
+    errdefer slots.deinit(allocator);
+    var occurrences = std.ArrayList(SpecializationOccurrence).empty;
+    errdefer occurrences.deinit(allocator);
+    var projections = std.ArrayList(SpecializationProjection).empty;
+    errdefer projections.deinit(allocator);
+    var operand_flows = std.ArrayList(SpecializationOperandFlow).empty;
+    errdefer operand_flows.deinit(allocator);
+    var call_identity_relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    errdefer call_identity_relations.deinit(allocator);
+    var call_concrete_selections = std.ArrayList(SpecializationConcreteSelection).empty;
+    errdefer call_concrete_selections.deinit(allocator);
+    for (0..type_count) |raw_type| {
+        const checked_ty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(raw_type)));
+        switch (checked_types.store.payload(checked_ty)) {
+            .pending, .err => {},
+            .flex, .rigid, .empty_record, .empty_tag_union, .alias, .nominal, .function, .tuple, .record, .record_unbound, .tag_union => {
+                value_by_type[raw_type] = try compileSpecializationValuePlan(
+                    allocator,
+                    checked_types,
+                    checked_ty,
+                    &slots,
+                    &occurrences,
+                    &projections,
+                );
+            },
+        }
+    }
+    for (0..checked_bodies.exprCount()) |raw_expr| {
+        const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+        const expr = checked_bodies.expr(expr_id);
+        if (expr.data != .call or checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
+        by_expr[raw_expr] = try publishSpecializationCallPlanForCallable(
+            allocator,
+            checked_types,
+            expr.data.call.source_fn_ty_payload,
+            compiled,
+            by_type,
+            &slots,
+            &occurrences,
+            &projections,
+        );
+        by_expr[raw_expr].operand_flows = try appendSpecializationOperandFlowsForOrdinaryCall(
+            allocator,
+            expr.data.call.args,
+            value_flows_by_expr,
+            &operand_flows,
+        );
+        const expr_operand_flows = operand_flows.items[by_expr[raw_expr].operand_flows.start .. by_expr[raw_expr].operand_flows.start + by_expr[raw_expr].operand_flows.len];
+        identity_relations_by_expr[raw_expr] = try compileOrdinaryCallIdentityRelations(
+            allocator,
+            checked_types,
+            checked_bodies,
+            value_flows_by_expr,
+            expr,
+            expr.data.call,
+            expr_operand_flows,
+            &call_identity_relations,
+        );
+    }
+    for (static_dispatch_plans.plans) |plan| {
+        if (checked_bodies.exprContainsDiagnosticError(plan.expr)) continue;
+        by_expr[@intFromEnum(plan.expr)] = try compileSpecializationCallPlan(
+            allocator,
+            checked_types,
+            plan.callable_ty,
+            plan.dispatcher_ty,
+            switch (plan.resolution) {
+                .direct_closed, .direct_parametric, .evidence_dependent => true,
+                .structural, .checked_error, .@"unreachable" => false,
+                .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached specialization publication", .{}),
+            },
+            &slots,
+            &occurrences,
+            &projections,
+        );
+        const raw_plan_expr = @intFromEnum(plan.expr);
+        by_expr[raw_plan_expr].operand_flows = try appendSpecializationOperandFlowsForDispatchCall(
+            allocator,
+            static_dispatch_plans,
+            plan,
+            value_flows_by_expr,
+            &operand_flows,
+        );
+        const dispatch_operand_flows = operand_flows.items[by_expr[raw_plan_expr].operand_flows.start .. by_expr[raw_plan_expr].operand_flows.start + by_expr[raw_plan_expr].operand_flows.len];
+        identity_relations_by_expr[@intFromEnum(plan.expr)] = try compileDispatchCallIdentityRelations(
+            allocator,
+            checked_types,
+            checked_bodies,
+            static_dispatch_plans,
+            plan,
+            dispatch_operand_flows,
+            &call_identity_relations,
+        );
+    }
+    // Every procedure body consumes the same directional interface plan as a
+    // call site: its completed specialization supplies every argument and the
+    // reserved result. Publish that plan for every checked procedure root so
+    // body lowering never has to reconstruct substitutions from a pair of
+    // complete function graphs.
+    for (templates.templates) |template| {
+        _ = try publishSpecializationCallPlanForCallable(
+            allocator,
+            checked_types,
+            template.checked_fn_root,
+            compiled,
+            by_type,
+            &slots,
+            &occurrences,
+            &projections,
+        );
+    }
+    for (templates.specialization_interface_relations) |relation| switch (relation.data) {
+        .procedure => |procedure| _ = try publishSpecializationCallPlanForCallable(
+            allocator,
+            checked_types,
+            procedure.fn_ty,
+            compiled,
+            by_type,
+            &slots,
+            &occurrences,
+            &projections,
+        ),
+        .type_equality, .call, .local_proc_use => {},
+    };
+    for (static_dispatch_plans.evidence_nodes) |node| switch (node.instantiation) {
+        .monomorphic => {},
+        .callable => |callable| _ = try publishSpecializationCallPlanForCallable(
+            allocator,
+            checked_types,
+            callable,
+            compiled,
+            by_type,
+            &slots,
+            &occurrences,
+            &projections,
+        ),
+    };
+    for (method_registry.entries) |entry| switch (entry.target.kind) {
+        .procedure, .local_proc => _ = try publishSpecializationCallPlanForCallable(
+            allocator,
+            checked_types,
+            entry.target.callable_ty,
+            compiled,
+            by_type,
+            &slots,
+            &occurrences,
+            &projections,
+        ),
+        .structural => {},
+    };
+    for (static_dispatch_plans.iterator_for_plans, 0..) |plan, index| {
+        iter_plans[index] = try compileSpecializationCallPlan(
+            allocator,
+            checked_types,
+            plan.iter.callable_ty,
+            plan.iter.dispatcher_ty,
+            switch (plan.iter.resolution) {
+                .direct_closed, .direct_parametric, .evidence_dependent => true,
+                .structural, .checked_error, .@"unreachable" => false,
+                .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+            },
+            &slots,
+            &occurrences,
+            &projections,
+        );
+        next_plans[index] = try compileSpecializationCallPlan(
+            allocator,
+            checked_types,
+            plan.next.callable_ty,
+            plan.next.dispatcher_ty,
+            switch (plan.next.resolution) {
+                .direct_closed, .direct_parametric, .evidence_dependent => true,
+                .structural, .checked_error, .@"unreachable" => false,
+                .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
+            },
+            &slots,
+            &occurrences,
+            &projections,
+        );
+    }
+
+    templates.specialization_call_plans_by_expr = by_expr;
+    templates.specialization_call_identity_relations_by_expr = identity_relations_by_expr;
+    templates.specialization_call_identity_relations = try call_identity_relations.toOwnedSlice(allocator);
+    templates.specialization_call_concrete_selections_by_expr = concrete_selections_by_expr;
+    templates.specialization_call_concrete_selections = try call_concrete_selections.toOwnedSlice(allocator);
+    templates.specialization_target_relations_by_type = target_relations.by_type;
+    templates.specialization_target_relation_entries = target_relations.entries;
+    templates.specialization_target_identity_relations = target_relations.relations;
+    templates.specialization_iterator_iter_plans = iter_plans;
+    templates.specialization_iterator_next_plans = next_plans;
+    templates.specialization_call_plans_by_type = by_type;
+    templates.specialization_value_plans_by_type = value_by_type;
+    templates.specialization_call_slots = try slots.toOwnedSlice(allocator);
+    templates.specialization_call_occurrences = try occurrences.toOwnedSlice(allocator);
+    templates.specialization_call_projections = try projections.toOwnedSlice(allocator);
+    templates.specialization_call_operand_flows = try operand_flows.toOwnedSlice(allocator);
+    templates.specialization_value_flows_by_expr = value_flows_by_expr;
+}
+
+fn appendSpecializationCallOccurrence(
+    allocator: Allocator,
+    checked_ty: CheckedTypeId,
+    maybe_kind: ?SpecializationCallSlotKind,
+    exact_identity: bool,
+    occurrence_root: SpecializationOccurrenceRoot,
+    projection: u32,
+    produced: bool,
+    builds: *std.ArrayList(SpecializationCallSlotBuild),
+) Allocator.Error!void {
+    var build: *SpecializationCallSlotBuild = for (builds.items) |*candidate| {
+        if (candidate.checked == checked_ty) {
+            if (maybe_kind) |kind| if (candidate.kind != kind) {
+                checkedArtifactInvariant("one checked call identity was published with incompatible slot kinds", .{});
+            };
+            break candidate;
+        }
+    } else blk: {
+        try builds.append(allocator, .{
+            .checked = checked_ty,
+            .kind = maybe_kind orelse .identity,
+        });
+        break :blk &builds.items[builds.items.len - 1];
+    };
+    build.exact_identity = build.exact_identity or exact_identity;
+    try build.occurrences.append(allocator, .{
+        .checked = checked_ty,
+        .projection = projection,
+        .root = occurrence_root,
+        .production = if (produced) .producer else .consumer,
+    });
+}
+
+fn collectSpecializationCallOccurrences(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    raw_root: CheckedTypeId,
+    raw_projection: SpecializationProjection,
+    produced: bool,
+    substitutions: *std.ArrayList(SpecializationProjectionSubstitution),
+    active: *collections.DenseMap(CheckedTypeId, void),
+    projections: *std.ArrayList(SpecializationProjection),
+    builds: *std.ArrayList(SpecializationCallSlotBuild),
+) Allocator.Error!?u32 {
+    const root = specializationProjectionSubstitute(substitutions.items, raw_root);
+    var projection = raw_projection;
+    projection.checked = root;
+    const projection_start = projections.items.len;
+    const projection_index: u32 = @intCast(projection_start);
+    try projections.append(allocator, projection);
+    const root_projection = blk: {
+        var index = projection_index;
+        while (projections.items[index].parent != no_specialization_projection_parent) {
+            if (projections.items[index].parent >= index) {
+                checkedArtifactInvariant("specialization projection child had no preceding parent", .{});
+            }
+            index = projections.items[index].parent;
+        }
+        break :blk projections.items[index];
+    };
+    const occurrence_root: SpecializationOccurrenceRoot = switch (root_projection.step) {
+        .argument => .argument,
+        .result => .result,
+        .dispatcher => .dispatcher,
+        .target_argument => .target_argument,
+        .target_result => .target_result,
+        .alias_argument,
+        .alias_backing,
+        .nominal_argument,
+        .nominal_representation,
+        .function_argument,
+        .function_result,
+        .tuple_item,
+        .record_field,
+        .record_remainder,
+        .tag_payload,
+        .tag_remainder,
+        => checkedArtifactInvariant("specialization projection root was not a call edge", .{}),
+    };
+    const payload = checked_types.store.payload(root);
+    var has_output = false;
+    if (checkedTypePayloadIsIdentity(payload)) {
+        try appendSpecializationCallOccurrence(
+            allocator,
+            root,
+            @as(?SpecializationCallSlotKind, .identity),
+            false,
+            occurrence_root,
+            projection_index,
+            produced,
+            builds,
+        );
+        has_output = true;
+    }
+    if (checkedTypeIsGeneratedNominal(payload)) {
+        try appendSpecializationCallOccurrence(
+            allocator,
+            root,
+            @as(?SpecializationCallSlotKind, .generated_nominal),
+            false,
+            occurrence_root,
+            projection_index,
+            produced,
+            builds,
+        );
+        has_output = true;
+    }
+
+    const seen = try active.getOrPut(root);
+    if (seen.found_existing) {
+        if (!has_output) projections.shrinkRetainingCapacity(projection_start);
+        return if (has_output) projection_index else null;
+    }
+    defer _ = active.remove(root);
+
+    switch (payload) {
+        .flex, .rigid => {},
+        .alias => |alias| {
+            for (alias.args, 0..) |arg, index| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
+                    .checked = arg,
+                    .parent = projection_index,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .alias_argument,
+                }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }
+            has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, alias.backing, .{
+                .checked = alias.backing,
+                .parent = projection_index,
+                .index = 0,
+                .payload_index = 0,
+                .step = .alias_backing,
+            }, produced, substitutions, active, projections, builds)) != null or has_output;
+        },
+        .nominal => |nominal| nominal_blk: {
+            if (nominal.builtin) |builtin_nominal| {
+                if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal) {
+                    const declaration = checked_types.store.nominalDeclarationForPayload(nominal) orelse
+                        checkedArtifactInvariant("Try specialization projection had no checked declaration", .{});
+                    const backing = checked_types.store.nominalBackingTemplateForPayload(nominal) orelse
+                        checkedArtifactInvariant("Try specialization projection had no checked backing", .{});
+                    const formals = declaration.formalArgs(&checked_types.store);
+                    if (formals.len != nominal.args.len) {
+                        checkedArtifactInvariant("Try specialization projection backing arity did not match", .{});
+                    }
+                    const substitution_start = substitutions.items.len;
+                    defer substitutions.shrinkRetainingCapacity(substitution_start);
+                    for (formals, nominal.args) |formal, actual| {
+                        try substitutions.append(allocator, .{
+                            .formal = formal,
+                            .actual = specializationProjectionSubstitute(substitutions.items[0..substitution_start], actual),
+                        });
+                    }
+                    has_output = (try collectSpecializationCallOccurrences(
+                        allocator,
+                        checked_types,
+                        backing,
+                        .{
+                            .checked = backing,
+                            .parent = projection_index,
+                            .index = 0,
+                            .payload_index = 0,
+                            .step = .nominal_representation,
+                        },
+                        produced,
+                        substitutions,
+                        active,
+                        projections,
+                        builds,
+                    )) != null or has_output;
+                    break :nominal_blk;
+                }
+            }
+            // A nominal is atomic once encountered. Only its explicitly
+            // declared public arguments are legal outgoing projection edges;
+            // generated backing is never traversed.
+            for (nominal.args, 0..) |arg, index| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
+                    .checked = arg,
+                    .parent = projection_index,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .nominal_argument,
+                }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }
+        },
+        .function => |function| {
+            for (function.args, 0..) |arg, index| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
+                    .checked = arg,
+                    .parent = projection_index,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .function_argument,
+                }, false, substitutions, active, projections, builds)) != null or has_output;
+            }
+            has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, function.ret, .{
+                .checked = function.ret,
+                .parent = projection_index,
+                .index = 0,
+                .payload_index = 0,
+                .step = .function_result,
+            }, true, substitutions, active, projections, builds)) != null or has_output;
+        },
+        .tuple => |items| {
+            for (items, 0..) |item, index| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, item, .{
+                    .checked = item,
+                    .parent = projection_index,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .tuple_item,
+                }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }
+        },
+        .record, .record_unbound => {
+            const parts = recordParts(payload).?;
+            for (parts.fields, 0..) |field, index| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, field.ty, .{
+                    .checked = field.ty,
+                    .parent = projection_index,
+                    .index = @intCast(index),
+                    .payload_index = 0,
+                    .step = .record_field,
+                }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }
+            if (parts.ext) |ext| {
+                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, ext, .{
+                    .checked = ext,
+                    .parent = projection_index,
+                    .index = 0,
+                    .payload_index = 0,
+                    .step = .record_remainder,
+                }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }
+        },
+        .tag_union => |tag_union| {
+            for (tag_union.tags, 0..) |tag, tag_index| {
+                for (tag.argsSlice(&checked_types.store), 0..) |arg, payload_index| {
+                    has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
+                        .checked = arg,
+                        .parent = projection_index,
+                        .index = @intCast(tag_index),
+                        .payload_index = @intCast(payload_index),
+                        .step = .tag_payload,
+                    }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }
+            }
+            has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, tag_union.ext, .{
+                .checked = tag_union.ext,
+                .parent = projection_index,
+                .index = 0,
+                .payload_index = 0,
+                .step = .tag_remainder,
+            }, produced, substitutions, active, projections, builds)) != null or has_output;
+        },
+        .pending => checkedArtifactInvariant("call specialization occurrence reached an unfinished checked type", .{}),
+        .err, .empty_record, .empty_tag_union => {},
+    }
+    if (!has_output) projections.shrinkRetainingCapacity(projection_start);
+    return if (has_output) projection_index else null;
+}
+
 const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -17154,6 +19383,7 @@ const CheckedTemplateRefCollector = struct {
     scheme_use_scopes: std.ArrayList(DispatchScope),
     scope_sites: std.ArrayList(CollectedScopeConstructionSite),
     specialization_relations: std.ArrayList(SpecializationInterfaceRelation),
+    specialization_identity_relations: std.ArrayList(SpecializationIdentityRelation),
     specialization_types: std.ArrayList(CheckedTypeId),
     template_root_expr: ?CheckedExprId = null,
     /// Pooled across templates (ids are global); the stack resets per template.
@@ -17191,6 +19421,7 @@ const CheckedTemplateRefCollector = struct {
             .scheme_use_scopes = .empty,
             .scope_sites = .empty,
             .specialization_relations = .empty,
+            .specialization_identity_relations = .empty,
             .specialization_types = .empty,
             .scopes = .empty,
             .scope_by_checked_expr = collections.DenseMap(CheckedExprId, DispatchScopeId).init(allocator),
@@ -17215,6 +19446,7 @@ const CheckedTemplateRefCollector = struct {
         self.scheme_use_scopes.deinit(self.allocator);
         self.scope_sites.deinit(self.allocator);
         self.specialization_relations.deinit(self.allocator);
+        self.specialization_identity_relations.deinit(self.allocator);
         self.specialization_types.deinit(self.allocator);
         self.scopes.deinit(self.allocator);
         self.scope_by_checked_expr.deinit();
@@ -17232,6 +19464,7 @@ const CheckedTemplateRefCollector = struct {
         self.scheme_use_scopes.clearRetainingCapacity();
         self.scope_sites.clearRetainingCapacity();
         self.specialization_relations.clearRetainingCapacity();
+        self.specialization_identity_relations.clearRetainingCapacity();
         self.specialization_types.clearRetainingCapacity();
         self.template_root_expr = null;
         // `scopes` pools across templates; only the stack resets.
@@ -17268,14 +19501,98 @@ const CheckedTemplateRefCollector = struct {
         owns_scope: bool,
     ) Allocator.Error!void {
         if (self.checked_bodies.exprContainsDiagnosticError(expr_id)) return;
+        const function = checkedFunctionPayload(
+            &self.checked_types.store,
+            fn_ty,
+            "checked procedure specialization relation",
+        );
+        const relation_start: u32 = @intCast(self.specialization_identity_relations.items.len);
+        try self.appendBidirectionalSpecializationIdentityRelations(function.ret, body_ret_ty);
+        const procedure_data = switch (self.checked_bodies.expr(expr_id).data) {
+            .lambda => |lambda| lambda,
+            .closure => |closure| blk: {
+                const lambda_expr = self.checked_bodies.expr(closure.lambda);
+                if (lambda_expr.data != .lambda) {
+                    checkedArtifactInvariant("checked closure procedure relation did not reference a lambda", .{});
+                }
+                try self.appendBidirectionalSpecializationIdentityRelations(fn_ty, lambda_expr.ty);
+                break :blk lambda_expr.data.lambda;
+            },
+            else => null,
+        };
+        if (procedure_data) |lambda| {
+            if (function.args.len != lambda.args.len) {
+                checkedArtifactInvariant("checked procedure relation had a different argument arity", .{});
+            }
+            for (function.args, lambda.args) |formal, pattern| {
+                try self.appendBidirectionalSpecializationIdentityRelations(
+                    formal,
+                    self.checked_bodies.pattern(pattern).ty,
+                );
+            }
+        }
+        const identity_relations = artifact_serialize.Span{
+            .start = relation_start,
+            .len = @intCast(self.specialization_identity_relations.items.len - relation_start),
+        };
         try self.specialization_relations.append(self.allocator, .{
             .scope = self.currentScope(),
+            .procedure_expr = expr_id,
+            .identity_relations = identity_relations,
             .data = .{ .procedure = .{
                 .fn_ty = fn_ty,
                 .body_ret_ty = body_ret_ty,
                 .owns_scope = owns_scope,
             } },
         });
+    }
+
+    fn appendSpecializationIdentityRelations(
+        self: *CheckedTemplateRefCollector,
+        source: CheckedTypeId,
+        dependent: CheckedTypeId,
+    ) Allocator.Error!artifact_serialize.Span {
+        const start: u32 = @intCast(self.specialization_identity_relations.items.len);
+        var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(self.allocator);
+        defer active.deinit();
+        try collectSpecializationIdentityRelations(
+            self.allocator,
+            &self.checked_types.store,
+            source,
+            dependent,
+            &self.specialization_identity_relations,
+            &active,
+        );
+        return .{
+            .start = start,
+            .len = @intCast(self.specialization_identity_relations.items.len - start),
+        };
+    }
+
+    fn appendBidirectionalSpecializationIdentityRelations(
+        self: *CheckedTemplateRefCollector,
+        left: CheckedTypeId,
+        right: CheckedTypeId,
+    ) Allocator.Error!void {
+        var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(self.allocator);
+        defer active.deinit();
+        try collectSpecializationIdentityRelations(
+            self.allocator,
+            &self.checked_types.store,
+            left,
+            right,
+            &self.specialization_identity_relations,
+            &active,
+        );
+        active.clearRetainingCapacity();
+        try collectSpecializationIdentityRelations(
+            self.allocator,
+            &self.checked_types.store,
+            right,
+            left,
+            &self.specialization_identity_relations,
+            &active,
+        );
     }
 
     fn appendCallRelation(
@@ -17290,6 +19607,25 @@ const CheckedTemplateRefCollector = struct {
         for (call.args) |arg| {
             self.specialization_types.appendAssumeCapacity(self.checked_bodies.expr(arg).ty);
         }
+        const function = checkedFunctionPayload(
+            &self.checked_types.store,
+            call.source_fn_ty_payload,
+            "checked call specialization relation",
+        );
+        if (function.args.len != call.args.len) {
+            checkedArtifactInvariant("checked call specialization relation had a different arity", .{});
+        }
+        try self.appendBidirectionalSpecializationIdentityRelations(
+            call.source_fn_ty_payload,
+            self.checked_bodies.expr(call.func).ty,
+        );
+        for (function.args, call.args) |formal, arg| {
+            try self.appendBidirectionalSpecializationIdentityRelations(
+                formal,
+                self.checked_bodies.expr(arg).ty,
+            );
+        }
+        try self.appendBidirectionalSpecializationIdentityRelations(function.ret, expr.ty);
         try self.specialization_relations.append(self.allocator, .{
             .scope = self.currentScope(),
             .data = .{ .call = .{
@@ -17300,6 +19636,51 @@ const CheckedTemplateRefCollector = struct {
                 .direct_target = call.direct_target,
             } },
         });
+    }
+
+    fn appendDispatchCallRelation(
+        self: *CheckedTemplateRefCollector,
+        expr_id: CheckedExprId,
+        plan_id: static_dispatch.StaticDispatchPlanId,
+    ) Allocator.Error!void {
+        if (self.checked_bodies.exprContainsDiagnosticError(expr_id)) return;
+        const plan = self.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const operands = plan.argsSlice(self.static_dispatch_plans);
+        const function = checkedFunctionPayload(
+            &self.checked_types.store,
+            plan.callable_ty,
+            "checked dispatch specialization relation",
+        );
+        if (function.args.len != operands.len) {
+            checkedArtifactInvariant("checked dispatch specialization relation had a different arity", .{});
+        }
+        for (function.args, operands) |formal, operand| switch (operand) {
+            .checked_expr => |arg| try self.appendBidirectionalSpecializationIdentityRelations(
+                formal,
+                self.checked_bodies.expr(arg).ty,
+            ),
+            .generated_interpolation_iter => |arg| try self.appendBidirectionalSpecializationIdentityRelations(
+                formal,
+                self.checked_bodies.expr(arg).ty,
+            ),
+            .generated_numeral, .generated_quote => {},
+        };
+        try self.appendBidirectionalSpecializationIdentityRelations(
+            function.ret,
+            self.checked_bodies.expr(expr_id).ty,
+        );
+        switch (plan.dispatcher) {
+            .arg => |index| {
+                if (index >= function.args.len) {
+                    checkedArtifactInvariant("checked dispatch relation dispatcher exceeded its arity", .{});
+                }
+                try self.appendBidirectionalSpecializationIdentityRelations(
+                    plan.dispatcher_ty,
+                    function.args[index],
+                );
+            },
+            .type_only => {},
+        }
     }
 
     fn collectExpr(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
@@ -17388,11 +19769,13 @@ const CheckedTemplateRefCollector = struct {
             => |plan_id| {
                 const id = plan_id orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
+                try self.appendDispatchCallRelation(expr_id, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
             .interpolation => |interpolation| {
                 const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
+                try self.appendDispatchCallRelation(expr_id, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
             .numeral => |numeral| {
@@ -17400,12 +19783,14 @@ const CheckedTemplateRefCollector = struct {
                 // produced at monotype lowering); only custom conversions do.
                 if (numeral.plan) |id| {
                     try self.appendDispatchRef(id);
+                    try self.appendDispatchCallRelation(expr_id, id);
                     try self.collectStaticDispatchPlanArgs(id);
                 }
             },
             .str_from_quote => |quote| {
                 const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
                 try self.appendDispatchRef(id);
+                try self.appendDispatchCallRelation(expr_id, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
             .str,
@@ -17824,6 +20209,15 @@ pub const CheckedProcedureTemplate = struct {
     body: CheckedProcedureBody,
     checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
     checked_fn_root: CheckedTypeId,
+    /// Range into `CheckedProcedureTemplateTable.specialization_identity_slots`.
+    identity_slots: artifact_serialize.Span = .{},
+    /// Checker-published directional result substitutions for the template
+    /// root. Nested procedures use their expression-indexed relation instead.
+    identity_relations: artifact_serialize.Span = .{},
+    /// Checker-selected concrete sources for every solved identity component
+    /// used inside this template body, including monomorphic interface/body
+    /// equalities that have no public specialization slot.
+    concrete_selections: artifact_serialize.Span = .{},
     /// Build/publication traversal span containing every call plan in the
     /// template. Post-check consumers use the classified spans below.
     static_dispatch_plans: StaticDispatchPlanTableRef,
@@ -18000,6 +20394,8 @@ fn hostedTryAdapterCapabilityForRoot(
 
 /// Public `CheckedProcedureTemplateTable` declaration.
 pub const CheckedProcedureTemplateTable = struct {
+    pub const no_specialization_relation = std.math.maxInt(u32);
+
     templates: []CheckedProcedureTemplate = &.{},
     by_def: []static_dispatch.ProcedureTemplateLookupEntry = &.{},
     /// Flat pool backing each template's `evidence_params` span.
@@ -18016,6 +20412,60 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Flat pool of checker-authored relations that complete callable
     /// interfaces before specialization keys are sealed.
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
+    /// Dense checked-expression column naming the owning procedure relation.
+    /// Non-procedure expressions contain `no_specialization_relation`.
+    specialization_procedure_relations_by_expr: []u32 = &.{},
+    /// Flat pool backing every specialization relation's direct identity-slot
+    /// span.
+    specialization_identity_relations: []SpecializationIdentityRelation = &.{},
+    /// Every identity slot in each template's immutable checked function
+    /// interface.
+    specialization_identity_slots: []SpecializationIdentitySlot = &.{},
+    /// Checker-selected concrete sources for template and nested-procedure
+    /// internal identity components.
+    specialization_concrete_selections: []SpecializationConcreteSelection = &.{},
+    /// Dense checked-expression column for ordinary and static-dispatch call
+    /// plans.
+    specialization_call_plans_by_expr: []SpecializationCallPlan = &.{},
+    /// Dense checked-expression column of direct checker-authored identity
+    /// relations for each ordinary or static-dispatch call.
+    specialization_call_identity_relations_by_expr: []artifact_serialize.Span = &.{},
+    /// Flat pool backing `specialization_call_identity_relations_by_expr`.
+    specialization_call_identity_relations: []SpecializationIdentityRelation = &.{},
+    /// Dense checked-expression column of checker-selected concrete identity
+    /// sources for each call.
+    specialization_call_concrete_selections_by_expr: []artifact_serialize.Span = &.{},
+    /// Flat pool backing `specialization_call_concrete_selections_by_expr`.
+    specialization_call_concrete_selections: []SpecializationConcreteSelection = &.{},
+    /// Dense checked-type column. Each source callable indexes the concrete
+    /// dispatch-target correspondences checking published for it.
+    specialization_target_relations_by_type: []artifact_serialize.Span = &.{},
+    /// Target correspondence entries grouped by source callable.
+    specialization_target_relation_entries: []SpecializationTargetRelationEntry = &.{},
+    /// Flat directional edges backing every target correspondence entry.
+    specialization_target_identity_relations: []SpecializationTargetIdentityRelation = &.{},
+    /// Synthetic iterator-loop call plans, parallel to `iterator_for_plans`.
+    specialization_iterator_iter_plans: []SpecializationCallPlan = &.{},
+    specialization_iterator_next_plans: []SpecializationCallPlan = &.{},
+    /// Dense checked-type column for target-instantiation call plans. This is
+    /// published after dispatch target specialization, so a target request is
+    /// always built from the target's final checked callable shape.
+    specialization_call_plans_by_type: []SpecializationCallPlan = &.{},
+    /// Dense checked-type column for one produced value root. These plans
+    /// publish only identity-bearing immediate descendants; an ordinary
+    /// compound or nominal root is never installed as an identity merely
+    /// because it contains one.
+    specialization_value_plans_by_type: []SpecializationCallPlan = &.{},
+    /// Flat checker-authored exact-call slots and their occurrences.
+    specialization_call_slots: []SpecializationCallSlot = &.{},
+    specialization_call_occurrences: []SpecializationOccurrence = &.{},
+    specialization_call_projections: []SpecializationProjection = &.{},
+    /// Flat pool backing each expression call plan's explicit operand flow.
+    specialization_call_operand_flows: []SpecializationOperandFlow = &.{},
+    /// Dense checked-expression column publishing the direction in which each
+    /// value obtains its exact runtime node. Consumers use this semantic fact
+    /// directly; post-check lowering never reclassifies expression syntax.
+    specialization_value_flows_by_expr: []SpecializationOperandFlow = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
     /// Dense, expression-indexed spans of checker-authored storage slots for
@@ -18037,6 +20487,27 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
+        specialization_procedure_relations_by_expr: SerializedSlice(u32) = .{},
+        specialization_identity_relations: SerializedSlice(SpecializationIdentityRelation) = .{},
+        specialization_identity_slots: SerializedSlice(SpecializationIdentitySlot) = .{},
+        specialization_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
+        specialization_call_plans_by_expr: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_call_identity_relations_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
+        specialization_call_identity_relations: SerializedSlice(SpecializationIdentityRelation) = .{},
+        specialization_call_concrete_selections_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
+        specialization_call_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
+        specialization_target_relations_by_type: SerializedSlice(artifact_serialize.Span) = .{},
+        specialization_target_relation_entries: SerializedSlice(SpecializationTargetRelationEntry) = .{},
+        specialization_target_identity_relations: SerializedSlice(SpecializationTargetIdentityRelation) = .{},
+        specialization_iterator_iter_plans: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_iterator_next_plans: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_call_plans_by_type: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_value_plans_by_type: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_call_slots: SerializedSlice(SpecializationCallSlot) = .{},
+        specialization_call_occurrences: SerializedSlice(SpecializationOccurrence) = .{},
+        specialization_call_projections: SerializedSlice(SpecializationProjection) = .{},
+        specialization_call_operand_flows: SerializedSlice(SpecializationOperandFlow) = .{},
+        specialization_value_flows_by_expr: SerializedSlice(SpecializationOperandFlow) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         recursive_storage_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
         recursive_storage_types: SerializedSlice(CheckedTypeId) = .{},
@@ -18279,6 +20750,27 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.dispatch_relation_kinds);
         allocator.free(self.dispatch_scopes);
         allocator.free(self.specialization_interface_relations);
+        allocator.free(self.specialization_procedure_relations_by_expr);
+        allocator.free(self.specialization_identity_relations);
+        allocator.free(self.specialization_identity_slots);
+        allocator.free(self.specialization_concrete_selections);
+        allocator.free(self.specialization_call_plans_by_expr);
+        allocator.free(self.specialization_call_identity_relations_by_expr);
+        allocator.free(self.specialization_call_identity_relations);
+        allocator.free(self.specialization_call_concrete_selections_by_expr);
+        allocator.free(self.specialization_call_concrete_selections);
+        allocator.free(self.specialization_target_relations_by_type);
+        allocator.free(self.specialization_target_relation_entries);
+        allocator.free(self.specialization_target_identity_relations);
+        allocator.free(self.specialization_iterator_iter_plans);
+        allocator.free(self.specialization_iterator_next_plans);
+        allocator.free(self.specialization_call_plans_by_type);
+        allocator.free(self.specialization_value_plans_by_type);
+        allocator.free(self.specialization_call_slots);
+        allocator.free(self.specialization_call_occurrences);
+        allocator.free(self.specialization_call_projections);
+        allocator.free(self.specialization_call_operand_flows);
+        allocator.free(self.specialization_value_flows_by_expr);
         allocator.free(self.specialization_interface_types);
         allocator.free(self.recursive_storage_by_expr);
         allocator.free(self.recursive_storage_types);
@@ -18301,8 +20793,160 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.specialization_interface_relations[span.start .. span.start + span.len];
     }
 
+    pub fn specializationProcedureRelationForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) SpecializationInterfaceRelation {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.specialization_procedure_relations_by_expr.len) {
+            checkedArtifactInvariant("procedure expression exceeded its specialization-relation column", .{});
+        }
+        const relation = self.specialization_procedure_relations_by_expr[raw];
+        if (relation == no_specialization_relation or relation >= self.specialization_interface_relations.len) {
+            checkedArtifactInvariant("checked procedure had no published specialization relation", .{});
+        }
+        return self.specialization_interface_relations[relation];
+    }
+
     pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: artifact_serialize.Span) []const CheckedTypeId {
         return self.specialization_interface_types[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationIdentityRelations(
+        self: *const CheckedProcedureTemplateTable,
+        relation: SpecializationInterfaceRelation,
+    ) []const SpecializationIdentityRelation {
+        const span = relation.identity_relations;
+        return self.specialization_identity_relations[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationIdentitySlots(
+        self: *const CheckedProcedureTemplateTable,
+        template: *const CheckedProcedureTemplate,
+    ) []const SpecializationIdentitySlot {
+        const span = template.identity_slots;
+        return self.specialization_identity_slots[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationRelationIdentitySlots(
+        self: *const CheckedProcedureTemplateTable,
+        relation: SpecializationInterfaceRelation,
+    ) []const SpecializationIdentitySlot {
+        const span = relation.identity_slots;
+        return self.specialization_identity_slots[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationConcreteSelections(
+        self: *const CheckedProcedureTemplateTable,
+        span: artifact_serialize.Span,
+    ) []const SpecializationConcreteSelection {
+        return self.specialization_concrete_selections[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationCallPlanForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) SpecializationCallPlanView {
+        return self.specializationCallPlanView(self.specialization_call_plans_by_expr[@intFromEnum(expr)]);
+    }
+
+    pub fn specializationValueFlowForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) SpecializationOperandFlow {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.specialization_value_flows_by_expr.len) {
+            checkedArtifactInvariant("checked expression exceeded its exact-value-flow column", .{});
+        }
+        return self.specialization_value_flows_by_expr[raw];
+    }
+
+    pub fn specializationCallIdentityRelationsForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) []const SpecializationIdentityRelation {
+        const span = self.specialization_call_identity_relations_by_expr[@intFromEnum(expr)];
+        return self.specialization_call_identity_relations[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationCallConcreteSelectionsForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) []const SpecializationConcreteSelection {
+        const span = self.specialization_call_concrete_selections_by_expr[@intFromEnum(expr)];
+        return self.specialization_call_concrete_selections[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationTargetIdentityRelations(
+        self: *const CheckedProcedureTemplateTable,
+        source_callable: CheckedTypeId,
+        target_artifact: CheckedModuleArtifactKey,
+        target_callable: CheckedTypeId,
+    ) []const SpecializationTargetIdentityRelation {
+        const raw = @intFromEnum(source_callable);
+        if (raw >= self.specialization_target_relations_by_type.len) {
+            checkedArtifactInvariant("dispatch target instantiation exceeded its relation column", .{});
+        }
+        const entries_span = self.specialization_target_relations_by_type[raw];
+        const entries = self.specialization_target_relation_entries[entries_span.start .. entries_span.start + entries_span.len];
+        for (entries) |entry| {
+            if (!checkedArtifactKeyEql(entry.target_artifact, target_artifact) or
+                entry.target_callable != target_callable) continue;
+            return self.specialization_target_identity_relations[entry.relations.start .. entry.relations.start + entry.relations.len];
+        }
+        checkedArtifactInvariant("dispatch target instantiation had no checker-published target correspondence", .{});
+    }
+
+    pub fn specializationCallPlanForCallable(
+        self: *const CheckedProcedureTemplateTable,
+        callable: CheckedTypeId,
+    ) SpecializationCallPlanView {
+        const raw = @intFromEnum(callable);
+        if (raw >= self.specialization_call_plans_by_type.len) {
+            checkedArtifactInvariant("checked callable exceeded its specialization-plan column", .{});
+        }
+        return self.specializationCallPlanView(self.specialization_call_plans_by_type[raw]);
+    }
+
+    pub fn specializationValuePlanForType(
+        self: *const CheckedProcedureTemplateTable,
+        checked_ty: CheckedTypeId,
+    ) SpecializationCallPlanView {
+        const raw = @intFromEnum(checked_ty);
+        if (raw >= self.specialization_value_plans_by_type.len) {
+            checkedArtifactInvariant("checked type exceeded its exact-value plan column", .{});
+        }
+        return self.specializationCallPlanView(self.specialization_value_plans_by_type[raw]);
+    }
+
+    pub fn specializationIteratorCallPlan(
+        self: *const CheckedProcedureTemplateTable,
+        plan: static_dispatch.IteratorForPlanId,
+        comptime edge: enum { iter, next },
+    ) SpecializationCallPlanView {
+        const plans = switch (edge) {
+            .iter => self.specialization_iterator_iter_plans,
+            .next => self.specialization_iterator_next_plans,
+        };
+        return self.specializationCallPlanView(plans[@intFromEnum(plan)]);
+    }
+
+    fn specializationCallPlanView(
+        self: *const CheckedProcedureTemplateTable,
+        plan: SpecializationCallPlan,
+    ) SpecializationCallPlanView {
+        return .{
+            .slots = self.specialization_call_slots[plan.slots.start .. plan.slots.start + plan.slots.len],
+            .projections = self.specialization_call_projections[plan.projections.start .. plan.projections.start + plan.projections.len],
+            .operand_flows = self.specialization_call_operand_flows[plan.operand_flows.start .. plan.operand_flows.start + plan.operand_flows.len],
+        };
+    }
+
+    pub fn specializationSlotOccurrences(
+        self: *const CheckedProcedureTemplateTable,
+        slot: SpecializationCallSlot,
+    ) []const SpecializationOccurrence {
+        return self.specialization_call_occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len];
     }
 
     /// The exact checked identities whose values cross recursive storage in
@@ -21612,6 +24256,312 @@ const PlatformRequirementTypePair = struct {
     expected: u32,
     actual: u32,
 };
+
+/// Compile one solved checked relation into the identity edges Monotype needs.
+/// This traversal runs exactly once while publishing the checked artifact.
+/// Runtime specialization consumes the resulting flat span and never compares
+/// these two checked graphs again.
+fn collectSpecializationIdentityRelations(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    source: CheckedTypeId,
+    dependent: CheckedTypeId,
+    out: *std.ArrayList(SpecializationIdentityRelation),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+) Allocator.Error!void {
+    var source_substitutions = std.ArrayList(SpecializationRelationSubstitution).empty;
+    defer source_substitutions.deinit(allocator);
+    var dependent_substitutions = std.ArrayList(SpecializationRelationSubstitution).empty;
+    defer dependent_substitutions.deinit(allocator);
+    return collectSpecializationIdentityRelationsInner(
+        allocator,
+        store,
+        source,
+        dependent,
+        out,
+        active,
+        &source_substitutions,
+        &dependent_substitutions,
+    );
+}
+
+const SpecializationRelationSubstitution = struct {
+    formal: CheckedTypeId,
+    actual: CheckedTypeId,
+};
+
+fn specializationRelationSubstitute(
+    substitutions: []const SpecializationRelationSubstitution,
+    root: CheckedTypeId,
+) CheckedTypeId {
+    var current = root;
+    var remaining = substitutions.len + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        var found: ?CheckedTypeId = null;
+        var index = substitutions.len;
+        while (index > 0) {
+            index -= 1;
+            const substitution = substitutions[index];
+            if (substitution.formal == current) {
+                found = substitution.actual;
+                break;
+            }
+        }
+        const next = found orelse return current;
+        if (next == current) return current;
+        current = next;
+    }
+    checkedArtifactInvariant("specialization relation substitutions contained a cycle", .{});
+}
+
+fn collectSpecializationIdentityRelationsInner(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    raw_source: CheckedTypeId,
+    raw_dependent: CheckedTypeId,
+    out: *std.ArrayList(SpecializationIdentityRelation),
+    active: *std.AutoHashMap(PlatformRequirementTypePair, void),
+    source_substitutions: *std.ArrayList(SpecializationRelationSubstitution),
+    dependent_substitutions: *std.ArrayList(SpecializationRelationSubstitution),
+) Allocator.Error!void {
+    const source = specializationRelationSubstitute(source_substitutions.items, raw_source);
+    const dependent = specializationRelationSubstitute(dependent_substitutions.items, raw_dependent);
+    if (source == dependent) return;
+    const pair = PlatformRequirementTypePair{
+        .expected = @intFromEnum(source),
+        .actual = @intFromEnum(dependent),
+    };
+    const seen = try active.getOrPut(pair);
+    if (seen.found_existing) return;
+    defer _ = active.remove(pair);
+
+    const source_payload = store.payload(source);
+    const dependent_payload = store.payload(dependent);
+    if (checkedTypePayloadIsIdentity(source_payload) or
+        checkedTypePayloadIsIdentity(dependent_payload))
+    {
+        for (out.items) |existing| {
+            if (existing.source == source and existing.dependent == dependent) return;
+        }
+        try out.append(allocator, .{ .source = source, .dependent = dependent });
+        return;
+    }
+
+    // A generated nominal is one atomic runtime identity, but its declared
+    // type arguments remain explicit inputs to that identity. Publish both
+    // facts: the exact generated root flows as one node, and each checked
+    // argument identity flows independently. Monotype consumes only these
+    // flat edges; it never opens the generated runtime node to rediscover its
+    // public arguments.
+    if (checkedTypeIsGeneratedNominal(source_payload) or
+        checkedTypeIsGeneratedNominal(dependent_payload))
+    {
+        for (out.items) |existing| {
+            if (existing.source == source and existing.dependent == dependent) break;
+        } else try out.append(allocator, .{ .source = source, .dependent = dependent });
+
+        if (source_payload != .nominal or dependent_payload != .nominal) return;
+        const source_nominal = source_payload.nominal;
+        const dependent_nominal = dependent_payload.nominal;
+        if (source_nominal.name != dependent_nominal.name or
+            source_nominal.origin_module != dependent_nominal.origin_module or
+            !checkedArtifactKeyEql(source_nominal.owner_module, dependent_nominal.owner_module) or
+            source_nominal.source_decl != dependent_nominal.source_decl or
+            source_nominal.builtin != dependent_nominal.builtin or
+            source_nominal.args.len != dependent_nominal.args.len)
+        {
+            return;
+        }
+        for (source_nominal.args, dependent_nominal.args) |source_arg, dependent_arg| {
+            try collectSpecializationIdentityRelationsInner(
+                allocator,
+                store,
+                source_arg,
+                dependent_arg,
+                out,
+                active,
+                source_substitutions,
+                dependent_substitutions,
+            );
+        }
+        return;
+    }
+
+    if (source_payload == .alias) {
+        return collectSpecializationIdentityRelationsInner(
+            allocator,
+            store,
+            source_payload.alias.backing,
+            dependent,
+            out,
+            active,
+            source_substitutions,
+            dependent_substitutions,
+        );
+    }
+    if (dependent_payload == .alias) {
+        return collectSpecializationIdentityRelationsInner(
+            allocator,
+            store,
+            source,
+            dependent_payload.alias.backing,
+            out,
+            active,
+            source_substitutions,
+            dependent_substitutions,
+        );
+    }
+
+    if (source_payload == .nominal) {
+        const source_nominal = source_payload.nominal;
+        const same_nominal = dependent_payload == .nominal and
+            source_nominal.name == dependent_payload.nominal.name and
+            source_nominal.origin_module == dependent_payload.nominal.origin_module and
+            checkedArtifactKeyEql(source_nominal.owner_module, dependent_payload.nominal.owner_module) and
+            source_nominal.source_decl == dependent_payload.nominal.source_decl and
+            source_nominal.builtin == dependent_payload.nominal.builtin and
+            source_nominal.args.len == dependent_payload.nominal.args.len;
+        if (!same_nominal) {
+            const backing = store.nominalBackingTemplateForPayload(source_nominal) orelse return;
+            const declaration = store.nominalDeclarationForPayload(source_nominal) orelse
+                checkedArtifactInvariant("specialization relation nominal backing had no declaration", .{});
+            const formals = declaration.formalArgs(store);
+            if (formals.len != source_nominal.args.len) {
+                checkedArtifactInvariant("specialization relation nominal backing arity did not match", .{});
+            }
+            const substitution_start = source_substitutions.items.len;
+            defer source_substitutions.shrinkRetainingCapacity(substitution_start);
+            for (formals, source_nominal.args) |formal, actual| {
+                try source_substitutions.append(allocator, .{
+                    .formal = formal,
+                    .actual = specializationRelationSubstitute(source_substitutions.items[0..substitution_start], actual),
+                });
+            }
+            return collectSpecializationIdentityRelationsInner(
+                allocator,
+                store,
+                backing,
+                dependent,
+                out,
+                active,
+                source_substitutions,
+                dependent_substitutions,
+            );
+        }
+    }
+    if (dependent_payload == .nominal and source_payload != .nominal) {
+        const dependent_nominal = dependent_payload.nominal;
+        const backing = store.nominalBackingTemplateForPayload(dependent_nominal) orelse return;
+        const declaration = store.nominalDeclarationForPayload(dependent_nominal) orelse
+            checkedArtifactInvariant("specialization relation nominal backing had no declaration", .{});
+        const formals = declaration.formalArgs(store);
+        if (formals.len != dependent_nominal.args.len) {
+            checkedArtifactInvariant("specialization relation nominal backing arity did not match", .{});
+        }
+        const substitution_start = dependent_substitutions.items.len;
+        defer dependent_substitutions.shrinkRetainingCapacity(substitution_start);
+        for (formals, dependent_nominal.args) |formal, actual| {
+            try dependent_substitutions.append(allocator, .{
+                .formal = formal,
+                .actual = specializationRelationSubstitute(dependent_substitutions.items[0..substitution_start], actual),
+            });
+        }
+        return collectSpecializationIdentityRelationsInner(
+            allocator,
+            store,
+            source,
+            backing,
+            out,
+            active,
+            source_substitutions,
+            dependent_substitutions,
+        );
+    }
+
+    switch (source_payload) {
+        .function => |source_fn| {
+            if (dependent_payload != .function or source_fn.args.len != dependent_payload.function.args.len) return;
+            for (source_fn.args, dependent_payload.function.args) |source_arg, dependent_arg| {
+                try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+            }
+            try collectSpecializationIdentityRelationsInner(allocator, store, source_fn.ret, dependent_payload.function.ret, out, active, source_substitutions, dependent_substitutions);
+        },
+        .tuple => |source_items| {
+            if (dependent_payload != .tuple or source_items.len != dependent_payload.tuple.len) return;
+            for (source_items, dependent_payload.tuple) |source_item, dependent_item| {
+                try collectSpecializationIdentityRelationsInner(allocator, store, source_item, dependent_item, out, active, source_substitutions, dependent_substitutions);
+            }
+        },
+        .nominal => |source_nominal| {
+            if (dependent_payload != .nominal) return;
+            const dependent_nominal = dependent_payload.nominal;
+            if (source_nominal.name != dependent_nominal.name or
+                source_nominal.origin_module != dependent_nominal.origin_module or
+                !checkedArtifactKeyEql(source_nominal.owner_module, dependent_nominal.owner_module) or
+                source_nominal.source_decl != dependent_nominal.source_decl or
+                source_nominal.builtin != dependent_nominal.builtin or
+                source_nominal.args.len != dependent_nominal.args.len)
+            {
+                return;
+            }
+            for (source_nominal.args, dependent_nominal.args) |source_arg, dependent_arg| {
+                try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+            }
+        },
+        .record, .record_unbound, .empty_record => {
+            const source_parts = recordParts(source_payload) orelse return;
+            const dependent_parts = recordParts(dependent_payload) orelse return;
+            const source_row = try flattenPlatformRequirementRecordRow(allocator, store, source_parts.fields, source_parts.ext);
+            defer source_row.deinit(allocator);
+            const dependent_row = try flattenPlatformRequirementRecordRow(allocator, store, dependent_parts.fields, dependent_parts.ext);
+            defer dependent_row.deinit(allocator);
+            for (dependent_row.fields) |dependent_field| {
+                var source_field: ?CheckedRecordField = null;
+                for (source_row.fields) |candidate| {
+                    if (candidate.name == dependent_field.name) {
+                        source_field = candidate;
+                        break;
+                    }
+                }
+                if (source_field) |field| {
+                    try collectSpecializationIdentityRelationsInner(allocator, store, field.ty, dependent_field.ty, out, active, source_substitutions, dependent_substitutions);
+                }
+            }
+            if (source_row.tail) |source_tail| if (dependent_row.tail) |dependent_tail| {
+                try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions);
+            };
+        },
+        .tag_union, .empty_tag_union => {
+            const source_parts = tagUnionParts(source_payload) orelse return;
+            const dependent_parts = tagUnionParts(dependent_payload) orelse return;
+            const source_row = try flattenPlatformRequirementTagRow(allocator, store, source_parts.tags, source_parts.ext);
+            defer source_row.deinit(allocator);
+            const dependent_row = try flattenPlatformRequirementTagRow(allocator, store, dependent_parts.tags, dependent_parts.ext);
+            defer dependent_row.deinit(allocator);
+            for (dependent_row.tags) |dependent_tag| {
+                var source_tag: ?CheckedTag = null;
+                for (source_row.tags) |candidate| {
+                    if (candidate.name == dependent_tag.name) {
+                        source_tag = candidate;
+                        break;
+                    }
+                }
+                if (source_tag) |tag| {
+                    const source_args = tag.argsSlice(store);
+                    const dependent_args = dependent_tag.argsSlice(store);
+                    if (source_args.len != dependent_args.len) continue;
+                    for (source_args, dependent_args) |source_arg, dependent_arg| {
+                        try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+                    }
+                }
+            }
+            if (source_row.tail) |source_tail| if (dependent_row.tail) |dependent_tail| {
+                try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions);
+            };
+        },
+        .pending, .err, .flex, .rigid, .alias => {},
+    }
+}
 
 fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
     return payload == .flex or payload == .rigid;
@@ -27525,7 +30475,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 208);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 229);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31147,6 +34097,21 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         &static_dispatch_plans,
+    );
+    try publishSpecializationCallPlans(
+        allocator,
+        &canonical_names,
+        &checked_type_publication,
+        checked_bodies,
+        artifact_key,
+        inputs.imports,
+        inputs.available_artifacts,
+        inputs.relation_artifacts,
+        &static_dispatch_plans,
+        &method_registry,
+        &resolved_value_refs,
+        &top_level_procedure_bindings,
+        &checked_procedure_templates,
     );
     try classifyTemplateDispatchPlanRefs(
         allocator,

@@ -2653,6 +2653,14 @@ identity inputs: they are possible inhabitants of the callable slot in the one
 shared runtime interface. There is no later identity-finalization pass,
 coalescing pass, or Lambda/LIR repair.
 
+The exact item-type digest describes language type identity and runtime shape,
+not the visibility of the occurrence that reached the producer. In particular,
+the public `opaque` view and definition-private `nominal` view of one declaration
+have the same digest. Visibility controls which source operations are legal; it
+does not create a second runtime type. Transparent aliases contribute only
+their backing, while a non-alias nominal contributes its declaration, builtin
+owner, and exact declared arguments.
+
 The construction lookup computes its graph-local input digest once. A vacant
 lookup carries that digest into registration, so building a cache miss does not
 walk and hash the same inputs again. Collision authority may compare the exact

@@ -15193,7 +15193,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [14]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -15210,14 +15210,6 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [22]
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
-        .{ .name = "Produced-type requests", .count = graph.produced_type_requests },
-        .{ .name = "Produced-type cycle/repeat hits", .count = graph.produced_type_cycle_hits },
-        .{ .name = "Produced-type pairs visited", .count = graph.produced_type_pairs_visited },
-        .{ .name = "Produced-type joins", .count = graph.produced_type_joins },
-        .{ .name = "Function request builds", .count = graph.function_request_builds },
-        .{ .name = "Function request pairs visited", .count = graph.function_request_pairs_visited },
-        .{ .name = "Function request replacements", .count = graph.function_request_replacements },
-        .{ .name = "Function request nodes materialized", .count = graph.function_request_nodes_materialized },
     };
 }
 

@@ -2014,6 +2014,19 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok({ n: 5.0 })" },
     },
     .{
+        .name = "inspect: early returns produce their exact error rows before selection",
+        .source_kind = .module,
+        .source =
+        \\choose_error = |first| {
+        \\    if first { return Err(First) }
+        \\    Err(Second)
+        \\}
+        \\
+        \\main = choose_error(True)
+        ,
+        .expected = .{ .inspect_str = "Err(First)" },
+    },
+    .{
         .name = "inspect: two-level closure factory",
         .source =
         \\{
