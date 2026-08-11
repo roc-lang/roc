@@ -16124,9 +16124,13 @@ const BodyContext = struct {
                     .use = .inspectable,
                 },
             } }),
+            // An unbound record is only unbound during checking; by the time
+            // it reaches Monotype its fields are final, so its row is born
+            // closed. Anything that tried to widen it would be adding a field
+            // checking never saw, which the closed-row invariant rejects.
             .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
+                .ext = try self.graph.newNode(.empty_record),
             } }),
             .record => |record| try self.graph.newNode(.{ .record = .{
                 .fields = try self.instFields(record.fields),

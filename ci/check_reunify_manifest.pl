@@ -73,8 +73,13 @@ my @categories = (
         patterns => [
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
               counts => { $SOLVE => 39, $LOWER => 18 } },
+            # $LOWER lost one row variable: an unbound record's fields are
+            # final once checking ends, so its instantiation is born with a
+            # closed row instead of an ext that nothing may ever widen. The
+            # two that remain are the hosted-try error evidence, whose row
+            # genuinely merges with the caller's, and a unit test.
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
-              counts => { $SOLVE => 16, $LOWER => 3 } },
+              counts => { $SOLVE => 16, $LOWER => 2 } },
             # Reserve-then-fill construction: the fill installs a just-built
             # class over a placeholder that is still an unresolved variable,
             # which the API asserts, so no information flows from the reserved
