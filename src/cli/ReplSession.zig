@@ -2619,7 +2619,7 @@ test "Repl - missing file import reports a graceful diagnostic instead of panick
     const result = try repl.step("import \"./repl_file_that_definitely_does_not_exist.txt\" as data : Str");
     defer testing.allocator.free(result);
 
-    try testing.expect(std.mem.find(u8, result, "FILE NOT FOUND") != null);
+    try testing.expect(std.mem.find(u8, result, "file not found") != null);
 }
 
 test "Repl - simple expressions" {
@@ -2893,7 +2893,7 @@ test "Repl - invalid syntax preserves definitions" {
 
     const diagnostic = try repl.step("x +");
     defer testing.allocator.free(diagnostic);
-    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED EXPRESSION SYNTAX") != null);
+    try testing.expect(std.mem.find(u8, diagnostic, "unexpected expression syntax") != null);
 
     const result = try repl.step("x");
     defer testing.allocator.free(result);
