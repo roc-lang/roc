@@ -215,9 +215,6 @@ const Analysis = struct {
     fn passesGate(self: *Analysis, local: LIR.LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .struct_ and local_layout.tag != .tag_union) return false;
-        if (local_layout.tag == .tag_union and
-            @import("builtin").os.tag != .freestanding and
-            std.c.getenv("ROC_NO_UNION_DISMANTLE") != null) return false;
         if (self.solution.isBorrowed(local) and !self.is_param[@intFromEnum(local)]) return false;
         if (self.solution.isJoinParam(local)) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;

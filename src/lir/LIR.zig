@@ -320,6 +320,19 @@ pub const LiteralValue = union(enum) {
     proc_ref: LirProcSpecId,
 };
 
+/// How a reference read interacts with its source's stored ownership unit.
+/// Decided by ARC take solving after the borrow modes are final, baked into
+/// each emitted statement, and consumed by the debug certifier, which never
+/// re-infers it: an unstamped read either pays its own retain or stays a
+/// borrow, and only a stamped read may consume the container's stored unit.
+pub const TakeKind = enum(u8) {
+    /// Ordinary read.
+    none,
+    /// Field take: the read consumes the dying container's stored unit for
+    /// this field, and this emission pays no retain.
+    take,
+};
+
 /// Reference-producing operation lowered by `assign_ref`.
 pub const RefOp = union(enum) {
     local: LocalId,
@@ -478,6 +491,7 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
+        take_kind: TakeKind = .none,
         next: CFStmtId,
     },
     assign_literal: struct {

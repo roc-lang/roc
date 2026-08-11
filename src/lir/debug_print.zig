@@ -82,6 +82,7 @@ const Printer = struct {
                         .list_reinterpret => |l| try writer.print("ref.list_reinterpret l{d}", .{@intFromEnum(l.backing_ref)}),
                         .nominal => |n| try writer.print("ref.nominal l{d}", .{@intFromEnum(n.backing_ref)}),
                     }
+                    if (s.take_kind == .take) try writer.writeAll(" take");
                     try writer.writeAll("\n");
                     current = s.next;
                 },

@@ -1354,9 +1354,14 @@ const Inserter = struct {
         var cloned: LIR.CFStmtId = switch (stmt) {
             .assign_ref => |assign| blk: {
                 if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
+                // Bake the emission-resolved take decision into the cloned
+                // read: the certifier consumes this stamp instead of
+                // re-deriving take-ness, and a parameter-conditional take
+                // resolves here against this emission's demand vector.
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
+                    .take_kind = if (self.takeApplies(step.stmt)) .take else .none,
                     .next = next,
                 } });
             },
@@ -4871,6 +4876,7 @@ const Inserter = struct {
                     .source = local,
                     .field_idx = @intCast(field.field_idx),
                 } },
+                .take_kind = .take,
                 .next = tail,
             } });
         }
@@ -4933,6 +4939,7 @@ const Inserter = struct {
                                 .source = view,
                                 .field_idx = @intCast(field.field_idx),
                             } },
+                            .take_kind = .take,
                             .next = tail,
                         } });
                     }
@@ -4966,6 +4973,7 @@ const Inserter = struct {
                             .variant_index = plan.variant_index,
                             .tag_discriminant = plan.tag_discriminant,
                         } },
+                        .take_kind = .take,
                         .next = tail,
                     } });
                 }

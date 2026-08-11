@@ -6019,10 +6019,10 @@ field marks the unit spent: a terminal treats it as balanced and a jump's
 carry check exempts it, while anything less fails as an unspent stored unit.
 A claimed container can be neither consumed, moved into an aggregate, nor
 released whole.
-Claims and claim targets cross join quotients on the summary: owned entries
-carry their container's claim set, and borrowed field-read entries carry
-their container's representative and field so a claim deferred past a join
-still lands.
+Claims cross join quotients on the summary's owned entries. A take value
+itself never crosses with a deferred claim: the quotient settles it—claims
+the stored unit and carries the taker as an ordinary owned value—so claim
+targets stay walk-local and join groups never split over them.
 
 Partial dismantling across diverging paths -- a field consumed in one switch
 arm and not another -- is future work: it needs per-path residual masks, and
@@ -6080,22 +6080,31 @@ needs a discriminant scratch layout, taken from any single-definition
 discriminant read of the container; a union candidate without one keeps its
 whole release.
 
-The certifier extends its deferred claims to unions with the same encoding:
-a payload view's field read remembers the union container and the encoded
-(variant, field) bit, claims must stay within one variant, and a fully
+Take-ness is explicit in the emitted LIR: emission bakes each resolved
+take decision onto its cloned read statement (a parameter-conditional take
+resolves against the emitting variant's demand vector), and the certifier
+consumes the stamp instead of re-deriving take-ness from refcount shapes.
+Only a stamped read carries a claim target, so a borrowed payload read can
+never be mistaken for a take however it crosses the control-flow graph—
+which is also what keeps certification affordable: claim targets and view
+provenance never enter join summaries, stamped takers settle their claims
+at the first quotient they cross and continue as ordinary owned values, and
+a fully claimed container hashes as unbound in walk digests so the two
+sides of a death point re-converge instead of forking. The union encoding
+is shared: a stamped read through a payload view claims the union container
+under the view's variant, claims must stay within one variant, and a fully
 dismantled union's unit is spent when its claims cover exactly the claimed
 variant's mask—sound because control reaches that spend only when the
-container holds that variant. What makes the emitted dispatch certifiable is
-variant knowledge per path: reading a variant's payload proves the container
-holds it (anything else is already undefined), and switch arms on a
-discriminant refine it, resolved through single-definition pure-alias chains
-so the discriminant read and the payload reads meet on one container name.
-A path that excludes every variant of a live container is infeasible—the
+container holds that variant. What makes the emitted dispatch certifiable
+is variant knowledge per path: reading a variant's payload proves the
+container holds it (anything else is already undefined), switch arms on a
+discriminant refine it (resolved through single-definition pure-alias
+chains so the discriminant read and the payload reads meet on one container
+name), and a container's own claims pin its variant at any later switch. A
+path that excludes every variant of a live container is infeasible—the
 facts it accumulated cannot describe any runtime value—and its walk ends
 vacuously, which is exactly what lets the residual switch's unmatched arms
 and the whole-release default coexist with claims on the matched path.
-Exclusions and view provenance cross join quotients on the summary alongside
-claims.
 
 ### Debug Borrow Certifier
 

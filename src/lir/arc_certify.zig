@@ -1113,17 +1113,6 @@ const LocalSummary = struct {
     /// For owned locals: fields of the value already claimed by field takes.
     /// Set identically on every member of the alias set.
     claims: u64 = 0,
-    /// For borrowed locals born from a field read: dense position of the
-    /// container local the read's later claim would target, or `no_dense`.
-    /// Set identically on every member of the alias set.
-    payload_source: u32 = no_dense,
-    /// Field index of the read, valid with `payload_source`: a struct field
-    /// index or a tag-union claim-encoding bit.
-    payload_field: u16 = 0,
-    /// For borrowed locals that are tag-union payload views: dense position
-    /// of the union container local, or `no_dense`.
-    view_container: u32 = no_dense,
-    view_variant: u16 = 0,
 };
 
 /// Pair-map marker for a (container, discriminant) witnessed with two
@@ -1705,34 +1694,12 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                    self.addPayloadOriginToSummary(state, value, &summary);
                 }
             }
             self.summary_scratch.appendAssumeCapacity(summary);
         }
 
         return self.summary_scratch.items;
-    }
-
-    /// Carries a borrowed field-read value's claim target across a state
-    /// quotient: the container's dense representative and the field index,
-    /// when the container is still bound in this state. Requires
-    /// `repr_scratch` to hold the current summary's value representatives.
-    fn addPayloadOriginToSummary(self: *Certifier, state: *const State, value: ValueId, summary: *LocalSummary) void {
-        if (value >= self.values.items.len) return;
-        const info = self.values.items[value];
-        if (info.payload_source != no_value and state.balanceOf(info.payload_source) >= 1) {
-            if (self.repr_scratch.get(info.payload_source)) |source_repr| {
-                summary.payload_source = source_repr;
-                summary.payload_field = info.payload_field;
-            }
-        }
-        if (info.view_container != no_value and state.balanceOf(info.view_container) >= 1) {
-            if (self.repr_scratch.get(info.view_container)) |container_repr| {
-                summary.view_container = container_repr;
-                summary.view_variant = info.view_variant;
-            }
-        }
     }
 
     /// Collects every normalized value that anchors a borrowed value in a join
@@ -1840,10 +1807,6 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             hasher.update(std.mem.asBytes(&entry.claims));
-            hasher.update(std.mem.asBytes(&entry.payload_source));
-            hasher.update(std.mem.asBytes(&entry.payload_field));
-            hasher.update(std.mem.asBytes(&entry.view_container));
-            hasher.update(std.mem.asBytes(&entry.view_variant));
         }
         return hasher.final();
     }
@@ -1906,41 +1869,7 @@ const Certifier = struct {
                 }
                 try lenders.append(self.allocator, lender);
             }
-            const value = try self.bindFresh(&state, local, 0, lenders.items);
-            // Restore the claim target of a field-read value: the container's
-            // rebuilt value, resolved through its dense representative.
-            if (entry.payload_source != no_dense and entry.payload_source < self.proc_locals.items.len) {
-                const container = state.valueAtDense(entry.payload_source);
-                if (container != no_value) {
-                    const info = &self.values.items[value];
-                    info.payload_source = container;
-                    info.payload_field = entry.payload_field;
-                }
-            }
-            // Restore a payload view's union container the same way, so
-            // field reads after the join still claim through it. Restoring
-            // provenance also re-establishes the variant the path observed:
-            // summaries deliberately do not carry exclusions, so the join
-            // entry reconstructs them from the reads that crossed.
-            if (entry.view_container != no_dense and entry.view_container < self.proc_locals.items.len) {
-                const container = state.valueAtDense(entry.view_container);
-                if (container != no_value) {
-                    const info = &self.values.items[value];
-                    info.view_container = container;
-                    info.view_variant = entry.view_variant;
-                    try self.observeVariant(&state, container, entry.view_variant);
-                }
-            }
-            if (entry.payload_source != no_dense and entry.payload_source < self.proc_locals.items.len) {
-                const container = state.valueAtDense(entry.payload_source);
-                if (container != no_value) {
-                    if (self.unionEncodingOfValue(container)) |encoding| {
-                        if (encoding.variantOfClaims(@as(u64, 1) << @intCast(entry.payload_field))) |variant| {
-                            try self.observeVariant(&state, container, variant);
-                        }
-                    }
-                }
-            }
+            _ = try self.bindFresh(&state, local, 0, lenders.items);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .borrowed or entry.repr == dense) continue;
@@ -2020,11 +1949,7 @@ const Certifier = struct {
                 // balances; states disagreeing on them walk separately.
                 .owned => if (ga.claims != sb.claims) return false,
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
-                .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs) or
-                    ga.payload_source != sb.payload_source or
-                    ga.payload_field != sb.payload_field or
-                    ga.view_container != sb.view_container or
-                    ga.view_variant != sb.view_variant) return false,
+                .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs)) return false,
             }
         }
         return true;
@@ -3077,7 +3002,6 @@ const Certifier = struct {
         }
 
         // Build the restricted summary.
-        const any_claims = state.claims.count() != 0;
         self.repr_scratch.clearRetainingCapacity();
         self.summary_scratch.clearRetainingCapacity();
         try self.summary_scratch.ensureTotalCapacity(self.allocator, self.proc_locals.items.len);
@@ -3090,12 +3014,13 @@ const Certifier = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(dense);
         }
 
-        // A deferred take-claim cannot outlive its container's carry: a
-        // unit-less field-read value crossing this join while its container
-        // stays behind claims the stored unit now and crosses owned—the
-        // take moved the unit at the read, the deferral was bookkeeping. A
-        // genuine borrow in the same position keeps balance zero and fails
-        // the borrow-liveness rules exactly as before.
+        // Claim targets attach only to stamped take reads, so every
+        // crossing unit-less claim-target value is a taker whose deferred
+        // claim settles here and crosses owned. Settling at every quotient
+        // keeps takers' modes identical on every path: leaving some as
+        // borrowed claim-target entries would split join groups on the
+        // container's per-path representative, which multiplies walks
+        // without bound on large procedures.
         var settle_it = self.repr_scratch.iterator();
         while (settle_it.next()) |entry| {
             const value = entry.key_ptr.*;
@@ -3104,19 +3029,11 @@ const Certifier = struct {
             const container = self.values.items[value].payload_source;
             if (container == no_value) continue;
             if (state.balanceOf(container) < 1) continue;
-            // Once a dismantle is in flight (any claim made), every crossing
-            // unit-less field read of the container is a taker: borrows of a
-            // container whose takes ran are rejected by the analysis, so
-            // settling now cannot misclassify one. This makes both sides of
-            // a death point summarize identically by the next quotient
-            // instead of splitting join groups until the claims complete. A
-            // container with no claims yet only settles when it stays
-            // behind, where the claim could otherwise never land.
-            if (state.claimsOf(container) == 0 and self.repr_scratch.contains(container)) continue;
             if (try self.tryClaim(state, value)) {
                 try state.addBalance(value, 1);
             }
         }
+        const any_claims = state.claims.count() != 0;
 
         for (self.proc_locals.items, 0..) |local, dense| {
             var summary = LocalSummary{ .class = .unbound, .repr = 0, .balance = 0, .lender_reprs = &.{}, .condition = no_dense, .condition_mask = 0 };
@@ -3147,9 +3064,6 @@ const Certifier = struct {
                                     .condition = @intFromEnum(condition.local),
                                     .condition_mask = condition.mask,
                                 };
-                            } else if (any_claims and self.claimsSpendUnit(state, value)) {
-                                // Fully dismantled: spent, untouchable, and
-                                // deliberately summarized unbound.
                             } else {
                                 summary = .{ .class = .owned, .repr = repr, .balance = @intCast(units), .lender_reprs = &.{}, .abi_live = abi_live, .condition = no_dense, .condition_mask = 0, .claims = if (any_claims) state.claimsOf(value) else 0 };
                             }
@@ -3163,7 +3077,6 @@ const Certifier = struct {
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                            self.addPayloadOriginToSummary(state, value, &summary);
                         }
                     }
                 }
@@ -3480,8 +3393,8 @@ const Certifier = struct {
                             }
                         },
                         .discriminant => |op| _ = try self.requireLive(&state, op.source),
-                        .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx),
-                        .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
+                        .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx, assign.take_kind),
+                        .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null, .none),
                         .tag_payload_struct => |op| {
                             const source_layout = self.layouts.getLayout(self.store.getLocal(op.source).layout_idx);
                             var is_struct_payload = false;
@@ -3491,7 +3404,7 @@ const Certifier = struct {
                                     is_struct_payload = self.layouts.getLayout(union_info.variants.get(op.variant_index).payload_layout).tag == .struct_;
                                 }
                             }
-                            try self.bindPayloadStructRead(&state, assign.target, op.source, op.variant_index, is_struct_payload);
+                            try self.bindPayloadStructRead(&state, assign.target, op.source, op.variant_index, is_struct_payload, assign.take_kind);
                         },
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -3848,7 +3761,7 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16, take_kind: LIR.TakeKind) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         if (source_value == no_value) {
@@ -3858,27 +3771,33 @@ const Certifier = struct {
             );
         }
         const value = try self.bindFresh(state, target, 0, &.{source_value});
-        if (field_idx) |field| {
-            const info = &self.values.items[value];
-            const source_info = self.values.items[source_value];
-            if (source_info.view_container != no_value) {
-                // A field read through a payload view claims the union
-                // container's stored unit under the view's variant.
-                const container = source_info.view_container;
-                const variant = source_info.view_variant;
-                try self.observeVariant(state, container, variant);
-                if (self.unionEncodingOfValue(container)) |encoding| {
-                    if (encoding.bitFor(variant, field)) |bit| {
-                        info.payload_source = container;
-                        info.payload_field = bit;
-                    }
+        const field = field_idx orelse return;
+        const source_info = self.values.items[source_value];
+        if (source_info.view_container != no_value) {
+            // Reading one variant's payload is only defined while the
+            // container holds that variant; record the observation whether
+            // or not this read takes.
+            try self.observeVariant(state, source_info.view_container, source_info.view_variant);
+        }
+        if (take_kind != .take) return;
+        const info = &self.values.items[value];
+        if (source_info.view_container != no_value) {
+            // A field take through a payload view claims the union
+            // container's stored unit under the view's variant.
+            const container = source_info.view_container;
+            if (self.unionEncodingOfValue(container)) |encoding| {
+                if (encoding.bitFor(source_info.view_variant, field)) |bit| {
+                    info.payload_source = container;
+                    info.payload_field = bit;
                 }
-            } else {
-                info.payload_source = source_value;
-                info.payload_field = field;
             }
+        } else {
+            info.payload_source = source_value;
+            info.payload_field = field;
         }
     }
+
+
 
     /// The shared union claim encoding for a value whose origin local is a
     /// tag union, or null.
@@ -3995,6 +3914,7 @@ const Certifier = struct {
         source: LIR.LocalId,
         variant_index: u16,
         op_layout_is_struct: bool,
+        take_kind: LIR.TakeKind,
     ) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (source_value != no_value) {
@@ -4012,10 +3932,12 @@ const Certifier = struct {
         if (op_layout_is_struct) {
             info.view_container = source_value;
             info.view_variant = variant_index;
-        } else if (self.unionEncodingOfValue(source_value)) |encoding| {
-            if (encoding.bitFor(variant_index, 0)) |bit| {
-                info.payload_source = source_value;
-                info.payload_field = bit;
+        } else if (take_kind == .take) {
+            if (self.unionEncodingOfValue(source_value)) |encoding| {
+                if (encoding.bitFor(variant_index, 0)) |bit| {
+                    info.payload_source = source_value;
+                    info.payload_field = bit;
+                }
             }
         }
     }
@@ -5776,6 +5698,7 @@ fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .take_kind = .take,
         .next = next,
     } });
 }
