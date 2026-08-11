@@ -2997,6 +2997,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const host_zstd = b.dependency("zstd", .{
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
     const zig_unit_test_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
@@ -4137,14 +4141,14 @@ pub fn build(b: *std.Build) void {
         .name = "wasm_archive",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/wasm_archive.zig"),
-            .target = target,
+            .target = b.graph.host,
             .optimize = optimize,
         }),
     });
-    configureBackend(wasm_archive_exe, target);
+    configureBackend(wasm_archive_exe, b.graph.host);
     wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
     wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
-    wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
+    wasm_archive_exe.root_module.linkLibrary(host_zstd.artifact("zstd"));
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
