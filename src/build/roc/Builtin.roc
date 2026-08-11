@@ -5886,6 +5886,37 @@ Builtin :: [].{
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
 
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
+
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
 		## expect Dict.single(1, "One")
