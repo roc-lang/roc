@@ -3028,10 +3028,6 @@ fn mergeFromNumeralLiteralInfo(
 pub const DeferredConstraintCheck = struct {
     var_: Var,
     constraints: StaticDispatchConstraint.SafeList.Range,
-    /// The static-dispatch edge whose selected method target derived this
-    /// obligation. The checker uses this explicit lineage to detect a repeated
-    /// semantic dispatch state; fresh instantiated vars are not identities.
-    parent_constraint_fn_var: ?Var = null,
     /// The expression whose instantiation created this obligation. Ordinary
     /// definition-site constraints have no owner and report at their provenance.
     failure_expr: StaticDispatchConstraint.Provenance.OptExprIdx = .none,

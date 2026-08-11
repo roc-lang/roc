@@ -39,7 +39,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 223)
+(e-call (constraint-fn-var 222)
 	(e-call (constraint-fn-var 212)
 		(e-lambda
 			(args

@@ -18,24 +18,24 @@ main = {
 }
 ~~~
 # EXPECTED
-RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
+MISSING METHOD - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
 
-┌────────────────────┐
-│ RECURSIVE DISPATCH ├─ This `from_interpolation` dispatch would have to ─────┐
-└┬───────────────────┘  call itself to satisfy its own type.                  │
+┌────────────────┐
+│ MISSING METHOD ├─ This `from_interpolation` method is being called on a ────┐
+└┬───────────────┘  value whose type doesn't have that method.                │
  │                                                                            │
- │  url = "https://${domain}.com"                                             │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └─────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
+ │  url : Try(Try(Url, [InvalidUrl]), [Outer])                                │
+ │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
+ └─────────────────────── nested_try_interpolation_recursive_dispatch.md:8:11 ┘
 
-    The dispatcher type is:
+    The value's type, which does not have a method named `from_interpolation`,
+    is:
 
         Try(Url, [InvalidUrl])
 
-    Hint: Use a more specific result type, or add an associated function whose
-    `from_interpolation` implementation does not require the same dispatch on
-    the same type.
+    Hint: For this to work, the type would need to have a method named
+    `from_interpolation` associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -7218,7 +7218,7 @@ test "static dispatch - userland recursive-constraint method cannot self-nest (n
     try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
 }
 
-test "static dispatch - finite nested requirement chain has no iteration ceiling" {
+test "static dispatch - deep finite nested requirement chain stays within resource contract" {
     const allocator = testing.allocator;
     var nested_type = try allocator.dupe(u8, "Base");
     defer allocator.free(nested_type);
@@ -7708,6 +7708,26 @@ test "check type - shared pending scheme requirement reports once across uses" {
     try test_env.assertFirstTypeError("Missing Method");
 }
 
+test "check type - independent value dispatch sites each receive an ambiguity judgment" {
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\first = weak.to_i128()
+        \\second = weak.to_i128()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    var creation_candidates: usize = 0;
+    for (test_env.checker.ambiguity_candidates.items) |candidate| {
+        if (candidate.source == .creation) {
+            try testing.expect(candidate.judged);
+            creation_candidates += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), creation_candidates);
+}
+
 const principality_result_flow_defs = &[_]DefAndExpectation{
     .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
     .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
@@ -7749,6 +7769,26 @@ test "check type - principality - literal-constrained lambda parameter remains p
         .{ .def = "as_u8", .expected = "U8" },
         .{ .def = "as_i64", .expected = "I64" },
     });
+}
+
+test "check type - generalized numeral-constrained lambda accepts integer and fraction uses" {
+    const source =
+        \\app [main] { pf: platform "platform.roc" }
+        \\
+        \\num = 42
+        \\frac = 4.2
+        \\int_add = num + 10
+        \\int_multiply = num * 2
+        \\float_add = num + 3.14
+        \\float_multiply = num * 2.5
+        \\double = |x| x * 2
+        \\int_doubled = double(5)
+        \\float_doubled = double(2.5)
+        \\main = |_| int_add + int_multiply
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
 const GeneratedWeakLiteral = enum { quote, numeral };

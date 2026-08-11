@@ -84,8 +84,17 @@ pub fn instantiateNominalBacking(
         .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
     };
     const opened = try instantiator.instantiateVar(decl.backing);
+    if (instantiator.recursion_overflow) {
+        return try store.freshFromContentWithRank(.err, current_rank);
+    }
     return opened;
 }
+
+/// Native-stack safety bound for the recursive graph copier. The var map
+/// terminates cycles in a finite type graph, but a pathologically deep graph
+/// must not exhaust the compiler process's stack before the caller can report
+/// it as an infinite/depth-exhausted type.
+pub const max_instantiation_depth: u32 = 8192;
 
 /// Type to manage instantiation.
 ///
@@ -102,6 +111,9 @@ pub const Instantiator = struct {
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+
+    depth: u32 = 0,
+    recursion_overflow: bool = false,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -156,6 +168,13 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        self.depth += 1;
+        defer self.depth -= 1;
+        if (self.depth > max_instantiation_depth) {
+            self.recursion_overflow = true;
+            return try self.store.freshFromContentWithRank(.err, self.current_rank);
+        }
 
         // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
