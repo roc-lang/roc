@@ -470,6 +470,26 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
     try expectContains(generated_iterator_producer, "generatedIteratorBackingNode(");
 
+    const generated_call_identity = sourceSliceBetween(
+        lower_source,
+        "fn generatedNominalFromSelectedArguments(",
+        "fn checkedSelectionTableForCall(",
+    );
+    try expectContains(generated_call_identity, "slot.generated_argument_source");
+    try expectContains(generated_call_identity, ".exact_selection => selections.get(");
+    try expectContains(generated_call_identity, ".checked_substitution => try self.instantiateProducedOccurrenceWithSelections(");
+    try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
+    try expectContains(generated_call_identity, "generatedIteratorNodeFromPublicSource(");
+    try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
+
+    const generated_call_slots = sourceSliceBetween(
+        lower_source,
+        "// Checking stores generated slots after every generated dependency.",
+        "// Result-context identities may themselves be supplied by an operand",
+    );
+    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(slot, table)");
+    try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
+
     try expectContains(solve_source, "generated_iterators_by_item: collections.DenseMap(NodeId");
     try expectContains(solve_source, "direct_request_selections: std.ArrayList(DirectRequestSelection)");
     const open_request_key = sourceSliceBetween(
@@ -507,6 +527,23 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
+}
+
+test "unsubstituted checked bases are persistent and checked-node reservations are recursion-only" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    try expectContains(lower_source, "persistent_checked_base_nodes: std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState)");
+    try expectContains(lower_source, "fn usesPersistentCheckedBase(");
+    try expectContains(lower_source, "return self.instantiation.authority == .checked_base and self.active_checked_selections == null;");
+
+    const inst_node = sourceSliceBetween(
+        lower_source,
+        "fn instNode(self: *BodyContext",
+        "fn checkedExprOccurrenceNode(",
+    );
+    try expectContains(inst_node, ".building => |maybe_reserved| if (maybe_reserved) |reserved|");
+    try expectContains(inst_node, "recursive_checked_node_reservations");
+    try expectNotContains(inst_node, "newNode(.{ .unresolved = InstVariable.placeholder() });\n        try self.putScopedNodeState");
 }
 
 test "record literals request and retain only immediate exact field nodes" {
@@ -961,7 +998,8 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "declared const use reached a hoisted deferred boundary");
     try expectContains(lower_source, "deferred hoisted const provenance referenced a different const template");
     try expectContains(lower_source, "ctx.restoredHoistedConstAtNode(entry, boundary.witness_node)");
-    try expectContains(lower_source, "graph.unify(boundary.witness_node, restored_node)");
+    try expectContains(lower_source, "graph.completeProducedSelection(boundary.witness_node, restored_node)");
+    try expectNotContains(lower_source, "graph.unify(boundary.witness_node, restored_node)");
     try expectNotContains(lower_source, "body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node)");
     try expectNotContains(lower_source, "runtimeResultProducerForDraftCallee");
     try expectNotContains(lower_source, "runtimeDemandHasUninhabitedProducerGuard");

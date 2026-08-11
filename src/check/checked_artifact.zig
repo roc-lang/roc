@@ -15372,6 +15372,12 @@ pub const SpecializationGeneratedSlotSource = enum(u8) {
     exact_arguments,
 };
 
+pub const SpecializationGeneratedArgumentSource = enum(u8) {
+    exact_selection,
+    checked_substitution,
+    concrete_checked,
+};
+
 /// One checker-authored call substitution slot and all of its exact
 /// occurrences. Runtime lowering chooses a source only from the listed
 /// occurrences and never compares complete checked and produced type trees.
@@ -15384,6 +15390,10 @@ pub const SpecializationCallSlot = struct {
     /// dispatcher edge.
     exact_identity: bool,
     generated_source: SpecializationGeneratedSlotSource,
+    /// Checker-authored operation for producing a generated iterator's exact
+    /// item node. This removes any post-check probing or fallback between a
+    /// selected identity, a compound substitution, and a concrete base.
+    generated_argument_source: SpecializationGeneratedArgumentSource,
     occurrences: artifact_serialize.Span,
 };
 
@@ -17752,6 +17762,7 @@ fn checkedTypeIsGeneratedIterator(payload: CheckedTypePayload) bool {
 fn compileSpecializationCallShape(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     callable_root: CheckedTypeId,
     dispatcher_root: ?CheckedTypeId,
     target_signature_source: bool,
@@ -17931,6 +17942,33 @@ fn compileSpecializationCallShape(
                 has_produced_value_position = true;
             }
         }
+        const generated_source: SpecializationGeneratedSlotSource = if (build.kind == .generated_nominal and
+            has_produced_value_position and
+            checkedTypeIsGeneratedIterator(checked_types.store.payload(build.checked)))
+            .exact_arguments
+        else
+            .producer;
+        var generated_argument_source: SpecializationGeneratedArgumentSource = .exact_selection;
+        if (generated_source == .exact_arguments) {
+            const nominal = checked_types.store.payload(build.checked).nominal;
+            if (nominal.args.len != 1) {
+                checkedArtifactInvariant("generated iterator specialization slot had a non-unary item type", .{});
+            }
+            if (try concrete_sources.isConcrete(nominal.args[0])) {
+                generated_argument_source = .concrete_checked;
+            } else switch (checked_types.store.payload(nominal.args[0])) {
+                .flex, .rigid => generated_argument_source = .exact_selection,
+                .nominal => |item_nominal| if (checkedTypeIsGeneratedNominal(.{ .nominal = item_nominal })) {
+                    generated_argument_source = .exact_selection;
+                } else {
+                    generated_argument_source = .checked_substitution;
+                },
+                .alias, .record_unbound, .record, .tuple, .function, .tag_union => generated_argument_source = .checked_substitution,
+                .pending => checkedArtifactInvariant("generated iterator item source was unfinished", .{}),
+                .err => checkedArtifactInvariant("generated iterator item source contained a diagnostic error", .{}),
+                .empty_record, .empty_tag_union => generated_argument_source = .concrete_checked,
+            }
+        }
         try slots_out.append(allocator, .{
             .checked = build.checked,
             .kind = build.kind,
@@ -17942,12 +17980,8 @@ fn compileSpecializationCallShape(
             // If an exact argument/result/target occurrence already supplied
             // the slot, Monotype selects that producer before consulting this
             // construction policy.
-            .generated_source = if (build.kind == .generated_nominal and
-                has_produced_value_position and
-                checkedTypeIsGeneratedIterator(checked_types.store.payload(build.checked)))
-                .exact_arguments
-            else
-                .producer,
+            .generated_source = generated_source,
+            .generated_argument_source = generated_argument_source,
             .occurrences = .{
                 .start = occurrence_start,
                 .len = @intCast(build.occurrences.items.len),
@@ -17978,6 +18012,7 @@ const SpecializationCallShapeKey = struct {
 fn publishSpecializationCallShape(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     target_relations: *const PublishedSpecializationTargetRelations,
     key: SpecializationCallShapeKey,
     by_key: *std.AutoHashMap(SpecializationCallShapeKey, SpecializationCallShapeId),
@@ -18003,6 +18038,7 @@ fn publishSpecializationCallShape(
     try shapes.append(allocator, try compileSpecializationCallShape(
         allocator,
         checked_types,
+        concrete_sources,
         key.callable,
         key.dispatcher,
         key.target_signature_source,
@@ -18018,6 +18054,7 @@ fn publishSpecializationCallShape(
 fn publishSpecializationCallShapeForCallable(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     target_relations: *const PublishedSpecializationTargetRelations,
     callable: CheckedTypeId,
     by_type: []SpecializationCallShapeId,
@@ -18036,6 +18073,7 @@ fn publishSpecializationCallShapeForCallable(
         by_type[raw] = try publishSpecializationCallShape(
             allocator,
             checked_types,
+            concrete_sources,
             target_relations,
             .{
                 .callable = callable,
@@ -18512,10 +18550,19 @@ fn importedTargetView(
     checkedArtifactInvariant("dispatch target artifact was unavailable during specialization relation publication", .{});
 }
 
-fn importedCheckedTypeForProjected(
+fn importedCheckedTypeForPublishedEndpoint(
     projector: *CheckedTypeStoreImportProjector,
+    target_store: *const CheckedTypeStore,
+    imported: ImportedModuleView,
     projected: CheckedTypeId,
 ) ?CheckedTypeId {
+    if (!target_store.rootContainsIdentityVariables(projected)) {
+        const raw = @intFromEnum(projected);
+        if (raw >= target_store.roots.items.len) {
+            checkedArtifactInvariant("specialization target endpoint exceeded the publishing checked store", .{});
+        }
+        return imported.checked_types.rootForKey(target_store.roots.items[raw].key);
+    }
     var iterator = projector.projected.iterator();
     while (iterator.next()) |entry| {
         if (entry.value_ptr.* == projected) return entry.key_ptr.*;
@@ -18675,8 +18722,12 @@ fn appendSpecializationTargetRelationBuild(
             &active,
         );
         for (local_relations.items) |relation| {
-            const target_dependent = importedCheckedTypeForProjected(&projector, relation.dependent) orelse
-                checkedArtifactInvariant("projected specialization target relation lost its target endpoint", .{});
+            const target_dependent = importedCheckedTypeForPublishedEndpoint(
+                &projector,
+                &checked_types.store,
+                imported,
+                relation.dependent,
+            ) orelse checkedArtifactInvariant("projected specialization target relation lost its target endpoint", .{});
             try build.relations.append(allocator, .{
                 .source = relation.source,
                 .dependent = target_dependent,
@@ -18942,6 +18993,8 @@ fn publishSpecializationCallPlans(
     }
 
     const type_count = checked_types.store.payloads.items.len;
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, checked_types);
+    defer concrete_sources.deinit();
     const by_type = try allocator.alloc(SpecializationCallShapeId, type_count);
     errdefer allocator.free(by_type);
     @memset(by_type, no_specialization_call_shape);
@@ -19005,6 +19058,7 @@ fn publishSpecializationCallPlans(
         by_expr[raw_expr].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             .{
                 .callable = source_callable,
@@ -19108,6 +19162,7 @@ fn publishSpecializationCallPlans(
         _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             source_callable,
             by_type,
@@ -19133,6 +19188,7 @@ fn publishSpecializationCallPlans(
         by_expr[raw_plan_expr].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             .{
                 .callable = plan.callable_ty,
@@ -19232,6 +19288,7 @@ fn publishSpecializationCallPlans(
         _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             plan.callable_ty,
             by_type,
@@ -19252,6 +19309,7 @@ fn publishSpecializationCallPlans(
         _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             template.checked_fn_root,
             by_type,
@@ -19267,6 +19325,7 @@ fn publishSpecializationCallPlans(
         .procedure => |procedure| _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             procedure.fn_ty,
             by_type,
@@ -19284,6 +19343,7 @@ fn publishSpecializationCallPlans(
         .callable => |callable| _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             callable,
             by_type,
@@ -19299,6 +19359,7 @@ fn publishSpecializationCallPlans(
         .procedure, .local_proc => _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             entry.target.callable_ty,
             by_type,
@@ -19322,6 +19383,7 @@ fn publishSpecializationCallPlans(
         iter_plans[index].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             .{
                 .callable = plan.iter.callable_ty,
@@ -19366,6 +19428,7 @@ fn publishSpecializationCallPlans(
         next_plans[index].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
+            &concrete_sources,
             &target_relations,
             .{
                 .callable = plan.next.callable_ty,
@@ -19399,6 +19462,34 @@ fn publishSpecializationCallPlans(
             &consumer_bindings,
             &consumer_binding_spans,
             &next_plans[index],
+        );
+    }
+
+    // A procedure value can select a declaration before any call expression
+    // supplies concrete operands. Its source callable still needs the exact
+    // positional projections that name every cross-target identity edge.
+    // Publish that source shape explicitly instead of asking Monotype to
+    // recover the mapping from two materialized function graphs.
+    for (target_relations.by_type, 0..) |entries, raw_callable| {
+        if (entries.len == 0) continue;
+        const callable: CheckedTypeId = @enumFromInt(@as(u32, @intCast(raw_callable)));
+        by_type[raw_callable] = try publishSpecializationCallShape(
+            allocator,
+            checked_types,
+            &concrete_sources,
+            &target_relations,
+            .{
+                .callable = callable,
+                .dispatcher = null,
+                .target_signature_source = false,
+                .target_source_roots = true,
+            },
+            &shape_by_key,
+            &shapes,
+            &target_source_roots,
+            &slots,
+            &occurrences,
+            &projections,
         );
     }
 
@@ -30956,7 +31047,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 64;
+    const serialized_layout_version: u32 = 65;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36842,8 +36933,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x3C, 0x37, 0xD2, 0x6A, 0x56, 0xF9, 0x49, 0x5A, 0x4D, 0xD5, 0xC7, 0x74, 0x93, 0xFC, 0x86, 0x87,
-        0xFE, 0xCE, 0x23, 0x60, 0xF8, 0xF0, 0x10, 0xFD, 0x1A, 0x70, 0xB0, 0xCC, 0x8C, 0x71, 0xF5, 0xF3,
+        0x00, 0x3D, 0xC0, 0x66, 0x15, 0x70, 0x64, 0x76, 0xF1, 0xDB, 0x81, 0xBF, 0x28, 0x52, 0xA4, 0xC2,
+        0x00, 0x2B, 0x41, 0xCE, 0x29, 0x33, 0xD6, 0x4A, 0x1A, 0x07, 0xBA, 0x9A, 0x88, 0x1B, 0xA6, 0xF5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

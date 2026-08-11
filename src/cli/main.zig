@@ -15224,7 +15224,7 @@ fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnosti
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [24]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15248,6 +15248,9 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]p
         .{ .name = "Nested callable checks", .count = body.nested_callable_checks },
         .{ .name = "Nested lambdas prepared", .count = body.nested_lambdas_prepared },
         .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
+        .{ .name = "Substituted checked node misses", .count = body.substituted_checked_node_misses },
+        .{ .name = "Declaration checked node misses", .count = body.declaration_checked_node_misses },
+        .{ .name = "Recursive checked node reservations", .count = body.recursive_checked_node_reservations },
     };
 }
 
@@ -15309,14 +15312,15 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.template_requests = 101;
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
-    diagnostics.graph.produced_type_pairs_visited = 202;
-    diagnostics.graph.function_request_pairs_visited = 203;
     diagnostics.graph.generated_identity_input_nodes_hashed = 204;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
+    diagnostics.body.substituted_checked_node_misses = 307;
+    diagnostics.body.declaration_checked_node_misses = 308;
+    diagnostics.body.recursive_checked_node_reservations = 309;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
     try std.testing.expectEqualStrings("Template requests", specialization[0].name);
@@ -15327,10 +15331,6 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Produced-type pairs visited", graph[16].name);
-    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
-    try std.testing.expectEqualStrings("Function request pairs visited", graph[20].name);
-    try std.testing.expectEqual(@as(u64, 203), graph[20].count);
     const graph_identity = monotypeGraphIdentityCounters(diagnostics);
     try std.testing.expectEqualStrings("Generated identity input nodes hashed", graph_identity[0].name);
     try std.testing.expectEqual(@as(u64, 204), graph_identity[0].count);
@@ -15346,6 +15346,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 305), body[11].count);
     try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
     try std.testing.expectEqual(@as(u64, 302), body[20].count);
+    try std.testing.expectEqualStrings("Substituted checked node misses", body[21].name);
+    try std.testing.expectEqual(@as(u64, 307), body[21].count);
+    try std.testing.expectEqualStrings("Declaration checked node misses", body[22].name);
+    try std.testing.expectEqual(@as(u64, 308), body[22].count);
+    try std.testing.expectEqualStrings("Recursive checked node reservations", body[23].name);
+    try std.testing.expectEqual(@as(u64, 309), body[23].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

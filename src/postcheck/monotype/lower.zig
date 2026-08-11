@@ -350,6 +350,9 @@ pub const BodyDiagnostics = struct {
     checked_node_cache_hits: u64 = 0,
     checked_node_cache_misses: u64 = 0,
     fresh_checked_node_requests: u64 = 0,
+    substituted_checked_node_misses: u64 = 0,
+    declaration_checked_node_misses: u64 = 0,
+    recursive_checked_node_reservations: u64 = 0,
     call_expressions: u64 = 0,
     dispatch_expressions: u64 = 0,
     deferred_template_requests: u64 = 0,
@@ -3179,16 +3182,31 @@ const Builder = struct {
             source_ctx.draft,
         );
         defer target_request_ctx.deinit();
-        try source_ctx.publishProcedureTargetSelections(
+        var source_request_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            self.moduleForId(source_view),
+            source_ctx.method_scope,
+            source_ctx.owner_template,
+            source_ctx.graph,
+            source_ctx.draft,
+        );
+        defer source_request_ctx.deinit();
+        source_request_ctx.active_checked_selections = source_ctx.active_checked_selections;
+        const source_request_fn_node = try source_request_ctx.scopedExactFunctionRequest(
+            source_fn_ty,
+            raw_request_fn_node,
+        );
+        try source_request_ctx.publishProcedureTargetSelections(
             source_view,
             source_fn_ty,
             view,
             template.checked_fn_root,
-            raw_request_fn_node,
+            source_request_fn_node,
         );
         const request_fn_node = try target_request_ctx.scopedExactFunctionRequest(
             template.checked_fn_root,
-            raw_request_fn_node,
+            source_request_fn_node,
         );
         if (partial_evidence.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
@@ -5256,7 +5274,10 @@ const Builder = struct {
         const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
         if (!graph.sameClass(boundary.witness_node, restored_node)) {
-            try graph.unify(boundary.witness_node, restored_node);
+            if (graph.content(boundary.witness_node) != .unresolved) {
+                Common.invariant("deferred const produced a different exact node from its completed witness");
+            }
+            try graph.completeProducedSelection(boundary.witness_node, restored_node);
         }
         const restored_proof = body_draft.expr_impossibility_proofs.items[@intFromEnum(restored)];
         body_draft.impossibility_proofs.items[@intFromEnum(boundary.proof_reservation)] =
@@ -9988,6 +10009,10 @@ const BodyDraftStore = struct {
     /// dense NodeId column grows only once and each walk unsets the entries it
     /// touched before returning.
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
+    /// One immutable checked node per module-local checked identity in this
+    /// specialization graph. Exact runtime substitutions live in occurrence
+    /// scopes; an unsubstituted checked base is constructed only once.
+    persistent_checked_base_nodes: std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState),
     /// Closed static-data candidates are shared by child lowering contexts
     /// only within the body that owns their explicit runtime expression.
     static_data_candidate_exprs: std.AutoHashMap(StaticDataCandidateAddress, DraftExprId),
@@ -10065,6 +10090,7 @@ const BodyDraftStore = struct {
             .owner_starts = @splat(0),
             .owner_runs = .empty,
             .inhabitation_visiting = .{},
+            .persistent_checked_base_nodes = std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState).init(allocator),
             .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
         };
     }
@@ -10108,6 +10134,7 @@ const BodyDraftStore = struct {
         self.nested_spec_lookup.deinit();
         self.owner_runs.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
+        self.persistent_checked_base_nodes.deinit();
         self.stmt_impossibility_proofs.deinit(self.allocator);
         self.pat_impossibility_proofs.deinit(self.allocator);
         self.expr_impossibility_proofs.deinit(self.allocator);
@@ -15193,6 +15220,10 @@ const BodyContext = struct {
                     if (self.instantiation.authority == .produced_occurrence and
                         !self.graph.sameClass(existing, produced))
                     {
+                        if (self.graph.nodeIsCheckedBase(existing)) {
+                            try self.putScopedNode(scoped_ty, produced);
+                            return produced;
+                        }
                         if (self.graph.content(existing) != .unresolved) {
                             if (self.graph.generatedNominalReplacesPublic(existing, produced)) {
                                 try self.putScopedNode(scoped_ty, produced);
@@ -15218,11 +15249,20 @@ const BodyContext = struct {
                 else blk: {
                     const reserved = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
                     state.* = .{ .building = reserved };
+                    self.builder.countBodyDiagnostic("recursive_checked_node_reservations");
                     break :blk reserved;
                 },
             };
         }
         self.builder.countBodyDiagnostic("checked_node_cache_misses");
+        if (self.instantiation.decl_scopes.items.len != 0) {
+            self.builder.countBodyDiagnostic("declaration_checked_node_misses");
+        } else if (self.active_checked_selections != null) {
+            self.builder.countBodyDiagnostic("substituted_checked_node_misses");
+        }
+        if (self.instantiation.authority == .produced_occurrence) {
+            self.builder.countBodyDiagnostic("fresh_checked_node_requests");
+        }
         try self.putScopedNodeState(scoped_ty, .{ .building = null });
         errdefer self.removeScopedNodeState(scoped_ty);
         const build = if (self.instantiation.authority == .checked_base) build: {
@@ -15287,7 +15327,17 @@ const BodyContext = struct {
             if (self.instantiation.decl_scopes.items[index].getPtr(checked_ty)) |state| return state;
         }
         if (self.instantiation.decl_scopes.items.len != 0) return null;
+        if (self.usesPersistentCheckedBase()) {
+            return self.draft.persistent_checked_base_nodes.getPtr(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            });
+        }
         return self.instantiation.node_map.getPtr(checked_ty);
+    }
+
+    fn usesPersistentCheckedBase(self: *const BodyContext) bool {
+        return self.instantiation.authority == .checked_base and self.active_checked_selections == null;
     }
 
     fn putScopedNodeState(
@@ -15297,6 +15347,13 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         if (self.instantiation.decl_scopes.items.len != 0) {
             try self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].put(checked_ty, state);
+            return;
+        }
+        if (self.usesPersistentCheckedBase()) {
+            try self.draft.persistent_checked_base_nodes.put(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            }, state);
             return;
         }
         try self.instantiation.node_map.put(checked_ty, state);
@@ -15309,6 +15366,13 @@ const BodyContext = struct {
     fn removeScopedNodeState(self: *BodyContext, checked_ty: checked.CheckedTypeId) void {
         if (self.instantiation.decl_scopes.items.len != 0) {
             _ = self.instantiation.decl_scopes.items[self.instantiation.decl_scopes.items.len - 1].remove(checked_ty);
+            return;
+        }
+        if (self.usesPersistentCheckedBase()) {
+            _ = self.draft.persistent_checked_base_nodes.remove(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            });
             return;
         }
         _ = self.instantiation.node_map.remove(checked_ty);
@@ -15925,10 +15989,7 @@ const BodyContext = struct {
                 .checked = selection.dependent,
             };
             if (selections.get(dependent) != null) continue;
-            const produced = try self.instantiateProducedOccurrenceWithSelections(
-                selection.source,
-                selections,
-            );
+            const produced = try self.persistentCheckedBaseNode(selection.source);
             try selections.put(dependent, produced);
         }
         for (interface_slots) |slot| {
@@ -15938,10 +15999,7 @@ const BodyContext = struct {
                 .checked = slot.checked,
             };
             if (selections.get(key) != null) continue;
-            const produced = try self.instantiateProducedOccurrenceWithSelections(
-                slot.concrete_source,
-                selections,
-            );
+            const produced = try self.persistentCheckedBaseNode(slot.concrete_source);
             try selections.put(key, produced);
         }
         // The call edge already published the callee's immutable flat
@@ -19354,6 +19412,14 @@ const BodyContext = struct {
             Common.invariant("generated iterator requested a non-public Iter source type");
         }
         const public_source = self.graph.generatedIteratorPublicSource(public_iterator);
+        return try self.generatedIteratorNodeFromPublicSource(public_source, item_node);
+    }
+
+    fn generatedIteratorNodeFromPublicSource(
+        self: *BodyContext,
+        public_source: solve.InstIteratorPublicSource,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
         const lookup = try self.graph.lookupGeneratedIterator(public_source.def, item_node);
         if (try self.existingGeneratedIteratorNode(lookup)) |existing| return existing;
 
@@ -19391,7 +19457,7 @@ const BodyContext = struct {
         const generated = try self.graph.addRecursiveNode(Context{
             .body = self,
             .public_source = public_source,
-            .item_node = public_named.args[0],
+            .item_node = item_node,
             .identity = lookup.digest,
         }, Context.fill);
         try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
@@ -19514,16 +19580,7 @@ const BodyContext = struct {
         checked_fn_ty: checked.CheckedTypeId,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!NodeId {
-        // Request construction owns an immutable checked base, but that base
-        // is not a body occurrence. Build it in an isolated type-only scope so
-        // it cannot seed the body's checked-occurrence cache before the exact
-        // substitution span has been installed.
-        const empty_selections = try self.graph.arena().create(ActiveCheckedSelections);
-        empty_selections.* = ActiveCheckedSelections.init(self.graph.arena());
-        const checked_node = try self.instantiateCheckedBaseWithSelections(
-            checked_fn_ty,
-            empty_selections,
-        );
+        const checked_node = try self.persistentCheckedBaseNode(checked_fn_ty);
         const exact_node = try self.graph.importMono(mono_fn_ty);
         self.graph.registerFunctionResultRelation(exact_node, .exact_destination);
         const exact_fn = try self.graph.functionNodes(exact_node);
@@ -25014,14 +25071,13 @@ const BodyContext = struct {
             };
             if (directSelectionForSlot(selections.items, base_id) != null) continue;
             if (slot.kind != .generated_nominal or slot.generated_source != .exact_arguments) continue;
-            // Build the public nominal shell from its exact argument
-            // substitutions. The slot's own inherited public/default node is
-            // deliberately masked: it is the producer being replaced by a
-            // content-addressed generated identity.
+            // The checked slot explicitly names the exact arguments that
+            // determine this generated nominal. Construct the atomic result
+            // from those nodes directly; no intermediate public nominal graph
+            // exists to be replaced.
             _ = table.nodes.remove(base_id);
             try table.own(base_id);
-            const instantiated = try self.instantiateProducedOccurrenceWithSelections(slot.checked, table);
-            const exact = (try self.generatedNominalFromExactArguments(slot.checked, instantiated)) orelse continue;
+            const exact = (try self.generatedNominalFromSelectedArguments(slot, table)) orelse continue;
             try selections.append(self.allocator, .{
                 .base = base_id,
                 .produced = exact,
@@ -25076,12 +25132,12 @@ const BodyContext = struct {
     /// Construct an atomic generated identity only for a call slot whose
     /// checked operation explicitly authorizes generation from exact public
     /// arguments. Ordinary public nominal instantiation never calls this.
-    fn generatedNominalFromExactArguments(
+    fn generatedNominalFromSelectedArguments(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        public_node: NodeId,
+        slot: checked.SpecializationCallSlot,
+        selections: *ActiveCheckedSelections,
     ) Allocator.Error!?NodeId {
-        if (self.graph.nodeIsGeneratedNominal(public_node)) return public_node;
+        const checked_ty = slot.checked;
         const nominal = switch (checkedPayload(self.view, checked_ty)) {
             .nominal => |nominal| nominal,
             .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => Common.invariant("generated call slot referenced a non-nominal checked type"),
@@ -25090,10 +25146,49 @@ const BodyContext = struct {
             Common.invariant("generated call slot referenced a non-builtin nominal");
         return switch (checked.builtinRuntimeEncoding(builtin)) {
             .iterator => blk: {
-                const public = self.graph.namedNodes(public_node);
-                if (public.args.len != 1) Common.invariant("generated iterator call slot had a non-unary public nominal");
-                if (!try self.graph.typeIsResolved(public.args[0])) break :blk null;
-                break :blk try self.generatedIteratorNode(public_node, public.args[0]);
+                if (nominal.args.len != 1) Common.invariant("generated iterator call slot had a non-unary public nominal");
+                const item_node = switch (slot.generated_argument_source) {
+                    .exact_selection => selections.get(.{
+                        .module_bytes = self.view.key.bytes,
+                        .checked = nominal.args[0],
+                    }) orelse break :blk null,
+                    .checked_substitution => try self.instantiateProducedOccurrenceWithSelections(
+                        nominal.args[0],
+                        selections,
+                    ),
+                    .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
+                };
+                if (!try self.graph.typeIsResolved(item_node)) {
+                    Common.invariant("generated iterator slot item argument was not resolved before identity construction");
+                }
+                const def = try self.builder.typeDef(
+                    self.view,
+                    nominal.origin_module,
+                    nominal.name,
+                    nominal.source_decl,
+                );
+                const args = try self.graph.arena().dupe(NodeId, &.{item_node});
+                const backing_node = try self.instNominalBackingNode(nominal, args);
+                const owner = builtinOwner(nominal.builtin) orelse
+                    Common.invariant("generated iterator slot had no builtin owner");
+                if (!static_dispatch.isIteratorOwner(owner)) {
+                    Common.invariant("generated iterator slot had a non-iterator builtin owner");
+                }
+                break :blk try self.generatedIteratorNodeFromPublicSource(.{
+                    .named_type = .{
+                        .module = self.builder.declaredModuleForNominal(self.view, nominal),
+                        .ty = checked_ty,
+                    },
+                    .def = def,
+                    .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+                    .builtin_owner = owner,
+                    .backing = .{
+                        .node = backing_node,
+                        .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
+                        .authority = .checked_public,
+                    },
+                    .declared_order = try self.instDeclaredOrderForNominal(nominal),
+                }, item_node);
             },
             .parse_tag_union_spec, .fields, .field => Common.invariant("non-iterator generated call slot requested iterator argument materialization"),
             .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("ordinary builtin reached generated call slot materialization"),
@@ -25214,6 +25309,27 @@ const BodyContext = struct {
             selections,
             .checked_base,
         );
+    }
+
+    fn persistentCheckedBaseNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!NodeId {
+        const previous_instantiation = self.instantiation;
+        const previous_selections = self.active_checked_selections;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            self.view.key.bytes,
+            .checked_base,
+        );
+        self.active_checked_selections = null;
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.active_checked_selections = previous_selections;
+        }
+        return try self.instNode(checked_ty);
     }
 
     fn instantiateProducedOccurrenceWithSelections(
@@ -25476,14 +25592,41 @@ const BodyContext = struct {
         plan: checked.SpecializationCallPlanView,
         current_selections: []const solve.DirectRequestSelection,
         procedure: checked.IteratorProcedureId,
-        checked_fn_node: NodeId,
+        checked_fn_ty: checked.CheckedTypeId,
         produced_args: []const NodeId,
         available: []const bool,
     ) Allocator.Error!?[]const solve.DirectRequestSelection {
         if (!iteratorProducerOperandsReady(procedure, available)) return null;
+        // If the exact-argument pass already constructed the result's atomic
+        // generated nominal, that node is the producer result. Reconstructing
+        // it from the generic declaration would discard the exact item edge
+        // (notably for zero-argument producers such as `range_done`) and repeat
+        // the backing construction that has already been completed.
+        for (plan.slots) |slot| {
+            if (slot.kind != .generated_nominal) continue;
+            var produces_result = false;
+            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
+                if (occurrence.root == .result) {
+                    produces_result = true;
+                    break;
+                }
+            }
+            if (!produces_result) continue;
+            const selected = directSelectionForSlot(current_selections, .{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.checked,
+            }) orelse continue;
+            if (self.isGeneratedIteratorEvidenceNode(selected.produced)) {
+                return current_selections;
+            }
+        }
+        if (procedure == .range_done or procedure == .str_iter_utf8) {
+            Common.invariant("zero-argument iterator producer had no exact generated result selection");
+        }
+        const public_fn_node = try self.persistentCheckedBaseNode(checked_fn_ty);
         const generated_ret = (try self.generatedIteratorResultNode(
             procedure,
-            checked_fn_node,
+            public_fn_node,
             produced_args,
         )) orelse return null;
         if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) return null;
@@ -27679,7 +27822,6 @@ const BodyContext = struct {
                     return try self.deferConstUseAtNode(
                         self.view.bodies.expr(checked_expr).ty,
                         selected.const_use,
-                        expected_node,
                         try self.evidenceForUseSite(record.expr),
                         .{ .hoisted = entry },
                     );
@@ -27689,7 +27831,6 @@ const BodyContext = struct {
                 return try self.deferConstUseAtNode(
                     self.view.bodies.expr(checked_expr).ty,
                     const_use,
-                    expected_node,
                     try self.evidenceForUseSite(record.expr),
                     .declared,
                 );
@@ -27698,7 +27839,6 @@ const BodyContext = struct {
                 return try self.deferConstUseAtNode(
                     self.view.bodies.expr(checked_expr).ty,
                     const_use,
-                    expected_node,
                     try self.evidenceForUseSite(record.expr),
                     .declared,
                 );
@@ -27707,7 +27847,6 @@ const BodyContext = struct {
                 return try self.deferConstUseAtNode(
                     self.view.bodies.expr(checked_expr).ty,
                     required.const_use,
-                    expected_node,
                     try self.evidenceForUseSite(record.expr),
                     .declared,
                 );
@@ -27772,7 +27911,6 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         const_use: checked.ConstUseTemplate,
-        expected_node: NodeId,
         use_evidence: []const SpecEvidence,
         provenance: DraftConstUseProvenance,
     ) Allocator.Error!DraftExprId {
@@ -27791,9 +27929,26 @@ const BodyContext = struct {
                 }
             },
         }
-        const requested_node = try self.constUseTypeNode(checked_ty, const_use);
+        const requested_ty = const_use.requested_source_ty_payload orelse
+            Common.invariant("deferred const use had no requested checked type");
+        const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
+        const template = store_view.const_templates.get(const_use.const_ref);
+        const DeferredConstNodes = struct { request: NodeId, witness: NodeId };
+        const nodes: DeferredConstNodes = switch (template.state) {
+            .stored_const => |stored| blk: {
+                const exact = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
+                break :blk .{ .request = exact, .witness = exact };
+            },
+            .eval_template => .{
+                .request = try self.producedOccurrenceNode(requested_ty),
+                .witness = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
+            },
+            .reserved => Common.invariant("reserved checked const template reached deferred Monotype lowering"),
+        };
+        try self.publishExactCheckedTypeAtCell(requested_ty, DraftTypeCell.fromGraphNode(nodes.request));
+        try self.publishExactCheckedTypeAtCell(checked_ty, DraftTypeCell.fromGraphNode(nodes.request));
         const expr = try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(requested_node),
+            DraftTypeCell.fromGraphNode(nodes.witness),
             .pending_deferred,
         );
         const proof_reservation = try self.addImpossibilityProof(.pending);
@@ -27809,8 +27964,8 @@ const BodyContext = struct {
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
-            .request_node = expected_node,
-            .witness_node = requested_node,
+            .request_node = nodes.request,
+            .witness_node = nodes.witness,
             .const_use = const_use,
             .provenance = provenance,
             .context_evidence = self.evidence,
@@ -27961,12 +28116,7 @@ const BodyContext = struct {
         const exact_fn_node = try self.graph.functionRequestRoot(raw_exact_fn_node);
         const exact = try self.graph.functionNodes(exact_fn_node);
 
-        const empty_selections = try self.graph.arena().create(ActiveCheckedSelections);
-        empty_selections.* = ActiveCheckedSelections.init(self.graph.arena());
-        const checked_source = try self.instantiateCheckedBaseWithSelections(
-            checked_fn_ty,
-            empty_selections,
-        );
+        const checked_source = try self.persistentCheckedBaseNode(checked_fn_ty);
         const checked_shape = try self.graph.functionNodes(checked_source);
         if (checked_shape.args.len != exact.args.len) {
             Common.invariant("selected definition callable had a different arity from its exact call edge");
@@ -28307,12 +28457,14 @@ const BodyContext = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
-        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
-        try self.graph.unify(
-            try body_ctx.instNode(entry_template.checked_fn_root),
+        const wrapper_fn_node = try body_ctx.scopedExactFunctionRequest(
+            entry_template.checked_fn_root,
+            try body_ctx.graphFunctionNode(&.{}, request_node),
+        );
+        body_ctx.active_checked_selections = try body_ctx.procedureBodyCheckedSelections(
+            entry_template,
             wrapper_fn_node,
         );
-        try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
         const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
@@ -30650,7 +30802,7 @@ const BodyContext = struct {
                 plan,
                 selections,
                 procedure,
-                checked_fn_node,
+                checked_fn_ty,
                 produced_args,
                 available,
             )) orelse selections;
@@ -30721,7 +30873,7 @@ const BodyContext = struct {
                     plan,
                     selections,
                     procedure,
-                    checked_fn_node,
+                    checked_fn_ty,
                     produced_args,
                     available,
                 )) orelse selections;
@@ -30809,7 +30961,7 @@ const BodyContext = struct {
                 plan,
                 selections,
                 procedure,
-                checked_fn_node,
+                checked_fn_ty,
                 produced_args,
                 available,
             )) orelse selections;
@@ -30892,7 +31044,7 @@ const BodyContext = struct {
                     plan,
                     selections,
                     procedure,
-                    checked_fn_node,
+                    checked_fn_ty,
                     produced_args,
                     available,
                 )) orelse selections;
@@ -45686,7 +45838,7 @@ const BodyContext = struct {
                     call_plan,
                     selections,
                     procedure,
-                    checked_callable_node,
+                    plan.callable_ty,
                     produced_nodes,
                     available,
                 )) orelse selections;

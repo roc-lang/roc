@@ -2773,19 +2773,29 @@ child nodes. The checker may precompute a shared call shape because a call owns
 an explicit interface relation; it may not precompute a whole-value relation in
 case some later descendant happens to need it.
 
-Instantiating one checked occurrence reserves its dense graph `NodeId` before
-constructing children and fills that same node with the completed content. The
-reservation exists solely so a recursive child can refer to its eventual
-parent. Instantiation must not allocate a second root and then unify or redirect
-the two roots. Initial fill cannot invalidate active snapshots: unresolved
-reservations cannot be snapshotted, and every prior snapshot is independent of
-the newly filled node. If canonical interning finds an existing node, the
-reservation redirects to it while preserving row back-references.
+Instantiating one checked occurrence first records an unfinished construction
+state without allocating a graph node. It constructs the immediate children and
+interns the completed parent directly. Only a recursive child turns the
+unfinished state into a dense reserved `NodeId`; the original traversal then
+fills that same reservation. Instantiation must not allocate an acyclic
+placeholder and redirect it to a second canonical root. Initial fill cannot
+invalidate active snapshots: unresolved recursive reservations cannot be
+snapshotted, and every prior snapshot is independent of the newly filled node.
 
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
 makes one forward pass over those slots. It must not retry unresolved slots to
 a fixed point or search a parent type for generated descendants.
+
+Each generated construction slot also records the exact operation that supplies
+each public argument: read a named exact-selection slot, rebuild that one
+compound argument from its explicit substitutions, or reuse a checker-proven
+concrete base. Lowering does not choose among these operations. If a named
+producer has not run at the current operand-scheduling point, the generated
+slot remains absent; the next refinement that publishes that producer executes
+the same checker-authored operation. This is scheduling, not a fallback: no
+alternative source is tried and no checked or produced graph is inspected to
+discover one.
 
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
@@ -3963,33 +3973,29 @@ BodyDraft data, are intentionally absent from durable specialization evidence, a
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
 
-Within the specialization, each body instantiation context has an exact fresh
-scope identity, owns one checked module id, and caches nodes by checked type id
-inside that `(scope id, checked module id)` context. The module id is an
-invariant of the context rather than a repeated hash-map key; entering another
-checked module creates another context before any type id from that module is
-looked up. The resulting address is still the exact checked identity of the type
-variable/content in that body specialization. It is not a structural digest,
-source name, runtime layout, object symbol, or generated procedure id. A child
-that needs independent generic cells receives a new scope identity; copying
-cells into that scope is explicit. Nodes begin unresolved. As relations are
-produced, explicit evidence from checked data unifies those nodes:
+Within one specialization graph, each `(checked module id, checked type id)` has
+one persistent immutable checked-base node. It is the unsubstituted source
+contract, not a fresh relation-production cell. A use site carries only its
+small explicit substitution span from checked identities to exact produced
+nodes. Looking up a checked occurrence first reads that span and otherwise
+reuses the persistent base. Compound materialization rebuilds only the parent
+paths changed by substitutions; an empty span performs no fresh checked-type
+construction at all.
 
-- the requested root function/value type constrains the checked root type;
-- lambda and closure expected function types constrain the nested function
-  specialization they create;
-- call arguments constrain the callee instantiation through the checked formal
-  and actual type relation;
-- call results constrain the callee return type and the caller result type;
-- static-dispatch plans constrain dispatcher, callable, operand, and result
-  types;
-- numeric literals and checked numeric defaults constrain numeric type cells;
-- named type uses constrain their declaration formals to the instantiated named
-  arguments;
-- pattern lowering consumes the exact scrutinee cells directly. Checked
-  constructors provide the already-validated field, tuple-item, tag-payload,
-  and binder positions; Monotype does not relate a second checked pattern root
-  to the whole runtime value before projecting those positions.
+The module id is explicit checked identity, not a structural digest, source
+name, runtime layout, object symbol, or generated procedure id. Entering another
+checked module changes that address explicitly. A fresh scope exists only for
+operation-local construction state such as a declaration backing whose formal
+arguments have been replaced. It does not license copying an entire checked
+function or value graph.
+
+Exact nodes enter that substitution span only at checker-authored directional
+edges: completed call arguments and results, lambda and closure interfaces,
+static-dispatch operands and targets, numeric default operations, declaration
+formal arguments, and immediate pattern projections. None of these edges
+unifies a whole checked root with a whole produced root. Pattern lowering, for
+example, consumes the exact scrutinee node and the checked field, tuple-item,
+tag-payload, or binder position directly.
 
 Direct calls in the interface program are dependencies on a concrete callee
 specialization. The caller first lowers each operand once and constructs the
@@ -4107,15 +4113,13 @@ never reused across body owners: suppressing one owner must suppress all of the
 content referenced only by that owner. Generated strings remain ordinary
 distinct draft entries because they have no checked literal identity.
 
-Checked roots explicitly record whether their graph contains identity
-variables, but closure does not authorize reuse across instantiation scopes.
-Specialization relations may still refine representation-bearing nominal
-backings below a closed public type. Every checked graph therefore instantiates
-fresh relation-production cells in its exact scope. Immutable `TypeId` imports
-are reserved for types explicitly completed by an earlier Monotype stage.
-Function roots and their components remain scope-local request-interface
-identities even when the complete checked graph is closed, so distinct
-callable requests never merge their relation-production identity.
+Checked output does not classify a complete root by whether its descendants
+contain identity variables. Such a transitive property would make unrelated
+parents participate in exact-representation work. A call shape instead names
+the individual identity slots and direct projections that can supply them.
+Function requests keep the persistent checked function base plus their explicit
+substitution span, so distinct requests retain distinct request identity without
+copying unchanged function components.
 
 This distinction matters most for lambdas and closures. Expression-position
 functions are checked templates. Lowering a lambda or closure at an expected
