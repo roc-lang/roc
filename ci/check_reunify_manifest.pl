@@ -255,8 +255,14 @@ my @categories = (
         patterns => [
             { label => 'method_registry.lookup(', re => qr/method_registry\.lookup\(/,
               counts => { $LOWER => 1 } },
+            # One $LOWER lookup belongs to the sealed-type mirror of the codec
+            # required-field condition: the same registry consultation the graph
+            # walk performs, asked from the finished Monotype so the parser's
+            # declared error contribution can be decided without the graph. It
+            # is verified against the graph walk by an env-gated parity probe
+            # at the trigger site.
             { label => 'lookupMethodTargetByName', re => qr/\blookupMethodTargetByName\b/,
-              counts => { $LOWER => 29 } },
+              counts => { $LOWER => 30 } },
             { label => 'findMethodTargetByName', re => qr/\bfindMethodTargetByName\b/,
               counts => { $LOWER => 2 } },
             { label => 'methodTargetInView', re => qr/\bmethodTargetInView\b/,

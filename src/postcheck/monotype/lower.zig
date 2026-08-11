@@ -38727,7 +38727,9 @@ const BodyContext = struct {
         if (kind == .parser) {
             var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
             defer required_error_seen.deinit();
-            if (try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
+            const needs_required_error = try self.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen);
+            try self.probeSealedShapeAgreement(shape_node, needs_required_error);
+            if (needs_required_error) {
                 added_relation = try self.ensureGraphParserMissingRequiredFieldError(boundary_callable_node);
             }
             const runtime = try self.graph.functionNodes((try self.graph.functionNodes(boundary_callable_node)).ret);
@@ -39457,6 +39459,218 @@ const BodyContext = struct {
         return if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing")) payloads.ok else null;
     }
 
+    /// The sealed-type mirror of `methodOwnerFromNode`: the method owner a
+    /// finished Monotype names, used by the checked-side codec condition.
+    fn sealedMethodOwner(self: *BodyContext, ty: Type.TypeId) ?static_dispatch.MethodOwner {
+        const types = &self.builder.program.types;
+        return switch (types.get(ty)) {
+            .primitive => |primitive| .{ .builtin = builtinOwnerFromPrimitive(primitive) },
+            .list => .{ .builtin = .list },
+            .box => .{ .builtin = .box },
+            .named => |named| if (named.builtin_owner) |owner|
+                .{ .builtin = owner }
+            else if (named.kind == .alias)
+                (if (named.backing) |backing| self.sealedMethodOwner(backing.ty) else null)
+            else
+                .{ .nominal = .{
+                    .module = named.def.module,
+                    .type_name = named.def.type_name,
+                    .source_decl = named.def.source_decl,
+                } },
+            .tuple, .func, .tag_union, .record, .erased, .zst => null,
+        };
+    }
+
+    /// The sealed-type mirror of `customCodecLookupAtNode`.
+    fn sealedCustomCodecLookup(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        kind: CodecKind,
+    ) Allocator.Error!?MethodLookup {
+        const named = switch (self.builder.program.types.get(ty)) {
+            .named => |named| named,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .erased, .zst => return null,
+        };
+        if (named.builtin_owner != null) return null;
+        switch (named.kind) {
+            .nominal, .@"opaque" => {},
+            .alias => return null,
+        }
+        const owner = self.sealedMethodOwner(ty) orelse
+            Common.invariant("custom codec sealed type had no checked method owner");
+        const method_name = switch (kind) {
+            .parser => "parser_for",
+            .encoder => "encoder_for",
+        };
+        const lookup = (try self.builder.lookupMethodTargetByName(self.method_scope, owner, method_name)) orelse return null;
+        return switch (lookup.target.kind) {
+            .structural => |structural_kind| switch (kind) {
+                .parser => if (structural_kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
+                .encoder => if (structural_kind == .encoder) null else Common.invariant("encoder_for lookup resolved to a different structural target"),
+            },
+            .procedure, .local_proc => lookup,
+        };
+    }
+
+    fn sealedIsBuiltinTry(self: *BodyContext, ty: Type.TypeId) bool {
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| self.builder.isBuiltinTryDef(named.def),
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .erased, .zst => false,
+        };
+    }
+
+    const SealedTryPayloads = struct { ok: Type.TypeId, err: Type.TypeId };
+
+    fn sealedTryPayloads(self: *BodyContext, ty: Type.TypeId) SealedTryPayloads {
+        const types = &self.builder.program.types;
+        const named = switch (types.get(ty)) {
+            .named => |named| named,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .erased, .zst => Common.invariant("codec method result was not a named Try type"),
+        };
+        const backing = named.backing orelse Common.invariant("codec Try type had no checked backing");
+        const tags = switch (types.get(backing.ty)) {
+            .tag_union => |span| types.tagSpan(span),
+            .primitive, .list, .box, .tuple, .func, .named, .record, .erased, .zst => Common.invariant("codec Try backing was not a tag union"),
+        };
+        var ok: ?Type.TypeId = null;
+        var err: ?Type.TypeId = null;
+        for (0..tags.len) |index| {
+            const tag = GuardedList.at(tags, index);
+            const payloads = types.span(tag.payloads);
+            const text = self.builder.program.names.tagLabelText(tag.name);
+            if (Ident.textEql(text, "Ok")) {
+                if (payloads.len != 1) Common.invariant("codec Try tags did not have one payload each");
+                ok = GuardedList.at(payloads, 0);
+            } else if (Ident.textEql(text, "Err")) {
+                if (payloads.len != 1) Common.invariant("codec Try tags did not have one payload each");
+                err = GuardedList.at(payloads, 0);
+            }
+        }
+        return .{
+            .ok = ok orelse Common.invariant("codec Try backing had no Ok tag"),
+            .err = err orelse Common.invariant("codec Try backing had no Err tag"),
+        };
+    }
+
+    fn sealedErrorIsExactUnitTag(self: *BodyContext, ty: Type.TypeId, tag_text: []const u8) bool {
+        const types = &self.builder.program.types;
+        switch (types.get(ty)) {
+            .named => |named| {
+                const backing = named.backing orelse return false;
+                return self.sealedErrorIsExactUnitTag(backing.ty, tag_text);
+            },
+            .tag_union => |span| {
+                const tags = types.tagSpan(span);
+                if (tags.len != 1) return false;
+                const tag = GuardedList.at(tags, 0);
+                if (types.span(tag.payloads).len != 0) return false;
+                return Ident.textEql(self.builder.program.names.tagLabelText(tag.name), tag_text);
+            },
+            .primitive, .list, .box, .tuple, .func, .record, .erased, .zst => return false,
+        }
+    }
+
+    fn sealedMissingTryOkType(self: *BodyContext, ty: Type.TypeId) ?Type.TypeId {
+        if (!self.sealedIsBuiltinTry(ty)) return null;
+        const payloads = self.sealedTryPayloads(ty);
+        return if (self.sealedErrorIsExactUnitTag(payloads.err, "Missing")) payloads.ok else null;
+    }
+
+    /// The sealed-type mirror of `graphParserShapeNeedsRequiredFieldError`:
+    /// whether a parser generated for this shape can fail with
+    /// MissingRequiredField, decided from the finished Monotype alone.
+    fn sealedShapeNeedsRequiredFieldError(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        seen: *collections.DenseMap(Type.TypeId, void),
+    ) Allocator.Error!bool {
+        const entry = try seen.getOrPut(ty);
+        if (entry.found_existing) return false;
+
+        if (self.sealedMethodOwner(ty)) |owner| {
+            switch (owner) {
+                .builtin => |builtin| if (jsonParseScalarMethodNameForBuiltin(builtin) != null) return false,
+                .nominal => {},
+            }
+        }
+        if ((try self.sealedCustomCodecLookup(ty, .parser)) != null) return false;
+        if (self.sealedIsBuiltinTry(ty)) {
+            const payloads = self.sealedTryPayloads(ty);
+            if (self.sealedErrorIsExactUnitTag(payloads.err, "Missing") or
+                self.sealedErrorIsExactUnitTag(payloads.err, "Null"))
+            {
+                return try self.sealedShapeNeedsRequiredFieldError(payloads.ok, seen);
+            }
+            return false;
+        }
+
+        const types = &self.builder.program.types;
+        return switch (types.get(ty)) {
+            .list, .box => |payload| try self.sealedShapeNeedsRequiredFieldError(payload, seen),
+            .tuple => |span| blk: {
+                const items = types.span(span);
+                for (0..items.len) |index| {
+                    if (try self.sealedShapeNeedsRequiredFieldError(GuardedList.at(items, index), seen)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |span| blk: {
+                const fields = types.fieldSpan(span);
+                for (0..fields.len) |index| {
+                    const field = GuardedList.at(fields, index);
+                    if (self.sealedMissingTryOkType(field.ty)) |payload| {
+                        if (try self.sealedShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
+                    } else {
+                        break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .tag_union => |span| blk: {
+                const tags = types.tagSpan(span);
+                for (0..tags.len) |index| {
+                    const tag = GuardedList.at(tags, index);
+                    const payloads = types.span(tag.payloads);
+                    for (0..payloads.len) |payload_index| {
+                        if (try self.sealedShapeNeedsRequiredFieldError(GuardedList.at(payloads, payload_index), seen)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .named => |named| blk: {
+                const args = types.span(named.args);
+                if (named.builtin_owner == .set and args.len == 1) {
+                    break :blk try self.sealedShapeNeedsRequiredFieldError(GuardedList.at(args, 0), seen);
+                }
+                if (named.builtin_owner == .dict and args.len == 2) {
+                    break :blk try self.sealedShapeNeedsRequiredFieldError(GuardedList.at(args, 1), seen);
+                }
+                if (named.backing) |backing| {
+                    break :blk try self.sealedShapeNeedsRequiredFieldError(backing.ty, seen);
+                }
+                break :blk false;
+            },
+            .primitive, .func, .erased, .zst => false,
+        };
+    }
+
+    fn probeSealedShapeAgreement(self: *BodyContext, shape_node: NodeId, graph_answer: bool) Allocator.Error!void {
+        if (std.c.getenv("ROC_SHAPE_PROBE") == null) return;
+        if (!try self.graph.typeIsResolved(shape_node)) {
+            std.debug.print("SHAPEPROBE skip-unresolved\n", .{});
+            return;
+        }
+        const ty = try self.activeTypeFromNode(shape_node);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        const sealed_answer = try self.sealedShapeNeedsRequiredFieldError(ty, &seen);
+        if (sealed_answer != graph_answer) {
+            std.debug.print("SHAPEPROBE MISMATCH graph={} sealed={}\n", .{ graph_answer, sealed_answer });
+        } else {
+            std.debug.print("SHAPEPROBE agree={}\n", .{graph_answer});
+        }
+    }
+
     fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) bool {
         return self.graphJsonParseScalarMethodName(node) != null;
     }
@@ -39466,6 +39680,10 @@ const BodyContext = struct {
             .builtin => |builtin| builtin,
             .nominal => return null,
         };
+        return jsonParseScalarMethodNameForBuiltin(owner);
+    }
+
+    fn jsonParseScalarMethodNameForBuiltin(owner: static_dispatch.BuiltinOwner) ?[]const u8 {
         return switch (owner) {
             .bool => "parse_bool",
             .str => "parse_str",
