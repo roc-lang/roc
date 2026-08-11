@@ -110,7 +110,10 @@ pub fn validatePlatformHeader(
 
     // Extract TargetsConfig
     const config = TargetsConfig.fromAST(allocator, ast) catch {
-        return error.ParseError;
+        // fromAST only fails on allocation failure, and nothing has been
+        // rendered at this point, so don't report it as a parse error: that
+        // path assumes diagnostics are already on screen and exits silently.
+        return error.OutOfMemory;
     } orelse {
         try renderMissingTargetsError(allocator, platform_source_path, stderr, report_config);
         return error.MissingTargetsSection;
