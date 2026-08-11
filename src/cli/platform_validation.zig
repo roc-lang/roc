@@ -78,9 +78,42 @@ pub fn validatePlatformHeader(
     };
     defer ast.deinit();
 
+    // The parser recovers from syntax errors and records them in the AST rather
+    // than returning them, so the catch above only fires on allocation failure.
+    // Surface those diagnostics here; otherwise a bad header falls through to
+    // fromAST and is misreported as a missing 'targets:' section (#10651).
+    if (ast.hasErrors()) {
+        const owned_filename = try allocator.dupe(u8, platform_source_path);
+        defer allocator.free(owned_filename);
+        for (ast.tokenize_diagnostics.items) |diagnostic| {
+            var report = try ast.tokenizeDiagnosticToReport(diagnostic, allocator, owned_filename);
+            defer report.deinit();
+            reporting.renderReportToTerminal(
+                &report,
+                stderr,
+                reporting.ColorUtils.getPaletteForConfig(report_config),
+                report_config,
+            ) catch {};
+        }
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            var report = try ast.parseDiagnosticToReport(&env, diagnostic, allocator, owned_filename);
+            defer report.deinit();
+            reporting.renderReportToTerminal(
+                &report,
+                stderr,
+                reporting.ColorUtils.getPaletteForConfig(report_config),
+                report_config,
+            ) catch {};
+        }
+        return error.ParseError;
+    }
+
     // Extract TargetsConfig
     const config = TargetsConfig.fromAST(allocator, ast) catch {
-        return error.ParseError;
+        // fromAST only fails on allocation failure, and nothing has been
+        // rendered at this point, so don't report it as a parse error: that
+        // path assumes diagnostics are already on screen and exits silently.
+        return error.OutOfMemory;
     } orelse {
         try renderMissingTargetsError(allocator, platform_source_path, stderr, report_config);
         return error.MissingTargetsSection;
