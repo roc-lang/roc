@@ -1687,7 +1687,18 @@ frame or a recursive group's shared frame, where no mid-body state is pending—
 the driver checks each target's group in its own nested frame (together
 with any unchecked topological prefix), re-runs dispatch, and interleaves
 boundary literal defaulting to a fixpoint before generalizing. Group checks
-nest only at such boundaries.
+nest only at such boundaries. Ownership of a waiting target constraint is
+decided by its pinned callable relation: every active frame's drain re-sees
+the waiting constraint, and only a frame whose boundary rank the relation's
+callable var still sits at records the target—a relation pinned by an
+enclosing frame is generalization-safe in every nested frame, and re-recording
+it there would check the target's topological prefix inside the nested frame,
+where a prefix group can name that frame's still in-flight def and merge with
+it monomorphically instead of instantiating its finished scheme. The outermost
+active frame owns every remaining waiting constraint. A group checked from inside
+another definition's boundary also runs with no active scheme owner, exactly
+like a driver-initiated check, so a def's recorded scheme contents never
+depend on which definition's boundary caused it to be checked.
 
 Group suspension and merge need no dedicated machinery: a suspended group's
 members are `.processed` with still-live, not-yet-generalized vars, so a
@@ -3892,7 +3903,15 @@ source syntax. An explicit owner index lets each boundary consume only its own
 candidates instead of rescanning module-wide dispatch sites; the backing arena
 is cleared when the last active owner is consumed. Exact duplicate
 receiver/relation roots are stored once. A newly created relation needs the
-side table only when its receiver belongs to an outer rank. A relation copied
+side table only when its receiver belongs to an outer rank. An attached
+constraint copied by instantiating a constrained scheme lives on its fresh
+receiver's descriptor exactly like a creation-site attached constraint and is
+indexed as a creation candidate under the same owner rule: it becomes an
+explicit requirement only when that fresh receiver unifies outward to an outer
+rank—the argument-routed transitive case—while a receiver that generalizes
+with the owner's root keeps the relation structurally. Literal-conversion
+constraints settle through the open-literal worklist and stay out of the
+candidate index. A relation copied
 from another scheme is already detached from the receiver descriptor, so it
 remains explicit even when the receiver happens to share the enclosing
 boundary's rank. Every copied candidate also retains the exact structurally
@@ -4030,8 +4049,14 @@ still an exact constraint on the same generalized receiver reachable through
 the enclosing scheme; the checked scheme-use substitution is then the durable
 link from the structural relation to that copy. A nested scheme whose root is
 absent from the enclosing boundary's output interface is out of scope; its
-recorded capture rank, rather than a reachability guess about ownership, proves
-that the closing boundary may retire it. The checked-module boundary rejects
+recorded capture identity—the binding group whose checking captured it plus the
+capture rank—rather than a reachability guess about ownership, proves that the
+closing boundary may retire it. Ranks alone cannot: they are a shared depth
+counter, so a boundary that resolves pending dispatch targets by checking a
+sibling module-level group in a nested frame sees that group's schemes one rank
+deeper, and only the explicit capture-group identity keeps those live
+module-level schemes out of the closing boundary's nested-frame retirement.
+The checked-module boundary rejects
 any remaining checker-local requirement and empties the scheme index, so no
 import can observe a root type after its requirement was silently discarded.
 

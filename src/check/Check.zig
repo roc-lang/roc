@@ -824,8 +824,17 @@ const TypeScheme = struct {
     root_var: Var,
     /// Rank whose boundary created this scheme. A later enclosing boundary may
     /// retire the scheme as out of scope only when this rank is strictly
-    /// deeper and the scheme root is absent from the published interface.
+    /// deeper, the scheme root is absent from the published interface, and the
+    /// closing boundary's group captured the scheme (`capture_group_index`).
     capture_rank: Rank,
+    /// The binding group (`check_order` index) whose checking captured this
+    /// scheme, or null outside any group (REPL, expect bodies). Ranks are a
+    /// shared depth counter across nested group checks, so this explicit
+    /// identity—not rank arithmetic—decides which closing boundary may treat
+    /// the scheme as a nested lexical frame's: a boundary that resolves
+    /// pending dispatch targets by checking another module-level group one
+    /// rank deeper must leave that group's schemes alive.
+    capture_group_index: ?u32,
     indexed_vars: std.ArrayListUnmanaged(Var) = .empty,
     dispatch_requirements: std.ArrayListUnmanaged(SchemeDispatchRequirement) = .empty,
 };
@@ -1136,6 +1145,17 @@ fn registerInstantiatedAttachedDispatch(
         .instantiation_expr = instantiation_expr,
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
+    // An attached constraint copied by instantiation lives on the fresh
+    // receiver's descriptor exactly like a creation-site attached constraint,
+    // so it is indexed as a creation candidate: the owning boundary stores an
+    // explicit scheme requirement only when the receiver has unified outward
+    // to an outer rank, while a receiver that generalizes with the owner's
+    // root keeps the relation structurally. Literal-conversion constraints
+    // settle through the open-literal worklist (callers register the receiver
+    // there), so the candidate index filters them.
+    for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null);
+    }
 }
 
 fn shrinkSchemeRequirementCandidatesTo(self: *Self, new_len: usize) void {
@@ -10440,6 +10460,13 @@ fn currentGroupBoundaryRank(self: *const Self) Rank {
     return self.group_stack.items[self.group_stack.items.len - 1].boundary_rank;
 }
 
+/// The binding group currently being checked (top of `group_stack`), or null
+/// outside any group (REPL, expect bodies).
+fn currentGroupIndex(self: *const Self) ?u32 {
+    if (self.group_stack.items.len == 0) return null;
+    return self.group_stack.items[self.group_stack.items.len - 1].group_index;
+}
+
 fn currentFramePendingTargetsTop(self: *const Self) usize {
     if (self.group_stack.items.len == 0) return 0;
     return self.group_stack.items[self.group_stack.items.len - 1].pending_targets_top;
@@ -10512,6 +10539,15 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
     // Invariant E (boundary cleanliness): group checks start—and nest—
     // only with no mid-body state pending.
     std.debug.assert(self.suppress_generalize_expr == null);
+
+    // A group's recorded scheme contents are a property of its own defs, never
+    // of whichever definition's boundary caused the group to be checked. A
+    // group check nested inside another definition's generalization boundary
+    // therefore runs with no active owner, exactly like a driver-initiated
+    // check; members that generalize install their own owners in `checkDef`.
+    const saved_active_scheme_root = self.active_scheme_root;
+    self.active_scheme_root = null;
+    defer self.active_scheme_root = saved_active_scheme_root;
 
     // A singleton value def never generalizes, so its obligations resolve at
     // the base rank (after checkDef); everything else's boundary is the RHS
@@ -10702,6 +10738,22 @@ fn resolveGroupPendingDispatchTargets(self: *Self, env: *Env) std.mem.Allocator.
 /// boundary.
 fn recordPendingDispatchTarget(self: *Self, target_def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
     try self.pending_dispatch_targets.append(self.gpa, target_def_idx);
+}
+
+/// Whether the current group frame owns a deferred dispatch obligation whose
+/// target def is unchecked. Invariant D pins an obligation's callable relation
+/// at the boundary rank of the group whose checking discovered it, and every
+/// active frame's drain re-sees the waiting relation. A relation pinned below
+/// the current boundary is generalization-safe here, so it must wait for the
+/// enclosing frame that pinned it: recording it as this nested frame's pending
+/// target would check the target's topological prefix inside this frame, where
+/// a prefix group can name this frame's still in-flight def and merge with it
+/// monomorphically instead of instantiating its finished scheme. The outermost
+/// active frame owns every remaining obligation.
+fn currentFrameOwnsDeferredDispatchObligation(self: *const Self, constraint_fn_var: Var) bool {
+    if (self.group_stack.items.len <= 1) return true;
+    const fn_rank = self.types.resolveVar(constraint_fn_var).desc.rank;
+    return @intFromEnum(fn_rank) >= @intFromEnum(self.currentGroupBoundaryRank());
 }
 
 /// Instantiate an annotation that is available before its body, then retain
@@ -20863,6 +20915,7 @@ fn ensureTypeScheme(self: *Self, root_var: Var, capture_rank: Rank) Allocator.Er
     try self.type_schemes.append(self.gpa, .{
         .root_var = root_var,
         .capture_rank = capture_rank,
+        .capture_group_index = self.currentGroupIndex(),
     });
     errdefer _ = self.type_schemes.pop();
     try self.type_schemes.items[scheme_idx].indexed_vars.append(self.gpa, root_var);
@@ -20990,12 +21043,18 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
         const scheme = &self.type_schemes.items[scheme_idx];
         const scheme_root_published = published_vars.contains(self.types.resolveVar(scheme.root_var).var_);
         if (!scheme_root_published and
+            std.meta.eql(scheme.capture_group_index, self.currentGroupIndex()) and
             @intFromEnum(scheme.capture_rank) > @intFromEnum(boundary_rank))
         {
-            // This scheme was created in a nested lexical frame and its root
-            // did not escape through the closing interface. No later source
-            // expression can name it, so retaining checker-only requirements
-            // would manufacture an obligation after the binding left scope.
+            // This scheme belongs to a nested lexical frame of the closing
+            // boundary's own group and its root did not escape through the
+            // closing interface. No later source expression can name it, so
+            // retaining checker-only requirements would manufacture an
+            // obligation after the binding left scope. The capture group must
+            // match by identity: ranks are a shared depth counter, so a
+            // sibling module-level group checked one rank deeper inside this
+            // boundary (resolving a pending dispatch target) owns live
+            // module-level schemes that this boundary must leave intact.
             self.removeTypeSchemeAt(scheme_idx);
             continue;
         }
@@ -23239,13 +23298,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     // dispatch edge cannot be in the name
                                     // graph, so this is discovered here—but
                                     // never checked here: record the target
-                                    // for the enclosing group's boundary, pin
+                                    // for the owning group's boundary, pin
                                     // the constraint's vars at the boundary
                                     // rank (Invariant D), and leave the
-                                    // constraint deferred.
-                                    try self.recordPendingDispatchTarget(def_idx);
-                                    try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
-                                    try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
+                                    // constraint deferred. A relation owned
+                                    // by an enclosing frame only waits here.
+                                    if (self.currentFrameOwnsDeferredDispatchObligation(constraint.fn_var)) {
+                                        try self.recordPendingDispatchTarget(def_idx);
+                                        try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
+                                        try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
+                                    }
                                     var waiting_constraint = deferred_constraint;
                                     waiting_constraint.waiting_on_target_def = true;
                                     try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
@@ -23558,9 +23620,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_processed => if (mb_predeclared_scheme) |scheme_var| {
                                     predeclared_scheme_for_method = scheme_var;
                                 } else {
-                                    try self.recordPendingDispatchTarget(def_idx);
-                                    try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
-                                    try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
+                                    if (self.currentFrameOwnsDeferredDispatchObligation(constraint.fn_var)) {
+                                        try self.recordPendingDispatchTarget(def_idx);
+                                        try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
+                                        try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
+                                    }
                                     var waiting_constraint = deferred_constraint;
                                     waiting_constraint.waiting_on_target_def = true;
                                     try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
