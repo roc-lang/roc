@@ -6748,6 +6748,16 @@ const Builder = struct {
             } else null;
             if (template_spec) |spec| {
                 if (spec.state == .resolved) {
+                    if (spec.eager_resolution) |eager| {
+                        const final_request_ty = try sealer.sealNode(eager.request_fn_node);
+                        if (!try self.program.types.typeEql(
+                            &self.program.names,
+                            eager.fn_ty,
+                            final_request_ty,
+                        )) {
+                            Common.invariant("eager procedure specialization request changed before final graph seal");
+                        }
+                    }
                     fn_slots[raw_index] = spec.resolved_slot orelse
                         Common.invariant("resolved draft template demand had no specialization slot");
                     emit_fns[raw_index] = false;
@@ -9850,6 +9860,16 @@ fn registerTemplateSpecLookup(
     address: DraftTemplateLookupAddress,
     raw_spec: u32,
 ) Allocator.Error!void {
+    const spec = &draft.template_specs.items[raw_spec];
+    var tracked = false;
+    for (spec.lookup_addresses.items) |existing| {
+        if (std.meta.eql(existing, address)) {
+            tracked = true;
+            break;
+        }
+    }
+    if (!tracked) try spec.lookup_addresses.append(allocator, address);
+
     const entry = try draft.template_spec_lookup.getOrPut(address);
     if (!entry.found_existing) entry.value_ptr.* = .empty;
     for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
@@ -9861,12 +9881,14 @@ fn unregisterTemplateSpecLookup(
     address: DraftTemplateLookupAddress,
     raw_spec: u32,
 ) void {
-    const candidates = draft.template_spec_lookup.getPtr(address) orelse return;
+    const candidates = draft.template_spec_lookup.getPtr(address) orelse
+        Common.invariant("registered draft template lookup address disappeared before retargeting");
     for (candidates.items, 0..) |candidate, index| {
         if (candidate != raw_spec) continue;
         _ = candidates.orderedRemove(index);
         return;
     }
+    Common.invariant("registered draft template lookup candidate disappeared before retargeting");
 }
 
 fn registerTemplateSpecInterfaceLookups(
@@ -9886,32 +9908,19 @@ fn registerTemplateSpecInterfaceLookups(
         evidence_digest,
         request_fn_node,
         raw_spec,
-        .register,
     );
 }
 
-fn unregisterTemplateSpecInterfaceLookups(
+fn unregisterTemplateSpecLookups(
     draft: *BodyDraftStore,
-    allocator: Allocator,
-    graph: *InstGraph,
-    family: DraftTemplateFamilyAddress,
-    evidence_digest: [32]u8,
-    request_fn_node: NodeId,
     raw_spec: u32,
-) Allocator.Error!void {
-    return updateTemplateSpecInterfaceLookups(
-        draft,
-        allocator,
-        graph,
-        family,
-        evidence_digest,
-        request_fn_node,
-        raw_spec,
-        .unregister,
-    );
+) void {
+    const spec = &draft.template_specs.items[raw_spec];
+    for (spec.lookup_addresses.items) |address| {
+        unregisterTemplateSpecLookup(draft, address, raw_spec);
+    }
+    spec.lookup_addresses.clearRetainingCapacity();
 }
-
-const TemplateSpecInterfaceLookupUpdate = enum { register, unregister };
 
 fn updateTemplateSpecInterfaceLookups(
     draft: *BodyDraftStore,
@@ -9921,7 +9930,6 @@ fn updateTemplateSpecInterfaceLookups(
     evidence_digest: [32]u8,
     request_fn_node: NodeId,
     raw_spec: u32,
-    update: TemplateSpecInterfaceLookupUpdate,
 ) Allocator.Error!void {
     var indexed_nodes = collections.DenseMap(NodeId, void).init(allocator);
     defer indexed_nodes.deinit();
@@ -9935,10 +9943,7 @@ fn updateTemplateSpecInterfaceLookups(
             .request_kind = 1,
             .request_fn_key = draftOpenRequestKey(interface_node),
         };
-        switch (update) {
-            .register => try registerTemplateSpecLookup(draft, allocator, address, raw_spec),
-            .unregister => unregisterTemplateSpecLookup(draft, address, raw_spec),
-        }
+        try registerTemplateSpecLookup(draft, allocator, address, raw_spec);
     }
 }
 
@@ -10158,6 +10163,11 @@ fn draftOpenRequestKey(node: NodeId) [32]u8 {
     return bytes;
 }
 
+const EagerTemplateResolution = struct {
+    request_fn_node: NodeId,
+    fn_ty: Type.TypeId,
+};
+
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
@@ -10169,6 +10179,10 @@ const DraftTemplateSpec = struct {
     request_fn_node: NodeId,
     initial_request_arg_classes: []const ArgumentClassSnapshot,
     evidence: []const SpecEvidence,
+    /// Exact raw lookup addresses registered for this request. Graph class
+    /// representatives may change after registration, so retargeting removes
+    /// these retained keys instead of reconstructing them from live nodes.
+    lookup_addresses: std.ArrayList(DraftTemplateLookupAddress) = .empty,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
     /// Runtime-value demands recorded while this specialization's body (and
     /// any explicitly lexical-context-dependent procedure bodies it owns)
@@ -10186,6 +10200,10 @@ const DraftTemplateSpec = struct {
     lexical_context_key: ?names.TypeDigest = null,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
+    /// Mid-lowering iterator-result completion may resolve a body before the
+    /// graph's final seal. Commit re-seals this retained request and proves the
+    /// specialization key did not move afterward.
+    eager_resolution: ?EagerTemplateResolution = null,
 };
 
 const DraftConstUseProvenance = union(enum) {
@@ -10941,7 +10959,8 @@ const BodyDraftStore = struct {
     }
 
     fn deinit(self: *BodyDraftStore) void {
-        for (self.template_specs.items) |spec| {
+        for (self.template_specs.items) |*spec| {
+            spec.lookup_addresses.deinit(self.allocator);
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
                 self.allocator.free(lexical.local_procs);
@@ -13824,10 +13843,12 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const representation_node = self.constructorRepresentationNode(node);
         return switch (self.graph.content(representation_node)) {
-            .named => |named| blk: {
+            .named => |raw_named| blk: {
+                const named = self.graph.namedNodes(representation_node);
+                if (named.kind == .alias) Common.invariant("constructor witness retained a transparent alias node");
                 const backing = named.backing orelse
                     Common.invariant("named constructor witness had no explicit backing");
-                var witness = named;
+                var witness = raw_named;
                 witness.backing = .{
                     .node = try self.constructorWitnessWithStructuralNode(backing.node, structural_node),
                     .use = backing.use,
@@ -16750,8 +16771,11 @@ const BodyContext = struct {
         const checked_private_root = self.isGeneratedPrivateRootNode(checked_root);
         const produced_private_root = self.isGeneratedPrivateRootNode(produced_root);
         if (checked_private_root or produced_private_root) {
-            try relateRequestComponent(self.graph, checked_root, produced_root);
-            return if (produced_private_root) produced_node else checked_node;
+            // The structural witness records the representation of the value
+            // that was actually produced. Generated-private roots are explicit
+            // evidence but intentionally cannot join an ordinary public graph
+            // class.
+            return produced_node;
         }
         if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
@@ -27904,6 +27928,10 @@ const BodyContext = struct {
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
         try self.builder.resolveDeferredTemplateSpecAtType(self.draft, spec_index, request_fn_ty);
+        self.draft.template_specs.items[spec_index].eager_resolution = .{
+            .request_fn_node = spec.request_fn_node,
+            .fn_ty = request_fn_ty,
+        };
 
         const resolved = self.draft.template_specs.items[spec_index].resolved_slot orelse
             Common.invariant("eager iterator-result completion produced no specialization target");
@@ -27918,28 +27946,8 @@ const BodyContext = struct {
         const completed_node = try self.activeNodeFromType(completed_ty);
         if (!try self.graph.containsGeneratedPrivate(completed_node)) return current_node;
 
-        const family = DraftTemplateFamilyAddress.init(
-            spec.template_ref,
-            spec.method_scope,
-            spec.source_fn_key,
-        );
-        const evidence_digest = self.draft.fns.items[@intFromEnum(draft_fn)].source.evidence_digest.bytes;
         const raw_spec: u32 = @intCast(spec_index);
-        unregisterTemplateSpecLookup(self.draft, .{
-            .family = family,
-            .evidence_digest = evidence_digest,
-            .request_kind = 0,
-            .request_fn_key = self.builder.specializationTypeDigest(request_fn_ty).bytes,
-        }, raw_spec);
-        try unregisterTemplateSpecInterfaceLookups(
-            self.draft,
-            self.allocator,
-            self.graph,
-            family,
-            evidence_digest,
-            current_node,
-            raw_spec,
-        );
+        unregisterTemplateSpecLookups(self.draft, raw_spec);
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
         self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
@@ -30261,8 +30269,14 @@ const BodyContext = struct {
         comptime missing_evidence_message: []const u8,
     ) Allocator.Error!bool {
         if (self.graph.sameClass(slot_node, child_node)) return false;
-        if (try self.graph.containsGeneratedPrivate(child_node)) return true;
-        if (try self.graph.containsGeneratedPrivate(slot_node)) return true;
+        const child_private = try self.graph.containsGeneratedPrivate(child_node);
+        const slot_private = try self.graph.containsGeneratedPrivate(slot_node);
+        if (child_private) return true;
+        // A codec-authored private slot is the selected constructor
+        // representation even when the user-authored opaque value lowered at
+        // its public handle. Rebuilding the container from that public child
+        // would discard the earlier producer selection.
+        if (slot_private) return false;
         if (try self.resultCompletesRequest(slot_node, child_node)) return true;
         if (try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node)) return true;
         Common.invariant(missing_evidence_message);
@@ -31734,19 +31748,15 @@ const BodyContext = struct {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
-                if (!self.graph.sameClass(field.ty, child_node)) {
-                    // Either side may carry the generated-private
-                    // representation: a producer-authored child adopted by a
-                    // checked-public construction, or a construction whose
-                    // field slot was selected private by generated codec
-                    // machinery while the user's opaque handle value stays
-                    // checked-public (e.g. a FieldName passed through
-                    // user-authored parse_record_field).
-                    _ = try self.constructorChildRequiresWitness(
-                        field.ty,
-                        child_node,
-                        "record graph constructor child differed without explicit representation evidence",
-                    );
+                if (try self.constructorChildRequiresWitness(
+                    field.ty,
+                    child_node,
+                    "record graph constructor child differed without explicit representation evidence",
+                )) {
+                    // A producer-authored child can carry a representation
+                    // distinct from the checked-public field slot. A private
+                    // codec-authored slot carrying a public opaque handle is
+                    // retained by `constructorChildRequiresWitness` instead.
                     requires_distinct_witness = true;
                 }
                 produced_fields[index] = .{ .name = field.name, .ty = child_node };
@@ -31820,12 +31830,11 @@ const BodyContext = struct {
             );
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
             produced_payloads[index] = child_node;
-            if (!self.graph.sameClass(payload_node, child_node)) {
-                _ = try self.constructorChildRequiresWitness(
-                    payload_node,
-                    child_node,
-                    "tag graph constructor child differed without explicit representation evidence",
-                );
+            if (try self.constructorChildRequiresWitness(
+                payload_node,
+                child_node,
+                "tag graph constructor child differed without explicit representation evidence",
+            )) {
                 requires_distinct_witness = true;
             }
         }
@@ -42385,8 +42394,8 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
     ) Allocator.Error!NodeId {
         const expr = self.view.bodies.expr(checked_expr);
-        const public_ty = try self.builder.lowerType(self.view, expr.ty);
-        if (!try self.builder.program.types.containsIteratorInterface(public_ty)) {
+        const public_node = try self.instNode(expr.ty);
+        if (!try self.graph.containsIteratorInterface(public_node)) {
             return try self.lowerExprTypeNode(checked_expr);
         }
         return switch (expr.data) {
@@ -44576,7 +44585,7 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
 
         var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
-        const plan_fn = try self.graph.functionNodes(callable_node);
+        const initial_plan_fn = try self.graph.functionNodes(callable_node);
         // Instantiating the caller-authored request completes any procedure
         // operands that return iterator evidence. Only then is the producer's
         // representation available for the generated Iter.iter/Iter.next path.
@@ -44584,7 +44593,7 @@ const BodyContext = struct {
             lookup,
             plan,
             plan_args,
-            plan_fn.args[plan.dispatcher_arg_index],
+            initial_plan_fn.args[plan.dispatcher_arg_index],
             loop_iterator,
             expected_ret_ty,
         )) |generated| {
@@ -44600,16 +44609,16 @@ const BodyContext = struct {
         )) |private_node| {
             callable_node = private_node;
         }
-        // The checked dispatcher belongs to the caller-authored request. A
-        // callee specialization may complete its result with a private
-        // representation, but that completed callable does not replace the
-        // request's operand slots.
+        // The generated request owns the operand slots used to lower this
+        // call. Completing the callee may replace the callable result, but it
+        // must not move these request-authored operands.
+        const plan_fn = try self.graph.functionNodes(callable_node);
         const callee = try self.methodTargetCalleeAtNode(
             lookup,
             callable_node,
             try self.evidenceForIteratorCall(plan),
         );
-        callable_node = try self.draftFnSlotTypeNode(callee, callable_node);
+        const completed_callable_node = try self.draftFnSlotTypeNode(callee, callable_node);
         if (expected_ret_ty) |expected| {
             if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
                 Common.invariant("checked iterator dispatch plan return type differed from iterator-for expected type");
@@ -44630,7 +44639,7 @@ const BodyContext = struct {
         {
             Common.invariant("iterator dispatch plan dispatcher operand differed from the checked dispatcher type");
         }
-        const fn_nodes = try self.graph.functionNodes(callable_node);
+        const fn_nodes = try self.graph.functionNodes(completed_callable_node);
         if (expected_ret_ty) |expected| {
             if (!self.graph.sameClass(fn_nodes.ret, try expected.toGraphNode(self.graph))) {
                 Common.invariant("checked iterator dispatch target return type differed from iterator-for expected type");

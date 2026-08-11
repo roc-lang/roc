@@ -462,8 +462,8 @@ test "Monotype iterator result completion stays out of relation replay and reind
         "fn completeDeferredIteratorResult(",
         "fn constUseMonoType(",
     );
-    try expectContains(completion, "registerTemplateSpecInterfaceLookups(");
-    try expectContains(completion, "unregisterTemplateSpecLookup(");
+    try expectContains(completion, "try registerTemplateSpecInterfaceLookups(");
+    try expectContains(completion, "unregisterTemplateSpecLookups(");
     try expectContains(completion, "completed_source.evidence_digest.bytes");
 }
 
@@ -719,10 +719,15 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
         try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
-        try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
-        try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    const interface_registration = sourceSliceBetween(
+        lower_source,
+        "fn updateTemplateSpecInterfaceLookups(",
+        "fn draftNestedSpecRequestNode(",
+    );
+    try expectContains(interface_registration, "indexed_nodes.getOrPut(interface_node)");
+    try expectContains(interface_registration, "draftOpenRequestKey(interface_node)");
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
 }
 

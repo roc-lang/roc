@@ -275,9 +275,14 @@ const ContainmentDependency = struct {
     version: u32,
 };
 
+const ContainmentResult = struct {
+    generated_private: bool = false,
+    iterator_interface: bool = false,
+};
+
 const ContainmentCacheEntry = struct {
     valid: bool = false,
-    result: bool = false,
+    result: ContainmentResult = .{},
     dependencies: std.ArrayList(ContainmentDependency) = .empty,
 };
 
@@ -373,27 +378,14 @@ pub const InstGraph = struct {
     /// slots proves that recursion grows the representation rather than merely
     /// recurring over a fixed iterator.
     recursive_argument_slots: std.ArrayList(NodeId),
-    /// Reusable scratch for iterator-interface containment walks. Node ids are
-    /// dense, so epochs provide exact cycle detection without allocating a
-    /// fresh list and hash set for every closed direct call.
-    iterator_interface_pending: std.ArrayList(NodeId),
-    iterator_interface_visit_epochs: std.ArrayList(u32),
-    iterator_interface_visit_epoch: u32,
-    /// Exact iterator-interface containment answers, invalidated only when a
-    /// node read by the corresponding structural walk changes.
-    iterator_interface_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
-    /// Allocation-free scratch for exact generated-private containment walks.
-    /// Node ids are dense, so an epoch array replaces a fresh hash set on every
-    /// query while preserving cycle detection exactly.
-    generated_private_pending: std.ArrayList(NodeId),
-    generated_private_visit_epochs: std.ArrayList(u32),
-    generated_private_visit_epoch: u32,
-    /// Exact generated-private containment answers by current union-class
-    /// root. Each entry records the permanent nodes, resolved roots, and
-    /// content versions read by its walk. Mutations outside that dependency
-    /// set leave the answer reusable; a relevant redirect or content change
-    /// invalidates it at the next query.
-    generated_private_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
+    /// Shared allocation-free scratch and cache for exact structural
+    /// containment. One walk records both generated-private evidence and the
+    /// public iterator interface, so querying both facts for a call retains one
+    /// dependency list instead of duplicating the graph-sized cache.
+    containment_pending: std.ArrayList(NodeId),
+    containment_visit_epochs: std.ArrayList(u32),
+    containment_visit_epoch: u32,
+    containment_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -424,14 +416,10 @@ pub const InstGraph = struct {
             .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
             .recursive_argument_slots = .empty,
-            .iterator_interface_pending = .empty,
-            .iterator_interface_visit_epochs = .empty,
-            .iterator_interface_visit_epoch = 0,
-            .iterator_interface_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
-            .generated_private_pending = .empty,
-            .generated_private_visit_epochs = .empty,
-            .generated_private_visit_epoch = 0,
-            .generated_private_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
+            .containment_pending = .empty,
+            .containment_visit_epochs = .empty,
+            .containment_visit_epoch = 0,
+            .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
         };
         return graph;
     }
@@ -472,20 +460,13 @@ pub const InstGraph = struct {
         self.request_source_interfaces.deinit(allocator);
         self.forced_dynamic_iterator_roots.deinit(allocator);
         self.recursive_argument_slots.deinit(allocator);
-        self.iterator_interface_pending.deinit(allocator);
-        self.iterator_interface_visit_epochs.deinit(allocator);
-        var iterator_interface_entries = self.iterator_interface_cache.valueIterator();
-        while (iterator_interface_entries.next()) |entry| {
+        self.containment_pending.deinit(allocator);
+        self.containment_visit_epochs.deinit(allocator);
+        var containment_entries = self.containment_cache.valueIterator();
+        while (containment_entries.next()) |entry| {
             entry.dependencies.deinit(allocator);
         }
-        self.iterator_interface_cache.deinit();
-        self.generated_private_pending.deinit(allocator);
-        self.generated_private_visit_epochs.deinit(allocator);
-        var generated_private_entries = self.generated_private_cache.valueIterator();
-        while (generated_private_entries.next()) |entry| {
-            entry.dependencies.deinit(allocator);
-        }
-        self.generated_private_cache.deinit();
+        self.containment_cache.deinit();
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
@@ -1303,8 +1284,7 @@ pub const InstGraph = struct {
         try self.class_member_next.append(self.allocator, null);
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
-        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
-        try self.generated_private_visit_epochs.append(self.allocator, 0);
+        try self.containment_visit_epochs.append(self.allocator, 0);
         try self.row_exts.append(self.allocator, null);
         try self.request_source_interfaces.append(self.allocator, null);
         try self.registerRowParent(id, node_content);
@@ -1684,75 +1664,96 @@ pub const InstGraph = struct {
     /// from a backing shape.
     pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         self.countDiagnostic("iterator_interface_scans");
+        const result = try self.containmentResult(root, "iterator_interface_nodes_visited", "iterator_interface_cache_hits");
+        return result.iterator_interface;
+    }
+
+    /// Whether this exact graph type contains compiler-generated private
+    /// opaque evidence at any structural depth.
+    pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("generated_private_scans");
+        const result = try self.containmentResult(root, "generated_private_nodes_visited", "generated_private_cache_hits");
+        return result.generated_private;
+    }
+
+    fn containmentResult(
+        self: *InstGraph,
+        root: NodeId,
+        comptime nodes_visited_field: []const u8,
+        comptime cache_hits_field: []const u8,
+    ) Allocator.Error!ContainmentResult {
         const query_root = self.find(root);
-        const cache = try self.iterator_interface_cache.getOrPut(query_root);
+        const cache = try self.containment_cache.getOrPut(query_root);
         if (!cache.found_existing) cache.value_ptr.* = .{};
         if (cache.value_ptr.valid and self.containmentCacheEntryValid(cache.value_ptr)) {
-            self.countDiagnostic("iterator_interface_cache_hits");
+            self.countDiagnostic(cache_hits_field);
             return cache.value_ptr.result;
         }
         cache.value_ptr.valid = false;
+        cache.value_ptr.result = .{};
         cache.value_ptr.dependencies.clearRetainingCapacity();
-        self.iterator_interface_pending.clearRetainingCapacity();
-        defer self.iterator_interface_pending.clearRetainingCapacity();
-        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.iterator_interface_visit_epochs.items, 0);
-            self.iterator_interface_visit_epoch = 1;
+        self.containment_pending.clearRetainingCapacity();
+        defer self.containment_pending.clearRetainingCapacity();
+        if (self.containment_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.containment_visit_epochs.items, 0);
+            self.containment_visit_epoch = 1;
         } else {
-            self.iterator_interface_visit_epoch += 1;
+            self.containment_visit_epoch += 1;
         }
-        const visit_epoch = self.iterator_interface_visit_epoch;
+        const visit_epoch = self.containment_visit_epoch;
 
-        try self.iterator_interface_pending.append(self.allocator, query_root);
-        while (self.iterator_interface_pending.pop()) |raw_node| {
+        try self.containment_pending.append(self.allocator, query_root);
+        while (self.containment_pending.pop()) |raw_node| {
             const node = self.find(raw_node);
             const node_index = @intFromEnum(node);
-            if (self.iterator_interface_visit_epochs.items[node_index] == visit_epoch) continue;
-            self.iterator_interface_visit_epochs.items[node_index] = visit_epoch;
+            if (self.containment_visit_epochs.items[node_index] == visit_epoch) continue;
+            self.containment_visit_epochs.items[node_index] = visit_epoch;
             try cache.value_ptr.dependencies.append(self.allocator, .{
                 .node = raw_node,
                 .root = node,
                 .version = self.versions.items[node_index],
             });
-            self.countDiagnostic("iterator_interface_nodes_visited");
+            self.countDiagnostic(nodes_visited_field);
 
             switch (self.nodes.items[@intFromEnum(node)]) {
                 .redirect => unreachable,
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
-                .tuple => |items| try self.iterator_interface_pending.appendSlice(self.allocator, items),
+                .list, .box => |child| try self.containment_pending.append(self.allocator, child),
+                .tuple => |items| try self.containment_pending.appendSlice(self.allocator, items),
                 .func => |function| {
-                    try self.iterator_interface_pending.appendSlice(self.allocator, function.args);
-                    try self.iterator_interface_pending.append(self.allocator, function.ret);
+                    try self.containment_pending.appendSlice(self.allocator, function.args);
+                    try self.containment_pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |row| {
-                    for (row.tags) |tag| try self.iterator_interface_pending.appendSlice(self.allocator, tag.payloads);
-                    try self.iterator_interface_pending.append(self.allocator, row.ext);
+                    for (row.tags) |tag| try self.containment_pending.appendSlice(self.allocator, tag.payloads);
+                    try self.containment_pending.append(self.allocator, row.ext);
                 },
                 .record => |row| {
-                    for (row.fields) |field| try self.iterator_interface_pending.append(self.allocator, field.ty);
-                    try self.iterator_interface_pending.append(self.allocator, row.ext);
+                    for (row.fields) |field| try self.containment_pending.append(self.allocator, field.ty);
+                    try self.containment_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
                     if (named.builtin_owner) |owner| {
                         if (static_dispatch.isIteratorOwner(owner)) {
-                            cache.value_ptr.result = true;
-                            cache.value_ptr.valid = true;
-                            return true;
+                            cache.value_ptr.result.iterator_interface = true;
                         }
                     }
-                    if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.node);
-                    try self.iterator_interface_pending.appendSlice(self.allocator, named.args);
+                    if (named.backing) |backing| {
+                        if (backing.authority == .generated_private) {
+                            cache.value_ptr.result.generated_private = true;
+                        }
+                        try self.containment_pending.append(self.allocator, backing.node);
+                    }
+                    try self.containment_pending.appendSlice(self.allocator, named.args);
                     for (named.declared_order) |declared| switch (declared) {
                         .named => {},
-                        .padding => |padding| try self.iterator_interface_pending.append(self.allocator, padding),
+                        .padding => |padding| try self.containment_pending.append(self.allocator, padding),
                     };
                 },
             }
         }
-        cache.value_ptr.result = false;
         cache.value_ptr.valid = true;
-        return false;
+        return cache.value_ptr.result;
     }
 
     fn containmentCacheEntryValid(
@@ -1767,79 +1768,6 @@ pub const InstGraph = struct {
             }
         }
         return true;
-    }
-
-    /// Whether this exact graph type contains compiler-generated private
-    /// opaque evidence at any structural depth.
-    pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        self.countDiagnostic("generated_private_scans");
-        const query_root = self.find(root);
-        const cache = try self.generated_private_cache.getOrPut(query_root);
-        if (!cache.found_existing) cache.value_ptr.* = .{};
-        if (cache.value_ptr.valid and self.containmentCacheEntryValid(cache.value_ptr)) {
-            self.countDiagnostic("generated_private_cache_hits");
-            return cache.value_ptr.result;
-        }
-        cache.value_ptr.valid = false;
-        cache.value_ptr.dependencies.clearRetainingCapacity();
-        self.generated_private_pending.clearRetainingCapacity();
-        defer self.generated_private_pending.clearRetainingCapacity();
-        if (self.generated_private_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.generated_private_visit_epochs.items, 0);
-            self.generated_private_visit_epoch = 1;
-        } else {
-            self.generated_private_visit_epoch += 1;
-        }
-        const visit_epoch = self.generated_private_visit_epoch;
-        try self.generated_private_pending.append(self.allocator, root);
-        while (self.generated_private_pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const node_index = @intFromEnum(node);
-            if (self.generated_private_visit_epochs.items[node_index] == visit_epoch) continue;
-            self.generated_private_visit_epochs.items[node_index] = visit_epoch;
-            try cache.value_ptr.dependencies.append(self.allocator, .{
-                .node = raw_node,
-                .root = node,
-                .version = self.versions.items[node_index],
-            });
-            self.countDiagnostic("generated_private_nodes_visited");
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try self.generated_private_pending.append(self.allocator, child),
-                .tuple => |items| try self.generated_private_pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try self.generated_private_pending.appendSlice(self.allocator, function.args);
-                    try self.generated_private_pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try self.generated_private_pending.appendSlice(self.allocator, tag.payloads);
-                    try self.generated_private_pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try self.generated_private_pending.append(self.allocator, field.ty);
-                    try self.generated_private_pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    if (named.backing) |backing| {
-                        if (backing.authority == .generated_private) {
-                            cache.value_ptr.result = true;
-                            cache.value_ptr.valid = true;
-                            return true;
-                        }
-                        try self.generated_private_pending.append(self.allocator, backing.node);
-                    }
-                    try self.generated_private_pending.appendSlice(self.allocator, named.args);
-                    for (named.declared_order) |declared| switch (declared) {
-                        .named => {},
-                        .padding => |padding| try self.generated_private_pending.append(self.allocator, padding),
-                    };
-                },
-            }
-        }
-        cache.value_ptr.result = false;
-        cache.value_ptr.valid = true;
-        return false;
     }
 
     /// Whether this exact graph type contains a node imported from a finished
@@ -5698,11 +5626,11 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
         }
     };
     const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
-    graph.generated_private_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.generated_private_visit_epochs.items, std.math.maxInt(u32));
+    graph.containment_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u32, 1), graph.generated_private_visit_epoch);
+    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
 
     try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
     try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_cache_hits);
@@ -5735,11 +5663,11 @@ test "iterator-interface containment caches exact graph dependencies" {
 
     const child = try graph.newNode(.{ .primitive = .u64 });
     const root = try graph.newNode(.{ .box = child });
-    graph.iterator_interface_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.iterator_interface_visit_epochs.items, std.math.maxInt(u32));
+    graph.containment_visit_epoch = std.math.maxInt(u32);
+    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
 
     try std.testing.expect(!try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u32, 1), graph.iterator_interface_visit_epoch);
+    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
     try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
 
     try std.testing.expect(!try graph.containsIteratorInterface(root));

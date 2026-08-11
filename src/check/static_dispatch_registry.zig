@@ -291,7 +291,7 @@ const iterator_to_until_numeric_type_names = [_][]const u8{
     "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
 };
 
-const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(blk: {
+const iterator_procedure_name_entries = blk: {
     var entries: [
         iterator_procedure_base_names.len +
             iterator_range_numeric_type_names.len * 2 +
@@ -311,12 +311,14 @@ const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).init
         entries[index] = .{ "Builtin.Num." ++ numeric ++ ".until", .numeric_until };
         index += 1;
     }
-    break :blk &entries;
-});
+    break :blk entries;
+};
+
+const iterator_procedure_by_name = std.StaticStringMap(IteratorProcedureId).initComptime(&iterator_procedure_name_entries);
 
 const iterator_source_method_count = blk: {
     var count: usize = 0;
-    for (iterator_procedure_base_names) |entry| {
+    for (iterator_procedure_name_entries) |entry| {
         if (entry[1].preservesHoistableSourceInput()) count += 1;
     }
     break :blk count;
@@ -325,11 +327,11 @@ const iterator_source_method_count = blk: {
 const iterator_source_method_names = std.StaticStringMap(void).initComptime(blk: {
     var entries: [iterator_source_method_count]struct { []const u8, void } = undefined;
     var index: usize = 0;
-    for (iterator_procedure_base_names) |entry| {
+    for (iterator_procedure_name_entries) |entry| {
         if (!entry[1].preservesHoistableSourceInput()) continue;
 
         const dot_index = std.mem.lastIndexOfScalar(u8, entry[0], '.') orelse
-            @compileError("iterator procedure base names must be fully qualified");
+            @compileError("iterator procedure names must be fully qualified");
         entries[index] = .{ entry[0][dot_index + 1 ..], {} };
         index += 1;
     }

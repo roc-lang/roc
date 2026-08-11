@@ -267,6 +267,13 @@ pub const Store = struct {
     /// Cached immutable answer for whether a finished type contains an Iter or
     /// Stream interface at any structural depth.
     iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
+    /// Reusable exact walk state. Type ids are dense, so epochs provide cycle
+    /// detection without allocating a dense map sized to the largest type id
+    /// on every closed direct call.
+    iterator_interface_pending: std.ArrayList(TypeId),
+    iterator_interface_visited: std.ArrayList(TypeId),
+    iterator_interface_visit_epochs: StoreList(u32, "iterator_interface_visit_epochs"),
+    iterator_interface_visit_epoch: u32,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -281,6 +288,10 @@ pub const Store = struct {
             .specialization_digests = .empty,
             .constructing = .empty,
             .iterator_interface_cache = .empty,
+            .iterator_interface_pending = .empty,
+            .iterator_interface_visited = .empty,
+            .iterator_interface_visit_epochs = .empty,
+            .iterator_interface_visit_epoch = 0,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -294,6 +305,9 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.iterator_interface_visit_epochs.deinit(self.allocator);
+        self.iterator_interface_visited.deinit(self.allocator);
+        self.iterator_interface_pending.deinit(self.allocator);
         self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
@@ -368,6 +382,8 @@ pub const Store = struct {
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
+        errdefer _ = self.iterator_interface_cache.pop();
+        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -418,30 +434,39 @@ pub const Store = struct {
         const root_index = @intFromEnum(root);
         if (self.iterator_interface_cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
 
-        var pending = std.ArrayList(TypeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = collections.DenseMap(TypeId, void).init(self.allocator);
-        defer seen.deinit();
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |ty| {
-            const entry = try seen.getOrPut(ty);
-            if (entry.found_existing) continue;
+        self.iterator_interface_pending.clearRetainingCapacity();
+        self.iterator_interface_visited.clearRetainingCapacity();
+        defer self.iterator_interface_pending.clearRetainingCapacity();
+        defer self.iterator_interface_visited.clearRetainingCapacity();
+        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.iterator_interface_visit_epochs.unsafeRawItemsMutForStore(), 0);
+            self.iterator_interface_visit_epoch = 1;
+        } else {
+            self.iterator_interface_visit_epoch += 1;
+        }
+        const visit_epoch = self.iterator_interface_visit_epoch;
+        try self.iterator_interface_pending.append(self.allocator, root);
+        while (self.iterator_interface_pending.pop()) |ty| {
+            const ty_index = @intFromEnum(ty);
+            if (self.iterator_interface_visit_epochs.unsafeRawItemsForView()[ty_index] == visit_epoch) continue;
+            self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
+            try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
             switch (self.get(ty)) {
                 .primitive, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
+                .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
                 .tuple => |items| {
                     const item_types = self.span(items);
                     for (0..GuardedList.borrowLen(item_types)) |index| {
-                        try pending.append(self.allocator, GuardedList.at(item_types, index));
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(item_types, index));
                     }
                 },
                 .func => |function| {
                     const arg_types = self.span(function.args);
                     for (0..GuardedList.borrowLen(arg_types)) |index| {
-                        try pending.append(self.allocator, GuardedList.at(arg_types, index));
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(arg_types, index));
                     }
-                    try pending.append(self.allocator, function.ret);
+                    try self.iterator_interface_pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |tags| {
                     const variants = self.tagSpan(tags);
@@ -449,14 +474,14 @@ pub const Store = struct {
                         const tag = GuardedList.at(variants, variant_index);
                         const payloads = self.span(tag.payloads);
                         for (0..GuardedList.borrowLen(payloads)) |payload_index| {
-                            try pending.append(self.allocator, GuardedList.at(payloads, payload_index));
+                            try self.iterator_interface_pending.append(self.allocator, GuardedList.at(payloads, payload_index));
                         }
                     }
                 },
                 .record => |fields| {
                     const record_fields = self.fieldSpan(fields);
                     for (0..GuardedList.borrowLen(record_fields)) |index| {
-                        try pending.append(self.allocator, GuardedList.at(record_fields, index).ty);
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(record_fields, index).ty);
                     }
                 },
                 .named => |named| {
@@ -468,20 +493,22 @@ pub const Store = struct {
                     }
                     const args = self.span(named.args);
                     for (0..GuardedList.borrowLen(args)) |index| {
-                        try pending.append(self.allocator, GuardedList.at(args, index));
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(args, index));
                     }
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                    if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.ty);
                     const declared_fields = self.declaredFieldSpan(named.declared_order);
                     for (0..GuardedList.borrowLen(declared_fields)) |index| {
                         switch (GuardedList.at(declared_fields, index)) {
                             .named => {},
-                            .padding => |padding| try pending.append(self.allocator, padding),
+                            .padding => |padding| try self.iterator_interface_pending.append(self.allocator, padding),
                         }
                     }
                 },
             }
         }
-        self.iterator_interface_cache.set(root_index, false);
+        for (self.iterator_interface_visited.items) |visited| {
+            self.iterator_interface_cache.set(@intFromEnum(visited), false);
+        }
         return false;
     }
 
@@ -515,6 +542,7 @@ pub const Store = struct {
         specialization_digests_len: usize,
         constructing_len: usize,
         iterator_interface_cache_len: usize,
+        iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -528,6 +556,7 @@ pub const Store = struct {
             .specialization_digests_len = self.specialization_digests.len(),
             .constructing_len = self.constructing.len(),
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
+            .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -542,6 +571,7 @@ pub const Store = struct {
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
+        self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);

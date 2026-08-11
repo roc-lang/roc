@@ -125,8 +125,7 @@ pub const Constants = struct {
     /// 50: Interned literal entries record maximum runtime backing alignment.
     /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
     /// 52: Checked iterator procedure identity includes List.iter_rev.
-    /// 53: Reserved after an iterator-identity schema change for descending
-    ///     numeric ranges, which were subsequently removed.
+    /// 53: Reserved; unused by any released cache format.
     /// 54: Checked iterator identity includes the numeric to/until ranges.
     /// 55: Numeric to/until iterator representations have producer-specific
     ///     identities distinct from the range helpers they do not delegate to.

@@ -4362,6 +4362,7 @@ test "match locals and field accesses retain their registered scrutinee nodes" {
 
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &lowered.lowered, "switch_count", 2);
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site
