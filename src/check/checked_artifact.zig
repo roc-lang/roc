@@ -18247,6 +18247,21 @@ fn appendSpecializationOperandFlowsForOrdinaryCall(
     return .{ .start = start, .len = @intCast(args.len) };
 }
 
+fn appendSpecializationOperandFlowsForIteratorCall(
+    allocator: Allocator,
+    call: static_dispatch.IteratorDispatchCall,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    value_flows_by_expr: []const SpecializationOperandFlow,
+    out: *std.ArrayList(SpecializationOperandFlow),
+) Allocator.Error!artifact_serialize.Span {
+    const start: u32 = @intCast(out.items.len);
+    for (call.argsSlice(static_dispatch_plans)) |operand| try out.append(allocator, switch (operand) {
+        .checked_expr => |expr| value_flows_by_expr[@intFromEnum(expr)],
+        .loop_iterator_state => .produced,
+    });
+    return .{ .start = start, .len = @intCast(call.args.len) };
+}
+
 fn compileCallConsumerBindings(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
@@ -18283,6 +18298,101 @@ fn appendEmptyCallConsumerBindingSpans(
     const start: u32 = @intCast(out.items.len);
     try out.appendNTimes(allocator, .{}, count);
     return .{ .start = start, .len = @intCast(count) };
+}
+
+fn iteratorDispatchOperandType(
+    checked_bodies: *const CheckedBodyStore,
+    operand: static_dispatch.IteratorDispatchOperand,
+    loop_state_ty: CheckedTypeId,
+) CheckedTypeId {
+    return switch (operand) {
+        .checked_expr => |expr| checked_bodies.expr(expr).ty,
+        .loop_iterator_state => loop_state_ty,
+    };
+}
+
+fn publishIteratorCallBindings(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    checked_bodies: *const CheckedBodyStore,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    call: static_dispatch.IteratorDispatchCall,
+    result_ty: CheckedTypeId,
+    loop_state_ty: CheckedTypeId,
+    target_source_roots: []const CheckedTypeId,
+    operand_flow_span: artifact_serialize.Span,
+    operand_flows: []const SpecializationOperandFlow,
+    consumer_bindings: *std.ArrayList(SpecializationCallConsumerBinding),
+    consumer_binding_spans: *std.ArrayList(artifact_serialize.Span),
+    plan: *SpecializationCallPlan,
+) Allocator.Error!void {
+    const function = checkedFunctionPayload(
+        &checked_types.store,
+        call.callable_ty,
+        "iterator call consumer binding",
+    );
+    const operands = call.argsSlice(static_dispatch_plans);
+    if (function.args.len != operands.len or operand_flow_span.len != operands.len) {
+        checkedArtifactInvariant("iterator call binding arity differed from its callable", .{});
+    }
+
+    const context_start: u32 = @intCast(consumer_bindings.items.len);
+    _ = try compileCallConsumerBindings(
+        allocator,
+        checked_types,
+        result_ty,
+        function.ret,
+        consumer_bindings,
+    );
+    try appendCallConsumerSelfBindings(
+        allocator,
+        target_source_roots,
+        consumer_bindings,
+        context_start,
+    );
+    plan.context_bindings = .{
+        .start = context_start,
+        .len = @intCast(consumer_bindings.items.len - context_start),
+    };
+
+    const selection_start: u32 = @intCast(consumer_bindings.items.len);
+    _ = try compileCallConsumerBindings(
+        allocator,
+        checked_types,
+        function.ret,
+        result_ty,
+        consumer_bindings,
+    );
+    for (operands, 0..) |operand, index| {
+        _ = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            function.args[index],
+            iteratorDispatchOperandType(checked_bodies, operand, loop_state_ty),
+            consumer_bindings,
+        );
+    }
+    plan.selection_bindings = .{
+        .start = selection_start,
+        .len = @intCast(consumer_bindings.items.len - selection_start),
+    };
+
+    plan.operand_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
+        allocator,
+        operands.len,
+        consumer_binding_spans,
+    );
+    const flows = operand_flows[operand_flow_span.start .. operand_flow_span.start + operand_flow_span.len];
+    for (operands, flows, 0..) |operand, flow, index| {
+        if (flow == .produced) continue;
+        consumer_binding_spans.items[plan.operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            function.args[index],
+            iteratorDispatchOperandType(checked_bodies, operand, loop_state_ty),
+            consumer_bindings,
+        );
+    }
 }
 
 fn appendCallConsumerSelfBindings(
@@ -19200,12 +19310,13 @@ fn publishSpecializationCallPlans(
         .structural => {},
     };
     for (static_dispatch_plans.iterator_for_plans, 0..) |plan, index| {
-        const iter_flow_start: u32 = @intCast(operand_flows.items.len);
-        try operand_flows.appendNTimes(allocator, .produced, plan.iter.args.len);
-        const iter_flow_span = artifact_serialize.Span{
-            .start = iter_flow_start,
-            .len = plan.iter.args.len,
-        };
+        const iter_flow_span = try appendSpecializationOperandFlowsForIteratorCall(
+            allocator,
+            plan.iter,
+            static_dispatch_plans,
+            value_flows_by_expr,
+            &operand_flows,
+        );
         const iter_operand_flows = operand_flows.items[iter_flow_span.start .. iter_flow_span.start + iter_flow_span.len];
         try appendPublishedTargetSourceRoots(
             allocator,
@@ -19230,23 +19341,28 @@ fn publishSpecializationCallPlans(
             &projections,
         );
         iter_plans[index].operand_flows = iter_flow_span;
-        const iter_context_start: u32 = @intCast(consumer_bindings.items.len);
-        try appendCallConsumerSelfBindings(
+        try publishIteratorCallBindings(
             allocator,
+            checked_types,
+            checked_bodies,
+            static_dispatch_plans,
+            plan.iter,
+            plan.iterator_ty,
+            plan.iterator_ty,
             target_source_roots.items,
+            iter_flow_span,
+            operand_flows.items,
             &consumer_bindings,
-            iter_context_start,
+            &consumer_binding_spans,
+            &iter_plans[index],
         );
-        iter_plans[index].context_bindings = .{
-            .start = iter_context_start,
-            .len = @intCast(consumer_bindings.items.len - iter_context_start),
-        };
-        const next_flow_start: u32 = @intCast(operand_flows.items.len);
-        try operand_flows.appendNTimes(allocator, .produced, plan.next.args.len);
-        const next_flow_span = artifact_serialize.Span{
-            .start = next_flow_start,
-            .len = plan.next.args.len,
-        };
+        const next_flow_span = try appendSpecializationOperandFlowsForIteratorCall(
+            allocator,
+            plan.next,
+            static_dispatch_plans,
+            value_flows_by_expr,
+            &operand_flows,
+        );
         const next_operand_flows = operand_flows.items[next_flow_span.start .. next_flow_span.start + next_flow_span.len];
         try appendPublishedTargetSourceRoots(
             allocator,
@@ -19271,17 +19387,21 @@ fn publishSpecializationCallPlans(
             &projections,
         );
         next_plans[index].operand_flows = next_flow_span;
-        const next_context_start: u32 = @intCast(consumer_bindings.items.len);
-        try appendCallConsumerSelfBindings(
+        try publishIteratorCallBindings(
             allocator,
+            checked_types,
+            checked_bodies,
+            static_dispatch_plans,
+            plan.next,
+            plan.step_ty,
+            plan.iterator_ty,
             target_source_roots.items,
+            next_flow_span,
+            operand_flows.items,
             &consumer_bindings,
-            next_context_start,
+            &consumer_binding_spans,
+            &next_plans[index],
         );
-        next_plans[index].context_bindings = .{
-            .start = next_context_start,
-            .len = @intCast(consumer_bindings.items.len - next_context_start),
-        };
     }
 
     templates.specialization_call_plans_by_expr = by_expr;

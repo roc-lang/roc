@@ -17094,55 +17094,21 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         produced_node: NodeId,
     ) Allocator.Error!void {
-        const plan = self.view.templates.specializationValuePlanForType(checked_ty);
-        if (plan.slots.len == 0) return;
-        const needed = try self.graph.arena().alloc(bool, plan.projections.len);
-        @memset(needed, false);
-        for (plan.slots) |slot| {
-            const key = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
-            };
-            if (selections.get(key) != null) continue;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                var projection_index = occurrence.projection;
-                while (true) {
-                    needed[projection_index] = true;
-                    const parent = plan.projections[projection_index].parent;
-                    if (parent == checked.no_specialization_projection_parent) break;
-                    projection_index = parent;
-                }
-            }
-        }
-        const produced_args = [_]NodeId{self.graph.rootNode(produced_node)};
-        const available = [_]bool{true};
-        const projected = try self.evaluateCallProjections(
-            plan,
-            needed,
-            &produced_args,
-            &available,
-            null,
-            null,
-            produced_node,
-            false,
-        );
-        for (plan.slots) |slot| {
-            var selected: ?NodeId = null;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                const candidate = projected[occurrence.projection] orelse continue;
-                selected = candidate;
-                break;
-            }
-            const produced = selected orelse continue;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                const key = solve.CheckedBaseKey{
-                    .module_bytes = self.view.key.bytes,
-                    .checked = occurrence.checked,
-                };
-                const entry = try selections.getOrPut(key);
-                if (!entry.found_existing) entry.value_ptr.* = produced;
-            }
-        }
+        const publishes_identity = switch (checkedPayload(self.view, checked_ty)) {
+            .flex, .rigid => true,
+            .nominal => |nominal| if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
+                .iterator, .parse_tag_union_spec, .fields, .field => true,
+                .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
+            } else false,
+            .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
+        };
+        if (!publishes_identity) return;
+        const key = solve.CheckedBaseKey{
+            .module_bytes = self.view.key.bytes,
+            .checked = checked_ty,
+        };
+        const entry = try selections.getOrPut(key);
+        if (!entry.found_existing) entry.value_ptr.* = self.graph.rootNode(produced_node);
     }
 
     /// Whether this exact expression edge consumes at least one identity that
@@ -24568,6 +24534,26 @@ const BodyContext = struct {
         return null;
     }
 
+    /// A producer occurrence owns its exact node. A consumer occurrence may
+    /// also publish when its entire root is explicit authoritative input: an
+    /// exact result destination, dispatcher, or selected target signature.
+    /// Ordinary argument consumers never claim identities from independently
+    /// produced values.
+    fn callOccurrenceSuppliesExactSelection(
+        occurrence: checked.SpecializationOccurrence,
+        include_result: bool,
+        has_dispatcher: bool,
+        has_target_signature: bool,
+    ) bool {
+        if (occurrence.production == .producer) return true;
+        return switch (occurrence.root) {
+            .argument => false,
+            .result => include_result,
+            .dispatcher => has_dispatcher,
+            .target_argument, .target_result => has_target_signature,
+        };
+    }
+
     /// Add one complete exact producer edge to a request's flat identity.
     /// This is used by compiler-authored structural derivations whose selected
     /// method body depends on the operand's complete runtime type even though
@@ -24864,7 +24850,12 @@ const BodyContext = struct {
             // projections are not competing runtime producers.
             if (directSelectionForSlot(selections.items, base_id) != null) continue;
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.production != .producer) continue;
+                if (!callOccurrenceSuppliesExactSelection(
+                    occurrence,
+                    include_result,
+                    dispatcher_node != null,
+                    target_signature != null,
+                )) continue;
                 var root_index = occurrence.projection;
                 while (plan.projections[root_index].parent != checked.no_specialization_projection_parent) {
                     root_index = plan.projections[root_index].parent;
@@ -24903,7 +24894,12 @@ const BodyContext = struct {
             };
             var selected = directSelectionForSlot(selections.items, base_id);
             if (selected == null) for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.production != .producer) continue;
+                if (!callOccurrenceSuppliesExactSelection(
+                    occurrence,
+                    include_result,
+                    dispatcher_node != null,
+                    target_signature != null,
+                )) continue;
                 if (occurrence.projection >= projected.len) {
                     Common.invariant("checked specialization occurrence exceeded its projection plan");
                 }
@@ -31594,11 +31590,27 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         demand: LoweringDemand,
     ) Allocator.Error!DraftExprId {
+        return try self.lowerExprAtTypeCellWithDemandAndRelation(
+            checked_expr,
+            cell,
+            demand,
+            .exact_producer,
+        );
+    }
+
+    fn lowerExprAtTypeCellWithDemandAndRelation(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        cell: DraftTypeCell,
+        demand: LoweringDemand,
+        destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!DraftExprId {
         return try self.lowerExprAtTypeCellWithKnownDivergence(
             checked_expr,
             cell,
             demand,
             self.checkedExprDivergesInLoweredRuntime(checked_expr),
+            destination_relation,
         );
     }
 
@@ -31608,6 +31620,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         demand: LoweringDemand,
         expr_diverges: bool,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const expr = self.view.bodies.expr(checked_expr);
         const saved_loc = self.builder.program.current_loc;
@@ -31629,7 +31642,12 @@ const BodyContext = struct {
                 const lowered = if (expr_diverges)
                     try self.lowerDivergentExprAtTypeCell(checked_expr, cell)
                 else
-                    try self.lowerExprAtTypeCellInner(checked_expr, cell, expected_node);
+                    try self.lowerExprAtTypeCellInner(
+                        checked_expr,
+                        cell,
+                        expected_node,
+                        destination_relation,
+                    );
                 break :blk try self.requireLoweredExprAtCell(checked_expr, expr, cell, demand, lowered);
             },
         };
@@ -31759,6 +31777,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         cell: DraftTypeCell,
         expected_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         return switch (cell) {
             .sealed => Common.invariant("sealed expression reached graph-cell lowering"),
@@ -31793,7 +31812,11 @@ const BodyContext = struct {
                     .lambda => break :blk try self.lowerLambdaExprAtNode(checked_expr, expected_node),
                     .closure => |closure| break :blk try self.lowerClosureAtNode(checked_expr, closure, expected_node),
                     .field_access => |field| break :blk try self.lowerFieldAccessExprAtNode(checked_expr, field),
-                    .tag => |tag| break :blk try self.lowerTagConstructorAtNode(tag, expected_node),
+                    .tag => |tag| break :blk try self.lowerTagConstructorAtNodeWithRelation(
+                        tag,
+                        expected_node,
+                        destination_relation,
+                    ),
                     .zero_argument_tag => |tag| {
                         const name = try self.builder.tagName(self.view, tag.name);
                         break :blk try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
@@ -31801,23 +31824,55 @@ const BodyContext = struct {
                             .payloads = .empty(),
                         } });
                     },
-                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNode(checked_expr, nominal, expected_node),
-                    .tuple => |items| break :blk try self.lowerTupleConstructorAtNode(items, expected_node),
-                    .list => |items| break :blk try self.lowerListConstructorAtNode(items, expected_node),
+                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNodeWithRelation(
+                        checked_expr,
+                        nominal,
+                        expected_node,
+                        destination_relation,
+                    ),
+                    .tuple => |items| break :blk try self.lowerTupleConstructorAtNodeWithRelation(
+                        items,
+                        expected_node,
+                        destination_relation,
+                    ),
+                    .list => |items| break :blk try self.lowerListConstructorAtNodeWithRelation(
+                        items,
+                        expected_node,
+                        destination_relation,
+                    ),
                     .empty_list => break :blk try self.addExprWithTypeCell(
                         DraftTypeCell.fromGraphNode(expected_node),
                         .{ .list = .empty() },
                     ),
                     .empty_record => break :blk try self.addConstructorExprAtNode(expected_node, .{ .record = .empty() }),
-                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(checked_expr, record),
+                    .record => |record| break :blk try self.lowerRecordConstructorAtNodeWithRelation(
+                        checked_expr,
+                        record,
+                        expected_node,
+                        destination_relation,
+                    ),
                     .call => break :blk try self.lowerCallExprAtProducerNode(checked_expr, expected_node),
                     .dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
                     .interpolation => |interpolation| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell),
                     .type_dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
                     .method_eq => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
-                    .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
-                    .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
-                    .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
+                    .block => |block| break :blk try self.lowerBlockAtTypeCellWithRelation(
+                        block,
+                        cell,
+                        destination_relation,
+                    ),
+                    .match_ => |match| break :blk try self.lowerMatchExprAtTypeCellWithRelation(
+                        checked_expr,
+                        match,
+                        cell,
+                        destination_relation,
+                    ),
+                    .if_ => |if_| break :blk try self.lowerIfExprAtTypeCellWithRelation(
+                        checked_expr,
+                        if_,
+                        cell,
+                        destination_relation,
+                    ),
                     .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
                     .pending, .str, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
@@ -41922,7 +41977,12 @@ const BodyContext = struct {
         request_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         try self.publishExactCheckedExprAtCell(checked_expr, request_cell);
-        return try self.lowerExprAtTypeCell(checked_expr, request_cell);
+        return try self.lowerExprAtTypeCellWithDemandAndRelation(
+            checked_expr,
+            request_cell,
+            .runtime_value,
+            .exact_request,
+        );
     }
 
     fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -45388,55 +45448,112 @@ const BodyContext = struct {
             Common.invariant("iterator dispatch plan argument arity differed from its checked callable");
         }
 
-        const produced_exprs = try self.allocator.alloc(DraftExprId, plan_args.len);
-        defer self.allocator.free(produced_exprs);
-        const produced_nodes = try self.graph.arena().alloc(NodeId, plan_args.len);
-        for (plan_args, produced_exprs, produced_nodes) |operand, *produced_expr, *produced_node| {
-            produced_expr.* = switch (operand) {
-                .checked_expr => |expr| try self.lowerExpr(expr),
-                .loop_iterator_state => blk: {
-                    const iterator = loop_iterator orelse
-                        Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
-                    break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
-                },
-            };
-            produced_node.* = try self.exprTypeCell(produced_expr.*).toGraphNode(self.graph);
-        }
-
-        try call_ctx.publishExactCheckedTypeAtCell(
-            plan.dispatcher_ty,
-            DraftTypeCell.fromGraphNode(produced_nodes[plan.dispatcher_arg_index]),
-        );
-        const request_ret = if (expected_ret_ty) |expected|
-            try expected.toGraphNode(self.graph)
-        else
-            checked_callable.ret;
-        const available = try self.graph.arena().alloc(bool, produced_nodes.len);
-        @memset(available, true);
         const call_plan = switch (edge) {
             .iter => self.view.templates.specializationIteratorCallPlan(plan_id, .iter),
             .next => self.view.templates.specializationIteratorCallPlan(plan_id, .next),
         };
+        if (call_plan.operand_flows.len != plan_args.len) {
+            Common.invariant("iterator dispatch operand flow had a different arity from its callable");
+        }
+        const request_ret = if (expected_ret_ty) |expected|
+            try expected.toGraphNode(self.graph)
+        else
+            checked_callable.ret;
+        const target_signature_node = try self.methodTargetSignatureNode(lookup);
+        const produced_exprs = try self.allocator.alloc(DraftExprId, plan_args.len);
+        defer self.allocator.free(produced_exprs);
+        const produced_nodes = try self.graph.arena().dupe(NodeId, checked_callable.args);
+        const available = try self.graph.arena().alloc(bool, produced_nodes.len);
+        @memset(available, false);
+        const newly_available = try self.graph.arena().alloc(bool, produced_nodes.len);
+        @memset(newly_available, false);
         var selections = try call_ctx.directCallSelectionsFromPublishedPlan(
             call_plan,
             plan.callable_ty,
             &.{},
             produced_nodes,
-            available,
-            produced_nodes[plan.dispatcher_arg_index],
-            try self.methodTargetSignatureNode(lookup),
+            newly_available,
+            null,
+            target_signature_node,
             request_ret,
             expected_ret_ty != null,
         );
-        if (self.iteratorProcedureForMethodTarget(lookup.target)) |procedure| {
-            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+        const iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target);
+        var remaining = plan_args.len;
+        while (remaining != 0) {
+            @memset(newly_available, false);
+            var progressed = false;
+            var producer_remaining = false;
+            for (call_plan.operand_flows, 0..) |flow, operand_index| {
+                if (!available[operand_index] and flow == .produced) {
+                    producer_remaining = true;
+                    break;
+                }
+            }
+            for (plan_args, 0..) |operand, operand_index| {
+                if (available[operand_index]) continue;
+                const needs_request = call_plan.operand_flows[operand_index] != .produced;
+                if (needs_request and producer_remaining) continue;
+                const request_arg = if (needs_request)
+                    try call_ctx.callSelectionArgumentNode(
+                        call_plan,
+                        plan.callable_ty,
+                        selections,
+                        operand_index,
+                    )
+                else
+                    produced_nodes[operand_index];
+                produced_exprs[operand_index] = switch (operand) {
+                    .checked_expr => |expr| if (needs_request)
+                        try self.lowerExprAtCallConsumerRequest(
+                            call_plan,
+                            self.view.templates.specializationCallOperandConsumerBindings(call_plan, operand_index),
+                            selections,
+                            expr,
+                            request_arg,
+                        )
+                    else
+                        try self.lowerExpr(expr),
+                    .loop_iterator_state => blk: {
+                        if (needs_request) {
+                            Common.invariant("loop iterator state unexpectedly required a contextual request");
+                        }
+                        const iterator = loop_iterator orelse
+                            Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                        break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
+                    },
+                };
+                produced_nodes[operand_index] = try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph);
+                available[operand_index] = true;
+                newly_available[operand_index] = true;
+                remaining -= 1;
+                progressed = true;
+                if (needs_request) break;
+            }
+            if (!progressed) {
+                Common.invariant("checker-published iterator operand dependencies had no exact source");
+            }
+            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
                 call_plan,
+                plan.callable_ty,
                 selections,
-                procedure,
-                checked_callable_node,
                 produced_nodes,
-                available,
-            )) orelse selections;
+                newly_available,
+                if (available[plan.dispatcher_arg_index]) produced_nodes[plan.dispatcher_arg_index] else null,
+                target_signature_node,
+                request_ret,
+                false,
+            );
+            if (iterator_procedure) |procedure| {
+                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+                    call_plan,
+                    selections,
+                    procedure,
+                    checked_callable_node,
+                    produced_nodes,
+                    available,
+                )) orelse selections;
+            }
         }
         const callsite_callable = try call_ctx.materializeCallSelectionSpan(
             call_plan,
@@ -45473,7 +45590,7 @@ const BodyContext = struct {
             .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(callee),
                 .args = try self.addExprSpan(lowered_args),
-                .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
+                .iterator_procedure = iterator_procedure,
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         );
@@ -46387,6 +46504,7 @@ const BodyContext = struct {
                 .{ .sealed = ty },
                 .runtime_value,
                 false,
+                .exact_producer,
             )
         else
             // A declaration consumes the exact value its initializer

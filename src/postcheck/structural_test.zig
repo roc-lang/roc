@@ -1395,7 +1395,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(full_request, "functionRequestNode(");
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
-    try expectContains(iterator, "produced_node.* = try self.exprTypeCell(produced_expr.*).toGraphNode(self.graph)");
+    try expectContains(iterator, "produced_nodes[operand_index] = try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph)");
     try expectContains(iterator, "directCallSelectionsFromPublishedPlan(");
     try expectContains(iterator, "materializeCallSelectionSpan(");
     try expectNotContains(iterator, "functionRequestNode(");
