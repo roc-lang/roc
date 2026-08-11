@@ -5795,6 +5795,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
