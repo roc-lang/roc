@@ -11,7 +11,7 @@ F
 TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_004.md:2:1:2:1
 # PROBLEMS
 
-── ✗ type application needs parentheses ────────────────── fuzz_crash_004.md:2:1
+── ✗ TYPE APPLICATION NEEDS PARENTHESES ────────────────── fuzz_crash_004.md:2:1
 
 I was parsing a type annotation, and I found a type argument without
 parentheses.

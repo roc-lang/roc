@@ -12,7 +12,7 @@ x = -1
 INVALID NUMBER - u8_negative_value.md:2:5:2:7
 # PROBLEMS
 
-── ✗ invalid number ─────────────────────────────────── u8_negative_value.md:2:5
+── ✗ INVALID NUMBER ─────────────────────────────────── u8_negative_value.md:2:5
 
 This number literal does not fit in the inferred type.
 

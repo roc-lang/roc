@@ -13,7 +13,7 @@ SelfRef := [].{
 INVALID ASSIGNMENT TO ITSELF - assoc_value_self_reference.md:2:16:2:24
 # PROBLEMS
 
-── ✗ invalid assignment to itself ─────────── assoc_value_self_reference.md:2:16
+── ✗ INVALID ASSIGNMENT TO ITSELF ─────────── assoc_value_self_reference.md:2:16
 
 The value `with_uri` is assigned to itself, which would cause an infinite loop
 at runtime.

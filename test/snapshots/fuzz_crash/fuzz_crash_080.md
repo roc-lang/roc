@@ -17,7 +17,7 @@ UNBOUND WHERE RECEIVER - fuzz_crash_080.md:3:17:4:23
 DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
 # PROBLEMS
 
-── ✗ undeclared type ───────────────────────────────────── fuzz_crash_080.md:1:5
+── ✗ UNDECLARED TYPE ───────────────────────────────────── fuzz_crash_080.md:1:5
 
 The type `L` is not declared in this scope.
 
@@ -25,7 +25,7 @@ c : L
     ^
 
 
-── ✗ unbound where receiver ───────────────────────────── fuzz_crash_080.md:3:17
+── ✗ UNBOUND WHERE RECEIVER ───────────────────────────── fuzz_crash_080.md:3:17
 
 The type variable `o` is not introduced by this annotation's type or a
 connected method constraint, so this where clause cannot add the `h` method to
@@ -38,7 +38,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `o` to the annotation, or remove this constraint.
 
-── ● declaration has no value ──────────────────────────── fuzz_crash_080.md:1:1
+── ● DECLARATION HAS NO VALUE ──────────────────────────── fuzz_crash_080.md:1:1
 
 This declaration has a type annotation but no implementation.
 

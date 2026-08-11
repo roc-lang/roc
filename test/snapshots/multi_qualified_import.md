@@ -29,7 +29,7 @@ MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
 
-── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:12
+── ✗ EXPECTED RECORD ACCESSOR ────────────────── multi_qualified_import.md:12:12
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -48,7 +48,7 @@ I found `.Core` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
-── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:17
+── ✗ EXPECTED RECORD ACCESSOR ────────────────── multi_qualified_import.md:12:17
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -67,7 +67,7 @@ I found `.Utf8` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
-── ✗ mod not found ─────────────────────────── multi_qualified_import.md:3:16
+── ✗ MOD NOT FOUND ─────────────────────────── multi_qualified_import.md:3:16
 
 This `Encoder` type is declared to be in `json.Core`, which does not exist.
 
@@ -75,7 +75,7 @@ json_encoder : Encoder
                ^^^^^^^
 
 
-── ✗ does not exist ───────────────────────────── multi_qualified_import.md:4:16
+── ✗ DOES NOT EXIST ───────────────────────────── multi_qualified_import.md:4:16
 
 `Json.defaultEncoder` does not exist.
 
@@ -84,7 +84,7 @@ json_encoder = Json.Core.Utf8.defaultEncoder
 
 `Json` is in scope, but it has no associated `defaultEncoder`.
 
-── ✗ mod not imported ──────────────────────── multi_qualified_import.md:7:11
+── ✗ MOD NOT IMPORTED ──────────────────────── multi_qualified_import.md:7:11
 
 There is no mod with the name `json.Core.Utf8` imported into this Roc file.
 
@@ -92,7 +92,7 @@ process : json.Core.Utf8.Encoder -> Str
           ^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ● unused variable ──────────────────────────── multi_qualified_import.md:8:12
+── ● UNUSED VARIABLE ──────────────────────────── multi_qualified_import.md:8:12
 
 Variable `encoder` is defined here and then never used:
 
@@ -102,7 +102,7 @@ process = |encoder| "processing"
 If you don't need this variable, prefix it with an underscore like `_encoder`
 to suppress this warning.
 
-── ✗ mod not imported ──────────────────────── multi_qualified_import.md:11:8
+── ✗ MOD NOT IMPORTED ──────────────────────── multi_qualified_import.md:11:8
 
 There is no mod with the name `json.Core.Utf8` imported into this Roc file.
 
@@ -110,7 +110,7 @@ data : json.Core.Utf8.EncodedData
        ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ unrecognized syntax ──────────────────────── multi_qualified_import.md:12:8
+── ✗ UNRECOGNIZED SYNTAX ──────────────────────── multi_qualified_import.md:12:8
 
 I don't recognize this syntax.
 

@@ -12,7 +12,7 @@ UNEXPECTED STATEMENT - fuzz_hang_001.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_hang_001.md:1:3:1:4
 # PROBLEMS
 
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_001.md:1:1
+── ✗ UNEXPECTED STATEMENT ───────────────────────────────── fuzz_hang_001.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -27,7 +27,7 @@ For example:
 
 I found `0` here.
 
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_001.md:1:3
+── ✗ UNEXPECTED STATEMENT ───────────────────────────────── fuzz_hang_001.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 

@@ -11,7 +11,7 @@ type=expr
 INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
 # PROBLEMS
 
-── ✗ invalid number ───────────────────────── dec_scientific_negative_exp.md:1:1
+── ✗ INVALID NUMBER ───────────────────────── dec_scientific_negative_exp.md:1:1
 
 This number literal does not fit in the inferred type.
 

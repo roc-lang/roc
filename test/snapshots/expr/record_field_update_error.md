@@ -13,7 +13,7 @@ UNEXPECTED TYPE SYNTAX - record_field_update_error.md:1:17:1:19
 DECLARATION HAS NO VALUE - record_field_update_error.md:1:12:1:19
 # PROBLEMS
 
-── ✗ unexpected expression syntax ──────────── record_field_update_error.md:1:10
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────── record_field_update_error.md:1:10
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -28,7 +28,7 @@ For example:
 
 I found `&` here.
 
-── ✗ unexpected type syntax ────────────────── record_field_update_error.md:1:17
+── ✗ UNEXPECTED TYPE SYNTAX ────────────────── record_field_update_error.md:1:17
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -43,7 +43,7 @@ For example:
 
 I found `31` here.
 
-── ● declaration has no value ──────────────── record_field_update_error.md:1:12
+── ● DECLARATION HAS NO VALUE ──────────────── record_field_update_error.md:1:12
 
 This declaration has a type annotation but no implementation.
 

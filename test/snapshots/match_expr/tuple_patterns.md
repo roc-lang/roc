@@ -16,7 +16,7 @@ match coord {
 MISSING METHOD - tuple_patterns.md:2:21:2:29
 # PROBLEMS
 
-── ✗ missing method ───────────────────────────────────── tuple_patterns.md:2:21
+── ✗ MISSING METHOD ───────────────────────────────────── tuple_patterns.md:2:21
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.

@@ -13,7 +13,7 @@ hey : MyType
 DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
 
-── ● declaration has no value ────────────────────── type_alias_anno_only.md:3:1
+── ● DECLARATION HAS NO VALUE ────────────────────── type_alias_anno_only.md:3:1
 
 This declaration has a type annotation but no implementation.
 

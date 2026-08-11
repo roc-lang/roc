@@ -15,7 +15,7 @@ UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
 TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
 
-── ✗ underscore in type alias ─────────────────── simple_underscore_error.md:1:1
+── ✗ UNDERSCORE IN TYPE ALIAS ─────────────────── simple_underscore_error.md:1:1
 
 Underscores are not allowed in type alias declarations.
 
@@ -26,7 +26,7 @@ Underscores in type annotations mean "I don't care about this type", which
 doesn't make sense when declaring a type. If you need a placeholder type
 variable, use a named type variable like `a` instead.
 
-── ✗ type mismatch ────────────────────────────── simple_underscore_error.md:4:7
+── ✗ TYPE MISMATCH ────────────────────────────── simple_underscore_error.md:4:7
 
 This number is being used where a non-number type is needed.
 

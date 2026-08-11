@@ -15,7 +15,7 @@ UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
 `MAIN!` SHOULD TAKE 1 ARGUMENT - default_app_wrong_arity.md:1:1:3:2
 # PROBLEMS
 
-── ● unused variable ─────────────────────────── default_app_wrong_arity.md:1:16
+── ● UNUSED VARIABLE ─────────────────────────── default_app_wrong_arity.md:1:16
 
 Variable `arg2` is defined here and then never used:
 
@@ -25,7 +25,7 @@ main! = |arg1, arg2| {
 If you don't need this variable, prefix it with an underscore like `_arg2` to
 suppress this warning.
 
-── ✗ `main!` should take 1 argument ───────────── default_app_wrong_arity.md:1:1
+── ✗ `MAIN!` SHOULD TAKE 1 ARGUMENT ───────────── default_app_wrong_arity.md:1:1
 
 `main!` is defined but has the wrong number of arguments. `main!` should take 1
 argument.

@@ -32,7 +32,7 @@ UNUSED VARIABLE - unused_vars_simple.md:4:19:4:20
 UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 # PROBLEMS
 
-── ● unused variable ──────────────────────────────── unused_vars_simple.md:4:19
+── ● UNUSED VARIABLE ──────────────────────────────── unused_vars_simple.md:4:19
 
 Variable `x` is defined here and then never used:
 
@@ -42,7 +42,7 @@ unused_regular = |x| 42
 If you don't need this variable, prefix it with an underscore like `_x` to
 suppress this warning.
 
-── ● underscore variable used ─────────────────────── unused_vars_simple.md:7:28
+── ● UNDERSCORE VARIABLE USED ─────────────────────── unused_vars_simple.md:7:28
 
 Variable `_value` is prefixed with an underscore but is actually used.
 

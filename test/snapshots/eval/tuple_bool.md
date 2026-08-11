@@ -14,7 +14,7 @@ MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
 
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:38
+── ✗ MISSING METHOD ───────────────────────────────────────── tuple_bool.md:1:38
 
 This `not` method is being called on a value whose type doesn't have that
 method.
@@ -26,7 +26,7 @@ The value's type, which does not have a method named `not`, is:
 
     [True, ..]
 
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
+── ✗ MISSING METHOD ───────────────────────────────────────── tuple_bool.md:1:45
 
 This `not` method is being called on a value whose type doesn't have that
 method.
@@ -38,7 +38,7 @@ The value's type, which does not have a method named `not`, is:
 
     [False, ..]
 
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
+── ✗ MISSING METHOD ───────────────────────────────────────── tuple_bool.md:1:69
 
 This `not` method is being called on a value whose type doesn't have that
 method.
@@ -50,7 +50,7 @@ The value's type, which does not have a method named `not`, is:
 
     [True, ..]
 
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
+── ✗ MISSING METHOD ───────────────────────────────────────── tuple_bool.md:1:78
 
 This `not` method is being called on a value whose type doesn't have that
 method.

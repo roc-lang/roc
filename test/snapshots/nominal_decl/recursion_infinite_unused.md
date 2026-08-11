@@ -13,7 +13,7 @@ main = 0
 INVALID RECURSIVE TYPE - recursion_infinite_unused.md:1:1:1:14
 # PROBLEMS
 
-── ✗ invalid recursive type ─────────────────── recursion_infinite_unused.md:1:1
+── ✗ INVALID RECURSIVE TYPE ─────────────────── recursion_infinite_unused.md:1:1
 
 The nominal type T refers to itself in a way that would make it infinite.
 

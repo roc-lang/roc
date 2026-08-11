@@ -16,7 +16,7 @@ MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
 DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
 
-── ✗ malformed type ──────────────────────────── open_tag_union_stability.md:2:2
+── ✗ MALFORMED TYPE ──────────────────────────── open_tag_union_stability.md:2:2
 
 This type annotation is malformed or contains invalid syntax.
 
@@ -24,7 +24,7 @@ a,
 ^
 
 
-── ● declaration has no value ────────────────── open_tag_union_stability.md:1:1
+── ● DECLARATION HAS NO VALUE ────────────────── open_tag_union_stability.md:1:1
 
 This declaration has a type annotation but no implementation.
 

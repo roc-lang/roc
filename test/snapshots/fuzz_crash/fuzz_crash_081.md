@@ -12,7 +12,7 @@ EXPECTED RECORD ACCESSOR - fuzz_crash_081.md:1:6:1:7
 UNRECOGNIZED SYNTAX - fuzz_crash_081.md:1:5:1:9
 # PROBLEMS
 
-── ✗ expected record accessor ──────────────────────────── fuzz_crash_081.md:1:6
+── ✗ EXPECTED RECORD ACCESSOR ──────────────────────────── fuzz_crash_081.md:1:6
 
 I was parsing access after `.`, and I expected a field name or tuple index.
 
@@ -29,7 +29,7 @@ For example:
 
 I found `.` here.
 
-── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_081.md:1:5
+── ✗ UNRECOGNIZED SYNTAX ───────────────────────────────── fuzz_crash_081.md:1:5
 
 I don't recognize this syntax.
 

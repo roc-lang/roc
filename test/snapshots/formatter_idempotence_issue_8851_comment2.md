@@ -12,7 +12,7 @@ EMPTY TUPLE NOT ALLOWED - formatter_idempotence_issue_8851_comment2.md:1:3:1:5
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment2.md:1:7:1:8
 # PROBLEMS
 
-── ✗ empty tuple not allowed ── formatter_idempotence_issue_8851_comment2.md:1:3
+── ✗ EMPTY TUPLE NOT ALLOWED ── formatter_idempotence_issue_8851_comment2.md:1:3
 
 I am part way through parsing this tuple, but it is empty.
 
@@ -21,7 +21,7 @@ a=()->b()()()
 
 If you want to represent nothing, try using an empty record: `{}`.
 
-── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment2.md:1:7
+── ✗ NAME NOT IN SCOPE ──────── formatter_idempotence_issue_8851_comment2.md:1:7
 
 Nothing is named `b` in this scope.
 

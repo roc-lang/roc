@@ -16,7 +16,7 @@ EXPECTED CLOSING BRACE - fuzz_crash_090.md:3:1:3:1
 UNRECOGNIZED SYNTAX - fuzz_crash_090.md:1:1:1:1
 # PROBLEMS
 
-── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_090.md:2:7
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── fuzz_crash_090.md:2:7
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -33,7 +33,7 @@ I found `)` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ expected closing brace ────────────────────────────── fuzz_crash_090.md:3:1
+── ✗ EXPECTED CLOSING BRACE ────────────────────────────── fuzz_crash_090.md:3:1
 
 I was parsing a block expression, and I expected `}` before the file ended.
 
@@ -50,7 +50,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ expected tuple separator ──────────────────────────── fuzz_crash_090.md:3:1
+── ✗ EXPECTED TUPLE SEPARATOR ──────────────────────────── fuzz_crash_090.md:3:1
 
 I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 
@@ -65,7 +65,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ expected closing brace ────────────────────────────── fuzz_crash_090.md:3:1
+── ✗ EXPECTED CLOSING BRACE ────────────────────────────── fuzz_crash_090.md:3:1
 
 I was parsing a block expression, and I expected `}` before the file ended.
 
@@ -82,7 +82,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_090.md:1:1
+── ✗ UNRECOGNIZED SYNTAX ───────────────────────────────── fuzz_crash_090.md:1:1
 
 I don't recognize this syntax.
 

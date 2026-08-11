@@ -15,7 +15,7 @@ NAME NOT IN SCOPE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
 
-── ✗ name not in scope ─────────────────────── pattern_destructure_nested.md:1:7
+── ✗ NAME NOT IN SCOPE ─────────────────────── pattern_destructure_nested.md:1:7
 
 Nothing is named `person` in this scope.
 
@@ -24,7 +24,7 @@ match person {
 
 Is it misspelled, or is there an import missing?
 
-── ● unused variable ──────────────────────── pattern_destructure_nested.md:2:38
+── ● UNUSED VARIABLE ──────────────────────── pattern_destructure_nested.md:2:38
 
 Variable `zipCode` is defined here and then never used:
 

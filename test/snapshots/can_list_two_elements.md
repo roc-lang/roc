@@ -11,7 +11,7 @@ type=expr
 TYPE MISMATCH - can_list_two_elements.md:1:5:1:12
 # PROBLEMS
 
-── ✗ type mismatch ──────────────────────────────── can_list_two_elements.md:1:5
+── ✗ TYPE MISMATCH ──────────────────────────────── can_list_two_elements.md:1:5
 
 This string literal is being used where a non-string type is needed.
 

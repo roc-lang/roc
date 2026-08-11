@@ -11,7 +11,7 @@ type=expr
 MISSING METHOD - call_float_literal.md:1:1:1:4
 # PROBLEMS
 
-── ✗ missing method ────────────────────────────────── call_float_literal.md:1:1
+── ✗ MISSING METHOD ────────────────────────────────── call_float_literal.md:1:1
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

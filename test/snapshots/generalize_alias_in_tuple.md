@@ -18,7 +18,7 @@ main = {
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
 
-── ✗ type mismatch ─────────────────────────── generalize_alias_in_tuple.md:7:14
+── ✗ TYPE MISMATCH ─────────────────────────── generalize_alias_in_tuple.md:7:14
 
 This string literal is being used where a non-string type is needed.
 

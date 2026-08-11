@@ -13,7 +13,7 @@ MOD NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_042.md:1:11
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_042.md:1:11
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -30,7 +30,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_042.md:1:20
+── ✗ MOD NOT FOUND ─────────────────────────────────── fuzz_crash_042.md:1:20
 
 This `a.E` type is declared to be in `u.R`, which does not exist.
 
@@ -38,7 +38,7 @@ import u.R}g:r->R.a.E
                    ^^
 
 
-── ● declaration has no value ─────────────────────────── fuzz_crash_042.md:1:12
+── ● DECLARATION HAS NO VALUE ─────────────────────────── fuzz_crash_042.md:1:12
 
 This declaration has a type annotation but no implementation.
 

@@ -15,7 +15,7 @@ MOD NOT FOUND - nominal_import_type.md:3:12:3:16
 MOD NOT FOUND - nominal_import_type.md:4:12:4:16
 # PROBLEMS
 
-── ✗ mod not found ────────────────────────────── nominal_import_type.md:3:12
+── ✗ MOD NOT FOUND ────────────────────────────── nominal_import_type.md:3:12
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 
@@ -23,7 +23,7 @@ red : Color.RGB
            ^^^^
 
 
-── ✗ mod not found ────────────────────────────── nominal_import_type.md:4:12
+── ✗ MOD NOT FOUND ────────────────────────────── nominal_import_type.md:4:12
 
 This `RGB` type is declared to be in `Color`, which does not exist.
 

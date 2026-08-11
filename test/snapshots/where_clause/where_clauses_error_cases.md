@@ -32,7 +32,7 @@ UNBOUND WHERE RECEIVER - where_clauses_error_cases.md:11:10:11:27
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
 
-── ✗ expected constraint type ──────────────── where_clauses_error_cases.md:3:10
+── ✗ EXPECTED CONSTRAINT TYPE ──────────────── where_clauses_error_cases.md:3:10
 
 I was parsing a `where` method constraint, and I expected `:` before the method
 type.
@@ -49,7 +49,7 @@ I found `a` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ expected where clause end ──────────────── where_clauses_error_cases.md:3:3
+── ✗ EXPECTED WHERE CLAUSE END ──────────────── where_clauses_error_cases.md:3:3
 
 I was parsing a `where` clause, and I expected `]`.
 
@@ -64,7 +64,7 @@ For example:
 I found `where [a.method ->` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:22
+── ✗ UNEXPECTED STATEMENT ──────────────────── where_clauses_error_cases.md:3:22
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -81,7 +81,7 @@ I found `b` here.
 Names that start with lowercase letters are value names or record field names,
 depending on the surrounding syntax.
 
-── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:3:23
+── ✗ UNEXPECTED STATEMENT ──────────────────── where_clauses_error_cases.md:3:23
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -98,7 +98,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ expected where constraint ──────────────── where_clauses_error_cases.md:7:3
+── ✗ EXPECTED WHERE CONSTRAINT ──────────────── where_clauses_error_cases.md:7:3
 
 I was parsing a `where` clause, and I expected at least one constraint.
 
@@ -113,7 +113,7 @@ For example:
 I found `where [` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected statement ──────────────────── where_clauses_error_cases.md:7:10
+── ✗ UNEXPECTED STATEMENT ──────────────────── where_clauses_error_cases.md:7:10
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -130,7 +130,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ malformed where clause ────────────────── where_clauses_error_cases.md:3:10
+── ✗ MALFORMED WHERE CLAUSE ────────────────── where_clauses_error_cases.md:3:10
 
 This where clause could not be parsed correctly.
 
@@ -139,7 +139,7 @@ where [a.method -> b]
 
 Check the syntax of your where clause.
 
-── ✗ malformed where clause ─────────────────── where_clauses_error_cases.md:7:3
+── ✗ MALFORMED WHERE CLAUSE ─────────────────── where_clauses_error_cases.md:7:3
 
 This where clause could not be parsed correctly.
 
@@ -148,7 +148,7 @@ where []
 
 Check the syntax of your where clause.
 
-── ● declaration has no value ───────────────── where_clauses_error_cases.md:2:1
+── ● DECLARATION HAS NO VALUE ───────────────── where_clauses_error_cases.md:2:1
 
 This declaration has a type annotation but no implementation.
 
@@ -158,7 +158,7 @@ broken_fn1 : a -> b
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ● declaration has no value ───────────────── where_clauses_error_cases.md:6:1
+── ● DECLARATION HAS NO VALUE ───────────────── where_clauses_error_cases.md:6:1
 
 This declaration has a type annotation but no implementation.
 
@@ -168,7 +168,7 @@ broken_fn2 : a -> b
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ✗ unbound where receiver ───────────────── where_clauses_error_cases.md:11:10
+── ✗ UNBOUND WHERE RECEIVER ───────────────── where_clauses_error_cases.md:11:10
 
 The type variable `c` is not introduced by this annotation's type or a
 connected method constraint, so this where clause cannot add the `method`
@@ -181,7 +181,7 @@ A where clause receiver must be introduced by the annotation's type, or by the
 method type of a receiver that is already connected to the annotation. Connect
 `c` to the annotation, or remove this constraint.
 
-── ● declaration has no value ──────────────── where_clauses_error_cases.md:10:1
+── ● DECLARATION HAS NO VALUE ──────────────── where_clauses_error_cases.md:10:1
 
 This declaration has a type annotation but no implementation.
 

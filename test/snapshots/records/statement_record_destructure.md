@@ -11,7 +11,7 @@ type=snippet
 NAME NOT IN SCOPE - statement_record_destructure.md:1:24:1:30
 # PROBLEMS
 
-── ✗ name not in scope ──────────────────── statement_record_destructure.md:1:24
+── ✗ NAME NOT IN SCOPE ──────────────────── statement_record_destructure.md:1:24
 
 Nothing is named `person` in this scope.
 

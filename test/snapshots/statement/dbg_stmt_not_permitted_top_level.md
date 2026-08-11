@@ -14,7 +14,7 @@ foo = ...
 INVALID STATEMENT - dbg_stmt_not_permitted_top_level.md:2:1:2:10
 # PROBLEMS
 
-── ✗ invalid statement ───────────────── dbg_stmt_not_permitted_top_level.md:2:1
+── ✗ INVALID STATEMENT ───────────────── dbg_stmt_not_permitted_top_level.md:2:1
 
 The statement `dbg` is not allowed at the top level.
 

@@ -13,7 +13,7 @@ f = || {
 TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 # PROBLEMS
 
-── ✗ type mismatch ────────────────────────────────────── fuzz_crash_067.md:2:11
+── ✗ TYPE MISMATCH ────────────────────────────────────── fuzz_crash_067.md:2:11
 
 This number is being used where a non-number type is needed.
 

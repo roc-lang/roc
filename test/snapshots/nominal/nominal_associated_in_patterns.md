@@ -16,7 +16,7 @@ handleSuccess = |res| "success"
 UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 # PROBLEMS
 
-── ● unused variable ──────────────────── nominal_associated_in_patterns.md:6:18
+── ● UNUSED VARIABLE ──────────────────── nominal_associated_in_patterns.md:6:18
 
 Variable `res` is defined here and then never used:
 

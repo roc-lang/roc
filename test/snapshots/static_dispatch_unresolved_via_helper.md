@@ -17,7 +17,7 @@ ok = conv(5.U8)
 MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
 
-── ✗ missing method ────────────── static_dispatch_unresolved_via_helper.md:5:13
+── ✗ MISSING METHOD ────────────── static_dispatch_unresolved_via_helper.md:5:13
 
 This is trying to dispatch a method named `to_i128` on an unresolved type
 variable, but unresolved type variables have no methods.

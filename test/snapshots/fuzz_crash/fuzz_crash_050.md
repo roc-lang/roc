@@ -12,7 +12,7 @@ type=snippet
 UNEXPECTED STATEMENT - fuzz_crash_050.md:1:1:1:2
 # PROBLEMS
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_050.md:1:1
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_050.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 

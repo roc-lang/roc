@@ -18,7 +18,7 @@ TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
 
-── ● declaration has no value ────────────────────────── ann_effectful_fn.md:2:5
+── ● DECLARATION HAS NO VALUE ────────────────────────── ann_effectful_fn.md:2:5
 
 This declaration has a type annotation but no implementation.
 
@@ -28,7 +28,7 @@ launchTheNukes : {} => Try Bool LaunchNukeErr
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ✗ type mismatch ──────────────────────────────────── ann_effectful_fn.md:2:32
+── ✗ TYPE MISMATCH ──────────────────────────────────── ann_effectful_fn.md:2:32
 
 This expression produces a value, but it's not being used.
 
@@ -42,7 +42,7 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
-── ✗ type mismatch ──────────────────────────────────── ann_effectful_fn.md:2:37
+── ✗ TYPE MISMATCH ──────────────────────────────────── ann_effectful_fn.md:2:37
 
 This expression produces a value, but it's not being used.
 

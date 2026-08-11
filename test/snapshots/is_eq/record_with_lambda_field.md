@@ -11,7 +11,7 @@ type=expr
 TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
 # PROBLEMS
 
-── ✗ type does not support equality ──────────── record_with_lambda_field.md:1:1
+── ✗ TYPE DOES NOT SUPPORT EQUALITY ──────────── record_with_lambda_field.md:1:1
 
 This expression is doing an equality check on a type that doesn't support
 equality.

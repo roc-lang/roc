@@ -35,7 +35,7 @@ MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
 MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 # PROBLEMS
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:2:7
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:2:7
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -50,7 +50,7 @@ For example:
 
 I found `:` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:2:22
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:2:22
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -66,7 +66,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ unexpected type syntax ───── record_different_fields_reserved_error.md:3:11
+── ✗ UNEXPECTED TYPE SYNTAX ───── record_different_fields_reserved_error.md:3:11
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -81,7 +81,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:12
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:3:12
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -96,7 +96,7 @@ For example:
 
 I found `pattern match` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:25
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:3:25
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -111,7 +111,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:3:26
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:3:26
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -127,7 +127,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:11
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:4:11
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -142,7 +142,7 @@ For example:
 
 I found `:` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:4:29
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:4:29
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -158,7 +158,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ import must be top level ──── record_different_fields_reserved_error.md:5:5
+── ✗ IMPORT MUST BE TOP LEVEL ──── record_different_fields_reserved_error.md:5:5
 
 I was parsing an import, but imports are only allowed at the top level.
 
@@ -176,7 +176,7 @@ For example:
 I found `import` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:11
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:5:11
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -191,7 +191,7 @@ For example:
 
 I found `:` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:5:23
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:5:23
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -207,7 +207,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:5
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:6:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -222,7 +222,7 @@ For example:
 
 I found `and` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:6:19
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:6:19
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -238,7 +238,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:5
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:7:5
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -253,7 +253,7 @@ For example:
 
 I found `or` here.
 
-── ✗ unexpected expression syntax ───── record_different_fields_reserved_error.md:7:19
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───── record_different_fields_reserved_error.md:7:19
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -269,7 +269,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ● declaration has no value ──── record_different_fields_reserved_error.md:3:5
+── ● DECLARATION HAS NO VALUE ──── record_different_fields_reserved_error.md:3:5
 
 This declaration has a type annotation but no implementation.
 
@@ -279,7 +279,7 @@ when: "pattern match",
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ✗ missing method ───────────── record_different_fields_reserved_error.md:4:13
+── ✗ MISSING METHOD ───────────── record_different_fields_reserved_error.md:4:13
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.
@@ -291,7 +291,7 @@ The value's type, which does not have a method named `from_quote`, is:
 
     {}
 
-── ✗ missing method ───────────── record_different_fields_reserved_error.md:5:13
+── ✗ MISSING METHOD ───────────── record_different_fields_reserved_error.md:5:13
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.

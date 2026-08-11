@@ -16,7 +16,7 @@ main = 42
 DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
 # PROBLEMS
 
-── ● duplicate definition ──────────────── can_import_type_alias_conflict.md:1:1
+── ● DUPLICATE DEFINITION ──────────────── can_import_type_alias_conflict.md:1:1
 
 The name `Json` is being redeclared here:
 

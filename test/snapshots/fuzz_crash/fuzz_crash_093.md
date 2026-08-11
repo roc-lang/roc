@@ -11,7 +11,7 @@ d=(0||())
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_093.md:1:7:1:9
 # PROBLEMS
 
-── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_093.md:1:7
+── ✗ EMPTY TUPLE NOT ALLOWED ───────────────────────────── fuzz_crash_093.md:1:7
 
 I am part way through parsing this tuple, but it is empty.
 

@@ -33,7 +33,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 # PROBLEMS
 
-── ✗ expected dependency name ──────────────────────────── fuzz_crash_022.md:1:1
+── ✗ EXPECTED DEPENDENCY NAME ──────────────────────────── fuzz_crash_022.md:1:1
 
 I was parsing an app dependency record, and I expected a lowercase field name.
 
@@ -49,7 +49,7 @@ For example:
 I found `app` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_022.md:1:19
+── ✗ UNEXPECTED TYPE SYNTAX ───────────────────────────── fuzz_crash_022.md:1:19
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -65,7 +65,7 @@ For example:
 I found `platform` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:28
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_022.md:1:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -80,7 +80,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:29
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_022.md:1:29
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -95,7 +95,7 @@ For example:
 
 I found `c` here.
 
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:30
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_022.md:1:30
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -110,7 +110,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_022.md:1:32
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────── fuzz_crash_022.md:1:32
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -127,7 +127,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_022.md:6:27
+── ✗ UNEXPECTED EXPRESSION SYNTAX ─────────────────────── fuzz_crash_022.md:6:27
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -144,7 +144,7 @@ I found `)` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_022.md:6:35
+── ✗ UNEXPECTED EXPRESSION SYNTAX ─────────────────────── fuzz_crash_022.md:6:35
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -160,7 +160,7 @@ For example:
 I found `else` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_022.md:8:7
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── fuzz_crash_022.md:8:7
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -175,7 +175,7 @@ For example:
 
 I found `=` here.
 
-── ✗ expected tuple separator ──────────────────────────── fuzz_crash_022.md:9:1
+── ✗ EXPECTED TUPLE SEPARATOR ──────────────────────────── fuzz_crash_022.md:9:1
 
 I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 
@@ -190,7 +190,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_022.md:9:1
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── fuzz_crash_022.md:9:1
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -205,7 +205,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ malformed type ───────────────────────────────────── fuzz_crash_022.md:1:19
+── ✗ MALFORMED TYPE ───────────────────────────────────── fuzz_crash_022.md:1:19
 
 This type annotation is malformed or contains invalid syntax.
 
@@ -217,7 +217,7 @@ INVALID IF CONDITION
 The condition in this `if` expression could not be processed.
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).
 
-── ● unused variable ──────────────────────────────────── fuzz_crash_022.md:6:12
+── ● UNUSED VARIABLE ──────────────────────────────────── fuzz_crash_022.md:6:12
 
 Variable `id` is defined here and then never used:
 
@@ -227,7 +227,7 @@ getUser = |id| if (id > 1!) "big" else "l"
 If you don't need this variable, prefix it with an underscore like `_id` to
 suppress this warning.
 
-── ● declaration has no value ─────────────────────────── fuzz_crash_022.md:1:16
+── ● DECLARATION HAS NO VALUE ─────────────────────────── fuzz_crash_022.md:1:16
 
 This declaration has a type annotation but no implementation.
 
@@ -237,7 +237,7 @@ app [main!] { |f: platform "c" }
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ● declaration has no value ──────────────────────────── fuzz_crash_022.md:5:1
+── ● DECLARATION HAS NO VALUE ──────────────────────────── fuzz_crash_022.md:5:1
 
 This declaration has a type annotation but no implementation.
 

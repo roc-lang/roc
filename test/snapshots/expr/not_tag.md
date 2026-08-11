@@ -11,7 +11,7 @@ type=expr
 MISSING METHOD - not_tag.md:1:1:1:8
 # PROBLEMS
 
-── ✗ missing method ───────────────────────────────────────────── not_tag.md:1:1
+── ✗ MISSING METHOD ───────────────────────────────────────────── not_tag.md:1:1
 
 This `not` method is being called on a value whose type doesn't have that
 method.

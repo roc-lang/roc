@@ -19,7 +19,7 @@ main = swap(1, 2)
 TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
 
-── ✗ too many args ─────────────────────── test_tuple_instantiation_crash.md:9:8
+── ✗ TOO MANY ARGS ─────────────────────── test_tuple_instantiation_crash.md:9:8
 
 The `swap` function expects 1 argument, but it got 2 instead.
 

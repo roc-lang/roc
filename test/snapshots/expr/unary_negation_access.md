@@ -11,7 +11,7 @@ type=expr
 POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
 
-── ✗ polymorphic value ──────────────────────────── unary_negation_access.md:1:1
+── ✗ POLYMORPHIC VALUE ──────────────────────────── unary_negation_access.md:1:1
 
 This top-level value still has an unresolved polymorphic type.
 

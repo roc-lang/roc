@@ -17,7 +17,7 @@ TYPE MISMATCH - tuple_type.md:5:8:5:9
 TYPE MISMATCH - tuple_type.md:5:11:5:12
 # PROBLEMS
 
-── ✗ type mismatch ─────────────────────────────────────────── tuple_type.md:5:8
+── ✗ TYPE MISMATCH ─────────────────────────────────────────── tuple_type.md:5:8
 
 This number is being used where a non-number type is needed.
 
@@ -28,7 +28,7 @@ Other code expects this to have the type:
 
     Str
 
-── ✗ type mismatch ────────────────────────────────────────── tuple_type.md:5:11
+── ✗ TYPE MISMATCH ────────────────────────────────────────── tuple_type.md:5:11
 
 This number is being used where a non-number type is needed.
 

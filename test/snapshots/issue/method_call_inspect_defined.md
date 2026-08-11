@@ -11,7 +11,7 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
 
-── ✗ unexpected expression syntax ────────── method_call_inspect_defined.md:1:14
+── ✗ UNEXPECTED EXPRESSION SYNTAX ────────── method_call_inspect_defined.md:1:14
 
 I was parsing an expression, and this token cannot start an expression here.
 

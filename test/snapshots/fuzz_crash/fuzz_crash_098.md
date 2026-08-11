@@ -17,7 +17,7 @@ MISPLACED CARRIAGE RETURN
 Carriage return characters (\r) are not allowed in Roc source code.
 
 
-── ✗ missing method ────────────────────────────────────── fuzz_crash_098.md:1:4
+── ✗ MISSING METHOD ────────────────────────────────────── fuzz_crash_098.md:1:4
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

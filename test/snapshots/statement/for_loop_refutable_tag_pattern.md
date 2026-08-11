@@ -14,7 +14,7 @@ main! = |_args| {
 NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_tag_pattern.md:2:9:2:19
 # PROBLEMS
 
-── ✗ non exhaustive destructure ────────── for_loop_refutable_tag_pattern.md:2:9
+── ✗ NON EXHAUSTIVE DESTRUCTURE ────────── for_loop_refutable_tag_pattern.md:2:9
 
 This destructuring pattern doesn't cover all possible cases.
 

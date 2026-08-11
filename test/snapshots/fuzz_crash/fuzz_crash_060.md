@@ -17,7 +17,7 @@ UNEXPECTED STATEMENT - fuzz_crash_060.md:1:3:1:3
 UNEXPECTED STATEMENT - fuzz_crash_060.md:2:1:2:2
 # PROBLEMS
 
-── ✗ unclosed string ───────────────────────────────────── fuzz_crash_060.md:1:2
+── ✗ UNCLOSED STRING ───────────────────────────────────── fuzz_crash_060.md:1:2
 
 This string is missing a closing quote.
 
@@ -25,7 +25,7 @@ This string is missing a closing quote.
  ^
 
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:1
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_060.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -40,7 +40,7 @@ For example:
 
 I found `0` here.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:2
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_060.md:1:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -55,7 +55,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:3
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_060.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -70,7 +70,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:1:3
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_060.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -85,7 +85,7 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_060.md:2:1
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_060.md:2:1
 
 I was parsing a statement, and this token cannot start a statement here.
 

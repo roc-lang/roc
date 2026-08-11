@@ -25,7 +25,7 @@ addThreeTwice = |n| applyTwice(|x| x + 3, n)
 MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
 # PROBLEMS
 
-── ✗ missing method ───────────────────────── lambda_currying_constraint.md:3:21
+── ✗ MISSING METHOD ───────────────────────── lambda_currying_constraint.md:3:21
 
 The value before this `+` operator has a type that doesn't have a `plus` method.
 

@@ -18,7 +18,7 @@ UNEXPECTED STATEMENT - malformed_nominal.md:1:7:1:8
 UNEXPECTED STATEMENT - malformed_nominal.md:1:8:1:9
 # PROBLEMS
 
-── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:1
+── ✗ UNEXPECTED STATEMENT ───────────────────────────── malformed_nominal.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -33,7 +33,7 @@ For example:
 
 I found `@2` here.
 
-── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:4
+── ✗ UNEXPECTED STATEMENT ───────────────────────────── malformed_nominal.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -48,7 +48,7 @@ For example:
 
 I found `:=` here.
 
-── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:7
+── ✗ UNEXPECTED STATEMENT ───────────────────────────── malformed_nominal.md:1:7
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -63,7 +63,7 @@ For example:
 
 I found `{` here.
 
-── ✗ unexpected statement ───────────────────────────── malformed_nominal.md:1:8
+── ✗ UNEXPECTED STATEMENT ───────────────────────────── malformed_nominal.md:1:8
 
 I was parsing a statement, and this token cannot start a statement here.
 

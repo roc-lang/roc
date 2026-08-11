@@ -20,7 +20,7 @@ DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
 
-── ✗ unexpected expression syntax ─────────────────────── record_builder.md:1:15
+── ✗ UNEXPECTED EXPRESSION SYNTAX ─────────────────────── record_builder.md:1:15
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -35,7 +35,7 @@ For example:
 
 I found `<-` here.
 
-── ✗ unexpected type syntax ────────────────────────────── record_builder.md:2:8
+── ✗ UNEXPECTED TYPE SYNTAX ────────────────────────────── record_builder.md:2:8
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -50,7 +50,7 @@ For example:
 
 I found `5` here.
 
-── ✗ unexpected expression syntax ──────────────────────── record_builder.md:2:9
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── record_builder.md:2:9
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -66,7 +66,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ✗ unexpected type syntax ────────────────────────────── record_builder.md:3:8
+── ✗ UNEXPECTED TYPE SYNTAX ────────────────────────────── record_builder.md:3:8
 
 I was parsing a type annotation, and this token cannot start a type here.
 
@@ -81,7 +81,7 @@ For example:
 
 I found `0` here.
 
-── ✗ unexpected expression syntax ──────────────────────── record_builder.md:3:9
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── record_builder.md:3:9
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -97,7 +97,7 @@ For example:
 I found `,` here.
 A comma separates items, but there must be a valid item on both sides of it.
 
-── ● declaration has no value ──────────────────────────── record_builder.md:2:5
+── ● DECLARATION HAS NO VALUE ──────────────────────────── record_builder.md:2:5
 
 This declaration has a type annotation but no implementation.
 
@@ -107,7 +107,7 @@ x: 5,
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ● declaration has no value ──────────────────────────── record_builder.md:3:5
+── ● DECLARATION HAS NO VALUE ──────────────────────────── record_builder.md:3:5
 
 This declaration has a type annotation but no implementation.
 

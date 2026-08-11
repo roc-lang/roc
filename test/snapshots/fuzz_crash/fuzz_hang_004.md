@@ -16,7 +16,7 @@ REDUNDANT PATTERN - fuzz_hang_004.md:1:4:1:37
 NON EXHAUSTIVE MATCH - fuzz_hang_004.md:1:4:1:37
 # PROBLEMS
 
-── ✗ empty tuple not allowed ───────────────────────────── fuzz_hang_004.md:1:24
+── ✗ EMPTY TUPLE NOT ALLOWED ───────────────────────────── fuzz_hang_004.md:1:24
 
 I am part way through parsing this tuple, but it is empty.
 
@@ -25,7 +25,7 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
 
 If you want to represent nothing, try using an empty record: `{}`.
 
-── ✗ type mismatch ─────────────────────────────────────── fuzz_hang_004.md:1:10
+── ✗ TYPE MISMATCH ─────────────────────────────────────── fuzz_hang_004.md:1:10
 
 This number is being used where a non-number type is needed.
 
@@ -41,7 +41,7 @@ Other code expects this to have the type:
 
     List(_b)
 
-── ✗ invalid tuple access ──────────────────────────────── fuzz_hang_004.md:1:27
+── ✗ INVALID TUPLE ACCESS ──────────────────────────────── fuzz_hang_004.md:1:27
 
 This value is not a tuple, so it has no .70000 element.
 
@@ -49,7 +49,7 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
                           ^^^^^^^^
 
 
-── ● redundant pattern ──────────────────────────────────── fuzz_hang_004.md:1:4
+── ● REDUNDANT PATTERN ──────────────────────────────────── fuzz_hang_004.md:1:4
 
 The second branch of this `match` is redundant.
 
@@ -59,7 +59,7 @@ s={match 0{[]=>[][]=>{{()}{}.70000}}}a=||{}
 This pattern can never match because earlier patterns already cover all the
 values it would match.
 
-── ✗ non exhaustive match ───────────────────────────────── fuzz_hang_004.md:1:4
+── ✗ NON EXHAUSTIVE MATCH ───────────────────────────────── fuzz_hang_004.md:1:4
 
 This match expression doesn't cover all possible cases.
 

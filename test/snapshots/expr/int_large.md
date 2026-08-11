@@ -11,7 +11,7 @@ type=expr
 INVALID NUMBER - int_large.md:1:1:1:31
 # PROBLEMS
 
-── ✗ invalid number ─────────────────────────────────────────── int_large.md:1:1
+── ✗ INVALID NUMBER ─────────────────────────────────────────── int_large.md:1:1
 
 This number literal does not fit in the inferred type.
 

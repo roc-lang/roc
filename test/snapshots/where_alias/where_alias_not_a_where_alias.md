@@ -14,7 +14,7 @@ describe = |value| value.to_str()
 NOT A WHERE ALIAS - where_alias_not_a_where_alias.md:3:29:3:37
 # PROBLEMS
 
-── ✗ not a where alias ─────────────────── where_alias_not_a_where_alias.md:3:29
+── ✗ NOT A WHERE ALIAS ─────────────────── where_alias_not_a_where_alias.md:3:29
 
 A where clause can only name a where alias, but Wrapper is a type.
 

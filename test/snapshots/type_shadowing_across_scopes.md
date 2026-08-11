@@ -26,7 +26,7 @@ UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
 
-── ✗ expected type field ─────────────────── type_shadowing_across_scopes.md:9:5
+── ✗ EXPECTED TYPE FIELD ─────────────────── type_shadowing_across_scopes.md:9:5
 
 I was parsing a record type, and I expected a field name.
 
@@ -43,7 +43,7 @@ I found `Try` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
-── ✗ expected record type separator ─────── type_shadowing_across_scopes.md:9:21
+── ✗ EXPECTED RECORD TYPE SEPARATOR ─────── type_shadowing_across_scopes.md:9:21
 
 I was parsing a record type, and I expected `,` or `}`.
 
@@ -59,7 +59,7 @@ I found `Failure` here.
 Names that start with uppercase letters are used for tags, type names, and
 mod names in Roc.
 
-── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:9:28
+── ✗ UNEXPECTED STATEMENT ───────────────── type_shadowing_across_scopes.md:9:28
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -76,7 +76,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ unexpected statement ───────────────── type_shadowing_across_scopes.md:10:1
+── ✗ UNEXPECTED STATEMENT ───────────────── type_shadowing_across_scopes.md:10:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -93,7 +93,7 @@ I found `}` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ● builtin type shadowed ───────────────── type_shadowing_across_scopes.md:1:1
+── ● BUILTIN TYPE SHADOWED ───────────────── type_shadowing_across_scopes.md:1:1
 
 The type `Try` shadows a builtin type.
 
@@ -104,7 +104,7 @@ This may make the builtin type inaccessible in this scope.
 
 The new declaration is in:
 
-── ● unused variable ────────────────────── type_shadowing_across_scopes.md:4:16
+── ● UNUSED VARIABLE ────────────────────── type_shadowing_across_scopes.md:4:16
 
 Variable `data` is defined here and then never used:
 
@@ -114,7 +114,7 @@ processData = |data|
 If you don't need this variable, prefix it with an underscore like `_data` to
 suppress this warning.
 
-── ✗ malformed type ─────────────────────── type_shadowing_across_scopes.md:9:21
+── ✗ MALFORMED TYPE ─────────────────────── type_shadowing_across_scopes.md:9:21
 
 This type annotation is malformed or contains invalid syntax.
 

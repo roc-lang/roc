@@ -17,7 +17,7 @@ TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
 TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
 
-── ✗ name not in scope ─────────────────────── static_dispatch_super_test.md:1:1
+── ✗ NAME NOT IN SCOPE ─────────────────────── static_dispatch_super_test.md:1:1
 
 Nothing is named `some_fn` in this scope.
 
@@ -26,7 +26,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 
 Is it misspelled, or is there an import missing?
 
-── ✗ name not in scope ─────────────────────── static_dispatch_super_test.md:1:9
+── ✗ NAME NOT IN SCOPE ─────────────────────── static_dispatch_super_test.md:1:9
 
 Nothing is named `arg1` in this scope.
 
@@ -35,7 +35,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 
 Is it misspelled, or is there an import missing?
 
-── ✗ try operator outside function ─────────── static_dispatch_super_test.md:1:1
+── ✗ TRY OPERATOR OUTSIDE FUNCTION ─────────── static_dispatch_super_test.md:1:1
 
 The `?` operator can only be used inside function bodies because it can cause
 an early return.
@@ -44,7 +44,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ^^^^^^^^^^^^^^
 
 
-── ✗ try operator outside function ─────────── static_dispatch_super_test.md:1:1
+── ✗ TRY OPERATOR OUTSIDE FUNCTION ─────────── static_dispatch_super_test.md:1:1
 
 The `?` operator can only be used inside function bodies because it can cause
 an early return.
@@ -53,7 +53,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ try operator outside function ─────────── static_dispatch_super_test.md:1:1
+── ✗ TRY OPERATOR OUTSIDE FUNCTION ─────────── static_dispatch_super_test.md:1:1
 
 The `?` operator can only be used inside function bodies because it can cause
 an early return.
@@ -62,7 +62,7 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-── ✗ try operator outside function ─────────── static_dispatch_super_test.md:1:1
+── ✗ TRY OPERATOR OUTSIDE FUNCTION ─────────── static_dispatch_super_test.md:1:1
 
 The `?` operator can only be used inside function bodies because it can cause
 an early return.

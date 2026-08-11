@@ -41,7 +41,7 @@ UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
 
-── ✗ ambiguous function type ──────── underscore_in_regular_annotations.md:28:22
+── ✗ AMBIGUOUS FUNCTION TYPE ──────── underscore_in_regular_annotations.md:28:22
 
 I was parsing a function type, and multiple arrows need parentheses.
 
@@ -55,7 +55,7 @@ For example:
     a -> (b -> c)
     (a -> b) -> c
 
-── ✗ unexpected statement ─────────── underscore_in_regular_annotations.md:28:25
+── ✗ UNEXPECTED STATEMENT ─────────── underscore_in_regular_annotations.md:28:25
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -70,7 +70,7 @@ For example:
 
 I found `_b` here.
 
-── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
+── ● UNUSED VARIABLE ───────────────── underscore_in_regular_annotations.md:9:12
 
 Variable `list` is defined here and then never used:
 

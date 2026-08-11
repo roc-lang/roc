@@ -32,7 +32,7 @@ UNEXPECTED STATEMENT - string.md:13:2:13:3
 UNEXPECTED STATEMENT - string.md:13:3:13:3
 # PROBLEMS
 
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:4:3
+── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────────────────────── string.md:4:3
 
 This Unicode escape sequence is not valid.
 
@@ -40,7 +40,7 @@ This Unicode escape sequence is not valid.
  ^^
 
 
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:5:3
+── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────────────────────── string.md:5:3
 
 This Unicode escape sequence is not valid.
 
@@ -48,7 +48,7 @@ This Unicode escape sequence is not valid.
  ^^
 
 
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:6:3
+── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────────────────────── string.md:6:3
 
 This Unicode escape sequence is not valid.
 
@@ -56,7 +56,7 @@ This Unicode escape sequence is not valid.
  ^^^
 
 
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:7:3
+── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────────────────────── string.md:7:3
 
 This Unicode escape sequence is not valid.
 
@@ -64,7 +64,7 @@ This Unicode escape sequence is not valid.
  ^^^^
 
 
-── ✗ invalid unicode escape sequence ───────────────────────────── string.md:8:3
+── ✗ INVALID UNICODE ESCAPE SEQUENCE ───────────────────────────── string.md:8:3
 
 This Unicode escape sequence is not valid.
 
@@ -72,7 +72,7 @@ This Unicode escape sequence is not valid.
  ^^^^^
 
 
-── ✗ invalid escape sequence ──────────────────────────────────── string.md:13:2
+── ✗ INVALID ESCAPE SEQUENCE ──────────────────────────────────── string.md:13:2
 
 This escape sequence is not recognized.
 
@@ -80,7 +80,7 @@ This escape sequence is not recognized.
 
 
 
-── ✗ unclosed string ──────────────────────────────────────────── string.md:13:1
+── ✗ UNCLOSED STRING ──────────────────────────────────────────── string.md:13:1
 
 This string is missing a closing quote.
 
@@ -88,7 +88,7 @@ This string is missing a closing quote.
 ^^
 
 
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:1
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────────────── string.md:13:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -103,7 +103,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:2
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────────────── string.md:13:2
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -121,7 +121,7 @@ I found `\` here.
 Tip: Roc syntax does not use single backslashes. Roc lambda syntax is `|arg1,
 arg2| body`, and double backslash (`\\`) begins a line in a multiline string.
 
-── ✗ unexpected statement ─────────────────────────────────────── string.md:13:3
+── ✗ UNEXPECTED STATEMENT ─────────────────────────────────────── string.md:13:3
 
 I was parsing a statement, and this token cannot start a statement here.
 

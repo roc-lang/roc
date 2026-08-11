@@ -16,7 +16,7 @@ type=expr
 TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
 
-── ✗ too many args ──────────────────── test_instantiation_arity_mismatch.md:5:5
+── ✗ TOO MANY ARGS ──────────────────── test_instantiation_arity_mismatch.md:5:5
 
 The `identity` function expects 1 argument, but it got 2 instead.
 

@@ -12,7 +12,7 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_110.md:1:25:1:26
 MISSING METHOD - fuzz_crash_110.md:1:61:1:62
 # PROBLEMS
 
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_110.md:1:25
+── ✗ UNDECLARED TYPE VARIABLE ─────────────────────────── fuzz_crash_110.md:1:25
 
 The type variable `o` is not declared in this scope.
 
@@ -21,7 +21,7 @@ R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
 
 Type variables must be introduced in a type annotation before they can be used.
 
-── ✗ missing method ───────────────────────────────────── fuzz_crash_110.md:1:61
+── ✗ MISSING METHOD ───────────────────────────────────── fuzz_crash_110.md:1:61
 
 This `from_numeral` method is being called on a value whose type doesn't have
 that method.

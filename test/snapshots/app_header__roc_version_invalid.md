@@ -11,7 +11,7 @@ app [main!] { pf: platform "../main.roc", roc: "yesterday's build" }
 INVALID ROC VERSION - app_header__roc_version_invalid.md:1:43:1:67
 # PROBLEMS
 
-── ✗ invalid roc version ─────────────── app_header__roc_version_invalid.md:1:43
+── ✗ INVALID ROC VERSION ─────────────── app_header__roc_version_invalid.md:1:43
 
 I was parsing the `roc` entry of a header, and I did not recognize this version.
 

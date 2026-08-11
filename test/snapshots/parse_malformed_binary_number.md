@@ -11,7 +11,7 @@ type=expr
 UNEXPECTED EXPRESSION SYNTAX - parse_malformed_binary_number.md:1:1:1:3
 # PROBLEMS
 
-── ✗ unexpected expression syntax ───────── parse_malformed_binary_number.md:1:1
+── ✗ UNEXPECTED EXPRESSION SYNTAX ───────── parse_malformed_binary_number.md:1:1
 
 I was parsing an expression, and this token cannot start an expression here.
 

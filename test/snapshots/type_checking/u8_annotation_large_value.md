@@ -12,7 +12,7 @@ x = 500
 INVALID NUMBER - u8_annotation_large_value.md:2:5:2:8
 # PROBLEMS
 
-── ✗ invalid number ─────────────────────────── u8_annotation_large_value.md:2:5
+── ✗ INVALID NUMBER ─────────────────────────── u8_annotation_large_value.md:2:5
 
 This number literal does not fit in the inferred type.
 

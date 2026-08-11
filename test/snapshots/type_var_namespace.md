@@ -26,7 +26,7 @@ main! = |_| {}
 UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 # PROBLEMS
 
-── ● unused variable ───────────────────────────────── type_var_namespace.md:7:5
+── ● UNUSED VARIABLE ───────────────────────────────── type_var_namespace.md:7:5
 
 Variable `item` is defined here and then never used:
 

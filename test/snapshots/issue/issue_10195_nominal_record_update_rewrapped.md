@@ -15,7 +15,7 @@ Wrap :: { a : U8, b : U8 }.{
 INVALID NOMINAL RECORD - issue_10195_nominal_record_update_rewrapped.md:4:22:4:47
 # PROBLEMS
 
-── ✗ invalid nominal record ───── issue_10195_nominal_record_update_rewrapped.md:4:22
+── ✗ INVALID NOMINAL RECORD ───── issue_10195_nominal_record_update_rewrapped.md:4:22
 
 I'm having trouble with this nominal type that wraps a record.
 

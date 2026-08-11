@@ -16,7 +16,7 @@ TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
 MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 # PROBLEMS
 
-── ✗ type mismatch ──────────────────────────── if_then_else_simple_file.md:1:10
+── ✗ TYPE MISMATCH ──────────────────────────── if_then_else_simple_file.md:1:10
 
 This number is being used where a non-number type is needed.
 
@@ -27,7 +27,7 @@ Other code expects this to have the type:
 
     Bool
 
-── ✗ missing method ──────────────────────────── if_then_else_simple_file.md:4:2
+── ✗ MISSING METHOD ──────────────────────────── if_then_else_simple_file.md:4:2
 
 This `from_quote` method is being called on a value whose type doesn't have
 that method.

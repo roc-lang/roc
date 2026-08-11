@@ -21,7 +21,7 @@ main = {
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
 # PROBLEMS
 
-── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:9:11
+── ✗ RECURSIVE DISPATCH ──── nested_try_interpolation_recursive_dispatch.md:9:11
 
 This `from_interpolation` dispatch would have to call itself to satisfy its own
 type.

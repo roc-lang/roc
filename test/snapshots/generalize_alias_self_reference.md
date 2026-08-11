@@ -13,7 +13,7 @@ main = x
 INVALID ASSIGNMENT TO ITSELF - generalize_alias_self_reference.md:1:5:1:6
 # PROBLEMS
 
-── ✗ invalid assignment to itself ─────── generalize_alias_self_reference.md:1:5
+── ✗ INVALID ASSIGNMENT TO ITSELF ─────── generalize_alias_self_reference.md:1:5
 
 The value `x` is assigned to itself, which would cause an infinite loop at
 runtime.

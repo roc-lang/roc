@@ -19,7 +19,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_024.md:2:8:2:9
 DUPLICATE DEFINITION - fuzz_crash_024.md:5:5:5:6
 # PROBLEMS
 
-── ✗ var outside body ──────────────────────────────────── fuzz_crash_024.md:2:1
+── ✗ VAR OUTSIDE BODY ──────────────────────────────────── fuzz_crash_024.md:2:1
 
 I was parsing a statement, and `var` appeared outside a function or block body.
 
@@ -38,7 +38,7 @@ For example:
 I found `var` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unexpected expression syntax ──────────────────────── fuzz_crash_024.md:2:8
+── ✗ UNEXPECTED EXPRESSION SYNTAX ──────────────────────── fuzz_crash_024.md:2:8
 
 I was parsing an expression, and this token cannot start an expression here.
 
@@ -55,7 +55,7 @@ I found `]` here.
 This closes the current construct, so the parser was looking for the missing
 item before it.
 
-── ✗ var outside body ──────────────────────────────────── fuzz_crash_024.md:5:1
+── ✗ VAR OUTSIDE BODY ──────────────────────────────────── fuzz_crash_024.md:5:1
 
 I was parsing a statement, and `var` appeared outside a function or block body.
 
@@ -74,7 +74,7 @@ For example:
 I found `var` here.
 That word is reserved by Roc, so it cannot be used as a name in this position.
 
-── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_024.md:2:8
+── ✗ UNRECOGNIZED SYNTAX ───────────────────────────────── fuzz_crash_024.md:2:8
 
 I don't recognize this syntax.
 
@@ -83,7 +83,7 @@ var t= ]
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-── ● duplicate definition ──────────────────────────────── fuzz_crash_024.md:5:5
+── ● DUPLICATE DEFINITION ──────────────────────────────── fuzz_crash_024.md:5:5
 
 The name `t` is being redeclared here:
 

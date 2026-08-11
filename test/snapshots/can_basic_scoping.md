@@ -24,7 +24,7 @@ outerFunc = |_| {
 DUPLICATE DEFINITION - can_basic_scoping.md:7:5:7:6
 # PROBLEMS
 
-── ● duplicate definition ───────────────────────────── can_basic_scoping.md:7:5
+── ● DUPLICATE DEFINITION ───────────────────────────── can_basic_scoping.md:7:5
 
 The name `x` is being redeclared here:
 

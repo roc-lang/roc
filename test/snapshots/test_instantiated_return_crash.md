@@ -19,7 +19,7 @@ type=expr
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
 
-── ✗ type mismatch ────────────────────── test_instantiated_return_crash.md:6:26
+── ✗ TYPE MISMATCH ────────────────────── test_instantiated_return_crash.md:6:26
 
 The first argument being passed to this function has the wrong type.
 

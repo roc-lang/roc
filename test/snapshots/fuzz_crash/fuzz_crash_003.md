@@ -15,7 +15,7 @@ UNEXPECTED STATEMENT - fuzz_crash_003.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_003.md:1:6:1:6
 # PROBLEMS
 
-── ✗ unclosed string ───────────────────────────────────── fuzz_crash_003.md:1:3
+── ✗ UNCLOSED STRING ───────────────────────────────────── fuzz_crash_003.md:1:3
 
 This string is missing a closing quote.
 
@@ -23,7 +23,7 @@ This string is missing a closing quote.
   ^^^
 
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:1
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_003.md:1:1
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -38,7 +38,7 @@ For example:
 
 I found `=` here.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:3
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_003.md:1:3
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -53,7 +53,7 @@ For example:
 
 I found `"` here.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:4
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_003.md:1:4
 
 I was parsing a statement, and this token cannot start a statement here.
 
@@ -68,7 +68,7 @@ For example:
 
 I found `te` here.
 
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_003.md:1:6
+── ✗ UNEXPECTED STATEMENT ──────────────────────────────── fuzz_crash_003.md:1:6
 
 I was parsing a statement, and this token cannot start a statement here.
 

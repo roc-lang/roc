@@ -36,7 +36,7 @@ UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
 
-── ● unused variable ──────────────────────────── lambda_parameter_unused.md:5:8
+── ● UNUSED VARIABLE ──────────────────────────── lambda_parameter_unused.md:5:8
 
 Variable `unused` is defined here and then never used:
 
@@ -46,7 +46,7 @@ add = |unused| 42
 If you don't need this variable, prefix it with an underscore like `_unused` to
 suppress this warning.
 
-── ● underscore variable used ────────────────── lambda_parameter_unused.md:9:22
+── ● UNDERSCORE VARIABLE USED ────────────────── lambda_parameter_unused.md:9:22
 
 Variable `_factor` is prefixed with an underscore but is actually used.
 

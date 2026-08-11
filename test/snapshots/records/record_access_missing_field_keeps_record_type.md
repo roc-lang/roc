@@ -16,7 +16,7 @@ missing = record.gamma
 TYPE MISMATCH - record_access_missing_field_keeps_record_type.md:6:17:6:23
 # PROBLEMS
 
-── ✗ type mismatch ─────── record_access_missing_field_keeps_record_type.md:6:17
+── ✗ TYPE MISMATCH ─────── record_access_missing_field_keeps_record_type.md:6:17
 
 This record does not have a `gamma` field.
 

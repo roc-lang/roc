@@ -20,7 +20,7 @@ main! = |_| {}
 NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 
-── ✗ name not in scope ──────────────────────────── type_record_effectful.md:7:5
+── ✗ NAME NOT IN SCOPE ──────────────────────────── type_record_effectful.md:7:5
 
 Nothing is named `line!` in this scope.
 

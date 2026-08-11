@@ -24,7 +24,7 @@ main! = process!(42)
 NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
 
-── ✗ name not in scope ────────────────────────── function_no_annotation.md:9:21
+── ✗ NAME NOT IN SCOPE ────────────────────────── function_no_annotation.md:9:21
 
 Nothing is named `line!` in this scope.
 
