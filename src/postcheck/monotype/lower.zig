@@ -9387,6 +9387,10 @@ const ActiveConstNodeAddress = struct {
     module: [32]u8,
     node: checked.ConstNodeId,
     sealed_representation: bool,
+    /// Graph restorations are keyed by the exact producer/request node.
+    /// Sealed restorations retain one bucket because equivalent TypeIds are
+    /// compared by `constNodeRepresentationsEql` below.
+    graph_representation: ?NodeId,
 };
 
 const MaterializedConstNodeAddress = struct {
@@ -9399,6 +9403,7 @@ fn activeConstNodeAddress(
     store_view: ModuleView,
     node: checked.ConstNodeId,
     representation: ActiveConstNodeRepresentation,
+    graph: *InstGraph,
 ) ActiveConstNodeAddress {
     return .{
         .module = store_view.key.bytes,
@@ -9406,6 +9411,10 @@ fn activeConstNodeAddress(
         .sealed_representation = switch (representation) {
             .sealed => true,
             .graph => false,
+        },
+        .graph_representation = switch (representation) {
+            .sealed => null,
+            .graph => |request| graph.rootNode(request),
         },
     };
 }
@@ -16969,7 +16978,10 @@ const BodyContext = struct {
                 );
             },
             .eval_template => |eval| blk: {
-                try self.graph.unify(try self.instNode(entry.checked_type), request_node);
+                try self.publishExactCheckedTypeAtCell(
+                    entry.checked_type,
+                    DraftTypeCell.fromGraphNode(request_node),
+                );
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
                     eval,
@@ -18017,10 +18029,22 @@ const BodyContext = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
-        const wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
-        try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
-        try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
-        try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
+        const wrapper_fn_node = try body_ctx.scopedExactFunctionRequest(
+            wrapper.checked_fn_root,
+            try body_ctx.graphFunctionNode(&.{}, request_fn_node),
+        );
+        body_ctx.active_checked_selections = try body_ctx.procedureBodyCheckedSelections(
+            view.templates.get(wrapper.template.template),
+            wrapper_fn_node,
+        );
+        try body_ctx.publishExactCheckedTypeAtCell(
+            template.checked_fn_root,
+            DraftTypeCell.fromGraphNode(request_fn_node),
+        );
+        try body_ctx.publishExactCheckedTypeAtCell(
+            root.checked_type,
+            DraftTypeCell.fromGraphNode(request_fn_node),
+        );
 
         return try body_ctx.lowerPendingCallableEvalRoot(
             view,
@@ -18056,11 +18080,12 @@ const BodyContext = struct {
             index -= 1;
             const active = self.draft.active_callable_eval_bindings.items[index];
             if (!moduleBytesEqual(active.module.bytes, view.key.bytes) or active.root != root_id) continue;
-
-            try self.graph.unify(active.request_node, request_fn_node);
+            if (!self.graph.sameExactFunctionRequest(active.request_node, request_fn_node)) {
+                continue;
+            }
             self.draft.active_callable_eval_bindings.items[index].used = true;
             return try self.addExprWithTypeCell(
-                DraftTypeCell.fromGraphNode(request_fn_node),
+                DraftTypeCell.fromGraphNode(active.request_node),
                 .{ .local = active.local },
             );
         }
@@ -18109,9 +18134,9 @@ const BodyContext = struct {
         store_view: ModuleView,
         node: checked.ConstNodeId,
         representation: ActiveConstNodeRepresentation,
-        request_cell: DraftTypeCell,
+        _: DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
-        const address = activeConstNodeAddress(store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation, self.graph);
         var cursor = self.draft.active_const_node_binding_indices.get(address);
         while (cursor) |index| {
             if (index >= self.draft.active_const_node_bindings.items.len) {
@@ -18123,10 +18148,6 @@ const BodyContext = struct {
                 continue;
             }
 
-            try self.graph.unify(
-                try active.cell.toGraphNode(self.graph),
-                try request_cell.toGraphNode(self.graph),
-            );
             const local = active.local orelse blk: {
                 const owner_scope = try self.draft.enterOwner(active.owner);
                 defer owner_scope.leave();
@@ -18139,7 +18160,7 @@ const BodyContext = struct {
                 break :blk reserved;
             };
             self.draft.active_const_node_bindings.items[index].used = true;
-            return try self.addExprWithTypeCell(request_cell, .{ .local = local });
+            return try self.addExprWithTypeCell(active.cell, .{ .local = local });
         }
 
         return null;
@@ -18154,7 +18175,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!?DraftExprId {
         const address = MaterializedConstNodeAddress{
-            .active = activeConstNodeAddress(store_view, node, representation),
+            .active = activeConstNodeAddress(store_view, node, representation, self.graph),
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
@@ -18188,9 +18209,9 @@ const BodyContext = struct {
                     ),
                 .graph => false,
             },
-            .graph => switch (right) {
+            .graph => |left_node| switch (right) {
                 .sealed => false,
-                .graph => true,
+                .graph => |right_node| self.graph.sameClass(left_node, right_node),
             },
         };
     }
@@ -18203,7 +18224,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     ) Allocator.Error!void {
         const index = self.draft.active_const_node_bindings.items.len;
-        const address = activeConstNodeAddress(store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation, self.graph);
         const previous_same_address = self.draft.active_const_node_binding_indices.get(address);
         try self.draft.active_const_node_bindings.append(self.allocator, .{
             .module = store_view.key,
@@ -18232,7 +18253,7 @@ const BodyContext = struct {
         {
             Common.invariant("ConstStore node reservation changed before materialization completed");
         }
-        const address = activeConstNodeAddress(store_view, node, representation);
+        const address = activeConstNodeAddress(store_view, node, representation, self.graph);
         const current = self.draft.active_const_node_binding_indices.getPtr(address) orelse
             Common.invariant("completed ConstStore node had no active reservation index");
         if (current.* != index) {
@@ -18263,7 +18284,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!void {
         const address = MaterializedConstNodeAddress{
-            .active = activeConstNodeAddress(store_view, node, representation),
+            .active = activeConstNodeAddress(store_view, node, representation, self.graph),
             .owner = self.draft.current_owner,
             .static_data_const_locator = static_data_const_locator,
         };
@@ -24619,7 +24640,19 @@ const BodyContext = struct {
         const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
         const local_node = try cell.toGraphNode(self.graph);
         if (!self.graph.sameClass(local_node, value_node)) {
-            try self.graph.unify(local_node, value_node);
+            const local_content = self.graph.content(local_node);
+            if (local_content == .unresolved and local_content.unresolved.origin == .placeholder) {
+                try self.graph.completeProducedSelection(local_node, value_node);
+            } else if (local_content == .func and
+                self.graph.content(value_node) == .func and
+                self.graph.sameExactFunctionRequest(local_node, value_node))
+            {
+                // The recursive local's request owns the stable callable root;
+                // the produced function has the same exact immediate edges.
+                self.draft.exprs.items[@intFromEnum(value)].ty = cell;
+            } else {
+                Common.invariant("recursive const producer returned a different exact runtime node");
+            }
         }
         const local_expr = try self.addExprWithTypeCell(cell, .{ .local = local });
         const stmt = try self.addStmt(.{ .let_ = .{
@@ -40866,13 +40899,13 @@ const BodyContext = struct {
             .checked_name = tag_name,
             .payloads = try self.graph.arena().dupe(NodeId, &.{str_node}),
         };
-        const evidence = try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
-        } });
         // `row_probe` is the exact open extension encountered above. Extend
         // that one child directly; do not re-apply an enclosing result graph.
-        try self.graph.unify(row_probe, evidence);
+        try self.graph.completeOpenTagRowExtension(
+            row_probe,
+            tags,
+            try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+        );
         return true;
     }
 

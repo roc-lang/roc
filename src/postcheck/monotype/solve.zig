@@ -712,6 +712,31 @@ pub const InstGraph = struct {
         try self.setContent(selection, .{ .redirect = produced });
     }
 
+    /// Complete the one open tag-row extension owned by a generated producer.
+    /// The caller supplies the exact new tags and tail; no enclosing row is
+    /// compared, copied, or reconciled.
+    pub fn completeOpenTagRowExtension(
+        self: *InstGraph,
+        raw_extension: NodeId,
+        tags: []InstTag,
+        tail: NodeId,
+    ) Allocator.Error!void {
+        const extension = self.find(raw_extension);
+        const content_ = self.nodes.items[@intFromEnum(extension)];
+        if (content_ != .unresolved or content_.unresolved.numeric_default_phase != null) {
+            Common.invariant("tag-row producer attempted to complete a non-row extension");
+        }
+        if (content_.unresolved.row_default) |default| {
+            if (default != .empty_tag_union) {
+                Common.invariant("tag-row producer attempted to complete a record-row extension");
+            }
+        }
+        try self.setContent(extension, .{ .tag_union = .{
+            .tags = tags,
+            .ext = self.find(tail),
+        } });
+    }
+
     pub fn lookupGeneratedIteratorFromNamed(
         self: *InstGraph,
         public_named: InstNamed,
@@ -1743,6 +1768,14 @@ pub const InstGraph = struct {
             if (!self.sameClass(left_arg, right_arg)) return false;
         }
         return self.sameClass(left_fn.ret, right_fn.ret);
+    }
+
+    /// Whether two callable roots carry the same exact immediate runtime
+    /// edges and the same checker-authored substitution span. This is a
+    /// constant-depth recursive-binding key, not a structural graph match.
+    pub fn sameExactFunctionRequest(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        return self.sameFunctionInterface(left, right) and
+            self.sameDirectRequestSelections(left, right);
     }
 
     /// Whether a live graph type is already closed and can be snapshotted

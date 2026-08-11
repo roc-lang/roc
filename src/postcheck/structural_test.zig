@@ -1500,6 +1500,18 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
 }
 
+test "Monotype lowering never reconciles complete runtime type graphs" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const runtime_lowering = sourceSliceBetween(
+        lower_source,
+        "const std = @import(\"std\");",
+        "test \"draft runtime guard frames retain exact ancestry\"",
+    );
+    try expectNotContains(runtime_lowering, ".graph.unify(");
+    try expectContains(runtime_lowering, "completeProducedSelection(");
+    try expectContains(runtime_lowering, "completeOpenTagRowExtension(");
+}
+
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
     const graph_relation = sourceSliceBetween(
