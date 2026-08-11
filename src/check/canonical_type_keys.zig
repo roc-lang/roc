@@ -72,6 +72,27 @@ pub fn identityVarsFromVar(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
+/// Public `nodeCountFromVar` function.
+///
+/// The number of `writeVar` visits the canonical key traversal makes for
+/// `var_`. The count is a function of the serialized traversal, so two vars
+/// with equal canonical keys always have equal counts, and in a well-formed
+/// (cycle-free once nominal backings are excluded) store a proper structural
+/// subterm never visits more nodes than its container. Consumers use the
+/// count as a cheap necessary condition for subterm containment before paying
+/// for a per-subterm digest walk.
+pub fn nodeCountFromVar(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+) Allocator.Error!u32 {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    try builder.writeVar(var_);
+    return builder.node_count;
+}
+
 /// Public `fromConcreteVar` function.
 pub fn fromConcreteVar(
     allocator: Allocator,
@@ -146,6 +167,8 @@ const Builder = struct {
     contains_identity_variables: bool = false,
     detect_errors: bool = false,
     contains_error: bool = false,
+    /// Total `writeVar` invocations, cycle markers and identity refs included.
+    node_count: u32 = 0,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -165,6 +188,7 @@ const Builder = struct {
     }
 
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
+        self.node_count += 1;
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
 

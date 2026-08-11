@@ -8496,6 +8496,29 @@ test "check type - rejected default target leaves merged weak argument polymorph
     try expectRejectedDefaultTargetProblemShape(&test_env);
 }
 
+// The same discipline applies to quote literals: `("t")` defaults to Str
+// without candidate probing, so `Str.concat` is the first real test of the
+// recorded `concat` relation. The annotation pins that relation's return to
+// `Dec`, the validation fails, and the failed unify must not keep the partial
+// merge that retyped `weakarg` to `Str` on the way to the mismatch.
+
+test "check type - rejected quote default target leaves merged weak argument polymorphic" {
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Dec
+        \\r = ("t").concat(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
 test "check type - rejected default target leaves unreached weak argument polymorphic" {
     // Control: the same module except the failing `plus` argument is
     // `[weakarg]`, whose `List` shape already conflicts with `Dec`, so the
