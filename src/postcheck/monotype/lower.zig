@@ -32141,11 +32141,17 @@ const BodyContext = struct {
                 .op = op,
                 .args = args,
             } });
-            return try self.applyDispatchResultMode(
-                plan.result_mode,
-                call_expr,
-                try self.activeTypeFromNode(plan_ret_node),
-            );
+            // Only equality/hash result modes inspect the result type; a
+            // `.value` low-level result may still be an unresolved open row
+            // (e.g. an open error union) with no Monotype view yet.
+            return switch (plan.result_mode) {
+                .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
+                .equality, .hash => try self.applyDispatchResultMode(
+                    plan.result_mode,
+                    call_expr,
+                    try self.activeTypeFromNode(plan_ret_node),
+                ),
+            };
         }
         const call_data = if (direct_graph_call)
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
