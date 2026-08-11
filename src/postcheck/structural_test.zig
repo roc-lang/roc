@@ -1025,6 +1025,16 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectContains(inst_node, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
     try expectNotContains(inst_node, "self.graph.unify(placeholder");
 
+    const nominal_backing = sourceSliceBetween(
+        lower_source,
+        "fn instNominalDeclarationBackingNode(",
+        "const NominalInstantiationSource = struct",
+    );
+    try expectContains(nominal_backing, "try self.putScopedNode(backing, placeholder)");
+    try expectContains(nominal_backing, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
+    try expectNotContains(nominal_backing, "self.graph.unify(");
+    try expectNotContains(nominal_backing, "attachCheckedBaseAlias");
+
     const solve_source = @embedFile("monotype/solve.zig");
     const complete_reserved = sourceSliceBetween(
         solve_source,

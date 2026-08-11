@@ -15537,9 +15537,9 @@ const BodyContext = struct {
         if (authority == .checked_base) self.graph.beginCheckedBaseConstruction();
         defer if (authority == .checked_base) self.graph.endCheckedBaseConstruction();
 
-        const backing = if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) backing: {
-            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
-        } else backing: {
+        if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+            try self.fillNominalDeclarationBackingNodeInCurrentView(source.declaration, args, placeholder);
+        } else {
             const previous_view = self.view;
             const previous_instantiation = self.instantiation;
             self.view = source.view;
@@ -15554,26 +15554,20 @@ const BodyContext = struct {
                 self.instantiation = previous_instantiation;
                 self.view = previous_view;
             }
-            break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
-        };
+            try self.fillNominalDeclarationBackingNodeInCurrentView(source.declaration, args, placeholder);
+        }
         if (authority == .checked_base) {
-            if (self.graph.nodeIsCheckedBase(backing)) {
-                try self.graph.attachCheckedBaseAlias(placeholder, backing);
-            } else {
-                try self.graph.unify(placeholder, backing);
-            }
             self.graph.markCheckedBase(placeholder);
-        } else {
-            try self.graph.completeProducedSelection(placeholder, backing);
         }
         return placeholder;
     }
 
-    fn instNominalDeclarationBackingNodeInCurrentView(
+    fn fillNominalDeclarationBackingNodeInCurrentView(
         self: *BodyContext,
         declaration: checked.CheckedNominalDeclaration,
         args: []NodeId,
-    ) Allocator.Error!NodeId {
+        placeholder: NodeId,
+    ) Allocator.Error!void {
         const formal_args = declaration.formalArgs(self.view.types);
         if (formal_args.len != args.len) {
             Common.invariant("checked nominal declaration arity differed from nominal type use");
@@ -15585,7 +15579,15 @@ const BodyContext = struct {
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
-        return try self.instNode(declaration.backing);
+        const backing = self.scopedCheckedType(declaration.backing);
+        if (self.scopedNode(backing) != null) {
+            Common.invariant("nominal declaration backing was already instantiated before its reservation");
+        }
+        try self.putScopedNode(backing, placeholder);
+        switch (try self.instNodeBuild(backing)) {
+            .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
+            .existing => |existing| try self.graph.completeProducedSelection(placeholder, existing),
+        }
     }
 
     const NominalInstantiationSource = struct {

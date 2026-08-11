@@ -4047,6 +4047,15 @@ declaration template. Box payload capabilities remain separate explicit
 representation authorities; their backing roots come from the capability entry
 in checked module data instead of from declaration template lookup.
 
+Each distinct declaration-backing instantiation reserves its result node before
+descending into the checked backing template, seeds the template's formal roots
+with the instance's exact argument nodes, and fills that same reserved node in
+place. Recursive occurrences refer to the reservation. It is forbidden to
+instantiate the backing into a second root and then unify, alias, or otherwise
+reconcile that root with the cache reservation: the reservation is the backing
+result, not a proxy for it. This preserves recursive sharing while allocating
+and constructing exactly one produced root per distinct backing instantiation.
+
 Named type ownership is already decided before Monotype lowering starts. A
 checked alias or nominal payload names its owner checked module id explicitly,
 and the lowering input includes every checked module id recorded in checked
