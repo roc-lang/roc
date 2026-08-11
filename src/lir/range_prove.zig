@@ -352,6 +352,11 @@ const Pass = struct {
     joins_in_order: std.ArrayList(CFStmtId),
     jump_records: std.ArrayList(JumpRecord),
     merge_states: collections.DenseMap(CFStmtId, MergeState),
+    /// Region head that was being walked when each region was first
+    /// enqueued: the lexical nesting of join bodies. Edge classification at
+    /// a merge asks whether the arriving walk is nested anywhere inside the
+    /// merge head's own region, not merely whether it is the innermost one.
+    region_parents: collections.DenseMap(CFStmtId, CFStmtId),
     body_joins: collections.DenseMap(CFStmtId, JoinPointId),
     len_roots: collections.DenseMap(NodeId, LocalId),
     value_roots: collections.DenseMap(NodeId, LocalId),
@@ -417,6 +422,7 @@ const Pass = struct {
             .joins_in_order = .empty,
             .jump_records = .empty,
             .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
+            .region_parents = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
             .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -459,6 +465,7 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.clearMergeStates();
         self.merge_states.deinit();
+        self.region_parents.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
@@ -494,6 +501,7 @@ const Pass = struct {
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
+        self.region_parents.clearRetainingCapacity();
         self.body_joins.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
@@ -980,10 +988,11 @@ const Pass = struct {
         }
         const state = entry.value_ptr;
 
-        // An edge arriving from another region is an entry edge; its facts
-        // meet separately so loop-invariant relations survive the back
-        // edge's inability to derive them before its region is seeded.
-        if (self.current_region != head) {
+        // An edge arriving from outside the merge head's region is an entry
+        // edge; its facts meet separately so loop-invariant relations
+        // survive the back edge's inability to derive them before its
+        // region is seeded.
+        if (!self.walkIsWithin(head)) {
             if (state.entry_captures == 0) {
                 try state.entry_facts.appendSlice(self.allocator, self.facts.items);
             } else {
@@ -1952,6 +1961,23 @@ const Pass = struct {
         if (self.region_seen.contains(head)) return;
         try self.region_seen.put(head, {});
         try self.regions.append(self.allocator, head);
+        if (self.current_region) |parent| {
+            try self.region_parents.put(head, parent);
+        }
+    }
+
+    /// Whether the walk is currently inside `head`'s region, directly or
+    /// through any chain of nested join-body regions. A loop's back edge
+    /// often sits inside a nested merge region (a `??` default's join, say),
+    /// and it is still a back edge of the enclosing loop.
+    fn walkIsWithin(self: *const Pass, head: CFStmtId) bool {
+        var cursor = self.current_region orelse return false;
+        var remaining = self.regions.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            if (cursor == head) return true;
+            cursor = self.region_parents.get(cursor) orelse return false;
+        }
+        return false;
     }
 
     fn walkRegions(self: *Pass, body: CFStmtId) ResourceError!void {
@@ -2315,6 +2341,13 @@ const Pass = struct {
                     if (try self.valueOf(list_local)) |list_node| {
                         const root = self.rootOf(list_node);
                         if (self.len_terms.get(root)) |len_node| {
+                            // A term synthesized before any read (a merge
+                            // meet's, say) has no stable base yet; this read
+                            // names one, so facts about the term can persist
+                            // into loop bodies.
+                            if (self.len_roots.get(len_node) == null and self.isSingleAssign(list_local)) {
+                                try self.len_roots.put(len_node, list_local);
+                            }
                             try self.bind(s.target, .{ .node = len_node });
                             return;
                         }

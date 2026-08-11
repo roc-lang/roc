@@ -91,6 +91,7 @@ const LowerModuleOptions = struct {
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
+    prove_ranges: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -131,6 +132,7 @@ fn lowerModuleWithOptions(
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
             .promote_loop_appends = options.promote_loop_appends,
+            .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
         },
     );
@@ -7912,5 +7914,97 @@ test "SCRATCH union takes with early error exit in wide loop" {
     ;
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
+}
+
+
+// A dominating length guard plus a masked index is how hot table loops
+// (hash chains, sliding windows) express in-bounds access: the guard pins
+// `len >= 32768` once, the mask pins the index below it, and the range
+// prover should fold every per-iteration bounds check in the loop body.
+// The loop's back edge sits inside the `??` default's merge region, so
+// this also guards the edge classification that keeps entry-invariant
+// facts alive across nested join regions.
+test "length guard plus masked index elides loop bounds checks" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\walk : List(I16), U64, U64 -> Try(U64, [Bug])
+        \\walk = |tab, start, n| {
+        \\    if List.len(tab) < 32768 {
+        \\        return Err(Bug)
+        \\    } else {
+        \\    }
+        \\    var $node = start
+        \\    var $acc = 0.U64
+        \\    var $i = 0.U64
+        \\    while $i < n {
+        \\        $acc = $acc + $node
+        \\        $node = (List.get(tab, $node.bitwise_and(32767)) ?? 0).to_u64_wrap()
+        \\        $i = $i + 1
+        \\    }
+        \\    Ok($acc)
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    match walk(List.repeat(0.I16, 32768), n, n) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    ;
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .prove_ranges = true });
+    defer optimized.deinit(allocator);
+
+    const store = &optimized.lowered.lir_result.store;
+    var unsafe_gets: usize = 0;
+    var len_guarded_switches: usize = 0;
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |s| switch (s.op) {
+                .list_get_unsafe => unsafe_gets += 1,
+                else => {},
+            },
+            else => {},
+        }
+    }
+    // The masked chain lookup survives as an unconditional unsafe get...
+    try std.testing.expect(unsafe_gets >= 1);
+    // ...and no switch in the module still branches on `idx < len(tab)`:
+    // every list_len result that feeds a comparison feeding a switch was
+    // folded. The one guard comparison itself remains, but it feeds the
+    // early return, whose switch tests the guard, not a per-element check.
+    var len_targets = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer len_targets.deinit(allocator);
+    var lt_of_len = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer lt_of_len.deinit(allocator);
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .assign_low_level => |s| {
+                const args = store.getLocalSpan(s.args);
+                switch (s.op) {
+                    .list_len => try len_targets.put(allocator, @intFromEnum(s.target), {}),
+                    .num_is_lt => {
+                        if (collections.GuardedList.borrowLen(args) == 2 and
+                            len_targets.contains(@intFromEnum(collections.GuardedList.at(args, 1))) and
+                            !len_targets.contains(@intFromEnum(collections.GuardedList.at(args, 0))))
+                        {
+                            try lt_of_len.put(allocator, @intFromEnum(s.target), {});
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+    for (store.getCFStmts()) |stmt| {
+        switch (stmt) {
+            .switch_stmt => |s| {
+                if (lt_of_len.contains(@intFromEnum(s.cond))) len_guarded_switches += 1;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), len_guarded_switches);
 }
 
