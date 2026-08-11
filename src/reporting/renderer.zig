@@ -930,7 +930,7 @@ fn wrapAndEmitBelowLine(
 fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     try writer.writeAll(palette.bold);
     try writer.writeAll(palette.primary);
-    try writeShouted(writer, report.title);
+    try writeLowercased(writer, report.title);
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
     if (report.headline.elementCount() > 0) {
@@ -959,7 +959,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 
     try writer.print("<div class=\"report {s}\">\n", .{title_class});
     try writer.writeAll("<h1 class=\"report-title\">");
-    try writeShouted(writer, report.title);
+    try writeLowercased(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
     if (report.headline.elementCount() > 0) {
@@ -974,7 +974,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
     // LSP typically wants plain text without formatting
-    try writeShouted(writer, report.title);
+    try writeLowercased(writer, report.title);
     try writer.writeAll("\n\n");
     if (report.headline.elementCount() > 0) {
         try renderDocumentToLsp(&report.headline, writer, config);
