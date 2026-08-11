@@ -15348,6 +15348,15 @@ pub const SpecializationOperandFlow = enum(u8) {
     requested_value,
 };
 
+/// One direct substitution from a call plan's exact formal slot to the
+/// checked identity consumed by a contextual expression. Checking publishes
+/// these per callee/operand, so Monotype never constructs a relation graph or
+/// lets two syntactically distinct operands claim the same checked root.
+pub const SpecializationCallConsumerBinding = extern struct {
+    source: CheckedTypeId,
+    consumer: CheckedTypeId,
+};
+
 pub const SpecializationCallSlotKind = enum(u8) {
     identity,
     generated_nominal,
@@ -15385,12 +15394,20 @@ pub const SpecializationCallPlan = struct {
     slots: artifact_serialize.Span = .{},
     projections: artifact_serialize.Span = .{},
     operand_flows: artifact_serialize.Span = .{},
+    context_bindings: artifact_serialize.Span = .{},
+    selection_bindings: artifact_serialize.Span = .{},
+    callee_consumer_bindings: artifact_serialize.Span = .{},
+    operand_consumer_binding_spans: artifact_serialize.Span = .{},
 };
 
 pub const SpecializationCallPlanView = struct {
     slots: []const SpecializationCallSlot,
     projections: []const SpecializationProjection,
     operand_flows: []const SpecializationOperandFlow,
+    context_bindings: []const SpecializationCallConsumerBinding,
+    selection_bindings: []const SpecializationCallConsumerBinding,
+    callee_consumer_bindings: []const SpecializationCallConsumerBinding,
+    operand_consumer_binding_spans: []const artifact_serialize.Span,
 };
 
 /// One identity-bearing checked occurrence in a procedure's immutable base
@@ -17729,6 +17746,8 @@ fn compileSpecializationCallPlan(
     callable_root: CheckedTypeId,
     dispatcher_root: ?CheckedTypeId,
     target_signature_source: bool,
+    expression_operand_flows: ?[]const SpecializationOperandFlow,
+    exact_identity_roots: []const CheckedTypeId,
     slots_out: *std.ArrayList(SpecializationCallSlot),
     occurrences_out: *std.ArrayList(SpecializationOccurrence),
     projections_out: *std.ArrayList(SpecializationProjection),
@@ -17738,6 +17757,11 @@ fn compileSpecializationCallPlan(
         callable_root,
         "exact call specialization plan",
     );
+    if (expression_operand_flows) |flows| {
+        if (flows.len != function.args.len) {
+            checkedArtifactInvariant("specialization expression operand flow had a different arity", .{});
+        }
+    }
     var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
     defer {
         for (builds.items) |*build| build.deinit(allocator);
@@ -17749,6 +17773,15 @@ fn compileSpecializationCallPlan(
     defer substitutions.deinit(allocator);
     var projections = std.ArrayList(SpecializationProjection).empty;
     defer projections.deinit(allocator);
+
+    for (exact_identity_roots) |exact_root| {
+        const payload = checked_types.store.payload(exact_root);
+        try builds.append(allocator, .{
+            .checked = exact_root,
+            .kind = if (checkedTypeIsGeneratedNominal(payload)) .generated_nominal else .identity,
+            .exact_identity = true,
+        });
+    }
 
     for (function.args, 0..) |arg, index| {
         _ = try collectSpecializationCallOccurrences(
@@ -17762,7 +17795,10 @@ fn compileSpecializationCallPlan(
                 .payload_index = 0,
                 .step = .argument,
             },
-            false,
+            // Flow controls whether the operand needs a request before it is
+            // lowered. After lowering, every operand has produced its exact
+            // runtime node and may fill the checker-declared projections.
+            true,
             &substitutions,
             &active,
             &projections,
@@ -17867,6 +17903,12 @@ fn compileSpecializationCallPlan(
             &projections,
             &builds,
         );
+    }
+
+    for (builds.items) |build| {
+        if (build.exact_identity and build.occurrences.items.len == 0) {
+            checkedArtifactInvariant("exact target identity had no callable projection", .{});
+        }
     }
 
     const slot_start: u32 = @intCast(slots_out.items.len);
@@ -18007,6 +18049,8 @@ fn publishSpecializationCallPlanForCallable(
             callable,
             null,
             false,
+            null,
+            &.{},
             slots,
             occurrences,
             projections,
@@ -18196,14 +18240,55 @@ fn appendSpecializationOperandFlowsForOrdinaryCall(
     return .{ .start = start, .len = @intCast(args.len) };
 }
 
-fn appendCallIdentityRelationSpan(
+fn compileCallConsumerBindings(
     allocator: Allocator,
-    pool: *std.ArrayList(SpecializationIdentityRelation),
-    relations: []const SpecializationIdentityRelation,
+    checked_types: *const CheckedTypePublication,
+    source: CheckedTypeId,
+    consumer: CheckedTypeId,
+    pool: *std.ArrayList(SpecializationCallConsumerBinding),
 ) Allocator.Error!artifact_serialize.Span {
+    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    defer relations.deinit(allocator);
+    try collectDirectionalCallIdentityRelations(
+        allocator,
+        checked_types,
+        source,
+        consumer,
+        &relations,
+    );
     const start: u32 = @intCast(pool.items.len);
-    try pool.appendSlice(allocator, relations);
-    return .{ .start = start, .len = @intCast(relations.len) };
+    for (relations.items) |relation| {
+        for (pool.items[start..]) |existing| {
+            if (existing.source == relation.source and existing.consumer == relation.dependent) break;
+        } else try pool.append(allocator, .{
+            .source = relation.source,
+            .consumer = relation.dependent,
+        });
+    }
+    return .{ .start = start, .len = @intCast(pool.items.len - start) };
+}
+
+fn appendEmptyCallConsumerBindingSpans(
+    allocator: Allocator,
+    count: usize,
+    out: *std.ArrayList(artifact_serialize.Span),
+) Allocator.Error!artifact_serialize.Span {
+    const start: u32 = @intCast(out.items.len);
+    try out.appendNTimes(allocator, .{}, count);
+    return .{ .start = start, .len = @intCast(count) };
+}
+
+fn appendCallConsumerSelfBindings(
+    allocator: Allocator,
+    roots: []const CheckedTypeId,
+    pool: *std.ArrayList(SpecializationCallConsumerBinding),
+    start: u32,
+) Allocator.Error!void {
+    for (roots) |root| {
+        for (pool.items[start..]) |existing| {
+            if (existing.source == root and existing.consumer == root) break;
+        } else try pool.append(allocator, .{ .source = root, .consumer = root });
+    }
 }
 
 fn compileCallConcreteSelections(
@@ -18229,137 +18314,20 @@ fn compileCallConcreteSelections(
     return .{ .start = start, .len = @intCast(pool.items.len - start) };
 }
 
-fn compileOrdinaryCallIdentityRelations(
-    allocator: Allocator,
-    checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
-    value_flows_by_expr: []const SpecializationOperandFlow,
-    expr: CheckedExpr,
+fn specializationCallSourceCallable(
     call: anytype,
-    operand_flows: []const SpecializationOperandFlow,
-    pool: *std.ArrayList(SpecializationIdentityRelation),
-) Allocator.Error!artifact_serialize.Span {
-    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
-    defer relations.deinit(allocator);
-    const function = checkedFunctionPayload(
-        &checked_types.store,
-        call.source_fn_ty_payload,
-        "ordinary call identity relation",
-    );
-    if (function.args.len != call.args.len) {
-        checkedArtifactInvariant("ordinary call identity relation had a different arity", .{});
+    resolved_value_refs: *const ResolvedValueRefTable,
+) CheckedTypeId {
+    const target = call.direct_target orelse return call.source_fn_ty_payload;
+    const raw = @intFromEnum(target);
+    if (raw >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("direct call target exceeded the resolved value table", .{});
     }
-    if (operand_flows.len != call.args.len) {
-        checkedArtifactInvariant("ordinary call operand flow had a different arity", .{});
-    }
-    const callee_ty = checked_bodies.expr(call.func).ty;
-    const callee_flow = value_flows_by_expr[@intFromEnum(call.func)];
-    try collectDirectionalCallIdentityRelations(
-        allocator,
-        checked_types,
-        if (callee_flow == .produced) callee_ty else call.source_fn_ty_payload,
-        if (callee_flow == .produced) call.source_fn_ty_payload else callee_ty,
-        &relations,
-    );
-    for (function.args, call.args, operand_flows) |formal, arg, flow| {
-        const actual = checked_bodies.expr(arg).ty;
-        try collectDirectionalCallIdentityRelations(
-            allocator,
-            checked_types,
-            if (flow == .produced) actual else formal,
-            if (flow == .produced) formal else actual,
-            &relations,
-        );
-    }
-    // A call result may either receive an exact destination from its parent or
-    // become that parent's producer. Publish both explicit directions; only
-    // the edge whose source is present at lowering time fires.
-    try collectBidirectionalCallIdentityRelations(
-        allocator,
-        checked_types,
-        function.ret,
-        expr.ty,
-        &relations,
-    );
-    return try appendCallIdentityRelationSpan(allocator, pool, relations.items);
-}
-
-fn compileDispatchCallIdentityRelations(
-    allocator: Allocator,
-    checked_types: *const CheckedTypePublication,
-    checked_bodies: *const CheckedBodyStore,
-    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    plan: static_dispatch.StaticDispatchCallPlan,
-    operand_flows: []const SpecializationOperandFlow,
-    pool: *std.ArrayList(SpecializationIdentityRelation),
-) Allocator.Error!artifact_serialize.Span {
-    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
-    defer relations.deinit(allocator);
-    const operands = plan.argsSlice(static_dispatch_plans);
-    const function = checkedFunctionPayload(
-        &checked_types.store,
-        plan.callable_ty,
-        "dispatch call identity relation",
-    );
-    if (function.args.len != operands.len) {
-        checkedArtifactInvariant("dispatch call identity relation had a different arity", .{});
-    }
-    if (operand_flows.len != operands.len) {
-        checkedArtifactInvariant("dispatch call operand flow had a different arity", .{});
-    }
-    switch (plan.resolution) {
-        .direct_closed, .direct_parametric => |direct| {
-            const target = static_dispatch_plans.evidenceNode(direct.evidence);
-            switch (target.instantiation) {
-                .monomorphic => {},
-                .callable => |target_callable| try collectBidirectionalCallIdentityRelations(
-                    allocator,
-                    checked_types,
-                    plan.callable_ty,
-                    target_callable,
-                    &relations,
-                ),
-            }
-        },
-        .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached identity relation publication", .{}),
-        .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
-    }
-    for (function.args, operands, operand_flows) |formal, operand, flow| switch (operand) {
-        .checked_expr, .generated_interpolation_iter => |arg| {
-            const actual = checked_bodies.expr(arg).ty;
-            try collectDirectionalCallIdentityRelations(
-                allocator,
-                checked_types,
-                if (flow == .produced) actual else formal,
-                if (flow == .produced) formal else actual,
-                &relations,
-            );
-        },
-        .generated_numeral, .generated_quote => {},
+    return switch (resolved_value_refs.records[raw].ref) {
+        .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
+            checkedArtifactInvariant("platform-required call had no relation-owned callable", .{}),
+        .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => call.source_fn_ty_payload,
     };
-    try collectBidirectionalCallIdentityRelations(
-        allocator,
-        checked_types,
-        function.ret,
-        checked_bodies.expr(plan.expr).ty,
-        &relations,
-    );
-    switch (plan.dispatcher) {
-        .arg => |index| {
-            if (index >= function.args.len) {
-                checkedArtifactInvariant("dispatch identity relation dispatcher exceeded its arity", .{});
-            }
-            try collectBidirectionalCallIdentityRelations(
-                allocator,
-                checked_types,
-                plan.dispatcher_ty,
-                function.args[index],
-                &relations,
-            );
-        },
-        .type_only => {},
-    }
-    return try appendCallIdentityRelationSpan(allocator, pool, relations.items);
 }
 
 fn appendSpecializationOperandFlowsForDispatchCall(
@@ -18395,6 +18363,25 @@ const PublishedSpecializationTargetRelations = struct {
     entries: []SpecializationTargetRelationEntry,
     relations: []SpecializationTargetIdentityRelation,
 };
+
+fn appendPublishedTargetSourceRoots(
+    allocator: Allocator,
+    published: *const PublishedSpecializationTargetRelations,
+    source_callable: CheckedTypeId,
+    out: *std.ArrayList(CheckedTypeId),
+) Allocator.Error!void {
+    out.clearRetainingCapacity();
+    const entries_span = published.by_type[@intFromEnum(source_callable)];
+    const entries = published.entries[entries_span.start .. entries_span.start + entries_span.len];
+    for (entries) |entry| {
+        const relations = published.relations[entry.relations.start .. entry.relations.start + entry.relations.len];
+        for (relations) |relation| {
+            for (out.items) |existing| {
+                if (existing == relation.source) break;
+            } else try out.append(allocator, relation.source);
+        }
+    }
+}
 
 fn targetArtifactKey(
     current_artifact: CheckedModuleArtifactKey,
@@ -18730,6 +18717,7 @@ fn publishSpecializationTargetRelations(
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
         if (expr.data != .call or checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
+        const source_callable = specializationCallSourceCallable(expr.data.call, resolved_value_refs);
         const target_id = expr.data.call.direct_target orelse continue;
         const target_record = resolved_value_refs.records[@intFromEnum(target_id)];
         const procedure = procedureUseFromResolvedValue(target_record.ref) orelse continue;
@@ -18744,7 +18732,7 @@ fn publishSpecializationTargetRelations(
             local_procedure_bindings,
             templates,
             &builds,
-            expr.data.call.source_fn_ty_payload,
+            source_callable,
             procedure,
         );
     }
@@ -18811,10 +18799,6 @@ fn publishSpecializationCallPlans(
     templates: *CheckedProcedureTemplateTable,
 ) Allocator.Error!void {
     if (templates.specialization_call_plans_by_expr.len != 0 or
-        templates.specialization_call_identity_relations_by_expr.len != 0 or
-        templates.specialization_call_identity_relations.len != 0 or
-        templates.specialization_call_concrete_selections_by_expr.len != 0 or
-        templates.specialization_call_concrete_selections.len != 0 or
         templates.specialization_target_relations_by_type.len != 0 or
         templates.specialization_target_relation_entries.len != 0 or
         templates.specialization_target_identity_relations.len != 0 or
@@ -18826,6 +18810,8 @@ fn publishSpecializationCallPlans(
         templates.specialization_call_occurrences.len != 0 or
         templates.specialization_call_projections.len != 0 or
         templates.specialization_call_operand_flows.len != 0 or
+        templates.specialization_call_consumer_bindings.len != 0 or
+        templates.specialization_call_consumer_binding_spans.len != 0 or
         templates.specialization_value_flows_by_expr.len != 0)
     {
         checkedArtifactInvariant("specialization call plans were published twice", .{});
@@ -18881,12 +18867,6 @@ fn publishSpecializationCallPlans(
             @enumFromInt(@as(u32, @intCast(raw_expr))),
         );
     }
-    const identity_relations_by_expr = try allocator.alloc(artifact_serialize.Span, checked_bodies.exprCount());
-    errdefer allocator.free(identity_relations_by_expr);
-    @memset(identity_relations_by_expr, .{});
-    const concrete_selections_by_expr = try allocator.alloc(artifact_serialize.Span, checked_bodies.exprCount());
-    errdefer allocator.free(concrete_selections_by_expr);
-    @memset(concrete_selections_by_expr, .{});
     const iter_plans = try allocator.alloc(SpecializationCallPlan, static_dispatch_plans.iterator_for_plans.len);
     errdefer allocator.free(iter_plans);
     @memset(iter_plans, .{});
@@ -18902,10 +18882,12 @@ fn publishSpecializationCallPlans(
     errdefer projections.deinit(allocator);
     var operand_flows = std.ArrayList(SpecializationOperandFlow).empty;
     errdefer operand_flows.deinit(allocator);
-    var call_identity_relations = std.ArrayList(SpecializationIdentityRelation).empty;
-    errdefer call_identity_relations.deinit(allocator);
-    var call_concrete_selections = std.ArrayList(SpecializationConcreteSelection).empty;
-    errdefer call_concrete_selections.deinit(allocator);
+    var consumer_bindings = std.ArrayList(SpecializationCallConsumerBinding).empty;
+    errdefer consumer_bindings.deinit(allocator);
+    var consumer_binding_spans = std.ArrayList(artifact_serialize.Span).empty;
+    errdefer consumer_binding_spans.deinit(allocator);
+    var target_source_roots = std.ArrayList(CheckedTypeId).empty;
+    defer target_source_roots.deinit(allocator);
     for (0..type_count) |raw_type| {
         const checked_ty: CheckedTypeId = @enumFromInt(@as(u32, @intCast(raw_type)));
         switch (checked_types.store.payload(checked_ty)) {
@@ -18926,37 +18908,140 @@ fn publishSpecializationCallPlans(
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
         if (expr.data != .call or checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
-        by_expr[raw_expr] = try publishSpecializationCallPlanForCallable(
-            allocator,
-            checked_types,
-            expr.data.call.source_fn_ty_payload,
-            compiled,
-            by_type,
-            &slots,
-            &occurrences,
-            &projections,
-        );
-        by_expr[raw_expr].operand_flows = try appendSpecializationOperandFlowsForOrdinaryCall(
+        const source_callable = specializationCallSourceCallable(expr.data.call, resolved_value_refs);
+        const flow_span = try appendSpecializationOperandFlowsForOrdinaryCall(
             allocator,
             expr.data.call.args,
             value_flows_by_expr,
             &operand_flows,
         );
-        const expr_operand_flows = operand_flows.items[by_expr[raw_expr].operand_flows.start .. by_expr[raw_expr].operand_flows.start + by_expr[raw_expr].operand_flows.len];
-        identity_relations_by_expr[raw_expr] = try compileOrdinaryCallIdentityRelations(
+        const expr_operand_flows = operand_flows.items[flow_span.start .. flow_span.start + flow_span.len];
+        target_source_roots.clearRetainingCapacity();
+        if (expr.data.call.direct_target != null) {
+            try appendPublishedTargetSourceRoots(
+                allocator,
+                &target_relations,
+                source_callable,
+                &target_source_roots,
+            );
+        }
+        by_expr[raw_expr] = try compileSpecializationCallPlan(
             allocator,
             checked_types,
-            checked_bodies,
-            value_flows_by_expr,
-            expr,
-            expr.data.call,
+            source_callable,
+            null,
+            false,
             expr_operand_flows,
-            &call_identity_relations,
+            target_source_roots.items,
+            &slots,
+            &occurrences,
+            &projections,
         );
+        by_expr[raw_expr].operand_flows = flow_span;
+        const ordinary_function = checkedFunctionPayload(
+            &checked_types.store,
+            source_callable,
+            "ordinary call context binding",
+        );
+        const context_binding_start: u32 = @intCast(consumer_bindings.items.len);
+        _ = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            expr.ty,
+            ordinary_function.ret,
+            &consumer_bindings,
+        );
+        const callee_ty = checked_bodies.expr(expr.data.call.func).ty;
+        const callee_flow = value_flows_by_expr[@intFromEnum(expr.data.call.func)];
+        if (callee_flow == .produced) {
+            _ = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                callee_ty,
+                source_callable,
+                &consumer_bindings,
+            );
+        } else {
+            by_expr[raw_expr].callee_consumer_bindings = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                source_callable,
+                callee_ty,
+                &consumer_bindings,
+            );
+        }
+        try appendCallConsumerSelfBindings(
+            allocator,
+            target_source_roots.items,
+            &consumer_bindings,
+            context_binding_start,
+        );
+        by_expr[raw_expr].context_bindings = .{
+            .start = context_binding_start,
+            .len = @intCast(consumer_bindings.items.len - context_binding_start),
+        };
+        const selection_binding_start: u32 = @intCast(consumer_bindings.items.len);
+        _ = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            source_callable,
+            callee_ty,
+            &consumer_bindings,
+        );
+        _ = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            ordinary_function.ret,
+            expr.ty,
+            &consumer_bindings,
+        );
+        for (expr.data.call.args, 0..) |arg, index| {
+            _ = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                ordinary_function.args[index],
+                checked_bodies.expr(arg).ty,
+                &consumer_bindings,
+            );
+        }
+        by_expr[raw_expr].selection_bindings = .{
+            .start = selection_binding_start,
+            .len = @intCast(consumer_bindings.items.len - selection_binding_start),
+        };
+        by_expr[raw_expr].operand_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
+            allocator,
+            expr.data.call.args.len,
+            &consumer_binding_spans,
+        );
+        for (expr.data.call.args, expr_operand_flows, 0..) |arg, flow, index| {
+            if (flow == .produced) continue;
+            consumer_binding_spans.items[by_expr[raw_expr].operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                ordinary_function.args[index],
+                checked_bodies.expr(arg).ty,
+                &consumer_bindings,
+            );
+        }
     }
     for (static_dispatch_plans.plans) |plan| {
         if (checked_bodies.exprContainsDiagnosticError(plan.expr)) continue;
-        by_expr[@intFromEnum(plan.expr)] = try compileSpecializationCallPlan(
+        const raw_plan_expr = @intFromEnum(plan.expr);
+        const flow_span = try appendSpecializationOperandFlowsForDispatchCall(
+            allocator,
+            static_dispatch_plans,
+            plan,
+            value_flows_by_expr,
+            &operand_flows,
+        );
+        const dispatch_operand_flows = operand_flows.items[flow_span.start .. flow_span.start + flow_span.len];
+        try appendPublishedTargetSourceRoots(
+            allocator,
+            &target_relations,
+            plan.callable_ty,
+            &target_source_roots,
+        );
+        by_expr[raw_plan_expr] = try compileSpecializationCallPlan(
             allocator,
             checked_types,
             plan.callable_ty,
@@ -18966,28 +19051,90 @@ fn publishSpecializationCallPlans(
                 .structural, .checked_error, .@"unreachable" => false,
                 .direct_pending => checkedArtifactInvariant("unfinalized direct dispatch reached specialization publication", .{}),
             },
+            dispatch_operand_flows,
+            target_source_roots.items,
             &slots,
             &occurrences,
             &projections,
         );
-        const raw_plan_expr = @intFromEnum(plan.expr);
-        by_expr[raw_plan_expr].operand_flows = try appendSpecializationOperandFlowsForDispatchCall(
-            allocator,
-            static_dispatch_plans,
-            plan,
-            value_flows_by_expr,
-            &operand_flows,
+        by_expr[raw_plan_expr].operand_flows = flow_span;
+        const dispatch_function = checkedFunctionPayload(
+            &checked_types.store,
+            plan.callable_ty,
+            "dispatch call consumer binding",
         );
-        const dispatch_operand_flows = operand_flows.items[by_expr[raw_plan_expr].operand_flows.start .. by_expr[raw_plan_expr].operand_flows.start + by_expr[raw_plan_expr].operand_flows.len];
-        identity_relations_by_expr[@intFromEnum(plan.expr)] = try compileDispatchCallIdentityRelations(
+        const dispatch_context_start: u32 = @intCast(consumer_bindings.items.len);
+        _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
-            checked_bodies,
-            static_dispatch_plans,
-            plan,
-            dispatch_operand_flows,
-            &call_identity_relations,
+            checked_bodies.expr(plan.expr).ty,
+            dispatch_function.ret,
+            &consumer_bindings,
         );
+        try appendCallConsumerSelfBindings(
+            allocator,
+            target_source_roots.items,
+            &consumer_bindings,
+            dispatch_context_start,
+        );
+        switch (plan.dispatcher) {
+            .arg => {},
+            .type_only => try appendCallConsumerSelfBindings(
+                allocator,
+                &.{plan.dispatcher_ty},
+                &consumer_bindings,
+                dispatch_context_start,
+            ),
+        }
+        by_expr[raw_plan_expr].context_bindings = .{
+            .start = dispatch_context_start,
+            .len = @intCast(consumer_bindings.items.len - dispatch_context_start),
+        };
+        const dispatch_selection_start: u32 = @intCast(consumer_bindings.items.len);
+        _ = try compileCallConsumerBindings(
+            allocator,
+            checked_types,
+            dispatch_function.ret,
+            checked_bodies.expr(plan.expr).ty,
+            &consumer_bindings,
+        );
+        const dispatch_operands = plan.argsSlice(static_dispatch_plans);
+        for (dispatch_operands, 0..) |operand, index| {
+            const actual = switch (operand) {
+                .checked_expr, .generated_interpolation_iter => |arg| checked_bodies.expr(arg).ty,
+                .generated_numeral, .generated_quote => continue,
+            };
+            _ = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                dispatch_function.args[index],
+                actual,
+                &consumer_bindings,
+            );
+        }
+        by_expr[raw_plan_expr].selection_bindings = .{
+            .start = dispatch_selection_start,
+            .len = @intCast(consumer_bindings.items.len - dispatch_selection_start),
+        };
+        by_expr[raw_plan_expr].operand_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
+            allocator,
+            dispatch_operands.len,
+            &consumer_binding_spans,
+        );
+        for (dispatch_operands, dispatch_operand_flows, 0..) |operand, flow, index| {
+            if (flow == .produced) continue;
+            const actual = switch (operand) {
+                .checked_expr => |arg| checked_bodies.expr(arg).ty,
+                .generated_interpolation_iter, .generated_numeral, .generated_quote => continue,
+            };
+            consumer_binding_spans.items[by_expr[raw_plan_expr].operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                dispatch_function.args[index],
+                actual,
+                &consumer_bindings,
+            );
+        }
     }
     // Every procedure body consumes the same directional interface plan as a
     // call site: its completed specialization supplies every argument and the
@@ -19046,6 +19193,19 @@ fn publishSpecializationCallPlans(
         .structural => {},
     };
     for (static_dispatch_plans.iterator_for_plans, 0..) |plan, index| {
+        const iter_flow_start: u32 = @intCast(operand_flows.items.len);
+        try operand_flows.appendNTimes(allocator, .produced, plan.iter.args.len);
+        const iter_flow_span = artifact_serialize.Span{
+            .start = iter_flow_start,
+            .len = plan.iter.args.len,
+        };
+        const iter_operand_flows = operand_flows.items[iter_flow_span.start .. iter_flow_span.start + iter_flow_span.len];
+        try appendPublishedTargetSourceRoots(
+            allocator,
+            &target_relations,
+            plan.iter.callable_ty,
+            &target_source_roots,
+        );
         iter_plans[index] = try compileSpecializationCallPlan(
             allocator,
             checked_types,
@@ -19056,9 +19216,36 @@ fn publishSpecializationCallPlans(
                 .structural, .checked_error, .@"unreachable" => false,
                 .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
             },
+            iter_operand_flows,
+            target_source_roots.items,
             &slots,
             &occurrences,
             &projections,
+        );
+        iter_plans[index].operand_flows = iter_flow_span;
+        const iter_context_start: u32 = @intCast(consumer_bindings.items.len);
+        try appendCallConsumerSelfBindings(
+            allocator,
+            target_source_roots.items,
+            &consumer_bindings,
+            iter_context_start,
+        );
+        iter_plans[index].context_bindings = .{
+            .start = iter_context_start,
+            .len = @intCast(consumer_bindings.items.len - iter_context_start),
+        };
+        const next_flow_start: u32 = @intCast(operand_flows.items.len);
+        try operand_flows.appendNTimes(allocator, .produced, plan.next.args.len);
+        const next_flow_span = artifact_serialize.Span{
+            .start = next_flow_start,
+            .len = plan.next.args.len,
+        };
+        const next_operand_flows = operand_flows.items[next_flow_span.start .. next_flow_span.start + next_flow_span.len];
+        try appendPublishedTargetSourceRoots(
+            allocator,
+            &target_relations,
+            plan.next.callable_ty,
+            &target_source_roots,
         );
         next_plans[index] = try compileSpecializationCallPlan(
             allocator,
@@ -19070,17 +19257,27 @@ fn publishSpecializationCallPlans(
                 .structural, .checked_error, .@"unreachable" => false,
                 .direct_pending => checkedArtifactInvariant("unfinalized iterator dispatch reached specialization publication", .{}),
             },
+            next_operand_flows,
+            target_source_roots.items,
             &slots,
             &occurrences,
             &projections,
         );
+        next_plans[index].operand_flows = next_flow_span;
+        const next_context_start: u32 = @intCast(consumer_bindings.items.len);
+        try appendCallConsumerSelfBindings(
+            allocator,
+            target_source_roots.items,
+            &consumer_bindings,
+            next_context_start,
+        );
+        next_plans[index].context_bindings = .{
+            .start = next_context_start,
+            .len = @intCast(consumer_bindings.items.len - next_context_start),
+        };
     }
 
     templates.specialization_call_plans_by_expr = by_expr;
-    templates.specialization_call_identity_relations_by_expr = identity_relations_by_expr;
-    templates.specialization_call_identity_relations = try call_identity_relations.toOwnedSlice(allocator);
-    templates.specialization_call_concrete_selections_by_expr = concrete_selections_by_expr;
-    templates.specialization_call_concrete_selections = try call_concrete_selections.toOwnedSlice(allocator);
     templates.specialization_target_relations_by_type = target_relations.by_type;
     templates.specialization_target_relation_entries = target_relations.entries;
     templates.specialization_target_identity_relations = target_relations.relations;
@@ -19092,6 +19289,8 @@ fn publishSpecializationCallPlans(
     templates.specialization_call_occurrences = try occurrences.toOwnedSlice(allocator);
     templates.specialization_call_projections = try projections.toOwnedSlice(allocator);
     templates.specialization_call_operand_flows = try operand_flows.toOwnedSlice(allocator);
+    templates.specialization_call_consumer_bindings = try consumer_bindings.toOwnedSlice(allocator);
+    templates.specialization_call_consumer_binding_spans = try consumer_binding_spans.toOwnedSlice(allocator);
     templates.specialization_value_flows_by_expr = value_flows_by_expr;
 }
 
@@ -19188,6 +19387,23 @@ fn collectSpecializationCallOccurrences(
             builds,
         );
         has_output = true;
+    }
+    if (!checkedTypePayloadIsIdentity(payload) and !checkedTypeIsGeneratedNominal(payload)) {
+        for (builds.items) |build| {
+            if (build.checked != root or !build.exact_identity) continue;
+            try appendSpecializationCallOccurrence(
+                allocator,
+                root,
+                null,
+                true,
+                occurrence_root,
+                projection_index,
+                produced,
+                builds,
+            );
+            has_output = true;
+            break;
+        }
     }
     if (checkedTypeIsGeneratedNominal(payload)) {
         try appendSpecializationCallOccurrence(
@@ -20427,16 +20643,6 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Dense checked-expression column for ordinary and static-dispatch call
     /// plans.
     specialization_call_plans_by_expr: []SpecializationCallPlan = &.{},
-    /// Dense checked-expression column of direct checker-authored identity
-    /// relations for each ordinary or static-dispatch call.
-    specialization_call_identity_relations_by_expr: []artifact_serialize.Span = &.{},
-    /// Flat pool backing `specialization_call_identity_relations_by_expr`.
-    specialization_call_identity_relations: []SpecializationIdentityRelation = &.{},
-    /// Dense checked-expression column of checker-selected concrete identity
-    /// sources for each call.
-    specialization_call_concrete_selections_by_expr: []artifact_serialize.Span = &.{},
-    /// Flat pool backing `specialization_call_concrete_selections_by_expr`.
-    specialization_call_concrete_selections: []SpecializationConcreteSelection = &.{},
     /// Dense checked-type column. Each source callable indexes the concrete
     /// dispatch-target correspondences checking published for it.
     specialization_target_relations_by_type: []artifact_serialize.Span = &.{},
@@ -20462,6 +20668,10 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_call_projections: []SpecializationProjection = &.{},
     /// Flat pool backing each expression call plan's explicit operand flow.
     specialization_call_operand_flows: []SpecializationOperandFlow = &.{},
+    /// Flat checker-authored formal-to-consumer mappings, grouped by the
+    /// callee and operand spans carried by each expression call plan.
+    specialization_call_consumer_bindings: []SpecializationCallConsumerBinding = &.{},
+    specialization_call_consumer_binding_spans: []artifact_serialize.Span = &.{},
     /// Dense checked-expression column publishing the direction in which each
     /// value obtains its exact runtime node. Consumers use this semantic fact
     /// directly; post-check lowering never reclassifies expression syntax.
@@ -20492,10 +20702,6 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_identity_slots: SerializedSlice(SpecializationIdentitySlot) = .{},
         specialization_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
         specialization_call_plans_by_expr: SerializedSlice(SpecializationCallPlan) = .{},
-        specialization_call_identity_relations_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
-        specialization_call_identity_relations: SerializedSlice(SpecializationIdentityRelation) = .{},
-        specialization_call_concrete_selections_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
-        specialization_call_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
         specialization_target_relations_by_type: SerializedSlice(artifact_serialize.Span) = .{},
         specialization_target_relation_entries: SerializedSlice(SpecializationTargetRelationEntry) = .{},
         specialization_target_identity_relations: SerializedSlice(SpecializationTargetIdentityRelation) = .{},
@@ -20507,6 +20713,8 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_call_occurrences: SerializedSlice(SpecializationOccurrence) = .{},
         specialization_call_projections: SerializedSlice(SpecializationProjection) = .{},
         specialization_call_operand_flows: SerializedSlice(SpecializationOperandFlow) = .{},
+        specialization_call_consumer_bindings: SerializedSlice(SpecializationCallConsumerBinding) = .{},
+        specialization_call_consumer_binding_spans: SerializedSlice(artifact_serialize.Span) = .{},
         specialization_value_flows_by_expr: SerializedSlice(SpecializationOperandFlow) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         recursive_storage_by_expr: SerializedSlice(artifact_serialize.Span) = .{},
@@ -20755,10 +20963,6 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_identity_slots);
         allocator.free(self.specialization_concrete_selections);
         allocator.free(self.specialization_call_plans_by_expr);
-        allocator.free(self.specialization_call_identity_relations_by_expr);
-        allocator.free(self.specialization_call_identity_relations);
-        allocator.free(self.specialization_call_concrete_selections_by_expr);
-        allocator.free(self.specialization_call_concrete_selections);
         allocator.free(self.specialization_target_relations_by_type);
         allocator.free(self.specialization_target_relation_entries);
         allocator.free(self.specialization_target_identity_relations);
@@ -20770,6 +20974,8 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_call_occurrences);
         allocator.free(self.specialization_call_projections);
         allocator.free(self.specialization_call_operand_flows);
+        allocator.free(self.specialization_call_consumer_bindings);
+        allocator.free(self.specialization_call_consumer_binding_spans);
         allocator.free(self.specialization_value_flows_by_expr);
         allocator.free(self.specialization_interface_types);
         allocator.free(self.recursive_storage_by_expr);
@@ -20861,20 +21067,16 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.specialization_value_flows_by_expr[raw];
     }
 
-    pub fn specializationCallIdentityRelationsForExpr(
+    pub fn specializationCallOperandConsumerBindings(
         self: *const CheckedProcedureTemplateTable,
-        expr: CheckedExprId,
-    ) []const SpecializationIdentityRelation {
-        const span = self.specialization_call_identity_relations_by_expr[@intFromEnum(expr)];
-        return self.specialization_call_identity_relations[span.start .. span.start + span.len];
-    }
-
-    pub fn specializationCallConcreteSelectionsForExpr(
-        self: *const CheckedProcedureTemplateTable,
-        expr: CheckedExprId,
-    ) []const SpecializationConcreteSelection {
-        const span = self.specialization_call_concrete_selections_by_expr[@intFromEnum(expr)];
-        return self.specialization_call_concrete_selections[span.start .. span.start + span.len];
+        plan: SpecializationCallPlanView,
+        index: usize,
+    ) []const SpecializationCallConsumerBinding {
+        if (index >= plan.operand_consumer_binding_spans.len) {
+            checkedArtifactInvariant("call operand exceeded its consumer-binding column", .{});
+        }
+        const span = plan.operand_consumer_binding_spans[index];
+        return self.specialization_call_consumer_bindings[span.start .. span.start + span.len];
     }
 
     pub fn specializationTargetIdentityRelations(
@@ -20939,6 +21141,10 @@ pub const CheckedProcedureTemplateTable = struct {
             .slots = self.specialization_call_slots[plan.slots.start .. plan.slots.start + plan.slots.len],
             .projections = self.specialization_call_projections[plan.projections.start .. plan.projections.start + plan.projections.len],
             .operand_flows = self.specialization_call_operand_flows[plan.operand_flows.start .. plan.operand_flows.start + plan.operand_flows.len],
+            .context_bindings = self.specialization_call_consumer_bindings[plan.context_bindings.start .. plan.context_bindings.start + plan.context_bindings.len],
+            .selection_bindings = self.specialization_call_consumer_bindings[plan.selection_bindings.start .. plan.selection_bindings.start + plan.selection_bindings.len],
+            .callee_consumer_bindings = self.specialization_call_consumer_bindings[plan.callee_consumer_bindings.start .. plan.callee_consumer_bindings.start + plan.callee_consumer_bindings.len],
+            .operand_consumer_binding_spans = self.specialization_call_consumer_binding_spans[plan.operand_consumer_binding_spans.start .. plan.operand_consumer_binding_spans.start + plan.operand_consumer_binding_spans.len],
         };
     }
 
@@ -30475,7 +30681,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 229);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording

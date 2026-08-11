@@ -2748,15 +2748,31 @@ identity have been finalized. Sealing must not make those inputs reachable as
 extra nominal arguments, because doing so makes every later type consumer walk
 implementation history that is neither source-visible nor needed for layout.
 
-Checked types still provide the explicit type-argument and type-variable
-mapping used to instantiate a specialization. Applying an exact produced
-argument or result to that mapping is directed request-to-produced
-substitution, not type checking and not symmetric type equality. It consumes
-the checked mapping and the producer-authored exact type once, binds the
-declared polymorphic slots, and keeps the produced root as the runtime type. At
-a generated nominal it consumes the nominal's recorded public source and
-ordered public arguments directly. It never merges the generated nominal with
-the public nominal.
+`CheckedModule` records every call as an immutable checked function base plus a
+small flat substitution plan. The plan names each checked identity slot, the
+exact argument/result/dispatcher child reads that may fill it, operand
+scheduling direction, and each direct formal-to-consumer or formal-to-actual
+binding. Monotype applies only those recorded edges. It never walks a checked
+type beside a produced type, constructs a relation graph, computes a transitive
+closure, or retries bindings to a fixed point.
+
+Operand scheduling direction says only whether an operand needs an exact
+request before lowering can begin. Once lowering finishes, every operand is an
+exact producer and may fill its recorded child edges. A requested operand does
+not remain a consumer after it has returned a value. Likewise, materializing a
+call request creates the call's own exact result graph node and immediately
+records the result edges supplied by that node, even when the callee will
+finish its contents later. A type-only dispatch has no value operand, so its
+checked plan records the one direct self-edge from the enclosing procedure's
+substitution span to its dispatcher slot.
+
+Applying a completed argument, result, or dispatcher edge is directed
+request-to-produced substitution, not type checking and not symmetric type
+equality. A generated nominal is an ordinary atomic exact node as soon as the
+producer encounters it. No enclosing list, tuple, record, tag, nominal, or
+function asks whether any descendant is generated, and no edge descends into a
+generated nominal's backing. The checked plan names the generated slot itself;
+the producer records the exact node at that point.
 
 A checked-view mapping may relate an ordinary checked nominal view to its
 declared structural backing. This is not an inferred type relation: the
@@ -2777,21 +2793,14 @@ boundaries have been emitted, Lambda Solved keeps the more restrictive backing
 visibility when otherwise-identical named runtime types meet; backing
 visibility is compile-time access, not a second runtime representation.
 
-Procedure dispatch specializes from the values the call actually produced.
-After each operand has been lowered once, Monotype builds the callee request
-from those operands' exact output cells and the requested result cell. The
-checked callable is retained only as the source contract for the directed
-substitution. In particular, a compiler-generated interpolation iterator enters
-`from_interpolation` as its exact generated nominal; dispatch must not reuse the
-original checked-public callable argument and ask the callee to derive or
-repair the representation.
-
-An already-produced operand cell enters that request directly. Monotype does
-not first instantiate the operand expression's checked type and map that copy
-to the cell: the request's single formal-to-produced traversal is the required
-relation. An existing result destination likewise enters as the request return
-directly. Only an exact-producing result with no destination needs an isolated
-checked occurrence to hold its not-yet-produced output.
+Procedure dispatch specializes from the exact nodes returned by the call's
+operands. The checked function base is retained only as the immutable source
+contract. The request carries its flat substitutions without a temporary
+function node while operands are being scheduled; one function graph node is
+materialized only at the specialization boundary. A compiler-generated
+interpolation iterator therefore enters `from_interpolation` as its exact
+generated nominal, and a completed ordinary operand enters as its exact node.
+Neither is replaced by a newly instantiated copy of its checked type.
 
 Iterator producer operations are applied to that completed callable, after
 lowered operands have supplied their exact cells. In particular, `Iter.next`
@@ -2800,22 +2809,13 @@ passed at runtime even when the checked-public request did not expose that
 identity. Direct graph-backed dispatch follows the same operation; it cannot
 bypass producer conversion merely because it does not need evidence lookup.
 
-The first request for a checked function source walks that interface beside its
-current request and completed produced arguments. It records every differing
-checked-node-to-produced-node substitution in a flat dense column, with one
-span owned by the request node. Refining that request seeds substitution
-directly from the previous span and walks only the newly completed produced
-arguments; it never walks the previous function interface again. Materializing
-the refined arguments and requested return consumes that same substitution
-table. Isolated body ABIs and generated callable wrappers share the immutable
-span as explicit request metadata; they do not copy its entries. At body entry,
-Monotype consumes the span directly and selects its generated-private roots; it
-does not derive them by walking the complete function type.
-If a request already has that explicit source and substitution span, its source
-is unchanged, it has no new checked components, and every produced argument is
-already in the request argument's union class, refinement is a true no-op. It
-returns the existing request and empty component span immediately; rebuilding
-or rematerializing the same request graph is forbidden unnecessary work.
+Selecting a concrete procedure copies only the exact nodes named by the
+checker's direct source-to-target bindings into the target procedure's checked
+identity span. It cannot consult an ambient substitution table when a source
+edge is absent; absence is an invariant violation in checked data. At body
+entry, Monotype consumes that immutable span directly. It does not compare the
+caller's complete function graph with the target's complete checked function,
+and it does not reconstruct substitutions from either graph.
 
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the

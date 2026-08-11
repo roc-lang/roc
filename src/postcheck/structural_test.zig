@@ -125,7 +125,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "selections = try self.directCallSelectionsFromPublishedPlan(");
     try expectContains(lower_call, "const request_fn_node = try self.materializeCallSelectionSpan(");
     try expectNotContains(lower_call, "functionRequestNode(");
-    try expectContains(lower_call, "const callee = try self.lowerExprAtExactRequest(");
+    try expectContains(lower_call, "const callee = try self.lowerExprAtCallConsumerRequest(");
     try expectContains(lower_call, "const callee_node = try self.builder.completePendingProducedNode(");
     try expectContains(lower_call, "const callee_fn = try self.graph.functionNodes(callee_node);");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
@@ -134,6 +134,10 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try std.testing.expect(std.mem.find(u8, lower_call, "instantiateCallNodeFromCallerAtNode") == null);
     try expectNotContains(lower_call, "functionRequestFromAvailableProducedArgumentsWithGeneratedInterner");
     try expectNotContains(lower_call, "applyProducedTypeToRequest");
+    try expectNotContains(lower_source, "fn checkedSelectionsForCallExpr(");
+    try expectNotContains(lower_source, "fn publishCallOperandSelections(");
+    try expectNotContains(lower_source, "fn propagateCheckedSelections(");
+    try expectNotContains(lower_source, "specializationCallIdentityRelationsForExpr(");
 
     try expectContains(lower_expr_type, ".lookup_required => |resolved| try self.lookupExprTypeNode(expr_id, resolved)");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| return try self.lowerLookupExprAtType(checked_expr, resolved, ty)");
@@ -735,7 +739,7 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try expectContains(call_source, "const produced_callee_node = try self.builder.completePendingProducedNode(");
     try expectContains(call_source, "try self.lowerExprTypeNode(call.func)");
     try expectContains(call_source, "const checked_callee_node = self.graph.requestCheckedSource(produced_callee_node) orelse");
-    try expectContains(call_source, "const callee = try self.lowerExprAtExactRequest(");
+    try expectContains(call_source, "const callee = try self.lowerExprAtCallConsumerRequest(");
     try expectContains(call_source, ".ret_ty = DraftTypeCell.fromGraphNode(callee_fn.ret)");
     try expectNotContains(call_source, "producedCallableNode");
     try expectNotContains(call_source, "lowerExprAtTypeCell(\n            call.func");
