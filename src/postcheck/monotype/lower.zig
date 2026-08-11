@@ -24940,35 +24940,35 @@ const BodyContext = struct {
             if (!replaced) try selections.append(self.allocator, next);
         }
         try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, &selections, false);
-        // A generated nominal is an ordinary atomic identity as soon as its
-        // explicitly named type arguments are exact. Instantiate only the
-        // generated slots published by checking; content addressing makes
-        // separately checked occurrences with the same declaration and item
-        // select the same node without inspecting any parent type.
-        var generated_progress = true;
-        while (generated_progress) {
-            generated_progress = false;
-            const table = try self.checkedSelectionTableForCall(plan, selections.items);
-            for (plan.slots) |slot| {
-                const base_id = solve.CheckedBaseKey{
+        // Checking stores generated slots after every generated dependency.
+        // One forward pass therefore constructs every identity whose public
+        // arguments are available at this call stage; no retry or descendant
+        // query is needed.
+        const table = try self.checkedSelectionTableForCall(plan, selections.items);
+        for (plan.slots) |slot| {
+            const base_id = solve.CheckedBaseKey{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.checked,
+            };
+            if (directSelectionForSlot(selections.items, base_id) != null) continue;
+            if (slot.kind != .generated_nominal or slot.generated_source != .exact_arguments) continue;
+            // Build the public nominal shell from its exact argument
+            // substitutions. The slot's own inherited public/default node is
+            // deliberately masked: it is the producer being replaced by a
+            // content-addressed generated identity.
+            _ = table.nodes.remove(base_id);
+            try table.own(base_id);
+            const instantiated = try self.instantiateProducedOccurrenceWithSelections(slot.checked, table);
+            const exact = (try self.generatedNominalFromExactArguments(slot.checked, instantiated)) orelse continue;
+            try selections.append(self.allocator, .{
+                .base = base_id,
+                .produced = exact,
+            });
+            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
+                try table.put(.{
                     .module_bytes = self.view.key.bytes,
-                    .checked = slot.checked,
-                };
-                if (directSelectionForSlot(selections.items, base_id) != null) continue;
-                if (slot.kind != .generated_nominal or slot.generated_source != .exact_arguments) continue;
-                // Build the public nominal shell from its exact argument
-                // substitutions. The slot's own inherited public/default
-                // node is deliberately masked: it is the thing this producer
-                // is replacing with a content-addressed generated identity.
-                _ = table.nodes.remove(base_id);
-                try table.own(base_id);
-                const instantiated = try self.instantiateProducedOccurrenceWithSelections(slot.checked, table);
-                const exact = (try self.generatedNominalFromExactArguments(slot.checked, instantiated)) orelse continue;
-                try selections.append(self.allocator, .{
-                    .base = base_id,
-                    .produced = exact,
-                });
-                generated_progress = true;
+                    .checked = occurrence.checked,
+                }, exact);
             }
         }
         // Result-context identities may themselves be supplied by an operand

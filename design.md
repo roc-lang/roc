@@ -2756,6 +2756,11 @@ binding. Monotype applies only those recorded edges. It never walks a checked
 type beside a produced type, constructs a relation graph, computes a transitive
 closure, or retries bindings to a fixed point.
 
+When one generated nominal's public arguments mention another generated
+nominal, checking stores their construction slots in dependency order. Lowering
+makes one forward pass over those slots. It must not retry unresolved slots to
+a fixed point or search a parent type for generated descendants.
+
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
 exact producer and may fill its recorded child edges. A requested operand does

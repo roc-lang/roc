@@ -17774,11 +17774,16 @@ fn compileSpecializationCallPlan(
     var projections = std.ArrayList(SpecializationProjection).empty;
     defer projections.deinit(allocator);
 
+    // Non-generated exact roots have no identity-bearing child that can create
+    // their slot during the occurrence walk. Generated roots are deliberately
+    // not seeded here: their public argument dependencies must be emitted
+    // before their own construction slot.
     for (exact_identity_roots) |exact_root| {
         const payload = checked_types.store.payload(exact_root);
+        if (checkedTypeIsGeneratedNominal(payload)) continue;
         try builds.append(allocator, .{
             .checked = exact_root,
-            .kind = if (checkedTypeIsGeneratedNominal(payload)) .generated_nominal else .identity,
+            .kind = .identity,
             .exact_identity = true,
         });
     }
@@ -17905,10 +17910,12 @@ fn compileSpecializationCallPlan(
         );
     }
 
-    for (builds.items) |build| {
-        if (build.exact_identity and build.occurrences.items.len == 0) {
-            checkedArtifactInvariant("exact target identity had no callable projection", .{});
-        }
+    for (exact_identity_roots) |exact_root| {
+        for (builds.items) |*build| {
+            if (build.checked != exact_root) continue;
+            build.exact_identity = true;
+            break;
+        } else checkedArtifactInvariant("exact target identity had no callable projection", .{});
     }
 
     const slot_start: u32 = @intCast(slots_out.items.len);
@@ -19374,6 +19381,7 @@ fn collectSpecializationCallOccurrences(
         => checkedArtifactInvariant("specialization projection root was not a call edge", .{}),
     };
     const payload = checked_types.store.payload(root);
+    const generated_nominal = checkedTypeIsGeneratedNominal(payload);
     var has_output = false;
     if (checkedTypePayloadIsIdentity(payload)) {
         try appendSpecializationCallOccurrence(
@@ -19388,7 +19396,7 @@ fn collectSpecializationCallOccurrences(
         );
         has_output = true;
     }
-    if (!checkedTypePayloadIsIdentity(payload) and !checkedTypeIsGeneratedNominal(payload)) {
+    if (!checkedTypePayloadIsIdentity(payload) and !generated_nominal) {
         for (builds.items) |build| {
             if (build.checked != root or !build.exact_identity) continue;
             try appendSpecializationCallOccurrence(
@@ -19405,22 +19413,11 @@ fn collectSpecializationCallOccurrences(
             break;
         }
     }
-    if (checkedTypeIsGeneratedNominal(payload)) {
-        try appendSpecializationCallOccurrence(
-            allocator,
-            root,
-            @as(?SpecializationCallSlotKind, .generated_nominal),
-            false,
-            occurrence_root,
-            projection_index,
-            produced,
-            builds,
-        );
-        has_output = true;
-    }
-
     const seen = try active.getOrPut(root);
     if (seen.found_existing) {
+        if (generated_nominal) {
+            checkedArtifactInvariant("content-addressed generated nominal construction contained a cycle", .{});
+        }
         if (!has_output) projections.shrinkRetainingCapacity(projection_start);
         return if (has_output) projection_index else null;
     }
@@ -19570,6 +19567,22 @@ fn collectSpecializationCallOccurrences(
         },
         .pending => checkedArtifactInvariant("call specialization occurrence reached an unfinished checked type", .{}),
         .err, .empty_record, .empty_tag_union => {},
+    }
+    // Generated nominal construction depends only on its explicit public
+    // arguments. Append its slot after visiting those arguments so Monotype
+    // can construct nested generated identities in one forward pass.
+    if (generated_nominal) {
+        try appendSpecializationCallOccurrence(
+            allocator,
+            root,
+            @as(?SpecializationCallSlotKind, .generated_nominal),
+            false,
+            occurrence_root,
+            projection_index,
+            produced,
+            builds,
+        );
+        has_output = true;
     }
     if (!has_output) projections.shrinkRetainingCapacity(projection_start);
     return if (has_output) projection_index else null;
