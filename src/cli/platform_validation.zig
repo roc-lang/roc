@@ -89,7 +89,8 @@ pub fn validatePlatformHeader(
             var report = try ast.tokenizeDiagnosticToReport(diagnostic, allocator, owned_filename);
             defer report.deinit();
             reporting.renderReportToTerminal(
-                &report, stderr,
+                &report,
+                stderr,
                 reporting.ColorUtils.getPaletteForConfig(report_config),
                 report_config,
             ) catch {};
@@ -98,7 +99,8 @@ pub fn validatePlatformHeader(
             var report = try ast.parseDiagnosticToReport(&env, diagnostic, allocator, owned_filename);
             defer report.deinit();
             reporting.renderReportToTerminal(
-                &report, stderr,
+                &report,
+                stderr,
                 reporting.ColorUtils.getPaletteForConfig(report_config),
                 report_config,
             ) catch {};
