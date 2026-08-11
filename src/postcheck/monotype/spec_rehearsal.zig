@@ -1311,6 +1311,21 @@ const UnresolvedDetail = struct {
 
 const ReachKind = enum(u8) { function, variable, row_or_function, defaultable };
 
+const ReaderMemoKey = struct {
+    generation: u64,
+    module_bytes: [32]u8,
+    type_id: u32,
+    under_callee: bool,
+    edge_module: [32]u8,
+    edge_expr: u32,
+    authoritative: bool,
+};
+
+const ReaderMemoValue = struct {
+    answer: ?Type.TypeId,
+    binding: Rehearsal.PositionBinding,
+};
+
 const ReachMemoKey = struct {
     module_bytes: [32]u8,
     ty: checked.CheckedTypeId,
@@ -1346,6 +1361,14 @@ pub const Rehearsal = struct {
     /// root's answer depends only on immutable checked module data, so one
     /// lowering run never walks the same root twice for the same question.
     reach_memo: std.AutoHashMap(ReachMemoKey, bool),
+    /// Memoized answers for the two directed position readers, valid only
+    /// within one emission generation: any change to the binding state a read
+    /// consults bumps the generation, so a stale answer can never be served.
+    reader_memo: std.AutoHashMap(ReaderMemoKey, ReaderMemoValue),
+    /// Bumped by every mutation of the state the position readers consult:
+    /// specialization frames, callee levels, request scopes, and consumer
+    /// input declarations.
+    emission_generation: u64 = 0,
     /// The produced representation each requesting use expression's
     /// specialization derived, keyed per call site so two uses of one
     /// interned checked type never share an entry. Entries are owned by the
@@ -1438,6 +1461,8 @@ pub const Rehearsal = struct {
             .component_arena = std.heap.ArenaAllocator.init(allocator),
             .use_mints = std.AutoHashMap(RequestingSite, direct_translate.ProducerRepresentation).init(allocator),
             .reach_memo = std.AutoHashMap(ReachMemoKey, bool).init(allocator),
+            .reader_memo = std.AutoHashMap(ReaderMemoKey, ReaderMemoValue).init(allocator),
+            .emission_generation = 0,
             .types = types,
             .program_names = program_names,
             .translator = undefined,
@@ -1478,6 +1503,7 @@ pub const Rehearsal = struct {
         self.component_arena.deinit();
         self.use_mints.deinit();
         self.reach_memo.deinit();
+        self.reader_memo.deinit();
         self.details.deinit(self.allocator);
         self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
@@ -1794,6 +1820,18 @@ pub const Rehearsal = struct {
         return @tagName(skip);
     }
 
+    fn readerMemoKey(self: *const Rehearsal, address: CheckedAddress, under_callee: bool, edge: ?RequestEdgeName, authoritative: bool) ReaderMemoKey {
+        return .{
+            .generation = self.emission_generation,
+            .module_bytes = address.module_bytes,
+            .type_id = address.type_id,
+            .under_callee = under_callee,
+            .edge_module = if (edge) |e| e.module_bytes else [_]u8{0} ** 32,
+            .edge_expr = if (edge) |e| @intFromEnum(e.use_expr) else std.math.maxInt(u32),
+            .authoritative = authoritative,
+        };
+    }
+
     pub fn innermostRequestEdge(self: *const Rehearsal) ?RequestEdgeName {
         if (self.disabled) return null;
         if (self.requests.items.len == 0) return null;
@@ -1809,6 +1847,7 @@ pub const Rehearsal = struct {
         use_expr: checked.CheckedExprId,
         covering_rule: ?GeneratedEdge,
     ) void {
+        self.emission_generation +%= 1;
         if (self.disabled) return;
         var edge = RequestEdge{
             .module_bytes = module_bytes,
@@ -1848,6 +1887,7 @@ pub const Rehearsal = struct {
     /// specialization this request reserves records which rule produced it and
     /// under which requesting environment.
     pub fn openGeneratedRequest(self: *Rehearsal, edge: GeneratedEdge) void {
+        self.emission_generation +%= 1;
         if (self.disabled) return;
         var request = GeneratedRequest{
             .edge = edge,
@@ -1877,6 +1917,7 @@ pub const Rehearsal = struct {
     /// belonged to a request that bound no new specialization, so it is dropped
     /// rather than left for whichever specialization lowers next.
     pub fn closeRequest(self: *Rehearsal) void {
+        self.emission_generation +%= 1;
         // Once the rehearsal disables itself no scope is opened, so none is
         // closed either and the stack stays balanced across the transition.
         if (self.disabled) return;
@@ -3077,6 +3118,7 @@ pub const Rehearsal = struct {
     /// a template specialization's does, but the graph's trace and seal probe
     /// stay with the enclosing specialization that owns the graph.
     pub fn beginNestedSpecialization(self: *Rehearsal, start: SpecializationStart) void {
+        self.emission_generation +%= 1;
         if (self.disabled) return;
         var frame = Frame{
             .env_module_bytes = start.cursor.module_bytes,
@@ -3101,6 +3143,7 @@ pub const Rehearsal = struct {
     /// Close the innermost frame a `beginNestedSpecialization` opened. The
     /// enclosing specialization's graph comparison is untouched.
     pub fn endNestedSpecialization(self: *Rehearsal) void {
+        self.emission_generation +%= 1;
         if (self.disabled) return;
         if (self.frames.items.len == 0) return;
         var frame = self.frames.pop() orelse return;
@@ -3289,6 +3332,7 @@ pub const Rehearsal = struct {
     /// specialization's graph exists — the directed request identity is read
     /// off the frame ahead of the cache probe.
     pub fn beginSpecializationFrame(self: *Rehearsal, start: SpecializationStart) void {
+        self.emission_generation +%= 1;
         if (self.disabled) return;
         var frame = Frame{
             .env_module_bytes = start.cursor.module_bytes,
@@ -3328,6 +3372,7 @@ pub const Rehearsal = struct {
 
     /// Finish one specialization: pop the environment.
     pub fn endSpecialization(self: *Rehearsal) void {
+        self.emission_generation +%= 1;
         if (self.requests.items.len == 0 and self.callees.items.len == 0 and
             self.translator.representationInputCount() == 0)
         {
@@ -5258,6 +5303,7 @@ pub const Rehearsal = struct {
         address: CheckedAddress,
         declared: GeneratedEdge,
     ) ?usize {
+        self.emission_generation +%= 1;
         const source = declared.source orelse return null;
         const procedure = source.procedure orelse return null;
         const kind = kindForIteratorProcedure(procedure) orelse return null;
@@ -5375,6 +5421,7 @@ pub const Rehearsal = struct {
 
     /// Retract consumer-declared inputs back to the floor their read opened.
     pub fn retractConsumerInputs(self: *Rehearsal, floor: usize) void {
+        self.emission_generation +%= 1;
         self.translator.truncateRepresentationInputs(floor);
     }
 
@@ -5439,6 +5486,19 @@ pub const Rehearsal = struct {
     /// reason a translation cannot answer stays fatal, exactly as
     /// `typeForCheckedAuthoritative` states it.
     pub fn typeForCheckedAuthoritativeOrUnstated(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        edge: ?RequestEdgeName,
+    ) Allocator.Error!?Type.TypeId {
+        const memo_key = self.readerMemoKey(address, under_callee, edge, true);
+        if (self.reader_memo.get(memo_key)) |hit| return hit.answer;
+        const answer = try self.typeForCheckedAuthoritativeOrUnstatedWalk(address, under_callee, edge);
+        self.reader_memo.put(memo_key, .{ .answer = answer, .binding = .none }) catch return answer;
+        return answer;
+    }
+
+    fn typeForCheckedAuthoritativeOrUnstatedWalk(
         self: *Rehearsal,
         address: CheckedAddress,
         under_callee: bool,
@@ -5524,6 +5584,23 @@ pub const Rehearsal = struct {
     }
 
     pub fn typeForCheckedPositionWithEdge(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        binding: *PositionBinding,
+        edge: ?RequestEdgeName,
+    ) Allocator.Error!?Type.TypeId {
+        const memo_key = self.readerMemoKey(address, under_callee, edge, false);
+        if (self.reader_memo.get(memo_key)) |hit| {
+            binding.* = hit.binding;
+            return hit.answer;
+        }
+        const answer = try self.typeForCheckedPositionWithEdgeWalk(address, under_callee, binding, edge);
+        self.reader_memo.put(memo_key, .{ .answer = answer, .binding = binding.* }) catch return answer;
+        return answer;
+    }
+
+    fn typeForCheckedPositionWithEdgeWalk(
         self: *Rehearsal,
         address: CheckedAddress,
         under_callee: bool,
