@@ -43312,8 +43312,16 @@ const BodyContext = struct {
         };
         for (checked_statements) |statement| {
             try self.registerLocalAssociatedProcedures(statement);
-            if (!self.checkedStatementHasRuntimeEffect(statement)) continue;
+            // Checking records divergence per statement, and marks a block
+            // divergent when any statement in it diverges. That output
+            // decides whether callers demand the block's own type from its
+            // final expression or the effect type from a value that never
+            // materializes, so it outranks every statement-local judgement
+            // here: a divergent statement transfers control, which makes it
+            // observable however little else the statement does, and leaves
+            // the rest of the block unreachable.
             const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
+            if (!statement_diverges and !self.checkedStatementHasRuntimeEffect(statement)) continue;
             if (!statement_diverges) {
                 if (try self.lowerUninhabitedStatementScrutinee(statement)) |scrutinee| {
                     lowered.termination = .{ .uninhabited = scrutinee };
