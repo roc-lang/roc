@@ -8931,3 +8931,102 @@ test "check type - failed group default records only the rejected driver" {
     }
     try testing.expectEqual(@as(usize, 1), mismatch_count);
 }
+
+// PENDING-DISPATCH OWNERSHIP IS BY GROUP IDENTITY. A value-def group checked
+// inside another definition's generalization boundary shares that boundary's
+// rank (a value def generalizes nothing, so no fresh rank frame separates
+// them), and its end-of-def dispatch drain re-sees the enclosing frame's
+// waiting obligation. The obligation is stamped with the group that created
+// it, so the nested value-def frame leaves it waiting instead of recording
+// the target as its own pending work; the enclosing boundary then checks the
+// target's topological prefix itself. The target method here carries its own
+// module-receiver relation, so misattributed resolution would surface as an
+// instantiation-sourced candidate or a diverging type.
+
+test "check type - nested value-def boundary leaves enclosing pending-dispatch obligation with its owner" {
+    var test_env = try TestEnv.init("Test",
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\mid = "x".split_on(",")
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    s
+        \\  }
+        \\}
+        \\first = user({})
+        \\second = user({})
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("weak", "Str");
+    try test_env.assertDefType("mid", "List(Str)");
+    try test_env.assertDefType("first", "Str");
+    try test_env.assertDefType("second", "Str");
+}
+
+test "check type - cascaded value-def group checks keep pending dispatch obligations with their owners" {
+    // Two value defs sit between `user` and its dispatch target's group, each
+    // with its own dispatch work: `mid1` targets an unchecked unannotated
+    // method itself, `mid2` dispatches on a checked receiver. Every obligation
+    // must resolve at the boundary of the group that created it.
+    var test_env = try TestEnv.init("Test",
+        \\n = "a"
+        \\user = |_x| Widget.Val("z").size()
+        \\mid1 = Gadget.Val("g").poke()
+        \\mid2 = n.split_on(",")
+        \\Gadget := [Val(Str)].{
+        \\  poke = |Gadget.Val(s)| s
+        \\}
+        \\Widget := [Val(Str)].{
+        \\  size = |Widget.Val(s)| s.count_utf8_bytes()
+        \\}
+        \\out = user({})
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("user", "_arg -> U64");
+    try test_env.assertDefType("mid1", "Str");
+    try test_env.assertDefType("mid2", "List(Str)");
+    try test_env.assertDefType("out", "U64");
+}
+
+// SELF-DISPATCH AND THE DERIVATION GRAPH. A method body that dispatches its
+// own method again is type-legal when the state never grows; the derivation
+// graph must absorb the re-attached relation without recording a self-edge,
+// and the lineage detectors' exact-repeat rule—not the self-edge guard—must
+// reject the case where satisfying the dispatch re-enters itself.
+
+test "check type - self-recursive where-clause dispatch is rejected as recursive dispatch" {
+    var test_env = try TestEnv.init("Test",
+        \\apply = |x| x.step()
+        \\Counter := [Val(I64)].{
+        \\  step = |c| apply(c)
+        \\}
+        \\use1 = apply(Counter.Val(1))
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - self-dispatch method over module receiver is rejected as recursive dispatch" {
+    // The receiver is a module-level numeral pinned to `N` by annotation, and
+    // the unannotated method re-dispatches the same method on it: satisfying
+    // the dispatch re-enters the same binding with an equal state, which the
+    // exact-repeat rule rejects. No self-edge ever enters the derivation
+    // graph on the way there.
+    var test_env = try TestEnv.init("Test",
+        \\n = 3
+        \\N := [Val(I64)].{
+        \\  from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])
+        \\  from_numeral = |_numeral| Ok(N.Val(0))
+        \\  poke = |_x| n.poke()
+        \\}
+        \\pin : N
+        \\pin = n
+        \\main = N.Val(7).poke()
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}

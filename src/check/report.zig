@@ -2485,7 +2485,7 @@ pub const ReportBuilder = struct {
             try D.renderSlice(&.{
                 D.bytes("Satisfying this dispatch re-enters"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("on a dispatcher that strictly contains an earlier dispatcher on the same chain:"),
+                D.bytes("with a dispatch state that has grown—in its dispatcher or in the method type it requires—since an earlier step on the same chain, whose dispatcher was:"),
             }, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
@@ -2493,7 +2493,7 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try D.renderSlice(&.{
-                D.bytes("The dispatcher grows on every step, so the chain can never terminate."),
+                D.bytes("The dispatch state grows on every such step, so the chain can never terminate."),
             }, self, &report);
             try report.document.addLineBreak();
             try report.document.addLineBreak();

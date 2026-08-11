@@ -3038,6 +3038,15 @@ pub const DeferredConstraintCheck = struct {
     /// receiver is concrete—re-processing it before the target's group is
     /// checked would just re-defer it again.
     waiting_on_target_def: bool = false,
+    /// The binding group whose checking created this obligation (for an
+    /// instantiated scheme copy, the group that instantiated it), or null when
+    /// it was created outside any group frame (REPL, expect bodies, module
+    /// finalization). When the obligation's method target is an unchecked
+    /// local def, this group's generalization boundary owns its resolution:
+    /// only that frame records the target for checking, while nested frames
+    /// leave the obligation waiting (Invariant D). The checker stamps this
+    /// where an obligation enters the deferred queue.
+    owner_group_index: ?u32 = null,
 
     pub const SafeList = MkSafeList(@This());
 };

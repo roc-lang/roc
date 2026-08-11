@@ -710,10 +710,11 @@ function_effect_dependency_frame_starts: std.ArrayListUnmanaged(usize),
 function_effect_resolution: std.AutoHashMap(Var, FunctionEffectResolution),
 /// Scratch for `beginCommitProbe`: the caller env's var-pool length per rank
 /// at probe start, restored on a failed probe's rollback. One buffer suffices
-/// because commit-probes never nest—but the type store's trail-based
-/// savepoints are themselves nestable, so nothing downstream would catch a
-/// nested commit-probe clobbering this buffer. `commit_probe_active` makes the
-/// invariant load-bearing-with-a-guard instead of load-bearing-by-convention.
+/// because commit-probes never nest. The type store's trail-based savepoints
+/// never nest either (`createSavepointImpl` asserts `!savepoint_active`), but
+/// that assertion guards the store, not this buffer, so `commit_probe_active`
+/// asserts the invariant at this layer too instead of leaving it
+/// load-bearing-by-convention.
 probe_var_pool_lens: std.ArrayListUnmanaged(usize),
 /// True while a `CommitProbe` is open. A second `beginCommitProbe` would
 /// `clearRetainingCapacity` and repopulate `probe_var_pool_lens`, corrupting the
@@ -860,6 +861,12 @@ const InstantiationDispatcher = struct {
     /// scheme requirement may remain waiting after it, then enqueue later when
     /// another obligation grounds its receiver.
     compatibility_checked: bool = false,
+    /// The binding group whose checking instantiated this dispatcher (null
+    /// outside any group frame). A dispatcher can wait registry-only while its
+    /// receiver is flex and enqueue from whichever frame grounds it, so the
+    /// deferred-queue entry carries this instantiation-time group as its
+    /// `owner_group_index`, not the enqueuing frame's group.
+    owner_group_index: ?u32 = null,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -1250,6 +1257,7 @@ fn registerInstantiatedSchemeRequirement(
         .instantiation_expr = instantiation_expr,
         .source = .scheme_requirement,
         .deferred_enqueued = !receiver_is_flex,
+        .owner_group_index = self.currentGroupIndex(),
     });
     if (receiver_is_flex) {
         try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
@@ -1261,6 +1269,7 @@ fn registerInstantiatedSchemeRequirement(
                 .from(@intFromEnum(expr_idx))
             else
                 .none,
+            .owner_group_index = self.currentGroupIndex(),
         });
     }
 
@@ -1287,6 +1296,7 @@ fn registerInstantiatedAttachedDispatch(
         .dispatcher_var = receiver_var,
         .constraints = constraints,
         .instantiation_expr = instantiation_expr,
+        .owner_group_index = self.currentGroupIndex(),
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
     // An attached constraint copied by instantiation lives on the fresh
@@ -4103,10 +4113,12 @@ fn runUnify(self: *Self, a: Var, b: Var, env: *Env, opts: unifier.Options) std.m
     // Copy any constraints created during unification into our own array. A
     // where-clause obligation that becomes concrete while checking a scheme use
     // belongs to that use; ordinary dispatch and literal constraints retain
-    // their own creation-time provenance.
+    // their own creation-time provenance. The group whose checking ran this
+    // unification owns each obligation's boundary-time resolution.
     const failure_expr = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr;
     for (self.unify_scratch.deferred_constraints.items.items) |deferred_constraint| {
         var owned_constraint = deferred_constraint;
+        owned_constraint.owner_group_index = self.currentGroupIndex();
         if (failure_expr) |expr_idx| {
             if (owned_constraint.failure_expr == .none) {
                 for (self.types.sliceStaticDispatchConstraints(owned_constraint.constraints)) |constraint| {
@@ -8519,6 +8531,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                     .from(@intFromEnum(expr_idx))
                 else
                     .none,
+                .owner_group_index = current.owner_group_index,
             });
             appended_deferred = true;
         }
@@ -10895,20 +10908,63 @@ fn recordPendingDispatchTarget(self: *Self, target_def_idx: CIR.Def.Idx) std.mem
     try self.pending_dispatch_targets.append(self.gpa, target_def_idx);
 }
 
-/// Whether the current group frame owns a deferred dispatch obligation whose
-/// target def is unchecked. Invariant D pins an obligation's callable relation
-/// at the boundary rank of the group whose checking discovered it, and every
-/// active frame's drain re-sees the waiting relation. A relation pinned below
-/// the current boundary is generalization-safe here, so it must wait for the
-/// enclosing frame that pinned it: recording it as this nested frame's pending
-/// target would check the target's topological prefix inside this frame, where
-/// a prefix group can name this frame's still in-flight def and merge with it
-/// monomorphically instead of instantiating its finished scheme. The outermost
-/// active frame owns every remaining obligation.
-fn currentFrameOwnsDeferredDispatchObligation(self: *const Self, constraint_fn_var: Var) bool {
-    if (self.group_stack.items.len <= 1) return true;
-    const fn_rank = self.types.resolveVar(constraint_fn_var).desc.rank;
-    return @intFromEnum(fn_rank) >= @intFromEnum(self.currentGroupBoundaryRank());
+/// The `group_stack` index of the active frame that owns a deferred dispatch
+/// obligation stamped with `owner_group_index`, or null when no active frame
+/// matches—an unstamped obligation (created outside any group frame) or one
+/// whose stamped group already finished, which the frame processing it adopts.
+/// Ownership is by group identity, never by rank comparison: ranks are a
+/// shared depth counter, so a nested value-def group's boundary rank aliases
+/// its enclosing frame's, and unification can collapse a callable's rank all
+/// the way to generalized—neither may move an obligation between frames.
+fn activeDeferredDispatchObligationOwnerFrame(
+    self: *const Self,
+    owner_group_index: ?u32,
+) ?usize {
+    const owner_group = owner_group_index orelse return null;
+    var frame_idx = self.group_stack.items.len;
+    while (frame_idx > 0) {
+        frame_idx -= 1;
+        if (self.group_stack.items[frame_idx].group_index == owner_group) return frame_idx;
+    }
+    return null;
+}
+
+/// Re-defer a dispatch obligation whose method target is an unchecked,
+/// unannotated local def. The obligation's owning group frame records the
+/// target for its own boundary and pins the relation there; any other frame
+/// leaves the obligation waiting, because recording it as a nested frame's
+/// pending target would check the target's topological prefix inside that
+/// frame, where a prefix group can name the nested frame's still in-flight
+/// def and merge with it monomorphically instead of instantiating its
+/// finished scheme. A non-owning frame still pins the callable and receiver
+/// at the owning frame's boundary rank (Invariant D): the obligation stays
+/// waiting across every nested boundary between here and its owner, and
+/// nothing it touches may generalize before the owner resolves it.
+fn deferDispatchObligationForUncheckedTarget(
+    self: *Self,
+    deferred_constraint: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    target_def_idx: CIR.Def.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    var waiting_constraint = deferred_constraint;
+    waiting_constraint.waiting_on_target_def = true;
+    const owner_frame = self.activeDeferredDispatchObligationOwnerFrame(
+        deferred_constraint.owner_group_index,
+    );
+    const current_frame_owns = owner_frame == null or
+        owner_frame.? + 1 == self.group_stack.items.len;
+    if (current_frame_owns) {
+        waiting_constraint.owner_group_index = self.currentGroupIndex();
+        try self.recordPendingDispatchTarget(target_def_idx);
+    }
+    const owner_boundary_rank = if (owner_frame) |frame_idx|
+        self.group_stack.items[frame_idx].boundary_rank
+    else
+        self.currentGroupBoundaryRank();
+    try self.pinVarAtRank(constraint.fn_var, owner_boundary_rank, env);
+    try self.pinVarAtRank(deferred_constraint.var_, owner_boundary_rank, env);
+    try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
 }
 
 /// Instantiate an annotation that is available before its body, then retain
@@ -11199,7 +11255,14 @@ fn resolvePendingPredeclaredSchemeUses(
 /// everything the obligation touched below the generalizing rank—escaped,
 /// alive, and un-generalized until the boundary).
 fn pinVarAtGroupBoundaryRank(self: *Self, obligation_var: Var, env: *Env) std.mem.Allocator.Error!void {
-    const boundary_rank = self.currentGroupBoundaryRank();
+    try self.pinVarAtRank(obligation_var, self.currentGroupBoundaryRank(), env);
+}
+
+/// Pin `obligation_var`'s class at `boundary_rank` (some active frame's
+/// generalization boundary) so no frame nested inside that boundary
+/// generalizes it before the obligation pinned there resolves. Never raises a
+/// rank and never touches a generalized class.
+fn pinVarAtRank(self: *Self, obligation_var: Var, boundary_rank: Rank, env: *Env) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(obligation_var);
     if (resolved.desc.rank != .generalized and
         @intFromEnum(resolved.desc.rank) > @intFromEnum(boundary_rank))
@@ -21584,6 +21647,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
                 .from(@intFromEnum(expr_idx))
             else
                 .none,
+            .owner_group_index = dispatcher.owner_group_index,
         });
         dispatcher.deferred_enqueued = true;
         appended = true;
@@ -21600,11 +21664,17 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
 /// Retirement still depends on `recordSettledDeferredDispatchRelation`; a
 /// concrete receiver alone never counts as discharge. A stored relation the
 /// drain retains rather than settles (an unresolved derived codec, a target
-/// def still being checked) stays unsettled here, so each relation takes at
-/// most one enqueue per finalization call—the latch below persists across
-/// rounds, mirroring the `deferred_enqueued` discipline of
-/// `checkGroundedSchemeRequirementsAtBoundary`—and the loop exits once a
-/// round enqueues nothing new.
+/// def still being checked) stays unsettled here; the latch below dedups its
+/// enqueues within one latch epoch, and re-arms whenever a round settles
+/// another relation—settling is exactly what can unblock a retained relation
+/// (e.g. a derived shape that resolves once its dependency settles), so the
+/// unblocked relation gets a fresh enqueue in the next round instead of
+/// waiting latched at the module boundary as a spuriously unresolved
+/// dispatcher. Termination: the settled set only grows and is finite, so the
+/// latch re-arms finitely often; within one latch epoch each stored relation
+/// enqueues at most once, so total enqueues are bounded by epochs times
+/// stored relations, and the loop exits on the first round that enqueues
+/// nothing.
 fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
     self: *Self,
     env: *Env,
@@ -21639,10 +21709,14 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
         }
         if (!appended) return;
 
+        const settled_relations_before = self.settled_static_dispatch_constraint_fns.count();
         try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
         try self.checkAllConstraints(env);
         try self.checkInstantiatedStaticDispatchConstraints(env, is_numeric_default_pass);
         try self.checkAllConstraints(env);
+        if (self.settled_static_dispatch_constraint_fns.count() != settled_relations_before) {
+            enqueued_fn_vars.clearRetainingCapacity();
+        }
     }
 }
 
@@ -22676,16 +22750,21 @@ fn recordDispatchDerivations(
     constraints: StaticDispatchConstraint.SafeList.Range,
     parent_fn_var: Var,
 ) Allocator.Error!void {
+    const parent_root = self.types.resolveVar(parent_fn_var).var_;
     for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
         // The parent graph is acyclic by construction: an edge is recorded
-        // only for a child that is provably fresh at record time. A child that
-        // equals its parent or that has already selected a dispatch target is
-        // not fresh, so it never becomes a new node here; a child that already
-        // carries a parent keeps its first recorded edge.
-        if (constraint.fn_var == parent_fn_var) {
-            if (builtin.mode == .Debug) std.debug.panic("static-dispatch derivation would record a self-edge", .{});
-            continue;
-        }
+        // only for a child that is provably fresh at record time. A child in
+        // the parent's own union-find class is not fresh—instantiating a
+        // scheme can share a non-generalized callable rather than copy it, so
+        // a receiver whose own relation is the dispatch target re-attaches
+        // that relation to itself here. Recording that edge would put a cycle
+        // in the graph, so it is skipped; a program that genuinely
+        // self-recurses is rejected by the lineage detectors' exact-repeat
+        // rule. The classes must be compared through their resolved roots: a
+        // unified parent var no longer equal to its root still names the same
+        // class. A child that has already selected a dispatch target, or that
+        // already carries a parent, keeps its first recorded edge.
+        if (self.types.resolveVar(constraint.fn_var).var_ == parent_root) continue;
         if (self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) continue;
         const entry = try self.dispatch_derivation_by_child_fn_var.getOrPut(self.gpa, constraint.fn_var);
         if (entry.found_existing) continue;
@@ -23953,20 +24032,19 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     // Unannotated, unchecked local target. A
                                     // dispatch edge cannot be in the name
                                     // graph, so this is discovered here—but
-                                    // never checked here: record the target
-                                    // for the owning group's boundary, pin
-                                    // the constraint's vars at the boundary
-                                    // rank (Invariant D), and leave the
-                                    // constraint deferred. A relation owned
-                                    // by an enclosing frame only waits here.
-                                    if (self.currentFrameOwnsDeferredDispatchObligation(constraint.fn_var)) {
-                                        try self.recordPendingDispatchTarget(def_idx);
-                                        try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
-                                        try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
-                                    }
-                                    var waiting_constraint = deferred_constraint;
-                                    waiting_constraint.waiting_on_target_def = true;
-                                    try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
+                                    // never checked here: the obligation's
+                                    // owning group frame records the target
+                                    // for its boundary, the relation is
+                                    // pinned at that boundary's rank
+                                    // (Invariant D), and the constraint stays
+                                    // deferred. A relation owned by an
+                                    // enclosing frame only waits here.
+                                    try self.deferDispatchObligationForUncheckedTarget(
+                                        deferred_constraint,
+                                        constraint,
+                                        def_idx,
+                                        env,
+                                    );
                                     continue;
                                 },
                                 .processing => if (mb_predeclared_scheme) |scheme_var| {
@@ -24330,14 +24408,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 .not_processed => if (mb_predeclared_scheme) |scheme_var| {
                                     predeclared_scheme_for_method = scheme_var;
                                 } else {
-                                    if (self.currentFrameOwnsDeferredDispatchObligation(constraint.fn_var)) {
-                                        try self.recordPendingDispatchTarget(def_idx);
-                                        try self.pinVarAtGroupBoundaryRank(constraint.fn_var, env);
-                                        try self.pinVarAtGroupBoundaryRank(deferred_constraint.var_, env);
-                                    }
-                                    var waiting_constraint = deferred_constraint;
-                                    waiting_constraint.waiting_on_target_def = true;
-                                    try self.scratch_deferred_static_dispatch_constraints.append(waiting_constraint);
+                                    try self.deferDispatchObligationForUncheckedTarget(
+                                        deferred_constraint,
+                                        constraint,
+                                        def_idx,
+                                        env,
+                                    );
                                     continue;
                                 },
                                 .processing => if (mb_predeclared_scheme) |scheme_var| {
@@ -26618,6 +26694,96 @@ test "imported method schemes are copied once and freshly instantiated per use" 
 
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_schemes.items.len);
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_scheme_by_source.count());
+}
+
+// THE SELF-EDGE GUARD (`recordDispatchDerivations`): instantiating a scheme
+// can share a non-generalized callable rather than copy it, so a receiver
+// whose own relation is the dispatch target re-attaches that relation to
+// itself, and unification can leave the parent var pointing at a class root
+// it no longer equals raw. The guard must compare resolved roots (a raw
+// comparison lets a semantic self-edge through whenever the parent is not
+// its own root, breaking the graph's acyclicity) and skip silently in every
+// build mode; genuine self-recursion is rejected by the lineage detectors'
+// exact-repeat rule, not here.
+test "dispatch derivation self-edge guard compares resolved roots and skips silently" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("SelfEdgeGuard", "value = \"x\"");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    const alias_var = try checker.types.fresh();
+    const other_var = try checker.types.fresh();
+    try checker.types.union_(alias_var, other_var, checker.types.resolveVar(other_var).desc);
+    const class_root = checker.types.resolveVar(other_var).var_;
+    const non_root = if (class_root == other_var) alias_var else other_var;
+    try std.testing.expect(non_root != class_root);
+    try std.testing.expectEqual(class_root, checker.types.resolveVar(non_root).var_);
+
+    const constraint_range = try checker.types.appendStaticDispatchConstraints(&.{.{
+        .fn_name = checker.cir.idents.map,
+        .fn_var = class_root,
+        .origin = .method_call,
+    }});
+    const derivations_before = checker.dispatch_derivations.items.len;
+
+    // A raw-equal parent and a non-root parent of the same class are both
+    // self-edges: neither may record, panic, or leave partial table state.
+    try checker.recordDispatchDerivations(constraint_range, class_root);
+    try checker.recordDispatchDerivations(constraint_range, non_root);
+    try std.testing.expectEqual(derivations_before, checker.dispatch_derivations.items.len);
+    try std.testing.expect(!checker.dispatch_derivation_by_child_fn_var.contains(class_root));
+
+    // Control: a parent in a different class records an ordinary edge.
+    const unrelated_parent = try checker.types.fresh();
+    try checker.recordDispatchDerivations(constraint_range, unrelated_parent);
+    try std.testing.expectEqual(derivations_before + 1, checker.dispatch_derivations.items.len);
+    try std.testing.expectEqual(
+        @as(?Var, unrelated_parent),
+        checker.dispatch_derivation_by_child_fn_var.get(class_root),
+    );
+}
+
+// DEFERRED-DISPATCH OWNERSHIP (`activeDeferredDispatchObligationOwnerFrame`):
+// an obligation whose method target is unchecked resolves at the boundary of
+// the group that created it, found by group identity. Ranks cannot decide
+// this: a nested value-def group's boundary rank aliases its enclosing
+// frame's (a value def generalizes nothing, so no fresh rank frame separates
+// them), and unification can collapse a callable's rank to generalized. The
+// fixture below gives both frames the same boundary rank, and the lookup
+// must still resolve each stamp to its exact frame; a stamp naming no active
+// frame (or no stamp) yields null, telling the processing frame to adopt the
+// obligation.
+test "deferred dispatch obligation ownership is by group identity, not rank" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("ObligationOwner", "value = \"x\"");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    try std.testing.expectEqual(@as(usize, 0), checker.group_stack.items.len);
+    defer checker.group_stack.shrinkRetainingCapacity(0);
+    try checker.group_stack.append(checker.gpa, .{
+        .group_index = 7,
+        .base_rank = .outermost,
+        .def_check_rank = .outermost,
+        .boundary_rank = Rank.outermost.next(),
+        .pending_targets_top = 0,
+        .pending_predeclared_uses_top = 0,
+    });
+    try checker.group_stack.append(checker.gpa, .{
+        .group_index = 9,
+        .base_rank = Rank.outermost.next(),
+        .def_check_rank = Rank.outermost.next(),
+        .boundary_rank = Rank.outermost.next(),
+        .pending_targets_top = 0,
+        .pending_predeclared_uses_top = 0,
+    });
+
+    try std.testing.expectEqual(@as(?usize, 1), checker.activeDeferredDispatchObligationOwnerFrame(9));
+    try std.testing.expectEqual(@as(?usize, 0), checker.activeDeferredDispatchObligationOwnerFrame(7));
+    try std.testing.expectEqual(@as(?usize, null), checker.activeDeferredDispatchObligationOwnerFrame(null));
+    try std.testing.expectEqual(@as(?usize, null), checker.activeDeferredDispatchObligationOwnerFrame(3));
 }
 
 // THE ESCALATION JOURNAL CONTRACT (`ambiguity_escalation_journal`): a repeated
