@@ -324,39 +324,39 @@ For example:
     answer = 42
 
 I found `'\` here.
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 
-INVALID TUPLE ELEMENT
+invalid tuple element
 
 This tuple element is malformed or contains invalid syntax.
 

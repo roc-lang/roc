@@ -212,7 +212,7 @@ This type annotation is malformed or contains invalid syntax.
 app [main!] { |f: platform "c" }
                   ^^^^^^^^
 
-INVALID IF CONDITION
+invalid if condition
 
 The condition in this `if` expression could not be processed.
 The condition must be a valid expression that evaluates to a `Bool` value (`Bool.true` or `Bool.false`).

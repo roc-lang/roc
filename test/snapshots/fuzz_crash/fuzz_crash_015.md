@@ -19,7 +19,7 @@ UNEXPECTED STATEMENT - fuzz_crash_015.md:3:1:3:4
 UNEXPECTED STATEMENT - fuzz_crash_015.md:3:4:3:6
 UNEXPECTED STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
-LEADING ZERO
+leading zero
 
 Numbers cannot have leading zeros.
 

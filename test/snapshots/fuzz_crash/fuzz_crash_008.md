@@ -13,7 +13,7 @@ UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
-ASCII CONTROL CHARACTER
+ascii control character
 
 ASCII control characters are not allowed in Roc source code.
 

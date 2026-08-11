@@ -179,7 +179,7 @@ match color { RGB => LocalStatus.Pending
                      ^^^^^^^^^^^
 
 Hint: You can declare this type with `:=` to make it nominal.
-INVALID PATTERN
+invalid pattern
 
 This pattern contains invalid syntax or uses unsupported features.
 

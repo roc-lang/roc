@@ -233,7 +233,7 @@ MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
-LEADING ZERO
+leading zero
 
 Numbers cannot have leading zeros.
 

@@ -11,7 +11,7 @@ app[]{f:platform""}import fS
 ASCII CONTROL CHARACTER - :0:0:0:0
 INCOMPLETE IMPORT - fuzz_crash_046.md:1:20:1:26
 # PROBLEMS
-ASCII CONTROL CHARACTER
+ascii control character
 
 ASCII control characters are not allowed in Roc source code.
 

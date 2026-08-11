@@ -25,7 +25,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_048.md:4:1:5:16
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:6:1:6:35
 DECLARATION HAS NO VALUE - fuzz_crash_048.md:7:1:7:29
 # PROBLEMS
-ASCII CONTROL CHARACTER
+ascii control character
 
 ASCII control characters are not allowed in Roc source code.
 

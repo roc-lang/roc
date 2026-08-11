@@ -12,7 +12,7 @@ t=|(0|(#\r))|0
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 NOT IMPLEMENTED - fuzz_crash_084.md:1:5:1:11
 # PROBLEMS
-MISPLACED CARRIAGE RETURN
+misplaced carriage return
 
 Carriage return characters (\r) are not allowed in Roc source code.
 

@@ -269,15 +269,15 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
 MISSING METHOD - fuzz_crash_028.md:133:5:133:12
 MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
-ASCII CONTROL CHARACTER
+ascii control character
 
 ASCII control characters are not allowed in Roc source code.
 
-ASCII CONTROL CHARACTER
+ascii control character
 
 ASCII control characters are not allowed in Roc source code.
 
-LEADING ZERO
+leading zero
 
 Numbers cannot have leading zeros.
 

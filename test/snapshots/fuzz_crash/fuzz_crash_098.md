@@ -12,7 +12,7 @@ a=(0\r.e)
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 MISSING METHOD - fuzz_crash_098.md:1:4:1:5
 # PROBLEMS
-MISPLACED CARRIAGE RETURN
+misplaced carriage return
 
 Carriage return characters (\r) are not allowed in Roc source code.
 

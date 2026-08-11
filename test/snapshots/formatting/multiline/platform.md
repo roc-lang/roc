@@ -73,7 +73,7 @@ E2,
 
 You can fix this by either defining `E2` in this mod, or by removing it from
 the list of exposed values.
-INVALID HOSTED SECTION
+invalid hosted section
 
 The platform header uses the linker symbol `roc_not implemented`, but linker
 symbols in platform headers must be valid C identifiers: start with a letter or
