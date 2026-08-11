@@ -8855,3 +8855,79 @@ test "check type - dispatch - cap-free generational discharge across pending sch
     }
     try testing.expect(scheme_requirement_dispatchers >= hops);
 }
+
+// CONFLICTED-DEFAULT RECORDING DISCIPLINE. A literal joins
+// `conflicted_default_literal_vars` only when validation REJECTED its head
+// default (every numeral candidate failed, or Str failed the quote predicate
+// probe)—the list routes the dispatch pass's failure path through
+// probed-rollback semantics, so a satisfied receiver on it would make every
+// SUCCESSFUL dispatch on that class pay the savepoint bracket and would leave
+// the resolved-root matching exposed to unrelated later merges. The list
+// itself is scoped to the defaulting-rounds invocation that recorded it, so
+// these tests observe the debug-only monotone recording counter.
+
+test "check type - satisfied quote method constraint records no conflicted default" {
+    const source =
+        \\weak = "a,b,c"
+        \\parts = weak.split_on(",")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 0), test_env.checker.bench_conflicted_default_records);
+    }
+}
+
+test "check type - rejected quote default is recorded once and scoped to its defaulting rounds" {
+    // Same module as "rejected quote default target leaves merged weak
+    // argument polymorphic": Str.concat's return cannot unify with the
+    // Dec-pinned relation, so validation rejects the quote default and the
+    // literal is recorded exactly once. After checking, the list is empty
+    // again—entries live only until the recording rounds' cascade has
+    // consumed them, so a var merging into the (by then concrete) class later
+    // keeps ordinary poison semantics.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Dec
+        \\r = ("t").concat(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
+    }
+    try testing.expectEqual(@as(usize, 0), test_env.checker.conflicted_default_literal_vars.items.len);
+}
+
+test "check type - failed group default records only the rejected driver" {
+    // The quote driver ("az", whose concat obligation Str satisfies) and the
+    // numeral driver (5, whose plus relation is return-pinned to Str so every
+    // numeric candidate fails) interfere through the concat return var, so
+    // they default as one group and the group scan fails. Only the numeral
+    // driver's head default was actually rejected: the quote driver must stay
+    // off the conflicted list and its concat dispatch discharges normally
+    // against Str.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\weakarg = poly({})
+        \\r : Str
+        \\r = (5).plus("az".concat(weakarg))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
+    }
+    var mismatch_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .type_mismatch) mismatch_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), mismatch_count);
+}

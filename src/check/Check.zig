@@ -504,6 +504,14 @@ ambiguity_candidates: std.ArrayListUnmanaged(AmbiguityCandidate),
 /// remain distinct, while repeated explicit requirements on one shared outer
 /// receiver contribute only one judgment candidate.
 ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32) = .empty,
+/// Undo journal for `requires_current_resolution` escalations performed while
+/// a probe is open: each entry is the index of a candidate whose flag an
+/// in-probe repeated observation flipped. `Probe.rollback` resets the flags
+/// its scope journaled (the observation was speculative work that did not
+/// survive), while `Probe.commit` drops the entries keeping the flips (a
+/// committed probe's observation is as real as an unprobed one). Escalations
+/// performed with no probe open are permanent and never journaled.
+ambiguity_escalation_journal: std.ArrayListUnmanaged(u32) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
 /// def's entries begin. Generalization events scan only from here: entries
 /// below the cursor belong to earlier defs and are either already judged or
@@ -588,13 +596,20 @@ open_literal_vars: std.ArrayListUnmanaged(Var),
 /// a concrete number type, so range validation does not depend on flex content
 /// still being present in the union-find root.
 open_numeral_literals: std.ArrayListUnmanaged(OpenNumeralLiteral),
-/// Literal receivers committed to their documented head default after every
-/// numeric candidate failed validation. The dispatch pass reports each such
-/// receiver's conflicts against the default type, and its failure path
+/// Literal receivers committed to their documented head default after
+/// validation failed—every numeric candidate rejected for numerals, the
+/// single Str candidate rejected for quotes. The dispatch pass reports each
+/// such receiver's conflicts against the default type, and its failure path
 /// consults this list to rewind the failed unify: the program never chose the
 /// default, so a rejected default target must not retype anything reachable
 /// through the relation's argument graph. Membership is checked by resolved
-/// root at query time (error path only, so the list stays tiny).
+/// root at query time (error path only, so the list stays tiny). Entries are
+/// scoped to the defaulting-rounds invocation that recorded them: its own
+/// step-4 cascade consumes their deferred dispatches (a conflicted head
+/// default is a builtin nominal, whose method tables are always resolvable,
+/// so those dispatches cannot out-wait the cascade), and the rounds' exit
+/// drops the entries so a var that merges into the same—by then concrete—
+/// equivalence class later keeps ordinary poison semantics.
 conflicted_default_literal_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Tuple field accesses whose receiver was still unresolved when checked.
 /// A later call-site or annotation may resolve the receiver to a concrete tuple;
@@ -669,6 +684,13 @@ known_empty_payload_vars_match: std.ArrayList(Var),
 /// hot-path cost). Per-instance, so no cross-test synchronization concern.
 bench_probe_attempts: usize = 0,
 bench_probe_refuted: usize = 0,
+/// Debug-only count of conflicted-default recordings
+/// (`recordConflictedDefaultLiteral`), asserted by the recording-discipline
+/// tests: `conflicted_default_literal_vars` itself is scoped to one
+/// defaulting-rounds invocation, so a post-check test needs this monotone
+/// mirror to observe that a program recorded none (or exactly the expected
+/// conflicts). Same build discipline as the probe counters above.
+bench_conflicted_default_records: usize = 0,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
@@ -2308,6 +2330,7 @@ pub fn deinit(self: *Self) void {
     self.pending_scheme_requirement_dispatchers.deinit(self.gpa);
     self.ambiguity_candidates.deinit(self.gpa);
     self.ambiguity_candidate_by_key.deinit(self.gpa);
+    self.ambiguity_escalation_journal.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
     self.dispatch_target_instantiations.deinit(self.gpa);
     self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
@@ -7871,13 +7894,21 @@ fn recordAmbiguityCandidate(
     if (entry.found_existing) {
         // Repeated observations of one obligation are one judgment candidate,
         // but the payload is monotone: any direct executable observation makes
-        // current resolution mandatory. A speculative commit-probe must not
-        // flip the flag on a candidate recorded before the probe began—the
-        // probe's rollback truncates candidate entries, not their payloads, so
-        // an in-probe observation of a pre-probe candidate would survive the
-        // rollback as a phantom escalation.
-        if (requires_current_resolution and !self.commit_probe_active) {
-            self.ambiguity_candidates.items[entry.value_ptr.*].requires_current_resolution = true;
+        // current resolution mandatory. An in-probe observation of a pre-probe
+        // candidate flips the flag like any other—the probe's rollback
+        // truncates candidate entries, not their payloads, so the flip is
+        // journaled (`ambiguity_escalation_journal`) and the probe scope
+        // settles it: rollback resets it (no phantom escalation from
+        // speculative work), commit keeps it (a committed probe's observation
+        // is as real as an unprobed one).
+        const candidate_idx = entry.value_ptr.*;
+        if (requires_current_resolution and
+            !self.ambiguity_candidates.items[candidate_idx].requires_current_resolution)
+        {
+            if (self.probe_depth > 0) {
+                try self.ambiguity_escalation_journal.append(self.gpa, candidate_idx);
+            }
+            self.ambiguity_candidates.items[candidate_idx].requires_current_resolution = true;
         }
         return;
     }
@@ -20088,6 +20119,7 @@ const Probe = struct {
     instantiation_dispatchers_checked: usize,
     pending_scheme_requirement_dispatchers_len: usize,
     ambiguity_candidates_len: usize,
+    ambiguity_escalation_journal_len: usize,
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
@@ -20116,6 +20148,13 @@ const Probe = struct {
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
         self.check.instantiation_dispatchers_checked = self.instantiation_dispatchers_checked;
         self.check.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(self.pending_scheme_requirement_dispatchers_len);
+        // Escalation flips journaled by this probe scope were speculative
+        // work: reset them before the candidate truncation below, while every
+        // journaled index is still in bounds.
+        while (self.check.ambiguity_escalation_journal.items.len > self.ambiguity_escalation_journal_len) {
+            const flipped_idx = self.check.ambiguity_escalation_journal.pop().?;
+            self.check.ambiguity_candidates.items[flipped_idx].requires_current_resolution = false;
+        }
         self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         self.check.shrinkSchemeRequirementCandidatesTo(self.scheme_requirement_candidates_len);
         // Likewise, open literals registered during the probe (by in-probe
@@ -20154,6 +20193,10 @@ const Probe = struct {
         std.debug.assert(self.check.probe_depth > 0);
         self.check.types.commitSavepoint(&self.savepoint);
         self.check.probe_depth -= 1;
+        // Escalation flips this scope journaled are kept—the committed
+        // observations are real—so the journal entries are dead weight and
+        // drop with the scope.
+        self.check.ambiguity_escalation_journal.shrinkRetainingCapacity(self.ambiguity_escalation_journal_len);
     }
 };
 
@@ -20162,6 +20205,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
+    const ambiguity_escalation_journal_len = self.ambiguity_escalation_journal.items.len;
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
@@ -20188,6 +20232,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .instantiation_dispatchers_checked = self.instantiation_dispatchers_checked,
         .pending_scheme_requirement_dispatchers_len = pending_scheme_requirement_dispatchers_len,
         .ambiguity_candidates_len = ambiguity_candidates_len,
+        .ambiguity_escalation_journal_len = ambiguity_escalation_journal_len,
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
@@ -20498,6 +20543,15 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
     // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
     // of each step. Safe despite cascade reentrancy: every buffer is cleared
     // before use and never read across the step-4 cascade.
+
+    // Conflicted-default entries recorded by THIS invocation's commits are
+    // consumed by its own step-4 cascades (see the scoping contract on
+    // `conflicted_default_literal_vars`); drop exactly them on exit—a
+    // watermark rather than a clear, so an invocation reentered from a
+    // cascade (a delayed def's generalization boundary) cannot drop entries an
+    // enclosing invocation's cascade still owns.
+    const conflicted_defaults_watermark = self.conflicted_default_literal_vars.items.len;
+    defer self.conflicted_default_literal_vars.shrinkRetainingCapacity(conflicted_defaults_watermark);
 
     while (true) {
         // --- 1. Gather the still-open literal roots (deduped). ---
@@ -20876,17 +20930,31 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
     // No candidate satisfies the group: commit each driver's documented head
     // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
     // conflicts. (All drivers are flex again—every failed probe rolled back—
-    // but re-check defensively.) Drivers with method constraints are recorded
-    // as conflicted so the dispatch pass's failure path rewinds its
-    // speculative merges (see `conflicted_default_literal_vars`).
+    // but re-check defensively.) A driver is recorded as conflicted—so the
+    // dispatch pass's failure path rewinds its speculative merges (see
+    // `conflicted_default_literal_vars`)—only when its own head default is the
+    // rejected one: every shared candidate failed a numeral driver's scan, but
+    // a quote driver is assigned Str on every attempt, so the group's failure
+    // may be entirely its peers' doing; the per-driver predicate probe keeps a
+    // Str-satisfied quote driver off the list (its dispatches discharge
+    // normally against Str).
     for (drivers, self.literal_defaulting_kinds.items, self.literal_defaulting_constraint_ranges.items) |driver, kind, range| {
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
-        if (self.rangeHasNonLiteralConstraint(range)) {
-            try self.conflicted_default_literal_vars.append(self.gpa, driver);
-        }
         switch (kind) {
-            .numeral => _ = try self.commitLiteralDefaultHead(driver, env),
-            .quote, .interpolation => _ = try self.commitQuoteDefault(driver, env),
+            .numeral => {
+                if (self.rangeHasNonLiteralConstraint(range)) {
+                    try self.recordConflictedDefaultLiteral(driver);
+                }
+                _ = try self.commitLiteralDefaultHead(driver, env);
+            },
+            .quote, .interpolation => {
+                if (self.rangeHasNonLiteralConstraint(range) and
+                    !try self.quoteDefaultSatisfiesConstraints(driver, range, env))
+                {
+                    try self.recordConflictedDefaultLiteral(driver);
+                }
+                _ = try self.commitQuoteDefault(driver, env);
+            },
         }
     }
 }
@@ -21958,27 +22026,63 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                 // below is a documented conflict. Record the receiver so the
                 // dispatch pass's failure path rewinds its speculative merges
                 // (see `conflicted_default_literal_vars`).
-                try self.conflicted_default_literal_vars.append(self.gpa, literal_var);
+                try self.recordConflictedDefaultLiteral(literal_var);
             }
             return try self.commitLiteralDefaultHead(literal_var, env);
         },
         // Str is the single candidate for string literals—a one-element
-        // candidate list whose head is committed directly, no probing (and no
-        // structural pre-filter: there is no scan to prune). Committing
-        // without validation means a method constraint on the var may yet
-        // refute Str at dispatch time: record such a receiver so the dispatch
-        // pass's failure path rewinds its speculative merges instead of
-        // retyping the constraint's argument graph against a type the
+        // candidate list whose head is always committed (and no structural
+        // pre-filter: there is no scan to prune). The append-after-validation-
+        // failure discipline is the numeral branch's: only a receiver whose
+        // method constraints Str provably cannot satisfy is recorded, so the
+        // dispatch pass's failure path rewinds its speculative merges instead
+        // of retyping the constraint's argument graph against a type the
         // program never chose (see `conflicted_default_literal_vars`). The
-        // dispatch pass still reports any conflict against Str.
+        // dispatch pass still reports the conflict against Str. Satisfied
+        // constraints go entirely unrecorded; their dispatches discharge
+        // normally in the cascade.
         .quote, .interpolation => {
             const constraint_range = self.types.resolveVar(literal_var).desc.content.flex.constraints;
-            if (self.rangeHasNonLiteralConstraint(constraint_range)) {
-                try self.conflicted_default_literal_vars.append(self.gpa, literal_var);
+            if (self.rangeHasNonLiteralConstraint(constraint_range) and
+                !try self.quoteDefaultSatisfiesConstraints(literal_var, constraint_range, env))
+            {
+                try self.recordConflictedDefaultLiteral(literal_var);
             }
             return try self.commitQuoteDefault(literal_var, env);
         },
     }
+}
+
+/// Record a literal receiver whose documented head default is about to commit
+/// even though validation rejected it (see `conflicted_default_literal_vars`).
+/// Sole append site, so the debug-only recording counter cannot drift from the
+/// list.
+fn recordConflictedDefaultLiteral(self: *Self, literal_var: Var) Allocator.Error!void {
+    if (comptime std.debug.runtime_safety) self.bench_conflicted_default_records += 1;
+    try self.conflicted_default_literal_vars.append(self.gpa, literal_var);
+}
+
+/// Pure validation probe for the quote default: whether committing Str to the
+/// still-flex quote literal satisfies every non-literal constraint in
+/// `constraint_range`—the same acceptance rule the numeral candidate scan
+/// applies (`candidateSatisfiesRangeConstraints`), asked as a predicate. The
+/// probe always rolls back, leaving observable state identical to never having
+/// run: Str is the single candidate, so the commit itself goes through the
+/// ordinary head-commit path either way, and the group failure path can ask
+/// the same question per quote driver without perturbing its peers.
+fn quoteDefaultSatisfiesConstraints(
+    self: *Self,
+    literal_var: Var,
+    constraint_range: StaticDispatchConstraint.SafeList.Range,
+    env: *Env,
+) Allocator.Error!bool {
+    var commit_probe = try self.beginCommitProbe(env);
+    defer commit_probe.rollback();
+
+    const candidate_var = try self.freshStr(env, self.getRegionAt(literal_var));
+    const unify_result = try self.unify(literal_var, candidate_var, env);
+    if (!unify_result.isOk()) return false;
+    return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env);
 }
 
 /// Commit Str—the single (and therefore default) candidate for string literals—
@@ -22029,10 +22133,12 @@ fn numKindFromNumeralTarget(target: exact_numeral.Target) CIR.NumKind {
 }
 
 /// Whether `var_` resolves to a literal whose documented head default was
-/// committed while its method constraints were unvalidated—every numeral
-/// candidate failed validation, or the quote default committed without
-/// probing (see `conflicted_default_literal_vars`). Both sides re-resolve at
-/// query time: the class root can drift as later unifications merge into it.
+/// committed after validation rejected it—every numeral candidate failed, or
+/// Str failed the quote predicate probe (see
+/// `conflicted_default_literal_vars`). Both sides re-resolve at query time:
+/// the class root can drift as later unifications merge into it—which is why
+/// the entries only live until the recording rounds' cascade has consumed
+/// them.
 fn varIsConflictedDefaultLiteral(self: *const Self, var_: Var) bool {
     if (self.conflicted_default_literal_vars.items.len == 0) return false;
     const root = self.types.resolveVar(var_).var_;
@@ -23943,17 +24049,19 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // This receiver's type is the documented head default,
                         // committed while its method constraints were still
                         // unvalidated—a type the program never chose. The
-                        // unifier still owns
-                        // the diagnostic (its problem and snapshots live
-                        // outside the type store and survive the rollback),
-                        // but the failed validation must not retype anything
-                        // the relation's argument graph reaches: bracket the
-                        // unify in a probe and rewind the store, the deferred
-                        // queue, and the var-pool tails on mismatch. Success
-                        // commits—a default target that satisfies a
-                        // constraint is real. (Inside an enclosing probe the
-                        // ordinary path is fine: the outer speculation never
-                        // commits a nested dispatch failure.)
+                        // failed validation must not retype anything the
+                        // relation's argument graph reaches: bracket the unify
+                        // in a probe and rewind the store, the deferred queue,
+                        // and the var-pool tails on mismatch. The caller owns
+                        // the mismatch diagnostic (`unifyOwnedRelation`), per
+                        // the store rule that occurrence-directed poisoning
+                        // never runs under an active savepoint; the problem
+                        // and snapshots it records live outside the type store
+                        // and survive the rollback. Success commits—a default
+                        // target that satisfies a constraint is real. (Inside
+                        // an enclosing probe the ordinary path is fine: the
+                        // outer speculation never commits a nested dispatch
+                        // failure.)
                         self.probe_var_pool_lens.clearRetainingCapacity();
                         const rank_count = @intFromEnum(env.rank()) + 1;
                         try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
@@ -23962,13 +24070,16 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
                         }
                         var probe = try self.beginProbe(env);
-                        const probed_result = try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
-                        if (probed_result.isProblem()) {
+                        var committed = false;
+                        defer if (!committed) {
                             probe.rollback();
                             for (self.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
                                 env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
                             }
-                        } else {
+                        };
+                        const probed_result = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, fn_ctx);
+                        if (!probed_result.isProblem()) {
+                            committed = true;
                             probe.commit();
                         }
                         break :fn_result probed_result;
@@ -26507,6 +26618,55 @@ test "imported method schemes are copied once and freshly instantiated per use" 
 
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_schemes.items.len);
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.imported_method_scheme_by_source.count());
+}
+
+// THE ESCALATION JOURNAL CONTRACT (`ambiguity_escalation_journal`): a repeated
+// in-probe observation that flips a pre-probe candidate's
+// `requires_current_resolution` is speculative exactly as long as its probe
+// can still roll back. Rollback must reset the flip (no phantom escalation
+// from work that did not survive) and commit must keep it (a committed
+// probe's observation is as real as an unprobed one). Driven directly through
+// the probe API: the flip sites are reachable from several dispatch paths,
+// and the journal semantics are identical for all of them.
+test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("EscalationJournal", "value : U64\nvalue = 42");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    const receiver = try checker.types.fresh();
+
+    // Baseline record outside any probe and outside executable-root checking:
+    // the candidate starts unescalated.
+    checker.checking_executable_root = false;
+    try checker.recordAmbiguityCandidate(receiver, .creation, null);
+    const candidate_idx = checker.ambiguity_candidates.items.len - 1;
+    try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
+
+    checker.checking_executable_root = true;
+    defer checker.checking_executable_root = false;
+
+    // Escalation inside a probe that rolls back: the flip is reset and the
+    // journal is drained.
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
+        probe.rollback();
+    }
+    try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
+
+    // Escalation inside a probe that commits: the flip is permanent and the
+    // journal entry drops with the scope.
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        probe.commit();
+    }
+    try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
 }
 
 const DerivedMapAnalysis = struct {
@@ -29569,6 +29729,14 @@ fn checkFlexVarConstraintCompatibility(
         // Instantiating and unifying the method below can grow the constraint
         // store, so re-fetch each entry instead of retaining a backing slice.
         const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+
+        // A constraint already rejected durably has its diagnostic; the
+        // receiver stays flex after a rejected validation (the commit-probe
+        // rolls the attempt back without poisoning), so a later visit of the
+        // same equivalence class—another worklist entry or dispatcher record
+        // resolving to it—must not re-validate and re-report the identical
+        // mismatch.
+        if (self.types.varStaticDispatchRejected(constraint.fn_var)) continue;
 
         // Skip the literal-origin constraint the default type satisfies by
         // definition. (With both literal kinds present, the var defaults to Dec and
