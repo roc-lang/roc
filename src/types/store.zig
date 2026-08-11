@@ -8,6 +8,7 @@ const base = @import("base");
 const collections = @import("collections");
 const types = @import("types.zig");
 const debug = @import("debug.zig");
+const instantiate = @import("instantiate.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -169,6 +170,11 @@ pub const Store = struct {
     /// sorted on insert; lookups binary-search.
     nominal_decl_index: NominalDeclIndexEntry.SafeList,
 
+    /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
+    /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
+    /// relocated; capacity persists across instantiations against this store.
+    instantiate_scratch: instantiate.Scratch = .{},
+
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot, descriptor, checked
     /// representative, or structural rank that existed before the probe began
@@ -262,6 +268,9 @@ pub const Store = struct {
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
+
+        // instantiation worklist scratch
+        self.instantiate_scratch.deinit(self.gpa);
 
         // speculation undo trail
         self.slot_trail.deinit(self.gpa);

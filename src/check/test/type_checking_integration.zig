@@ -9030,3 +9030,45 @@ test "check type - self-dispatch method over module receiver is rejected as recu
     defer test_env.deinit();
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
+
+// Instantiation depth pin for the explicit-worklist graph copier
+// (src/types/instantiate.zig). Aliases materialize their backing structure
+// inline, so chaining alias declarations grows a spine of unique type-store
+// nodes multiplicatively: each declaration wraps the previous alias in
+// `layers` more `List` levels while keeping its own source nesting (and the
+// annotation-evaluation recursion it drives) at `layers`. Evaluating `deep`'s
+// annotation then instantiates the final alias's template in ONE copy whose
+// depth is at least layers * decls = 9216 unique nodes—deeper than any native
+// stack budget for a recursive copier. The copier runs on a heap worklist, so
+// this program must check cleanly; a native-stack or depth-bounded copier
+// fails this test by crashing or by reporting a phantom infinite-recursion
+// error.
+test "instantiation - alias-chain spine deeper than any native-stack budget checks cleanly" {
+    const allocator = testing.allocator;
+    const decls = 9;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "A0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "A{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "List(");
+        try source.print(allocator, "A{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, ")");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : A{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+        \\go : {{}}
+        \\go = deep([])
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

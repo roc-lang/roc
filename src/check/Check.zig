@@ -162,6 +162,11 @@ return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
+/// Explicit visit stack shared by the heap-worklist type-graph walks
+/// (`validateAliasRowsHelp`'s node descent, `varContainsError`). Entries are
+/// base-relative: each entry point operates only on the slots it pushed and
+/// drains back to its entry length, so the walks may nest freely.
+type_visit_stack: std.ArrayListUnmanaged(Var),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Header rigid vars for the currently-processed type declaration.
@@ -1178,30 +1183,27 @@ fn canonicalizeSchemeUsePairs(
 /// which narrow only the root copy), a requirement whose receiver stays
 /// shared keeps its original callable relation as the single live obligation
 /// on that receiver: the relation is already registered and its literals are
-/// protected by the scheme that owns it. Returns false when instantiation
-/// overflowed; the caller owns failure reporting.
+/// protected by the scheme that owns it.
 fn copySchemeDispatchRequirements(
     self: *Self,
     scheme_idx: usize,
     instantiator: *Instantiator,
     skip_shared_receiver_copies: bool,
     out: *std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement),
-) std.mem.Allocator.Error!bool {
+) std.mem.Allocator.Error!void {
     const requirements_len = self.type_schemes.items[scheme_idx].dispatch_requirements.items.len;
     var requirement_idx: usize = 0;
     while (requirement_idx < requirements_len) : (requirement_idx += 1) {
         // Instantiation grows the type store but not `type_schemes`; copy
-        // the record before doing either recursive operation.
+        // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
         const receiver_var = try instantiator.instantiateVar(requirement.receiver_var);
-        if (instantiator.recursion_overflow) return false;
         if (skip_shared_receiver_copies and
             self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
         {
             continue;
         }
         const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
-        if (instantiator.recursion_overflow) return false;
         try out.append(self.gpa, .{
             .scheme_receiver_var = requirement.receiver_var,
             .receiver_var = receiver_var,
@@ -1210,7 +1212,6 @@ fn copySchemeDispatchRequirements(
             .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
         });
     }
-    return true;
 }
 
 /// Append the (scheme var -> fresh var) evidence substitutions contributed by
@@ -2139,6 +2140,7 @@ fn initAssumePrepared(
         .return_constraints = .empty,
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
+        .type_visit_stack = .empty,
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
@@ -2305,6 +2307,7 @@ pub fn deinit(self: *Self) void {
     self.return_constraints.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
+    self.type_visit_stack.deinit(self.gpa);
     self.rigid_var_substitutions.deinit(self.gpa);
     self.type_decl_rigid_vars.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
@@ -4645,21 +4648,6 @@ fn instantiateVarWithSubs(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-fn failInstantiationRecursionOverflow(
-    self: *Self,
-    var_to_instantiate: Var,
-    env: *Env,
-) std.mem.Allocator.Error!Var {
-    const overflow_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_to_instantiate);
-    _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
-        .var_ = var_to_instantiate,
-        .snapshot = snapshot,
-        .def_name = null,
-    } });
-    return self.freshFromContent(.err, env, overflow_region);
-}
-
 /// Map a requirement's recorded creation relation through an instantiation
 /// substitution. The origin names the constraint attached to its receiver, and
 /// that attached relation is copied exactly when the receiver is: a receiver
@@ -4706,9 +4694,6 @@ fn instantiateVarHelp(
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
-    if (instantiator.recursion_overflow) {
-        return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
-    }
 
     // A scheme is the root type plus its explicit pending dispatch
     // requirements. Copy both under this one var_map so generalized variables
@@ -4717,14 +4702,12 @@ fn instantiateVarHelp(
     var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
     defer instantiated_requirements.deinit(self.gpa);
     if (self.typeSchemeIndexForRoot(var_to_instantiate)) |scheme_idx| {
-        if (!try self.copySchemeDispatchRequirements(
+        try self.copySchemeDispatchRequirements(
             scheme_idx,
             instantiator,
             shape_validation,
             &instantiated_requirements,
-        )) {
-            return self.failInstantiationRecursionOverflow(var_to_instantiate, env);
-        }
+        );
     }
 
     // If we had to insert any new type variables, ensure that we have
@@ -11089,16 +11072,12 @@ fn replayPredeclaredSchemeUse(
     };
     var instantiated_requirements: std.ArrayListUnmanaged(InstantiatedSchemeDispatchRequirement) = .empty;
     defer instantiated_requirements.deinit(self.gpa);
-    if (!try self.copySchemeDispatchRequirements(
+    try self.copySchemeDispatchRequirements(
         scheme_idx,
         &instantiator,
         false,
         &instantiated_requirements,
-    )) {
-        const err_var = try self.failInstantiationRecursionOverflow(scheme_root, env);
-        _ = try self.unify(pending.use_var, err_var, env);
-        return;
-    }
+    );
 
     // Register only vars created while copying the newly known requirements;
     // seeded body vars are the already-registered early-use vars. Build the
@@ -12878,37 +12857,66 @@ fn validateAliasRows(self: *Self, var_: Var, env: *Env, region: Region) Allocato
 
 fn validateAliasRowsHelp(
     self: *Self,
-    var_: Var,
+    root_var: Var,
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
+    // Node descent runs on an explicit heap stack so pure constructor spines
+    // of any depth cannot exhaust the native stack. Children are pushed in
+    // reverse, so pops replay the recursion's exact preorder: a node's first
+    // child's whole subtree drains before its next sibling. Row validators
+    // stay recursive for their interleaved duplicate-name checks and re-enter
+    // this walk per payload; every entry operates base-relative on the shared
+    // stack, and a false result abandons the walk wholesale.
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    try stack.append(self.gpa, root_var);
 
-    return switch (resolved.desc.content) {
-        .alias => |alias| blk: {
-            if (!try self.validateAliasRowsHelp(self.types.getAliasBackingVar(alias), env, region, visited)) break :blk false;
-            for (self.types.sliceAliasArgs(alias)) |arg_var| {
-                if (!try self.validateAliasRowsHelp(arg_var, env, region, visited)) break :blk false;
-            }
-            break :blk true;
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .tuple => |tuple| try self.validateAliasRowVars(self.types.sliceVars(tuple.elems), env, region, visited),
-            .nominal_type => |nominal| try self.validateAliasRowVars(self.types.sliceNominalArgs(nominal), env, region, visited),
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                if (!try self.validateAliasRowVars(self.types.sliceVars(func.args), env, region, visited)) break :blk false;
-                break :blk try self.validateAliasRowsHelp(func.ret, env, region, visited);
+    while (stack.items.len > stack_base) {
+        const var_ = stack.pop().?;
+        const resolved = self.types.resolveVar(var_);
+        if (visited.contains(resolved.var_)) continue;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                try self.pushAliasRowVarsReversed(self.types.sliceAliasArgs(alias));
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
             },
-            .record => |record| try self.validateRecordRow(record.fields, record.ext, env, region, visited),
-            .record_unbound => |fields| try self.validateRecordFields(fields, env, region, visited),
-            .tag_union => |tag_union| try self.validateTagUnionRow(tag_union.tags, tag_union.ext, env, region, visited),
-            .empty_record, .empty_tag_union => true,
-        },
-        .flex, .rigid, .err => true,
-    };
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try self.pushAliasRowVarsReversed(self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try self.pushAliasRowVarsReversed(self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.append(self.gpa, func.ret);
+                    try self.pushAliasRowVarsReversed(self.types.sliceVars(func.args));
+                },
+                .record => |record| {
+                    if (!try self.validateRecordRow(record.fields, record.ext, env, region, visited)) return false;
+                },
+                .record_unbound => |fields| {
+                    if (!try self.validateRecordFields(fields, env, region, visited)) return false;
+                },
+                .tag_union => |tag_union| {
+                    if (!try self.validateTagUnionRow(tag_union.tags, tag_union.ext, env, region, visited)) return false;
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+            .flex, .rigid, .err => {},
+        }
+    }
+    return true;
+}
+
+/// Push a child run onto the type visit stack in reverse, so the stack pops
+/// the children in their declared order.
+fn pushAliasRowVarsReversed(self: *Self, vars: []const Var) Allocator.Error!void {
+    var i = vars.len;
+    while (i > 0) {
+        i -= 1;
+        try self.type_visit_stack.append(self.gpa, vars[i]);
+    }
 }
 
 fn validateAliasRowVars(
@@ -27538,9 +27546,6 @@ fn recordGeneratedCodecDerivationSnapshot(
         .rank_behavior = .ignore_rank,
     };
     const copied_root = try instantiator.instantiateVar(snapshot_root);
-    if (instantiator.recursion_overflow) {
-        std.debug.panic("generated codec derivation snapshot exceeded type recursion limit", .{});
-    }
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
         try self.fillInRegionsThrough(copied.*);
@@ -30170,67 +30175,63 @@ fn markErroneousBranchWithExpected(self: *Self, expr_idx: CIR.Expr.Idx, expected
 /// we should use the annotation type for the pattern instead of the expression type.
 /// This handles cases like `Error -> Error` where the root is a function but the
 /// argument/return types are errors.
-fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
+///
+/// The walk runs on the shared explicit visit stack, so structures of any
+/// depth cannot exhaust the native stack. The answer is existential over the
+/// reachable graph—the visited set only prunes—so no particular visit order
+/// is required.
+fn varContainsError(self: *Self, root_var: Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    try stack.append(self.gpa, root_var);
 
-    // Check if we've already visited this var (cycle detection)
-    if (visited.contains(resolved.var_)) {
-        return false;
-    }
-    try visited.put(resolved.var_, {});
+    while (stack.items.len > stack_base) {
+        const var_ = stack.pop().?;
+        const resolved = self.types.resolveVar(var_);
 
-    return switch (resolved.desc.content) {
-        .err => true,
-        .flex, .rigid => false,
-        .alias => |alias| blk: {
-            if (try self.varContainsError(self.types.getAliasBackingVar(alias), visited)) break :blk true;
-            break :blk try self.varsContainError(self.types.sliceAliasArgs(alias), visited);
-        },
-        .structure => |flat_type| try self.flatTypeContainsError(flat_type, visited),
-    };
-}
+        // Check if we've already visited this var (cycle detection)
+        if (visited.contains(resolved.var_)) continue;
+        try visited.put(resolved.var_, {});
 
-/// Check if a flat type contains any error types
-fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
-    return switch (flat_type) {
-        .tuple => |tuple| try self.varsContainError(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| blk: {
-            var arg_iter = self.types.iterNominalArgs(nominal);
-            while (arg_iter.next()) |arg_var| {
-                if (try self.varContainsError(arg_var, visited)) break :blk true;
-            }
-            // An application of an invalid declaration is erroneous; a valid
-            // declaration's backing contains no errors by construction.
-            break :blk self.types.nominalDeclIsInvalid(nominal);
-        },
-        .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-            if (try self.varsContainError(self.types.sliceVars(func.args), visited)) break :blk true;
-            break :blk try self.varContainsError(func.ret, visited);
-        },
-        .record => |record| blk: {
-            const fields = self.types.getRecordFieldsSlice(record.fields);
-            if (try self.varsContainError(fields.items(.var_), visited)) break :blk true;
-            break :blk try self.varContainsError(record.ext, visited);
-        },
-        .record_unbound => |fields| blk: {
-            const fields_slice = self.types.getRecordFieldsSlice(fields);
-            break :blk try self.varsContainError(fields_slice.items(.var_), visited);
-        },
-        .tag_union => |tag_union| blk: {
-            const tags = self.types.getTagsSlice(tag_union.tags);
-            for (tags.items(.args)) |tag_args| {
-                if (try self.varsContainError(self.types.sliceVars(tag_args), visited)) break :blk true;
-            }
-            break :blk try self.varContainsError(tag_union.ext, visited);
-        },
-        .empty_record, .empty_tag_union => false,
-    };
-}
-
-/// Check if any of the given vars contain errors
-fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!bool {
-    for (vars) |v| {
-        if (try self.varContainsError(v, visited)) return true;
+        switch (resolved.desc.content) {
+            .err => return true,
+            .flex, .rigid => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| {
+                    // An application of an invalid declaration is erroneous; a valid
+                    // declaration's backing contains no errors by construction.
+                    if (self.types.nominalDeclIsInvalid(nominal)) return true;
+                    try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    try stack.appendSlice(self.gpa, fields.items(.var_));
+                    try stack.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    try stack.appendSlice(self.gpa, fields_slice.items(.var_));
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
     }
     return false;
 }

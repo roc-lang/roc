@@ -4019,9 +4019,11 @@ record time. The dispatch worklists carry no numeric give-up bounds; they
 terminate because the two rules keep fresh edges finite while every latched
 fixpoint—deferred re-defers, pending scheme requirements, stored finalization
 relations—consumes a monotone resource, each relation grounding at most once
-and taking at most one enqueue. Recursive graph instantiation alone keeps an
-explicit depth bound so it cannot exhaust the native stack. Rejection poisons
-only the cyclic relation and does not discard unrelated queued relations.
+and taking at most one enqueue. Graph instantiation runs on an explicit heap
+worklist whose cycles terminate through the substitution map, so it carries no
+depth bound and cannot exhaust the native stack at any depth. Rejection
+poisons only the cyclic relation and does not discard unrelated queued
+relations.
 
 A generalization boundary captures its owned
 requirements before literal defaulting, runs grounded copied requirements to
