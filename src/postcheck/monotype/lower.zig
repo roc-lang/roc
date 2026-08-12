@@ -5422,7 +5422,7 @@ const Builder = struct {
             boundary_index,
             boundary.mode,
             boundary.operand_node,
-            boundary.ret_ty,
+            boundary.ret_node,
             &seen,
             &added_method_call,
         );
@@ -5841,24 +5841,25 @@ const Builder = struct {
         ctx.frozen_equality_method_calls = &method_calls;
 
         const operand_ty = try sealer.sealNode(boundary.operand_node);
+        const ret_ty = try sealer.sealNode(boundary.ret_node);
         const lowered = switch (boundary.mode) {
             .equality => |eq| try ctx.lowerStructuralEqFromOperands(
                 operand_ty,
                 boundary.lhs,
                 boundary.rhs,
                 eq.negated,
-                boundary.ret_ty,
+                ret_ty,
             ),
             .hash => try ctx.lowerHashExpr(
                 operand_ty,
                 boundary.lhs,
                 boundary.rhs,
-                boundary.ret_ty,
+                ret_ty,
             ),
         };
         const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
         const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
-        if (!try self.program.types.typeEql(&self.program.names, boundary.ret_ty, lowered_ty)) {
+        if (!try self.program.types.typeEql(&self.program.names, ret_ty, lowered_ty)) {
             Common.invariant("deferred structural equality changed its sealed result type");
         }
         body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
@@ -9442,7 +9443,7 @@ const DraftDeferredStructuralEq = struct {
     owner: DraftOwner,
     expr: DraftExprId,
     operand_node: NodeId,
-    ret_ty: Type.TypeId,
+    ret_node: NodeId,
     lhs: DraftExprId,
     rhs: DraftExprId,
     mode: DraftStructuralDerivationMode,
@@ -16057,16 +16058,13 @@ const BodyContext = struct {
         const arg_cell = DraftTypeCell.fromGraphNode(arg_node);
         const arg_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), arg_cell, null);
         const local_expr = try self.addExprWithTypeCell(arg_cell, .{ .local = arg_local });
-        const ret_ty = try self.activeTypeFromCell(ret_cell);
+        const ret_ty = try self.builder.primitiveType(.str);
         const body = switch (self.graph.content(arg_node)) {
             // Rendering a function never inspects its nested signature. Keep
             // that signature graph-native so unresolved child cells survive
             // until the owning draft is sealed once.
             .func, .erased => try self.stringExpr("<function>", ret_ty),
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
-                try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node), ret_ty)
-            else
-                try self.deferInspectAtNode(local_expr, arg_node, ret_ty),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => try self.deferInspectAtNode(local_expr, arg_node, ret_ty),
         };
         return .{
             .args = try self.draft.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = arg_cell }}),
@@ -17501,10 +17499,7 @@ const BodyContext = struct {
         }
         const value = try self.lowerExpr(child);
         const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
-        return if (try self.graph.typeIsResolved(value_node))
-            try self.inspectCall(value, try self.activeTypeFromNode(value_node), str_ty)
-        else
-            try self.deferInspectAtNode(value, value_node, str_ty);
+        return try self.deferInspectAtNode(value, value_node, str_ty);
     }
 
     fn lowerExpectErrMessage(
@@ -36196,16 +36191,8 @@ const BodyContext = struct {
             if (self.graph.sameFunctionInterface(prepared.callable_node, callable_node)) {
                 return prepared.callee;
             }
-            if (try self.graph.typeIsResolved(prepared.callable_node) and
-                try self.graph.typeIsResolved(callable_node))
-            {
-                const prepared_ty = try self.activeTypeFromNode(prepared.callable_node);
-                const callable_ty = try self.activeTypeFromNode(callable_node);
-                if (try self.builder.program.types.typeEql(
-                    &self.builder.program.names,
-                    prepared_ty,
-                    callable_ty,
-                )) return prepared.callee;
+            if (self.graph.sameDirectRequestSelections(prepared.callable_node, callable_node)) {
+                return prepared.callee;
             }
         }
         return null;
@@ -36549,7 +36536,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural equality callable graph node must have two operands");
         }
-        const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
         const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
             fn_nodes.args,
@@ -36560,17 +36546,8 @@ const BodyContext = struct {
             Common.invariant("structural equality dispatch did not lower two operands");
         }
 
-        if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
-            return try self.lowerStructuralEqFromOperands(
-                try self.activeTypeFromNode(fn_nodes.args[0]),
-                operands[0],
-                operands[1],
-                eq.negated,
-                ret_ty,
-            );
-        }
         return try self.deferStructuralEqOperandsAtNode(
-            ret_ty,
+            fn_nodes.ret,
             fn_nodes.args[0],
             operands[0],
             operands[1],
@@ -36601,7 +36578,6 @@ const BodyContext = struct {
         if (fn_nodes.args.len != 2) {
             Common.invariant("structural hash callable graph node must have two operands");
         }
-        const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
         const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
             fn_nodes.args,
@@ -36612,16 +36588,8 @@ const BodyContext = struct {
             Common.invariant("structural hash dispatch did not lower two operands");
         }
 
-        if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
-            return try self.lowerHashExpr(
-                try self.activeTypeFromNode(fn_nodes.args[0]),
-                operands[0],
-                operands[1],
-                ret_ty,
-            );
-        }
         return try self.deferStructuralDerivationOperandsAtNode(
-            ret_ty,
+            fn_nodes.ret,
             fn_nodes.args[0],
             operands[0],
             operands[1],
@@ -41641,7 +41609,7 @@ const BodyContext = struct {
         // producer's node for deferred structural emission.
         try self.graph.requireSameExactProducedValue(lhs_node, rhs_node);
         return try self.deferStructuralDerivationOperandsAtNode(
-            ret_ty,
+            try self.graph.importMono(ret_ty),
             lhs_node,
             lhs,
             rhs,
@@ -41666,14 +41634,14 @@ const BodyContext = struct {
 
     fn deferStructuralEqOperandsAtNode(
         self: *BodyContext,
-        ret_ty: Type.TypeId,
+        ret_node: NodeId,
         operand_node: NodeId,
         lhs: DraftExprId,
         rhs: DraftExprId,
         negated: bool,
     ) Allocator.Error!DraftExprId {
         return try self.deferStructuralDerivationOperandsAtNode(
-            ret_ty,
+            ret_node,
             operand_node,
             lhs,
             rhs,
@@ -41683,13 +41651,13 @@ const BodyContext = struct {
 
     fn deferStructuralDerivationOperandsAtNode(
         self: *BodyContext,
-        ret_ty: Type.TypeId,
+        ret_node: NodeId,
         operand_node: NodeId,
         lhs: DraftExprId,
         rhs: DraftExprId,
         mode: DraftStructuralDerivationMode,
     ) Allocator.Error!DraftExprId {
-        const expr = try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
+        const expr = try self.addExprWithTypeCell(.{ .graph_node = ret_node }, .pending_deferred);
         self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = try self.anyImpossibilityProof(&.{
             self.exprImpossibilityProof(lhs),
             self.exprImpossibilityProof(rhs),
@@ -41706,7 +41674,7 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .expr = expr,
             .operand_node = operand_node,
-            .ret_ty = ret_ty,
+            .ret_node = ret_node,
             .lhs = lhs,
             .rhs = rhs,
             .mode = mode,
@@ -41729,7 +41697,7 @@ const BodyContext = struct {
         boundary_index: usize,
         mode: DraftStructuralDerivationMode,
         raw_node: NodeId,
-        result_ty: Type.TypeId,
+        result_node: NodeId,
         seen: *collections.DenseMap(NodeId, void),
         added_method_call: *bool,
     ) Allocator.Error!void {
@@ -41750,7 +41718,7 @@ const BodyContext = struct {
                     boundary_index,
                     mode,
                     raw_node,
-                    result_ty,
+                    result_node,
                     lookup,
                     added_method_call,
                 );
@@ -41761,7 +41729,7 @@ const BodyContext = struct {
                         boundary_index,
                         mode,
                         item,
-                        result_ty,
+                        result_node,
                         seen,
                         added_method_call,
                     );
@@ -41773,7 +41741,7 @@ const BodyContext = struct {
                         boundary_index,
                         mode,
                         field.ty,
-                        result_ty,
+                        result_node,
                         seen,
                         added_method_call,
                     );
@@ -41786,7 +41754,7 @@ const BodyContext = struct {
                             boundary_index,
                             mode,
                             payload,
-                            result_ty,
+                            result_node,
                             seen,
                             added_method_call,
                         );
@@ -41813,7 +41781,7 @@ const BodyContext = struct {
                                     boundary_index,
                                     mode,
                                     raw_node,
-                                    result_ty,
+                                    result_node,
                                     lookup,
                                     added_method_call,
                                 );
@@ -41827,7 +41795,7 @@ const BodyContext = struct {
                         boundary_index,
                         mode,
                         backing.node,
-                        result_ty,
+                        result_node,
                         seen,
                         added_method_call,
                     );
@@ -41851,7 +41819,7 @@ const BodyContext = struct {
         boundary_index: usize,
         mode: DraftStructuralDerivationMode,
         node: NodeId,
-        result_ty: Type.TypeId,
+        result_node: NodeId,
         lookup: MethodLookup,
         added_method_call: *bool,
     ) Allocator.Error!void {
@@ -41859,10 +41827,9 @@ const BodyContext = struct {
             if (planned.boundary != boundary_index) continue;
             if (self.graph.sameClass(planned.node, node)) return;
         }
-        const ret_node = try self.graph.importMono(result_ty);
         const callable_node = switch (mode) {
-            .equality => try self.graphFunctionNode(&.{ node, node }, ret_node),
-            .hash => try self.graphFunctionNode(&.{ node, ret_node }, ret_node),
+            .equality => try self.graphFunctionNode(&.{ node, node }, result_node),
+            .hash => try self.graphFunctionNode(&.{ node, result_node }, result_node),
         };
         try self.recordExactRequestEdge(
             callable_node,
@@ -42212,16 +42179,8 @@ const BodyContext = struct {
         const value = try self.lowerExpr(h.value);
         const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
         const hasher = try self.lowerExprAtType(h.hasher, hasher_ty);
-        if (try self.graph.typeIsResolved(value_node)) {
-            return try self.lowerHashExpr(
-                try self.activeTypeFromNode(value_node),
-                value,
-                hasher,
-                hasher_ty,
-            );
-        }
         return try self.deferStructuralDerivationOperandsAtNode(
-            hasher_ty,
+            try self.graph.importMono(hasher_ty),
             value_node,
             value,
             hasher,

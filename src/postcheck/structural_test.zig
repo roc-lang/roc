@@ -817,8 +817,9 @@ test "Monotype structural equality consumes exact lowered operand roots" {
         "const StructuralBinaryOperands = struct",
     );
     try expectContains(dispatch_equality, "self.graph.functionNodes(callable_node)");
-    try expectContains(dispatch_equality, "self.graph.typeIsResolved(fn_nodes.args[0])");
     try expectContains(dispatch_equality, "deferStructuralEqOperandsAtNode");
+    try expectNotContains(dispatch_equality, "self.graph.typeIsResolved(fn_nodes.args[0])");
+    try expectNotContains(dispatch_equality, "activeTypeFromNode(fn_nodes.args[0])");
     try expectNotContains(dispatch_equality, "resolvedTypeViewForNode(callable_node)");
 }
 
@@ -1179,10 +1180,10 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn lowerStrInspectIntrinsicAtNode(",
         "fn lowerLambdaTemplateAtNodeWithReturnRelation(",
     );
-    try expectContains(inspect_source, "try self.graph.typeIsResolved(arg_node)");
     try expectContains(inspect_source, "try self.deferInspectAtNode(local_expr, arg_node, ret_ty)");
     try expectContains(inspect_source, ".impossibility_proof = try self.currentRuntimeImpossibilityProof(null)");
-    try expectNotContains(inspect_source, "else => try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node)");
+    try expectNotContains(inspect_source, "self.graph.typeIsResolved(arg_node)");
+    try expectNotContains(inspect_source, "activeTypeFromNode(arg_node)");
 
     const prepare_inspect = sourceSliceBetween(
         lower_source,

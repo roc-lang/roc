@@ -2957,6 +2957,14 @@ completed receiver. No parent asks whether a child or descendant is generated,
 and no ordinary node participates in generated-representation work merely
 because such a descendant is possible.
 
+Operations whose generated IR depends on a fully closed runtime type—inspect,
+structural equality, structural hashing, parser generation, and encoder
+generation—retain the exact operand and result `NodeId`s in the body draft.
+They emit from the single final sealed type after relation production freezes.
+They do not branch on whether a node happens to be resolved early, materialize
+a pre-freeze `TypeId` snapshot, or choose a different lowering route based on
+that timing accident.
+
 Checked output has no transitive `produces_exact_graph` or
 `exact_graph_from_evidence` classification. Those booleans are forbidden: they
 turn a local producer edge into a property propagated across unrelated parents
