@@ -1216,7 +1216,7 @@ test "snapshotting a spine deeper than any native-stack budget" {
             .{ .ident_idx = alias_ident },
             current,
             &.{},
-            @enumFromInt(0),
+            base.ModuleIdentity.Idx.NONE,
         ));
     }
 
