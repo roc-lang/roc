@@ -2935,6 +2935,18 @@ with what the expression produced. A contextual consumer lowers the expression
 once, reads that returned `NodeId`, and only then performs the explicit storage
 or control-flow selection required by the consumer.
 
+Lowering may give a genuinely requested value, such as a lambda or an empty
+container, the exact destination named by the checker's directional schedule
+before that value runs. It may not run a type-only preview of a producer. In
+particular, request construction must not recursively specialize a call, inspect
+a call result, descend through a field or tuple receiver, or query a local as
+"argument evidence" to predict the node that later expression lowering will
+return. A producer enters a call's exact substitution span only after its one
+real lowering pass has returned the produced node. A stored generated body that
+has not yet restored its operands carries checked formal shells with every
+operand marked unavailable; only its explicit result destination and checked
+target signature may affect that preliminary request.
+
 Compound construction does not apply one complete type graph to another. It
 lowers each runtime child once, constructs the parent directly from those exact
 child `NodeId`s and the checker-authored constructor identity, and returns that
@@ -4073,6 +4085,12 @@ callee's flat checked-occurrence-to-exact-node substitution span. A completed
 callee stores its result node; an active recursive callee exposes its one
 reserved result cell. The caller never relates its own result tree to the
 callee's function tree.
+
+Call-site intrinsics use this same operand schedule. They do not build a
+callable by predicting operand result nodes and then lower the operands again
+inside the intrinsic body. The ordinary call planner lowers every operand once,
+the intrinsic consumes those existing IR expressions and exact nodes, and any
+deferred intrinsic retains those same expressions through final emission.
 
 Repeated dependencies are memoized by the complete procedure family (template,
 method scope, and checked source-function key), exact evidence topology,
