@@ -629,6 +629,11 @@ fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.Checke
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+fn procedureModuleIdentityMatches(module: ProcedureModuleView, identity: *const [32]u8) bool {
+    const module_identity = module.module_env.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(module_identity, identity);
+}
+
 fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
     var current = ty;
     var remaining = module.checked_types.payloadCount();
@@ -13057,12 +13062,12 @@ const ProcBodyBuilder = struct {
             .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
             .str => |segments| try self.lowerStrInto(target, expr.ty, segments, next),
             .str_from_quote => |quote| try self.lowerQuoteConversionInto(target, expr_id, expr.ty, quote, next),
-            .empty_record => try self.assignZst(target, next),
+            .empty_record => try self.lowerEmptyRecordInto(target, expr_id, expr.ty, next),
             .empty_list => try self.lowerListInto(target, expr.ty, &.{}, next),
             .lookup_local => |lookup| try self.lowerLookupLocalInto(target, expr_id, expr.ty, lookup, next),
             .lookup_external => |ref_id| try self.lowerResolvedLookupInto(target, expr_id, expr.ty, ref_id, next),
             .lookup_required => |ref_id| try self.lowerResolvedLookupInto(target, expr_id, expr.ty, ref_id, next),
-            .field_access => |access| try self.lowerFieldAccessInto(target, expr.ty, access.receiver, access.field_name, next),
+            .field_access => |access| try self.lowerFieldAccessInto(target, expr.ty, access.receiver, access.segments, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .list => |items| try self.lowerListInto(target, expr.ty, items, next),
             .tuple => |items| try self.lowerTupleInto(target, expr.ty, items, next),
@@ -13078,7 +13083,7 @@ const ProcBodyBuilder = struct {
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, null, eq.negated, next),
             .method_eq => |plan| try self.lowerMethodEqInto(target, plan, next),
             .structural_hash => |hash| try self.lowerStructuralHashInto(target, hash.value, hash.hasher, next),
-            .record => |record| try self.lowerRecordExprInto(target, expr.ty, record, next),
+            .record => |record| try self.lowerRecordExprInto(target, expr_id, expr.ty, record, next),
             .nominal => |nominal| try self.lowerNominalInto(target, expr.ty, nominal.backing_expr, next),
             .call => |call| try self.lowerDirectCallInto(target, expr_id, call, next),
             .dispatch_call => |maybe_plan| try self.lowerDispatchCallInto(target, expr_id, maybe_plan, next),
@@ -14102,10 +14107,11 @@ const ProcBodyBuilder = struct {
                     variant.index,
                 );
                 const payload_storage = try self.addFrameLocal(payload_layout);
+                self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = payload_storage,
                     .target_rep = target_child.rep,
-                    .source_rep = target_child.rep,
+                    .source_rep = payload_rep,
                 }};
                 const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
                 defer tag_desc.deinit(self.parent.allocator);
@@ -14131,10 +14137,11 @@ const ProcBodyBuilder = struct {
                 try self.bindConstructedTargetDescriptor(target, target_rep);
                 const target_desc = try self.constructedTargetDescForRep(target_rep);
                 const dynamic_payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
+                self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = dynamic_payload.local,
                     .target_rep = target_child.rep,
-                    .source_rep = target_child.rep,
+                    .source_rep = payload_rep,
                 }};
                 const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
                 defer tag_desc.deinit(self.parent.allocator);
@@ -20300,6 +20307,18 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const variant = self.tagVariant(rep, name);
+        return try self.lowerPlannedTagVariantInto(target, rep_id, variant, args, next);
+    }
+
+    fn lowerPlannedTagVariantInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        variant: TagVariantLookup,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != args.len) {
             boxyLowerInvariant("tag expression payload count disagreed with its checked type representation");
@@ -20338,7 +20357,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
                     .target_desc = target_desc,
-                    .tag_name = try self.lirTagName(name),
+                    .tag_name = try self.lirTagNameForLookup(variant),
                     .next = next,
                 } });
             } else try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
@@ -20753,9 +20772,12 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         result_ty: checked.CheckedTypeId,
         receiver_id: checked.CheckedExprId,
-        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+        segments: []const checked.CheckedFieldAccessSegment,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (segments.len == 0) {
+            boxyLowerInvariant("checked field access path had no segments");
+        }
         const receiver = self.module.checked_bodies.expr(receiver_id);
         const receiver_rep = self.repForType(receiver.ty);
         const receiver_layout = self.workerRuntimeLayoutForRep(receiver_rep);
@@ -20763,8 +20785,235 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(receiver_local).layout_idx != receiver_layout.layoutIdx()) {
             boxyLowerInvariant("boxy field access receiver local layout disagreed with checked type");
         }
-        const read = try self.lowerRecordFieldFromLocalInto(target, self.repForType(result_ty), receiver_local, receiver_rep, self.module, field_name, next);
-        return try self.lowerExprInto(receiver_local, receiver_id, read);
+
+        for (segments) |segment| {
+            if (segment.mode == .optional) {
+                const result_rep = self.repForType(result_ty);
+                const lowered = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    0,
+                    receiver_local,
+                    receiver_rep,
+                    next,
+                );
+                return try self.lowerExprInto(receiver_local, receiver_id, lowered);
+            }
+        }
+
+        const prefix_locals = try self.parent.allocator.alloc(LIR.LocalId, segments.len - 1);
+        defer self.parent.allocator.free(prefix_locals);
+        for (prefix_locals, segments[0 .. segments.len - 1]) |*local, segment| {
+            local.* = try self.addFrameLocalForRep(self.repForType(segment.success_ty));
+        }
+        var continuation = next;
+        var index = segments.len;
+        while (index > 0) {
+            index -= 1;
+            const segment = segments[index];
+            const segment_rep = self.repForType(segment.success_ty);
+            const destination = if (index + 1 == segments.len)
+                target
+            else
+                prefix_locals[index];
+            const source_local = if (index == 0) receiver_local else prefix_locals[index - 1];
+            const source_rep = if (index == 0)
+                receiver_rep
+            else
+                self.repForType(segments[index - 1].success_ty);
+            continuation = try self.lowerRecordFieldFromLocalInto(
+                destination,
+                if (index + 1 == segments.len) self.repForType(result_ty) else segment_rep,
+                source_local,
+                source_rep,
+                self.module,
+                segment.field_name,
+                continuation,
+            );
+        }
+        return try self.lowerExprInto(receiver_local, receiver_id, continuation);
+    }
+
+    fn lowerOptionalFieldAccessSegments(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_rep: Plan.TypeRepId,
+        segments: []const checked.CheckedFieldAccessSegment,
+        index: usize,
+        current: LIR.LocalId,
+        current_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (index == segments.len) {
+            const ok = self.generatedParserTagVariant(result_rep, "Ok");
+            return try self.assignGeneratedParserTag(
+                target,
+                result_rep,
+                ok,
+                current,
+                current_rep,
+                next,
+            );
+        }
+
+        const segment = segments[index];
+        const access = self.recordFieldAccessInfo(current_rep, self.module, segment.field_name);
+        return switch (segment.mode) {
+            .required => blk: {
+                if (access.field_kind == .optional) {
+                    boxyLowerInvariant("required field-access segment selected an optional slot");
+                }
+                const field_rep = self.repForType(segment.success_ty);
+                const field_local = try self.addFrameLocalForRep(field_rep);
+                const rest = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    index + 1,
+                    field_local,
+                    field_rep,
+                    next,
+                );
+                break :blk try self.lowerRecordFieldFromLocalInto(
+                    field_local,
+                    field_rep,
+                    current,
+                    current_rep,
+                    self.module,
+                    segment.field_name,
+                    rest,
+                );
+            },
+            .optional => blk: {
+                if (access.field_kind != .optional) {
+                    boxyLowerInvariant("optional field-access segment did not select an optional slot");
+                }
+                const slot_rep = access.field_rep;
+                const slot_local = try self.addFrameLocalForRep(slot_rep);
+                const slot_rep_info = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+                const present = self.plannedTagVariantByText(slot_rep, "#Present");
+                const payload_children = self.parent.plan.childSlice(present.payloads);
+                if (payload_children.len != 1) {
+                    boxyLowerInvariant("optional field Present slot did not carry one payload");
+                }
+                const payload_rep = payload_children[0].rep;
+                const payload = try self.addExtractedTagPayloadLocal(payload_rep, slot_rep_info.descriptor != null);
+                const present_rest = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    index + 1,
+                    payload.local,
+                    payload_rep,
+                    next,
+                );
+                const present_body = try self.assignConcreteTagPayloadRead(
+                    payload.local,
+                    payload_rep,
+                    payload.desc_local,
+                    slot_local,
+                    slot_rep,
+                    present.name,
+                    present.index,
+                    0,
+                    1,
+                    present_rest,
+                );
+
+                const err = self.generatedParserTagVariant(result_rep, "Err");
+                const err_payloads = self.parent.plan.childSlice(err.variant.payloads);
+                if (err_payloads.len != 1) {
+                    boxyLowerInvariant("optional field access Try Err variant did not carry one payload");
+                }
+                const error_rep = self.nominalBackingActualRep(result_rep, err_payloads[0].rep);
+                const error_local = try self.addFrameLocalForRep(error_rep);
+                const err_body = try self.assignGeneratedParserTag(
+                    target,
+                    result_rep,
+                    err,
+                    error_local,
+                    error_rep,
+                    next,
+                );
+                const missing = self.generatedParserTagVariant(error_rep, "MissingField");
+                const missing_body = try self.assignGeneratedParserZeroTag(
+                    error_local,
+                    error_rep,
+                    missing,
+                    err_body,
+                );
+
+                const discriminant = try self.addFrameLocal(.u16);
+                const branches = [_]LIR.CFSwitchBranch{.{
+                    .value = present.index,
+                    .body = present_body,
+                }};
+                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = discriminant,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+                    .default_branch = missing_body,
+                    .continuation = null,
+                } });
+                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = discriminant,
+                    .op = .{ .discriminant = .{ .source = slot_local } },
+                    .next = switch_stmt,
+                } });
+                break :blk try self.lowerRecordFieldFromLocalInto(
+                    slot_local,
+                    slot_rep,
+                    current,
+                    current_rep,
+                    self.module,
+                    segment.field_name,
+                    read_discriminant,
+                );
+            },
+        };
+    }
+
+    fn nominalBackingActualRep(
+        self: *const ProcBodyBuilder,
+        owner_rep: Plan.TypeRepId,
+        backing_rep: Plan.TypeRepId,
+    ) Plan.TypeRepId {
+        var current = owner_rep;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) {
+                boxyLowerInvariant("nominal backing substitution wrapper chain exceeded boxy lowerer limit");
+            }
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => {
+                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                        if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
+                    }
+                    return backing_rep;
+                },
+                .in_progress,
+                .dynamic,
+                .primitive,
+                .bool_tag_union,
+                .erased_callable,
+                .record,
+                .record_unbound,
+                .tuple,
+                .list,
+                .box,
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return backing_rep,
+            }
+        }
     }
 
     fn lowerRecordFieldFromLocalInto(
@@ -21012,12 +21261,27 @@ const ProcBodyBuilder = struct {
     fn lowerRecordInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         expr_fields: []const checked.CheckedRecordExprField,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const rep_id = self.repForType(record_ty);
-        return try self.lowerRecordRepInto(target, rep_id, expr_fields, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, null, next);
+    }
+
+    fn lowerEmptyRecordInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
+        record_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(record_ty);
+        if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
+            return try self.assignZst(target, next);
+        }
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, null, next);
     }
 
     const RecordExtension = struct {
@@ -21028,6 +21292,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordRepInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         expr_fields: []const checked.CheckedRecordExprField,
         extension: ?RecordExtension,
@@ -21037,9 +21302,9 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .record,
             .record_unbound,
-            => return try self.lowerRecordPayloadInto(target, rep_id, rep, expr_fields, extension, next),
-            .dynamic => return try self.lowerDynamicRecordInto(target, rep_id, rep, expr_fields, extension, next),
-            .alias => return try self.lowerRecordRepInto(target, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
+            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
+            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
+            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .opaque_nominal,
@@ -21048,7 +21313,7 @@ const ProcBodyBuilder = struct {
                     const backing = self.requiredSingleChild(rep_id, .nominal_backing);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, backing.rep, expr_fields, extension, assign);
+                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, extension, assign);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21058,6 +21323,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordPayloadInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
@@ -21073,8 +21339,8 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record representation had a non-record child role"),
             }
         }
-        if (extension == null and field_count != expr_fields.len) {
-            boxyLowerInvariant("record expression field count disagreed with its checked type representation");
+        if (expr_fields.len > field_count) {
+            boxyLowerInvariant("record expression had more fields than its checked type representation");
         }
 
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, field_count);
@@ -21087,6 +21353,8 @@ const ProcBodyBuilder = struct {
         const source_field_target_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, expr_fields.len);
         defer self.parent.allocator.free(source_field_target_reps);
         @memset(source_field_target_reps, null);
+        const source_field_kinds = try self.parent.allocator.alloc(checked.CheckedFieldKind.Tag, expr_fields.len);
+        defer self.parent.allocator.free(source_field_kinds);
         const field_sources = try self.parent.allocator.alloc(RecordPayloadFieldSource, field_count);
         defer self.parent.allocator.free(field_sources);
 
@@ -21106,14 +21374,18 @@ const ProcBodyBuilder = struct {
                         descriptor_fields[layout_index] = .{
                             .local = local,
                             .target_rep = child.rep,
-                            .source_rep = self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
+                            .source_rep = if (child.record_field_kind == .optional)
+                                child.rep
+                            else
+                                self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
                         };
                         if (source_field_locals[source_index] != null) {
                             boxyLowerInvariant("record expression field was selected more than once by representation order");
                         }
                         source_field_locals[source_index] = local;
                         source_field_target_reps[source_index] = child.rep;
-                        field_sources[layout_index] = .{ .expr = expr_fields[source_index].value };
+                        source_field_kinds[source_index] = child.record_field_kind;
+                        field_sources[layout_index] = .expr;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
@@ -21133,8 +21405,33 @@ const ProcBodyBuilder = struct {
                             .field_view = rep_field_view,
                             .label = label,
                         } };
-                    } else {
-                        boxyLowerInvariant("record expression was missing a field from its checked type representation");
+                    } else switch (child.record_field_kind) {
+                        .optional => {
+                            const local = try self.addFrameLocal(field_layout);
+                            field_locals[layout_index] = local;
+                            descriptor_fields[layout_index] = .{
+                                .local = local,
+                                .target_rep = child.rep,
+                                .source_rep = child.rep,
+                            };
+                            field_sources[layout_index] = .{ .missing_optional = child.rep };
+                        },
+                        .defaulted => {
+                            const default = self.omittedRecordFieldDefault(record_expr, rep_field_view, label) orelse
+                                boxyLowerInvariant("defaulted record expression field had no record_omitted_defaults entry");
+                            const local = try self.addFrameLocal(field_layout);
+                            field_locals[layout_index] = local;
+                            descriptor_fields[layout_index] = .{
+                                .local = local,
+                                .target_rep = child.rep,
+                                .source_rep = child.rep,
+                            };
+                            field_sources[layout_index] = .{ .defaulted = .{
+                                .default = default,
+                                .field_type = child.source_type,
+                            } };
+                        },
+                        .required, .undetermined, .err => boxyLowerInvariant("record expression was missing a required field from its checked type representation"),
                     }
                     layout_index += 1;
                 },
@@ -21163,6 +21460,13 @@ const ProcBodyBuilder = struct {
             field_index -= 1;
             continuation = switch (field_sources[field_index]) {
                 .expr => continuation,
+                .missing_optional => |slot_rep| try self.lowerOptionalSlotMissingInto(field_locals[field_index], slot_rep, continuation),
+                .defaulted => |defaulted| try self.lowerDefaultedRecordFieldInto(
+                    field_locals[field_index],
+                    defaulted.default,
+                    defaulted.field_type,
+                    continuation,
+                ),
                 .extension => |ext| blk: {
                     const field_local = field_locals[field_index];
                     if (self.localUsesWorkerLayoutForRep(field_local, ext.target_rep)) {
@@ -21197,13 +21501,21 @@ const ProcBodyBuilder = struct {
             const target_local = source_field_locals[source_index].?;
             const target_rep = source_field_target_reps[source_index] orelse
                 boxyLowerInvariant("record expression field target rep was not recorded");
-            continuation = try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
+            continuation = if (source_field_kinds[source_index] == .optional)
+                try self.lowerOptionalSlotPresentInto(target_local, target_rep, expr_fields[source_index].value, continuation)
+            else
+                try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
         }
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
 
     const RecordPayloadFieldSource = union(enum) {
-        expr: checked.CheckedExprId,
+        expr,
+        missing_optional: Plan.TypeRepId,
+        defaulted: struct {
+            default: checked.CheckedFieldDefault,
+            field_type: Plan.CheckedTypeIdentity,
+        },
         extension: struct {
             local: LIR.LocalId,
             rep: Plan.TypeRepId,
@@ -21213,9 +21525,112 @@ const ProcBodyBuilder = struct {
         },
     };
 
+    fn omittedRecordFieldDefault(
+        self: *const ProcBodyBuilder,
+        record_expr: checked.CheckedExprId,
+        field_view: ProcedureModuleView,
+        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) ?checked.CheckedFieldDefault {
+        for (self.module.checked_bodies.record_omitted_defaults) |entry| {
+            if (entry.expr != record_expr) continue;
+            if (self.recordFieldNameMatches(self.module, entry.field_name, field_view, field_name)) {
+                return entry.default;
+            }
+        }
+        return null;
+    }
+
+    fn lowerOptionalSlotPresentInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        slot_rep: Plan.TypeRepId,
+        value: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const present = self.plannedTagVariantByText(slot_rep, "#Present");
+        return try self.lowerPlannedTagVariantInto(target, slot_rep, present, &.{value}, next);
+    }
+
+    fn lowerOptionalSlotMissingInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        slot_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const missing = self.plannedTagVariantByText(slot_rep, "#Missing");
+        return try self.lowerPlannedTagVariantInto(target, slot_rep, missing, &.{}, next);
+    }
+
+    fn plannedTagVariantByText(
+        self: *const ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        text: []const u8,
+    ) TagVariantLookup {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .tag_union) {
+            boxyLowerInvariant("compiler-generated optional slot did not have a tag-union representation");
+        }
+        for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
+            if (!std.mem.eql(u8, self.tagVariantNameText(variant), text)) continue;
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("compiler-generated optional slot variant index exceeded LIR range");
+            }
+            return .{
+                .index = @intCast(index),
+                .name = variant.name,
+                .name_module = variant.name_module,
+                .payloads = variant.payloads,
+            };
+        }
+        boxyLowerInvariant("compiler-generated optional slot was missing a reserved variant");
+    }
+
+    fn lowerDefaultedRecordFieldInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        default: checked.CheckedFieldDefault,
+        field_type: Plan.CheckedTypeIdentity,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const origin = default.origin() orelse
+            boxyLowerInvariant("defaulted record field carried no declaring module identity");
+        const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
+        const declaring_module = self.moduleForIdentityHash(origin_hash) orelse
+            boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
+        const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
+            boxyLowerInvariant("defaulted record field's expression was not archived");
+        const root = declaring_module.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr) orelse
+            boxyLowerInvariant("defaulted record field's expression had no compile-time root");
+        const node = switch (root.payload) {
+            .const_node => |node| node,
+            .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
+            .fn_value, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
+        };
+        const type_module = procedureModuleById(self.parent.modules, field_type.module);
+        return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
+    }
+
+    fn moduleForIdentityHash(
+        self: *const ProcBodyBuilder,
+        origin_hash: *const [32]u8,
+    ) ?ProcedureModuleView {
+        const root = rootProcedureModule(self.parent.modules);
+        if (procedureModuleIdentityMatches(root, origin_hash)) return root;
+        for (self.parent.modules.imports) |imported| {
+            const view = procedureModuleFromImport(imported);
+            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
+        }
+        for (self.parent.modules.root.relation_modules) |relation| {
+            const view = procedureModuleFromImport(relation);
+            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
+        }
+        return null;
+    }
+
     fn lowerDynamicRecordInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
@@ -21238,6 +21653,7 @@ const ProcBodyBuilder = struct {
         } });
         return try self.lowerRecordPayloadInto(
             payload,
+            record_expr,
             rep_id,
             rep,
             expr_fields,
@@ -21249,6 +21665,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordExprInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         record: anytype,
         next: LIR.CFStmtId,
@@ -21257,13 +21674,13 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            const continuation = try self.lowerRecordRepInto(target, self.repForType(record_ty), record.fields, .{
+            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, .{
                 .local = ext_local,
                 .rep = ext_rep,
             }, next);
             return try self.lowerExprInto(ext_local, ext, continuation);
         }
-        return try self.lowerRecordInto(target, record_ty, record.fields, next);
+        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, next);
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -35815,6 +36232,7 @@ const ProcBodyBuilder = struct {
         record_rep: Plan.TypeRepId,
         field_idx: u16,
         field_rep: Plan.TypeRepId,
+        field_kind: checked.CheckedFieldKind.Tag,
     };
 
     const MatchedRecordField = struct {
@@ -35942,6 +36360,7 @@ const ProcBodyBuilder = struct {
                             .record_rep = record_rep_id,
                             .field_idx = index,
                             .field_rep = child.rep,
+                            .field_kind = child.record_field_kind,
                         };
                     }
                     index += 1;
@@ -36048,6 +36467,7 @@ const ProcBodyBuilder = struct {
     const TagVariantLookup = struct {
         index: u16,
         name: names.TagNameId,
+        name_module: checked.ModuleId,
         payloads: Plan.Span,
     };
 
@@ -36101,6 +36521,7 @@ const ProcBodyBuilder = struct {
             return .{
                 .index = @intCast(index),
                 .name = variant.name,
+                .name_module = variant.name_module,
                 .payloads = variant.payloads,
             };
         }
@@ -36147,6 +36568,14 @@ const ProcBodyBuilder = struct {
         variant: Plan.TagVariant,
     ) Allocator.Error!base.StringLiteral.Idx {
         return try self.parent.result.store.insertString(self.tagVariantNameText(variant));
+    }
+
+    fn lirTagNameForLookup(
+        self: *ProcBodyBuilder,
+        variant: TagVariantLookup,
+    ) Allocator.Error!base.StringLiteral.Idx {
+        const module = procedureModuleById(self.parent.modules, variant.name_module);
+        return try self.parent.result.store.insertString(module.canonical_names.tagLabelText(variant.name));
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u16 {
@@ -42715,14 +43144,20 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
+    try checked_module.checked_bodies.field_access_segment_pool.append(gpa, .{
+        .field_name = field_b,
+        .success_ty = @enumFromInt(fixtureTableIndex(0)),
+        .source_region = base.Region.zero(),
+        .mode = .required,
+        .backing_access = .inspectable,
+    });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
             .receiver = @enumFromInt(6),
-            .field_name = field_b,
-            .backing_access = .inspectable,
+            .segments = .{ .start = 0, .len = 1 },
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
@@ -43468,14 +43903,20 @@ test "boxy lowerer emits record field access using layout field index" {
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
     });
+    try checked_module.checked_bodies.field_access_segment_pool.append(gpa, .{
+        .field_name = field_b,
+        .success_ty = @enumFromInt(fixtureTableIndex(0)),
+        .source_region = base.Region.zero(),
+        .mode = .required,
+        .backing_access = .inspectable,
+    });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
             .receiver = @enumFromInt(2),
-            .field_name = field_b,
-            .backing_access = .inspectable,
+            .segments = .{ .start = 0, .len = 1 },
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{

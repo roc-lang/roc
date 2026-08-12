@@ -63,6 +63,16 @@ pub const FormattingResult = struct {
     }
 };
 
+/// Parse diagnostics whose recovery AST is an explicit source migration that
+/// the formatter owns. Every other parse diagnostic still blocks formatting so
+/// a malformed file is never overwritten from a lossy recovery tree.
+fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
+    for (diagnostics) |diagnostic| {
+        if (diagnostic.tag != .optional_field_mark_after_colon) return false;
+    }
+    return true;
+}
+
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
@@ -271,12 +281,14 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
+    // Explicit formatter migrations may consume their parser recovery AST.
+    // Every other parsing problem is reported and leaves the file untouched.
+    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
+    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
 
     // Check if the file is formatted without actually formatting it
     if (unformatted_files != null) {
@@ -292,6 +304,9 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
         var output_buffer: [4096]u8 = undefined;
         var output_writer = output_file.writer(io, &output_buffer);
         try formatAstWithOptions(parse_ast.*, &output_writer.interface, options);
+        if (migrates_optional_field_syntax) {
+            try stderr.print("Migrated legacy optional field syntax `:?` to `?:` in {s}.\n", .{path});
+        }
     }
 }
 
@@ -320,16 +335,21 @@ pub fn formatStdin(gpa: std.mem.Allocator, options: Options, io: std.Io, stdin: 
     const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
-    // If there are any parsing problems, print them to stderr
-    if (parse_ast.parse_diagnostics.items.len > 0) {
+    // Keep stdin behavior identical to file formatting: only explicit source
+    // migrations may proceed through a parser recovery AST.
+    if (!parseDiagnosticsPermitFormatting(parse_ast.parse_diagnostics.items)) {
         try parse_ast.toSExprStr(gpa, &module_env.common, stderr);
         try printParseErrors(gpa, module_env.common.source, parse_ast.*, stderr);
         return error.ParsingFailed;
     }
+    const migrates_optional_field_syntax = parse_ast.parse_diagnostics.items.len != 0;
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = stdout.writer(io, &stdout_buffer);
     try formatAstWithOptions(parse_ast.*, &stdout_writer.interface, options);
+    if (migrates_optional_field_syntax) {
+        try stderr.writeAll("Migrated legacy optional field syntax `:?` to `?:` from stdin.\n");
+    }
 }
 
 fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, stderr: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
@@ -1553,27 +1573,48 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                const left_expr = fmt.ast.store.getExpr(fa.left);
-                const flatten_pipe_receiver = left_expr == .arrow_call and multiline;
-                const parenthesize_receiver = (left_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(fa.left);
-                const expand_parenthesized_receiver = left_expr == .arrow_call and
-                    fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
-                const left = if (parenthesize_receiver)
-                    try fmt.formatParenthesizedExpr(null, fa.left, expand_parenthesized_receiver)
+                const receiver_expr = fmt.ast.store.getExpr(fa.receiver);
+                const flatten_pipe_receiver = receiver_expr == .arrow_call and multiline;
+                const parenthesize_receiver = (receiver_expr == .arrow_call and !flatten_pipe_receiver) or fmt.exprIsNumericAccessReceiver(fa.receiver);
+                const expand_parenthesized_receiver = receiver_expr == .arrow_call and
+                    fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.receiver);
+                const receiver = if (parenthesize_receiver)
+                    try fmt.formatParenthesizedExpr(null, fa.receiver, expand_parenthesized_receiver)
                 else
-                    try fmt.formatExprWithInfo(fa.left);
-                const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
-                if (flatten_pipe_receiver) {
-                    try fmt.continuePipeReceiverPostfix(right_region.start, format_behavior);
-                } else if (!parenthesize_receiver) {
-                    const continued = try fmt.continueAfterMultilineStringLine(left);
-                    if (!continued and multiline and try fmt.flushCommentsBefore(right_region.start)) {
-                        fmt.adjustMultilineAccessIndent(format_behavior);
-                        try fmt.pushIndent();
+                    try fmt.formatExprWithInfo(fa.receiver);
+
+                const access_indent = fmt.curr_indent;
+                const segments = fmt.ast.store.fieldAccessSegmentSlice(fa.segments);
+                std.debug.assert(segments.len > 0);
+
+                for (segments, 0..) |segment, i| {
+                    // Nested field-access nodes used to restore indentation after
+                    // every segment. Keep that behavior now that a path is flat.
+                    fmt.curr_indent = access_indent;
+
+                    if (i == 0 and flatten_pipe_receiver) {
+                        // A multiline pipe receiver keeps its postfix chain on
+                        // continuation lines rather than parenthesizing the
+                        // pipe (issue 10517).
+                        try fmt.continuePipeReceiverPostfix(segment.field_token, format_behavior);
+                    } else if (!parenthesize_receiver or i > 0) {
+                        const continued = i == 0 and try fmt.continueAfterMultilineStringLine(receiver);
+                        if (!continued and multiline and try fmt.flushCommentsBefore(segment.field_token)) {
+                            // Only the chain's final segment sits in the caller's
+                            // context; interior segments always indent as .normal
+                            // (they were nested nodes formatted as .normal when
+                            // access paths were binary trees).
+                            fmt.adjustMultilineAccessIndent(if (i == segments.len - 1) format_behavior else .normal);
+                            try fmt.pushIndent();
+                        }
                     }
+
+                    switch (segment.mode) {
+                        .required => try fmt.push('.'),
+                        .optional => try fmt.pushAll(".?"),
+                    }
+                    try fmt.pushTokenText(segment.field_token);
                 }
-                try fmt.push('.');
-                try fmt.formatExprInnerDiscard(fa.right, .no_indent_on_access);
             },
             .method_call => |mc| {
                 const left_expr = fmt.ast.store.getExpr(mc.receiver);
@@ -3116,6 +3157,15 @@ const Formatter = struct {
             },
         };
         const multiline = fmt.nodeWillBeMultiline(AST.AnnoRecordField.Idx, idx);
+        const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
+        const optional_mark_after_colon = if (field.optional_mark) |optional_mark| blk: {
+            const marker_precedes_colon = fmt.ast.tokens.tokenTag(optional_mark + 1) == .OpColon;
+            if (!marker_precedes_colon) {
+                std.debug.assert(optional_mark > 0);
+                std.debug.assert(fmt.ast.tokens.tokenTag(optional_mark - 1) == .OpColon);
+            }
+            break :blk !marker_precedes_colon;
+        } else false;
         try fmt.pushTokenText(field.name);
         if (multiline and try fmt.flushCommentsAfter(field.name)) {
             fmt.curr_indent += 1;
@@ -3123,8 +3173,18 @@ const Formatter = struct {
         } else {
             try fmt.push(' ');
         }
+        // `name ?: Type`—the `?` before the colon marks the field
+        // optional. Legacy `:?` sources format to `?:`. The marker remains its
+        // own token boundary so a comment between `?` and `:` is preserved.
+        if (field.optional_mark) |optional_mark| {
+            try fmt.push('?');
+            const preceding_token = if (optional_mark_after_colon) optional_mark - 1 else optional_mark;
+            if (multiline and try fmt.flushCommentsAfter(preceding_token)) {
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            }
+        }
         try fmt.push(':');
-        const anno_region = fmt.nodeRegion(@intFromEnum(field.ty));
         if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
             fmt.curr_indent += 1;
             try fmt.pushIndent();
@@ -3132,6 +3192,30 @@ const Formatter = struct {
             try fmt.push(' ');
         }
         try fmt.formatTypeAnnoDiscard(field.ty);
+        // `name : Type ?? default`—a defaulted field's value expression
+        // is part of the annotation and must survive formatting (design.md
+        // "Defaulted Fields").
+        if (field.default_value) |default_idx| {
+            const default_region = fmt.nodeRegion(@intFromEnum(default_idx));
+            const default_mark = default_region.start - 1;
+            if (comptime builtin.mode == .Debug) {
+                std.debug.assert(fmt.ast.tokens.tokenTag(default_mark) == .OpDoubleQuestion);
+            }
+            if (multiline and try fmt.flushCommentsBefore(default_mark)) {
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            } else {
+                try fmt.push(' ');
+            }
+            try fmt.pushAll("??");
+            if (multiline and try fmt.flushCommentsAfter(default_mark)) {
+                fmt.curr_indent += 1;
+                try fmt.pushIndent();
+            } else {
+                try fmt.push(' ');
+            }
+            try fmt.formatExprDiscard(default_idx);
+        }
         return field.region;
     }
 
@@ -3715,6 +3799,8 @@ const Formatter = struct {
         var start = region.start.offset;
         if (tag == .NoSpaceDotLowerIdent or tag == .NoSpaceDotUpperIdent or tag == .DotLowerIdent or tag == .DotUpperIdent) {
             start += 1;
+        } else if (tag == .NoSpaceDotQuestionLowerIdent or tag == .DotQuestionLowerIdent) {
+            start += 2;
         }
 
         const text = fmt.ast.env.source[start..region.end.offset];
@@ -3730,16 +3816,47 @@ const Formatter = struct {
     }
 
     fn exprCanStartPipeTargetUnparenthesized(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
-        const expr = fmt.ast.store.getExpr(expr_idx);
-        const tag = std.meta.activeTag(expr);
-        if (tag == .ident or tag == .tag) return true;
-        if (tag == .apply) return fmt.exprCanStartPipeTargetUnparenthesized(expr.apply.@"fn");
-        if (tag == .field_access) return fmt.exprCanStartPipeTargetUnparenthesized(expr.field_access.left);
-        if (tag == .method_call) return fmt.exprCanStartPipeTargetUnparenthesized(expr.method_call.receiver);
-        if (tag == .tuple_access) return fmt.exprCanStartPipeTargetUnparenthesized(expr.tuple_access.expr);
-        if (tag == .nominal_apply) return fmt.exprCanStartPipeTargetUnparenthesized(expr.nominal_apply.mapper);
-        if (tag == .suffix_single_question) return fmt.exprCanStartPipeTargetUnparenthesized(expr.suffix_single_question.expr);
-        return false;
+        return switch (fmt.ast.store.getExpr(expr_idx)) {
+            .ident, .tag => true,
+            .apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.@"fn"),
+            .field_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.receiver),
+            .method_call => |call| fmt.exprCanStartPipeTargetUnparenthesized(call.receiver),
+            .tuple_access => |access| fmt.exprCanStartPipeTargetUnparenthesized(access.expr),
+            .nominal_apply => |apply| fmt.exprCanStartPipeTargetUnparenthesized(apply.mapper),
+            .suffix_single_question => |suffix| fmt.exprCanStartPipeTargetUnparenthesized(suffix.expr),
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .single_quote,
+            .string_part,
+            .string,
+            .multiline_string,
+            .typed_string,
+            .typed_multiline_string,
+            .list,
+            .tuple,
+            .record,
+            .lambda,
+            .record_updater,
+            .arrow_call,
+            .bin_op,
+            .unary_op,
+            .if_then_else,
+            .if_without_else,
+            .match,
+            .dbg,
+            .crash,
+            .record_builder,
+            .nominal_record,
+            .ellipsis,
+            .block,
+            .for_expr,
+            .@"break",
+            .@"return",
+            .malformed,
+            => false,
+        };
     }
 
     fn groupedExprWillBeMultiline(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
@@ -3781,9 +3898,8 @@ const Formatter = struct {
             .suffix_single_question => |s| fmt.groupedExprWillBeMultiline(s.expr),
             .tuple_access => |t| fmt.groupedExprWillBeMultiline(t.expr),
             .unary_op => |u| fmt.groupedExprWillBeMultiline(u.expr),
-            .field_access => |f| (fmt.ast.store.getExpr(f.left) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, f.left)) or
-                fmt.groupedExprWillBeMultiline(f.left) or
-                fmt.groupedExprWillBeMultiline(f.right),
+            .field_access => |f| (fmt.ast.store.getExpr(f.receiver) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, f.receiver)) or
+                fmt.groupedExprWillBeMultiline(f.receiver),
             .method_call => |m| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 (fmt.ast.store.getExpr(m.receiver) == .arrow_call and fmt.nodeWillBeMultiline(AST.Expr.Idx, m.receiver)) or
                 fmt.groupedExprWillBeMultiline(m.receiver) or
@@ -3898,11 +4014,7 @@ const Formatter = struct {
                     return fmt.nodeWillBeMultiline(AST.Expr.Idx, u.expr);
                 },
                 .field_access => |f| {
-                    if (fmt.nodeWillBeMultiline(AST.Expr.Idx, f.left)) {
-                        return true;
-                    }
-
-                    return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.right);
+                    return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.receiver);
                 },
                 .method_call => |m| {
                     if (fmt.ast.store.getCollectionLayout(item) == .expanded) return true;
@@ -4176,6 +4288,29 @@ const Formatter = struct {
 
 /// Asserts a module when formatted twice in a row results in the same final output.
 /// Returns that final output.
+/// Like `moduleFmtsStable`, but the input is expected to produce exactly
+/// `expected_diags` recoverable parse diagnostics (legacy-syntax inputs);
+/// the formatted output must still reparse clean and stable.
+pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debug: bool, expected_diags: usize) FormatTestError![]const u8 {
+    if (debug) {
+        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+    }
+    const formatted = parseAndFmtCountingDiags(gpa, input, expected_diags) catch |err| return err;
+    defer gpa.free(formatted);
+
+    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+        return error.SecondParseFailed;
+    };
+    errdefer gpa.free(formatted_twice);
+
+    std.testing.expectEqualStrings(formatted, formatted_twice) catch {
+        return error.FormattingNotStable;
+    };
+    return formatted_twice;
+}
+
+/// Assert that formatting `input` as a module is stable (formatting the
+/// formatted output changes nothing) and return the formatted source.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatTestError![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
@@ -4193,6 +4328,23 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
         return error.FormattingNotStable;
     };
     return formatted_twice;
+}
+
+fn parseAndFmtCountingDiags(gpa: std.mem.Allocator, input: []const u8, expected_diags: usize) FormatParseError![]const u8 {
+    var module_env = try ModuleEnv.init(gpa, input);
+    defer module_env.deinit();
+
+    const parse_ast = try parse.file(gpa, &module_env.common);
+    defer parse_ast.deinit();
+
+    std.testing.expectEqual(expected_diags, parse_ast.parse_diagnostics.items.len) catch {
+        return error.ParseFailed;
+    };
+
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    defer result.deinit();
+    try formatAst(parse_ast.*, &result.writer);
+    return result.toOwnedSlice();
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatParseError![]const u8 {
@@ -4298,6 +4450,244 @@ test "issue 10140: nested record function type formatting is idempotent" {
         \\}=>U}=>r
     , false);
     defer std.testing.allocator.free(result);
+}
+
+test "optional record type fields format as a leading marker" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value:{x:U32,y?:U32,z ? : U32}",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : { x : U32, y ?: U32, z ?: U32 }\n",
+        result,
+    );
+}
+
+test "defaulted record type fields keep their default through formatting" {
+    // Review H1: the formatter must never drop `?? default`—it is
+    // semantics (construction sites that omit the field depend on it).
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value:{count:U8??10,name:Str ?? \"hi\"}",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : { count : U8 ?? 10, name : Str ?? \"hi\" }\n",
+        result,
+    );
+}
+
+test "defaulted record field preserves a comment after the default marker" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\value : {
+        \\    a : U8 ?? # why
+        \\        10,
+        \\}
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, "# why"));
+}
+
+test "optional mark with a trailing comment formats idempotently" {
+    // Review H2: trivia between `?:` and the type is flushed exactly once,
+    // so format(format(x)) == format(x). moduleFmtsStable asserts stability.
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "i : { a ?: # after mark\n\tU8 }",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(std.mem.count(u8, result, "# after mark") == 1);
+}
+
+test "optional record field preserves a comment before the colon" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\value : {
+        \\    a ? # why
+        \\        : U8,
+        \\}
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, result, "# why"));
+}
+
+test "legacy optional marker after the colon formats to the leading form" {
+    // `:?` (and spaced `: ?`) recover as optional fields with a parse
+    // diagnostic pointing at `?:`; the formatter canonicalizes them.
+    const result = try moduleFmtsStableWithDiags(
+        std.testing.allocator,
+        "value:{x:U32,y:?U32,z : ? U32}",
+        false,
+        2,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : { x : U32, y ?: U32, z ?: U32 }\n",
+        result,
+    );
+}
+
+test "legacy optional marker preserves a trailing comment once" {
+    const result = try moduleFmtsStableWithDiags(
+        std.testing.allocator,
+        "value : {\n    a :? # keep me\n        U8,\n}",
+        false,
+        1,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : {\n\ta ?: # keep me\n\t\tU8,\n}\n",
+        result,
+    );
+}
+
+test "legacy optional marker preserves a comment between colon and marker" {
+    const result = try moduleFmtsStableWithDiags(
+        std.testing.allocator,
+        "value : {\n    a : # keep me\n        ? U8,\n}",
+        false,
+        1,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value : {\n\ta ? # keep me\n\t\t: U8,\n}\n",
+        result,
+    );
+}
+
+test "formatFilePath migrates a legacy optional field marker" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input = "v : { a :? U8 }";
+    const file = try tmp.dir.createFile(io, "legacy.roc", .{});
+    try file.writeStreamingAll(io, input);
+    file.close(io);
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    try formatFilePath(gpa, tmp.dir, "legacy.roc", null, .{}, io, &stderr.writer);
+
+    const formatted = try tmp.dir.readFileAlloc(io, "legacy.roc", gpa, .limited(1024));
+    defer gpa.free(formatted);
+    try std.testing.expectEqualStrings("v : { a ?: U8 }\n", formatted);
+    try std.testing.expectEqualStrings(
+        "Migrated legacy optional field syntax `:?` to `?:` in legacy.roc.\n",
+        stderr.written(),
+    );
+}
+
+test "formatFilePath leaves unrelated parse failures untouched" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const input = "v : { a U8 }";
+    const file = try tmp.dir.createFile(io, "invalid.roc", .{});
+    try file.writeStreamingAll(io, input);
+    file.close(io);
+
+    var stderr: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr.deinit();
+    try std.testing.expectError(
+        error.ParsingFailed,
+        formatFilePath(gpa, tmp.dir, "invalid.roc", null, .{}, io, &stderr.writer),
+    );
+
+    const after = try tmp.dir.readFileAlloc(io, "invalid.roc", gpa, .limited(1024));
+    defer gpa.free(after);
+    try std.testing.expectEqualStrings(input, after);
+}
+
+test "optional field access formats as a tight postfix accessor" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value=record .?outer.?inner?",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("value = record.?outer.?inner?\n", result);
+}
+
+test "mixed required and optional field access formats as one tight chain" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value=record .?outer.inner .?leaf.value",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("value = record.?outer.inner.?leaf.value\n", result);
+}
+
+test "comments between flat field access segments retain one level of indentation" {
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\value=record # first
+        \\.?outer # second
+        \\.inner
+    , false);
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings(
+        "value = record # first\n" ++
+            "\t.?outer # second\n" ++
+            "\t.inner\n",
+        result,
+    );
+}
+
+test "deep mixed field access chains format stack-safely" {
+    const gpa = std.testing.allocator;
+    const depth = 4096;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(gpa);
+    try source.appendSlice(gpa, "value = record");
+    for (0..depth) |i| {
+        try source.appendSlice(gpa, if (i % 2 == 0) ".required" else ".?optional");
+    }
+
+    const result = try moduleFmtsStable(gpa, source.items, false);
+    defer gpa.free(result);
+
+    try source.append(gpa, '\n');
+    try std.testing.expectEqualStrings(source.items, result);
+}
+
+test "optional field access composes with defaulting without token ambiguity" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value=record.?field??0",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("value = record.?field ?? 0\n", result);
+}
+
+test "propagated optional function field application formats unambiguously" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "value=record .?callback?(arg)",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("value = record.?callback?(arg)\n", result);
 }
 
 test "compact function argument collections ignore removable source newlines" {

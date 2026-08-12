@@ -61,8 +61,26 @@ scratch_tags: std.array_list.Managed(types_mod.Tag),
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
 import_mapping: ?*const import_mapping_mod.ImportMapping,
+/// Optional resolver from a defaulted field's identity to its default's
+/// source snippet. Injected by the layer that owns CIR and source text (the
+/// types layer cannot depend on it)—see `setDefaultSourceResolver`. When
+/// null, or when the resolver returns null (foreign module, unrenderable
+/// snippet), a defaulted field renders `?? …` (design.md "Defaulted
+/// Fields").
+mb_default_source: ?DefaultSourceFn = null,
+default_source_ctx: *const anyopaque = undefined,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
+
+/// See `mb_default_source`.
+pub const DefaultSourceFn = *const fn (ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8;
+
+/// Inject the defaulted-field source resolver (see `mb_default_source`).
+/// `ctx` must outlive this writer.
+pub fn setDefaultSourceResolver(self: *TypeWriter, ctx: *const anyopaque, resolver: DefaultSourceFn) void {
+    self.default_source_ctx = ctx;
+    self.mb_default_source = resolver;
+}
 
 const ByteWrite = std.Io.Writer;
 
@@ -432,6 +450,16 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     try writer.writeAll(")");
                 }
             },
+            .field_presence => |field_presence| {
+                // A presence variable is normally rendered as a field separator
+                // (see writeRecordFieldSeparator), not standalone; render its
+                // resolved fact plainly if reached directly.
+                try writer.writeAll(switch (field_presence) {
+                    .required => "present",
+                    .optional => "optional",
+                    .defaulted => "defaulted",
+                });
+            },
             .err => {
                 try writer.writeAll("Error");
             },
@@ -604,8 +632,11 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
         // iterations.
         const field = self.scratch_record_fields.items[scratch_fields_top + i];
         try writer.writeAll(self.getIdent(field.name));
-        try writer.writeAll(": ");
-        try self.writeVarWithContext(writer, field.var_, .RecordFieldContent, root_var);
+        try self.writeRecordFieldSeparator(writer, field.presence);
+        // Absent fields are filtered out during gathering, so every rendered
+        // field carries a type on its presence's second axis.
+        try self.writeVarWithContext(writer, field.presence.typeVar(), .RecordFieldContent, root_var);
+        try self.writeFieldDefaultSuffix(writer, field.presence);
 
         if (i != num_fields - 1) try writer.writeAll(", ");
     }
@@ -662,6 +693,56 @@ fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: 
     try writer.writeAll(" }");
 }
 
+/// Append the ` ?? <default>` marker after a defaulted field's type: the
+/// default's source snippet when the injected resolver can render it, else
+/// `…` (design.md "Defaulted Fields").
+fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
+    const unknown = switch (presence.decode()) {
+        .unknown => |u| u,
+        .required => return,
+    };
+    const id = switch (self.types.resolveVar(unknown.presence).desc.content) {
+        .field_presence => |fp| switch (fp) {
+            .defaulted => |id| id,
+            .required, .optional => return,
+        },
+        .flex, .rigid, .alias, .structure, .err => return,
+    };
+    try writer.writeAll(" ?? ");
+    if (self.mb_default_source) |resolve| {
+        if (resolve(self.default_source_ctx, id)) |snippet| {
+            try writer.writeAll(snippet);
+            return;
+        }
+    }
+    try writer.writeAll("…");
+}
+
+/// Write the separator between a field's name and its type, resolving the
+/// presence variable: a field whose kind solved to `present` (required)
+/// renders as a plain field, an `optional` kind renders `?:`, and a still
+/// undetermined kind renders as a plain field. Post-check, a still-flex kind
+/// is a scheme interior (monomorphic literal-minted kinds are committed to
+/// `required` by the checker's finalize sweep—design.md "Field Kinds",
+/// kind defaulting), and rendering it required-equivalent matches the
+/// committed default an instantiation would take if nothing pinned it.
+fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
+    try writer.writeAll(switch (presence.decode()) {
+        .required => ": ",
+        .unknown => |unknown| switch (self.types.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |fp| switch (fp) {
+                // A defaulted field renders as a plain required field; the
+                // default value itself is not part of the rendered type
+                // (design.md "Defaulted Fields"—the `??` suffix is written
+                // by writeFieldDefaultSuffix).
+                .required, .defaulted => ": ",
+                .optional => " ?: ",
+            },
+            .flex, .rigid, .alias, .structure, .err => ": ",
+        },
+    });
+}
+
 /// Recursively unwrap all record fields
 fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, initial_ext: Var) std.mem.Allocator.Error!union(enum) {
     flex: struct { var_: Var, payload: types_mod.Flex },
@@ -672,8 +753,8 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
 } {
     const slice = self.types.getRecordFieldsSlice(fields);
     try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
-    for (slice.items(.name), slice.items(.var_)) |name, var_| {
-        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+    for (slice.items(.name), slice.items(.presence)) |name, presence| {
+        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
     }
 
     var ext = initial_ext;
@@ -696,16 +777,16 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                     .record => |ext_record| {
                         const ext_slice = self.types.getRecordFieldsSlice(ext_record.fields);
                         try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
                         }
                         ext = ext_record.ext;
                     },
                     .record_unbound => |ext_fields| {
                         const ext_slice = self.types.getRecordFieldsSlice(ext_fields);
                         try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
                         }
                         return .{ .unbound = resolved.var_ };
                     },
@@ -720,6 +801,8 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
                     => return .invalid,
                 }
             },
+            // A presence variable can never be a record extension tail.
+            .field_presence => return .invalid,
             .err => return .invalid,
         }
     }
@@ -777,6 +860,8 @@ fn gatherTags(self: *TypeWriter, tags: Tag.SafeMultiList.Range, initial_ext: Var
                     => return .invalid,
                 }
             },
+            // A presence variable can never be a tag-union extension tail.
+            .field_presence => return .invalid,
             .err => return .err,
         }
     }
@@ -800,20 +885,19 @@ fn writeRecordUnbound(self: *TypeWriter, writer: *ByteWrite, fields: RecordField
     const num_fields = fields_slice.len;
 
     if (num_fields > 0) {
-
-        // Write first field - we already verified that there's at least one field
-        try writer.writeAll(self.getIdent(fields_slice.items(.name)[0]));
-        try writer.writeAll(": ");
-        try self.writeVarWithContext(writer, fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
-
-        // Write remaining fields
-        for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
-            try writer.writeAll(", ");
+        // Absent fields are guaranteed not on the record, so they are never
+        // rendered; every rendered field carries a type on its second axis.
+        var wrote_any = false;
+        for (fields_slice.items(.name), fields_slice.items(.presence)) |name, presence| {
+            const type_var = presence.typeVar();
+            if (wrote_any) try writer.writeAll(", ");
             try writer.writeAll(self.getIdent(name));
-            try writer.writeAll(": ");
-            try self.writeVarWithContext(writer, var_, .RecordFieldContent, root_var);
+            try self.writeRecordFieldSeparator(writer, presence);
+            try self.writeVarWithContext(writer, type_var, .RecordFieldContent, root_var);
+            try self.writeFieldDefaultSuffix(writer, presence);
+            wrote_any = true;
         }
-        try writer.writeAll(", ");
+        if (wrote_any) try writer.writeAll(", ");
     }
 
     try writer.writeAll("..");
@@ -1047,6 +1131,8 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
         },
+        // A resolved presence fact has no sub-variables to count.
+        .field_presence => {},
         .err => {},
     }
 }
@@ -1075,15 +1161,17 @@ fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, c
         },
         .record => |record| {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            for (fields.items(.var_)) |field_var| {
-                try self.countVar(search_var, field_var, count);
+            for (fields.items(.presence)) |presence| {
+                try self.countVar(search_var, presence.typeVar(), count);
+                if (presence.presenceVar()) |presence_var| try self.countVar(search_var, presence_var, count);
             }
             try self.countVar(search_var, record.ext, count);
         },
         .record_unbound => |fields| {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            for (fields_slice.items(.var_)) |field_var| {
-                try self.countVar(search_var, field_var, count);
+            for (fields_slice.items(.presence)) |presence| {
+                try self.countVar(search_var, presence.typeVar(), count);
+                if (presence.presenceVar()) |presence_var| try self.countVar(search_var, presence_var, count);
             }
         },
         .tag_union => |tag_union| {
@@ -1239,4 +1327,62 @@ fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, W
         try writer.writeAll("var");
         try writer.print("{}", .{self.next_name_index});
     }
+}
+
+fn testRecordFields(
+    gpa: Allocator,
+    store: *TypesStore,
+    idents: *Ident.Store,
+) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
+    const required_name = try idents.insert(gpa, Ident.for_text("a_required"));
+    const optional_name = try idents.insert(gpa, Ident.for_text("b_optional"));
+    const value_var = try store.freshFromContent(.{ .structure = .empty_record });
+
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    return store.appendRecordFields(&.{
+        .{ .name = required_name, .presence = .required(value_var) },
+        .{ .name = optional_name, .presence = .unknown(optional_presence, value_var) },
+    });
+}
+
+test "TypeWriter renders required and optional fields in closed records" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 8, 4);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const fields = try testRecordFields(gpa, &store, &idents);
+    const ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = ext,
+    } } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer type_writer.deinit();
+
+    try std.testing.expectEqualStrings(
+        "{ a_required: {}, b_optional ?: {} }",
+        try type_writer.writeGet(record_var, .one_line),
+    );
+}
+
+test "TypeWriter renders required and optional fields in unbound records" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 8, 4);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const fields = try testRecordFields(gpa, &store, &idents);
+    const record_var = try store.freshFromContent(.{ .structure = .{ .record_unbound = fields } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer type_writer.deinit();
+
+    try std.testing.expectEqualStrings(
+        "{ a_required: {}, b_optional ?: {}, .. }",
+        try type_writer.writeGet(record_var, .one_line),
+    );
 }

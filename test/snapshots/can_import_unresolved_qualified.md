@@ -253,20 +253,14 @@ NO CHANGE
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parseData"))
-		(e-lambda
-			(args
-				(p-assign (ident "data")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
-		(e-lambda
-			(args
-				(p-assign (ident "req")))
-			(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

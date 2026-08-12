@@ -170,6 +170,17 @@ fn copyContent(ctx: *const CopyContext, content: Content) std.mem.Allocator.Erro
         .flex => |flex| Content{ .flex = try copyFlex(ctx, flex) },
         .rigid => |rigid| Content{ .rigid = try copyRigid(ctx, rigid) },
         .alias => |alias| Content{ .alias = try copyAlias(ctx, alias) },
+        .field_presence => |field_presence| switch (field_presence) {
+            .required, .optional => Content{ .field_presence = field_presence },
+            // A default identity's origin-module half is env-local, so
+            // crossing the store boundary rebases it (like
+            // `Alias.origin_module`); the expr-node half is stable in the
+            // declaring module (design.md "Defaulted Fields").
+            .defaulted => |id| Content{ .field_presence = .{ .defaulted = .{
+                .origin_module = try ctx.copyOriginModule(id.origin_module),
+                .expr_node = id.expr_node,
+            } } },
+        },
         .structure => |flat_type| Content{ .structure = try copyFlatType(ctx, flat_type) },
         .err => Content.err,
     };
@@ -294,15 +305,31 @@ fn copyRecordFields(
     var fresh_fields = std.ArrayList(RecordField).empty;
     defer fresh_fields.deinit(ctx.allocator);
 
-    for (source_fields.items(.name), source_fields.items(.var_)) |name, var_| {
+    for (source_fields.items(.name), source_fields.items(.presence)) |name, presence| {
         const translated_name = try ctx.copyIdent(name);
         try fresh_fields.append(ctx.allocator, .{
             .name = translated_name,
-            .var_ = try copyVarCtx(ctx, var_),
+            .presence = try copyFieldPresence(ctx, presence),
         });
     }
 
     return try ctx.dest_store.appendRecordFields(fresh_fields.items);
+}
+
+/// Copy both axes of a record field's presence across a module boundary: the
+/// value type and, for a kind-carrying field, the kind variable. A concrete
+/// `required` field carries just its value type.
+fn copyFieldPresence(
+    ctx: *const CopyContext,
+    presence: types_mod.RecordField.Presence,
+) std.mem.Allocator.Error!types_mod.RecordField.Presence {
+    return switch (presence.decode()) {
+        .required => |type_var| .required(try copyVarCtx(ctx, type_var)),
+        .unknown => |unknown| .unknown(
+            try copyVarCtx(ctx, unknown.presence),
+            try copyVarCtx(ctx, unknown.var_),
+        ),
+    };
 }
 
 fn copyRecord(ctx: *const CopyContext, record: Record) std.mem.Allocator.Error!Record {

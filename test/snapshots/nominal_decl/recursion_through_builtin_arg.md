@@ -65,8 +65,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-nominal (nominal "MyList")
-			(e-empty_list))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "MyList") (local))))
 	(s-nominal-decl

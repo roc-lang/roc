@@ -57,14 +57,15 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-arrow-call
-						(e-apply
-							(e-int (raw "0"))
-							(e-arrow-call
+					(receiver
+						(e-arrow-call
+							(e-apply
 								(e-int (raw "0"))
-								(e-tag (raw "X"))))
-						(e-tag (raw "X")))
-					(e-ident (raw ".a")))))))
+								(e-arrow-call
+									(e-int (raw "0"))
+									(e-tag (raw "X"))))
+							(e-tag (raw "X"))))
+					(segment (mode "required") (field "a")))))))
 ~~~
 # FORMATTED
 ~~~roc

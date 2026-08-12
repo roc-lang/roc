@@ -34,7 +34,8 @@ TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
 
     But you are trying to use it as:
 
-        { x: _field }
+        { x: a } where [a.from_numeral : Numeral -> Try(a,
+        [InvalidNumeral(Str)])]
     Hint: This pattern doesn't bind these fields:
      - `y`
      - `z`

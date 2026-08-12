@@ -32,8 +32,9 @@ EndOfFile,
 ~~~clojure
 (e-binop (op "+")
 	(e-field-access
-		(e-ident (raw "person"))
-		(e-ident (raw "age")))
+		(receiver
+			(e-ident (raw "person")))
+		(segment (mode "required") (field "age")))
 	(e-int (raw "5")))
 ~~~
 # FORMATTED
@@ -44,9 +45,11 @@ NO CHANGE
 ~~~clojure
 (e-dispatch-call (method "plus") (constraint-fn-var 205)
 	(receiver
-		(e-field-access (field "age")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "age") (mode "required")))))
 	(args
 		(e-num (value "5"))))
 ~~~

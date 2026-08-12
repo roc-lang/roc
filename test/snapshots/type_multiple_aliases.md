@@ -111,8 +111,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "user")))
 				(e-field-access
-					(e-ident (raw "user"))
-					(e-ident (raw "name")))))
+					(receiver
+						(e-ident (raw "user")))
+					(segment (mode "required") (field "name")))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -168,10 +169,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "user")))
-			(e-field-access (field "name")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "user"))))))
+						(p-assign (ident "user"))))
+				(segments
+					(segment (name "name") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "User") (local))
@@ -184,14 +187,14 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-assign (ident "user"))
-					(e-call (constraint-fn-var 399)
+					(e-call (constraint-fn-var 405)
 						(e-lookup-local
 							(p-assign (ident "create_user")))
 						(e-num (value "123"))
 						(e-string
 							(e-literal (string "Alice")))
 						(e-num (value "25"))))
-				(e-call (constraint-fn-var 400)
+				(e-call (constraint-fn-var 409)
 					(e-lookup-local
 						(p-assign (ident "get_user_name")))
 					(e-lookup-local

@@ -211,6 +211,63 @@ test "adding a field to a transparent record backing is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
+fn concreteFieldKindApi(kind: PackageApi.Field.Kind) std.mem.Allocator.Error!PackageApi {
+    var api = PackageApi.init(gpa);
+    errdefer api.deinit();
+    const str = try builtinStr(&api);
+    const fields = try api.allocator().dupe(PackageApi.Field, &.{.{
+        .name = "value",
+        .ty = str,
+        .kind = kind,
+    }});
+    const record = try api.addType(.{ .record = .{ .fields = fields, .ext = null } });
+    const module = try api.addModule("M");
+    try api.addItem(module, .{ .path = "M.value", .kind = .{ .value = record } });
+    return api;
+}
+
+fn undeterminedFieldKindApi() std.mem.Allocator.Error!PackageApi {
+    var api = PackageApi.init(gpa);
+    errdefer api.deinit();
+    const kind_var = try api.addType(.{ .variable = .{} });
+    const str = try builtinStr(&api);
+    const fields = try api.allocator().dupe(PackageApi.Field, &.{.{
+        .name = "value",
+        .ty = str,
+        .kind = .{ .undetermined = kind_var },
+    }});
+    const record = try api.addType(.{ .record = .{ .fields = fields, .ext = null } });
+    const module = try api.addModule("M");
+    try api.addItem(module, .{ .path = "M.value", .kind = .{ .value = record } });
+    return api;
+}
+
+test "record field kind changes are major" {
+    var required = try concreteFieldKindApi(.required);
+    defer required.deinit();
+    var optional = try concreteFieldKindApi(.optional);
+    defer optional.deinit();
+    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&required, &optional));
+
+    var required_again = try concreteFieldKindApi(.required);
+    defer required_again.deinit();
+    var defaulted = try concreteFieldKindApi(.{ .defaulted = "10" });
+    defer defaulted.deinit();
+    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&required_again, &defaulted));
+
+    var default_ten = try concreteFieldKindApi(.{ .defaulted = "10" });
+    defer default_ten.deinit();
+    var default_twenty = try concreteFieldKindApi(.{ .defaulted = "20" });
+    defer default_twenty.deinit();
+    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&default_ten, &default_twenty));
+
+    var required_third = try concreteFieldKindApi(.required);
+    defer required_third.deinit();
+    var undetermined = try undeterminedFieldKindApi();
+    defer undetermined.deinit();
+    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&required_third, &undetermined));
+}
+
 fn unionNominalApi(tag_names: []const []const u8) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();

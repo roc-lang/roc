@@ -76,11 +76,13 @@ EndOfFile,
 						(e-apply
 							(e-ident (raw "Stdout.line!"))
 							(e-field-access
-								(e-ident (raw "person"))
-								(e-ident (raw "name"))))
+								(receiver
+									(e-ident (raw "person")))
+								(segment (mode "required") (field "name"))))
 						(e-field-access
-							(e-ident (raw "person"))
-							(e-ident (raw "name")))))))
+							(receiver
+								(e-ident (raw "person")))
+							(segment (mode "required") (field "name")))))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -113,10 +115,12 @@ main! = |_| {}
 			(e-block
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-field-access (field "name")
+				(e-field-access
 					(receiver
 						(e-lookup-local
-							(p-assign (ident "person")))))))
+							(p-assign (ident "person"))))
+					(segments
+						(segment (name "name") (mode "required"))))))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-record

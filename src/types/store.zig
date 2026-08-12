@@ -1101,6 +1101,11 @@ pub const Store = struct {
         return self.record_fields.get(idx);
     }
 
+    /// Given a range, get a iter of record fields from the backing array
+    pub fn iterRecordFields(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Iterator {
+        return self.record_fields.iterRange(range);
+    }
+
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
@@ -1407,7 +1412,8 @@ pub const Store = struct {
                     .empty_tag_union,
                     => false,
                 },
-                .err, .flex, .rigid => return false,
+                // A presence variable never resolves to a function.
+                .err, .flex, .rigid, .field_presence => return false,
             }
         }
     }
@@ -2478,12 +2484,14 @@ test "Store comprehensive CompactWriter roundtrip" {
     const func_content = try original.mkFuncPure(&[_]Var{ arg1, arg2 }, ret);
     const func_var = try original.freshFromContent(func_content);
 
-    // Create a record type
+    // Create a record type: one field with a known-present type, one field
+    // whose presence is still undetermined (both axes are variables).
     const field1_var = try original.fresh();
     const field2_var = try original.fresh();
+    const field2_presence = try original.fresh();
     const record_fields = try original.appendRecordFields(&[_]RecordField{
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .var_ = field1_var },
-        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .var_ = field2_var },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 }, .presence = .required(field1_var) },
+        .{ .name = base.Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 }, .presence = .unknown(field2_presence, field2_var) },
     });
     const record_ext = try original.fresh();
     const record_content = Content{ .structure = .{ .record = .{ .fields = record_fields, .ext = record_ext } } };
@@ -2555,8 +2563,10 @@ test "Store comprehensive CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), fields_slice.len);
     try std.testing.expectEqual(@as(u29, 100), fields_slice.items(.name)[0].idx);
     try std.testing.expectEqual(@as(u29, 200), fields_slice.items(.name)[1].idx);
-    try std.testing.expectEqual(field1_var, fields_slice.items(.var_)[0]);
-    try std.testing.expectEqual(field2_var, fields_slice.items(.var_)[1]);
+    try std.testing.expectEqual(field1_var, fields_slice.items(.presence)[0].typeVar());
+    try std.testing.expectEqual(null, fields_slice.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field2_var, fields_slice.items(.presence)[1].typeVar());
+    try std.testing.expectEqual(field2_presence, fields_slice.items(.presence)[1].presenceVar());
     try std.testing.expectEqual(record_ext, record.ext);
 
     const deser_tag_union = deserialized.resolveVar(tag_union_var);
@@ -2717,6 +2727,17 @@ test "Store.Serialized roundtrip" {
     const flex = try store.fresh();
     const str_var = try store.freshFromContent(Content{ .structure = .empty_record });
     const redirect_var = try store.freshRedirect(flex);
+    const field_presence = try store.fresh();
+    const record_fields = try store.appendRecordFields(&.{
+        .{
+            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 },
+            .presence = .required(flex),
+        },
+        .{
+            .name = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 200 },
+            .presence = .unknown(field_presence, str_var),
+        },
+    });
     const class_a = try store.fresh();
     const class_b = try store.fresh();
     const class_checked = try store.fresh();
@@ -2753,8 +2774,10 @@ test "Store.Serialized roundtrip" {
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
-    // Verify the store was deserialized correctly
-    try std.testing.expectEqual(@as(usize, 6), deserialized.len());
+    // Verify the store was deserialized correctly (flex, str_var, redirect,
+    // the undetermined field's presence var, and the three union-rank class
+    // vars).
+    try std.testing.expectEqual(@as(usize, 7), deserialized.len());
 
     const flex_resolved = deserialized.resolveVar(flex);
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, flex_resolved.desc.content);
@@ -2772,6 +2795,19 @@ test "Store.Serialized roundtrip" {
     const class_storage = deserialized.resolveStorageRoot(class_a);
     try std.testing.expectEqual(@as(u8, 1), deserialized.getUnionRank(class_storage.storage_var));
     try std.testing.expect(class_storage.storage_var != class_checked);
+
+    const deserialized_fields = deserialized.getRecordFieldsSlice(record_fields);
+    try std.testing.expectEqual(@as(usize, 2), deserialized_fields.len);
+    try std.testing.expectEqual(null, deserialized_fields.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field_presence, deserialized_fields.items(.presence)[1].presenceVar());
+
+    var copied = try deser_ptr.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
+    defer copied.deinit();
+
+    const copied_fields = copied.getRecordFieldsSlice(record_fields);
+    try std.testing.expectEqual(@as(usize, 2), copied_fields.len);
+    try std.testing.expectEqual(null, copied_fields.items(.presence)[0].presenceVar());
+    try std.testing.expectEqual(field_presence, copied_fields.items(.presence)[1].presenceVar());
 }
 
 test "Store multiple instances CompactWriter roundtrip" {

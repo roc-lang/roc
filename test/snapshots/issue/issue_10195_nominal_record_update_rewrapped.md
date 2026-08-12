@@ -70,8 +70,9 @@ EndOfFile,
 									(field (field "a")
 										(e-binop (op "+")
 											(e-field-access
-												(e-ident (raw "wrap"))
-												(e-ident (raw "a")))
+												(receiver
+													(e-ident (raw "wrap")))
+												(segment (mode "required") (field "a")))
 											(e-int (raw "1")))))))))))))
 ~~~
 # FORMATTED

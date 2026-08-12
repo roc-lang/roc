@@ -333,8 +333,6 @@ scratch_type_paths: base.Scratch(AST.DeclIndex.TypePathIdx),
 /// Scratch associated alias sinks for nested associated source-order walks.
 scratch_assoc_alias_sinks: base.Scratch(AssociatedAliasSink),
 /// Scratch ident
-scratch_record_fields: base.Scratch(types.RecordField),
-/// Scratch ident
 scratch_seen_record_fields: base.Scratch(SeenRecordField),
 /// Scratch tag names for duplicate detection in type annotations.
 scratch_seen_tags: base.Scratch(SeenTag),
@@ -659,7 +657,6 @@ pub fn deinit(
     self.qualified_ident_bytes.deinit();
     self.scratch_type_paths.deinit();
     self.scratch_assoc_alias_sinks.deinit();
-    self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
     self.scratch_seen_tags.deinit();
     self.scratch_expr_ids.deinit();
@@ -735,7 +732,6 @@ fn initInternal(
         .qualified_ident_bytes = try base.Scratch(u8).init(gpa),
         .scratch_type_paths = try base.Scratch(AST.DeclIndex.TypePathIdx).init(gpa),
         .scratch_assoc_alias_sinks = try base.Scratch(AssociatedAliasSink).init(gpa),
-        .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .scratch_seen_tags = try base.Scratch(SeenTag).init(gpa),
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
@@ -3704,7 +3700,7 @@ fn canonicalizeAssociatedItems(
                 var keep_type_var_scope_for_body = false;
                 defer if (!keep_type_var_scope_for_body) self.scopeExitTypeVar(type_var_scope);
 
-                // Now canonicalize the annotation with type variables in scope
+                // Now canonicalize the annotation with type variables in scope.
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
@@ -4269,7 +4265,7 @@ pub fn canonicalizeFile(
                 defer self.scopeExitTypeVar(type_var_scope);
                 std.debug.assert(type_var_scope.depth == 0);
 
-                // Now canonicalize the annotation with type variables in scope
+                // Now canonicalize the annotation with type variables in scope.
                 const type_anno_idx = try self.canonicalizeTypeAnno(ta.anno, .local_anno);
 
                 // Canonicalize where clauses if present
@@ -7312,6 +7308,109 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
         .idx = try self.env.pushRuntimeErrorExpr(Expr.Idx, diagnostic),
         .free_vars = DataSpan.empty(),
     };
+}
+
+/// Judge whether a canonicalized record-field default expression is a closed
+/// literal: a numeric literal (including a negated numeral), an
+/// interpolation-free string literal, a tag literal (bare or applied, plain or
+/// nominal-qualified), or a list / record / tuple literal whose components are
+/// all literals. Nothing else—in particular no name reference of any kind—
+/// so a default cannot participate in a value-reference evaluation cycle.
+/// Literal aggregates can still omit fields that materialize other defaults;
+/// the checker follows those explicit `DefaultId` dependencies and rejects
+/// cycles after field kinds are solved (design.md "Defaulted Fields").
+///
+/// Returns the first non-literal node found (for the diagnostic to point at),
+/// or null when the whole expression is a literal. The walk is an explicit
+/// worklist over the CIR (zero-recursion policy) reusing `scratch_expr_ids`.
+fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?Expr.Idx {
+    const walk_top = self.scratch_expr_ids.top();
+    defer self.scratch_expr_ids.clearFrom(walk_top);
+    try self.scratch_expr_ids.append(root);
+    while (self.scratch_expr_ids.top() > walk_top) {
+        const expr_idx = self.scratch_expr_ids.pop() orelse unreachable;
+        const expr = self.env.store.getExpr(expr_idx);
+        const tag = std.meta.activeTag(expr);
+        // Numeric literals (the numeral table variants store their exact
+        // value in ModuleEnv; they are still literals).
+        if (tag == .e_num or tag == .e_frac_f32 or tag == .e_frac_f64 or
+            tag == .e_dec or tag == .e_dec_small or tag == .e_num_from_numeral or
+            tag == .e_typed_int or tag == .e_typed_frac or tag == .e_typed_num_from_numeral)
+        {
+            continue;
+        }
+        // A negated numeral. When the minus is not folded into the token,
+        // it canonicalizes as `e_unary_minus` over the numeric literal;
+        // exactly that shape counts. Negation of anything else (including
+        // a nested negation) is an operation, not a literal.
+        if (tag == .e_unary_minus) {
+            const inner = std.meta.activeTag(self.env.store.getExpr(expr.e_unary_minus.expr));
+            if (inner == .e_num or inner == .e_frac_f32 or inner == .e_frac_f64 or
+                inner == .e_dec or inner == .e_dec_small or inner == .e_num_from_numeral or
+                inner == .e_typed_int or inner == .e_typed_frac or inner == .e_typed_num_from_numeral)
+            {
+                continue;
+            }
+            return expr_idx;
+        }
+        // String literals. An interpolated string canonicalizes to
+        // `e_interpolation` (which references bindings and dispatches),
+        // so it falls to the rejecting return below; a plain string is a
+        // span of `e_str_segment`s.
+        if (tag == .e_str_segment) continue;
+        if (tag == .e_str) {
+            for (self.env.store.sliceExpr(expr.e_str.span)) |segment| {
+                try self.scratch_expr_ids.append(segment);
+            }
+            continue;
+        }
+        // Tag literals, including the nominal wrapper Can itself puts
+        // around a tag/record/tuple literal that resolves to a nominal
+        // type (e.g. a bare `True`): the wrapper names a type
+        // declaration, not a value, so it cannot form a value cycle.
+        if (tag == .e_zero_argument_tag) continue;
+        if (tag == .e_tag) {
+            for (self.env.store.sliceExpr(expr.e_tag.args)) |arg| {
+                try self.scratch_expr_ids.append(arg);
+            }
+            continue;
+        }
+        if (tag == .e_nominal) {
+            try self.scratch_expr_ids.append(expr.e_nominal.backing_expr);
+            continue;
+        }
+        if (tag == .e_nominal_external) {
+            try self.scratch_expr_ids.append(expr.e_nominal_external.backing_expr);
+            continue;
+        }
+        // Aggregate literals whose components must all be literals. A
+        // record UPDATE (`{ ..base, .. }`) is not a record literal.
+        if (tag == .e_empty_list or tag == .e_empty_record) continue;
+        if (tag == .e_list) {
+            for (self.env.store.sliceExpr(expr.e_list.elems)) |elem| {
+                try self.scratch_expr_ids.append(elem);
+            }
+            continue;
+        }
+        if (tag == .e_tuple) {
+            for (self.env.store.sliceExpr(expr.e_tuple.elems)) |elem| {
+                try self.scratch_expr_ids.append(elem);
+            }
+            continue;
+        }
+        if (tag == .e_record) {
+            if (expr.e_record.ext != null) return expr_idx;
+            for (self.env.store.sliceRecordFields(expr.e_record.fields)) |field_idx| {
+                const field = self.env.store.getRecordField(field_idx);
+                try self.scratch_expr_ids.append(field.value);
+            }
+            continue;
+        }
+        // Everything else—name references, calls, operators, lambdas,
+        // control flow, blocks—is not a literal.
+        return expr_idx;
+    }
+    return null;
 }
 
 fn canonicalizedLocalLookup(
@@ -10994,19 +11093,14 @@ fn runExprKernel(
                 .field_access => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const free_vars_start = self.scratch_free_vars.top();
-                    const field_expr = self.parse_ir.store.getExpr(e.right);
-                    if (field_expr != .ident) unreachable;
-                    const field_ident = field_expr.ident;
-                    const field_name = try self.resolveIdentOrUnknown(field_ident.token);
-                    const field_name_region = self.parse_ir.tokenizedRegionToRegion(field_ident.region);
 
-                    try stacks.pushFinishRegularFieldAccess(frame_allocator, .{
+                    std.debug.assert(e.segments.span.len > 0);
+                    try stacks.pushFinishFieldAccess(frame_allocator, .{
                         .region = region,
                         .free_vars_start = free_vars_start,
-                        .field_name = field_name,
-                        .field_name_region = field_name_region,
+                        .ast_segments = e.segments,
                     });
-                    try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                    try stacks.pushParse(frame_allocator, .{ .idx = e.receiver, .target = .scratch });
                 },
                 .apply => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -12475,20 +12569,40 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
-        .finish_regular_field_access => {
-            const state = stacks.takeFinishRegularFieldAccess();
+        .finish_field_access => {
+            const state = stacks.takeFinishFieldAccess();
+            const ast_segments = self.parse_ir.store.fieldAccessSegmentSlice(state.ast_segments);
+            std.debug.assert(ast_segments.len > 0);
+
             const result_start = child_slots.items.len - 1;
             const receiver_idx = if (child_slots.items[result_start].expr) |can_receiver| can_receiver.idx else try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                 .region = state.region,
             } });
 
+            const path_builder = try self.env.startFieldAccessPath(@intCast(ast_segments.len));
+            var path_finished = false;
+            errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
+
+            for (ast_segments) |ast_segment| {
+                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_segment.field_token) orelse unreachable;
+                const field_region = self.parse_ir.tokens.resolve(ast_segment.field_token);
+                _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+                    .name = field_name,
+                    .mode = switch (ast_segment.mode) {
+                        .required => .required,
+                        .optional => .optional,
+                    },
+                }, field_region);
+            }
+            const segments = self.env.finishFieldAccessPath(path_builder);
+
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_field_access = .{
                     .receiver = receiver_idx,
-                    .field_name = state.field_name,
-                    .field_name_region = state.field_name_region,
+                    .segments = segments,
                 },
             }, state.region);
+            path_finished = true;
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span });
@@ -15576,7 +15690,7 @@ const ExprKernelLabel = enum {
     finish_arrow_tag_apply,
     finish_arrow_call,
     finish_arrow_tag_single,
-    finish_regular_field_access,
+    finish_field_access,
     finish_apply,
     finish_tag,
     finish_type_dispatch_apply,
@@ -15860,11 +15974,10 @@ const ExprFinishArrowTagSingleWork = struct {
     tag: AST.TagExpr,
 };
 
-const ExprFinishRegularFieldAccessWork = struct {
+const ExprFinishFieldAccessWork = struct {
     region: Region,
     free_vars_start: u32,
-    field_name: Ident.Idx,
-    field_name_region: Region,
+    ast_segments: AST.FieldAccessSegment.Span,
 };
 
 const ExprFinishApplyWork = struct {
@@ -16058,7 +16171,7 @@ const ExprKernelWork = struct {
     finish_arrow_tag_apply: std.ArrayList(ExprFinishArrowTagApplyWork) = .empty,
     finish_arrow_call: std.ArrayList(ExprFinishArrowCallWork) = .empty,
     finish_arrow_tag_single: std.ArrayList(ExprFinishArrowTagSingleWork) = .empty,
-    finish_regular_field_access: std.ArrayList(ExprFinishRegularFieldAccessWork) = .empty,
+    finish_field_access: std.ArrayList(ExprFinishFieldAccessWork) = .empty,
     finish_apply: std.ArrayList(ExprFinishApplyWork) = .empty,
     finish_tag: std.ArrayList(ExprFinishTagWork) = .empty,
     finish_type_dispatch_apply: std.ArrayList(ExprFinishTypeDispatchApplyWork) = .empty,
@@ -16115,7 +16228,7 @@ const ExprKernelWork = struct {
             .finish_arrow_tag_apply => _ = self.takeFinishArrowTagApply(),
             .finish_arrow_call => _ = self.takeFinishArrowCall(),
             .finish_arrow_tag_single => _ = self.takeFinishArrowTagSingle(),
-            .finish_regular_field_access => _ = self.takeFinishRegularFieldAccess(),
+            .finish_field_access => _ = self.takeFinishFieldAccess(),
             .finish_apply => _ = self.takeFinishApply(),
             .finish_tag => _ = self.takeFinishTag(),
             .finish_type_dispatch_apply => _ = self.takeFinishTypeDispatchApply(),
@@ -16189,7 +16302,7 @@ const ExprKernelWork = struct {
                 .finish_arrow_tag_apply,
                 .finish_arrow_call,
                 .finish_arrow_tag_single,
-                .finish_regular_field_access,
+                .finish_field_access,
                 .finish_apply,
                 .finish_tag,
                 .finish_type_dispatch_apply,
@@ -16250,7 +16363,7 @@ const ExprKernelWork = struct {
         self.finish_arrow_tag_apply.deinit(allocator);
         self.finish_arrow_call.deinit(allocator);
         self.finish_arrow_tag_single.deinit(allocator);
-        self.finish_regular_field_access.deinit(allocator);
+        self.finish_field_access.deinit(allocator);
         self.finish_apply.deinit(allocator);
         self.finish_tag.deinit(allocator);
         self.finish_type_dispatch_apply.deinit(allocator);
@@ -16309,7 +16422,7 @@ const ExprKernelWork = struct {
         self.finish_arrow_tag_apply.clearRetainingCapacity();
         self.finish_arrow_call.clearRetainingCapacity();
         self.finish_arrow_tag_single.clearRetainingCapacity();
-        self.finish_regular_field_access.clearRetainingCapacity();
+        self.finish_field_access.clearRetainingCapacity();
         self.finish_apply.clearRetainingCapacity();
         self.finish_tag.clearRetainingCapacity();
         self.finish_type_dispatch_apply.clearRetainingCapacity();
@@ -16550,10 +16663,10 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_arrow_tag_single, self.current_target);
     }
 
-    inline fn pushFinishRegularFieldAccess(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishRegularFieldAccessWork) std.mem.Allocator.Error!void {
-        try self.finish_regular_field_access.append(allocator, item);
-        errdefer _ = self.finish_regular_field_access.pop();
-        try self.pushLabel(allocator, .finish_regular_field_access, self.current_target);
+    inline fn pushFinishFieldAccess(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishFieldAccessWork) std.mem.Allocator.Error!void {
+        try self.finish_field_access.append(allocator, item);
+        errdefer _ = self.finish_field_access.pop();
+        try self.pushLabel(allocator, .finish_field_access, self.current_target);
     }
 
     inline fn pushFinishApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishApplyWork) std.mem.Allocator.Error!void {
@@ -16802,8 +16915,8 @@ const ExprKernelWork = struct {
         return self.finish_arrow_tag_single.pop() orelse unreachable;
     }
 
-    inline fn takeFinishRegularFieldAccess(self: *ExprKernelWork) ExprFinishRegularFieldAccessWork {
-        return self.finish_regular_field_access.pop() orelse unreachable;
+    inline fn takeFinishFieldAccess(self: *ExprKernelWork) ExprFinishFieldAccessWork {
+        return self.finish_field_access.pop() orelse unreachable;
     }
 
     inline fn takeFinishApply(self: *ExprKernelWork) ExprFinishApplyWork {
@@ -17863,7 +17976,6 @@ const TypeAnnoKernelRecordNextWork = struct {
     region: Region,
     field_index: usize,
     scratch_top: u32,
-    scratch_record_fields_top: u32,
     scratch_seen_record_fields_top: u32,
     /// True when this record is the top-level backing of a nominal/opaque
     /// declaration, where unnamed fields (`_` / `_name`) are permitted.
@@ -17874,7 +17986,6 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     region: Region,
     field_index: usize,
     scratch_top: u32,
-    scratch_record_fields_top: u32,
     scratch_seen_record_fields_top: u32,
     field_name: Ident.Idx,
     field_region: Region,
@@ -17882,12 +17993,16 @@ const TypeAnnoKernelRecordAfterFieldWork = struct {
     /// True when this field is unnamed padding (kept in the canonical record
     /// annotation but excluded from the backing record row).
     is_unnamed: bool,
+    /// True when the field is declared runtime-optional (`name?: Type`).
+    is_optional: bool,
+    /// The AST default value expression for a DEFAULTED field
+    /// (`a : U8 ?? 10`), canonicalized when the field is built.
+    ast_default_value: ?AST.Expr.Idx,
 };
 const TypeAnnoKernelRecordAfterNamedExtWork = struct {
     region: Region,
     field_anno_idxs: CIR.TypeAnno.RecordField.Span,
     scratch_top: u32,
-    scratch_record_fields_top: u32,
     scratch_seen_record_fields_top: u32,
 };
 const TypeAnnoKernelTagUnionTagsNextWork = struct {
@@ -18338,7 +18453,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = self.parse_ir.tokenizedRegionToRegion(record.region),
                         .field_index = 0,
                         .scratch_top = self.env.store.scratchAnnoRecordFieldTop(),
-                        .scratch_record_fields_top = self.scratch_record_fields.top(),
                         .scratch_seen_record_fields_top = self.scratch_seen_record_fields.top(),
                         .is_nominal_backing = is_nominal_backing,
                     });
@@ -18507,13 +18621,10 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const fields = self.parse_ir.store.annoRecordFieldSlice(state.record.fields);
             if (state.field_index >= fields.len) {
                 const field_anno_idxs = try self.env.store.annoRecordFieldSpanFrom(state.scratch_top);
-                const record_fields_scratch = self.scratch_record_fields.sliceFromStart(state.scratch_record_fields_top);
-                std.mem.sort(types.RecordField, record_fields_scratch, self.env.common.getIdentStore(), comptime types.RecordField.sortByNameAsc);
 
                 switch (state.record.ext) {
                     .closed => {
                         self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                        self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
                         self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                         last = try self.env.addTypeAnno(.{ .record = .{
                             .fields = field_anno_idxs,
@@ -18527,7 +18638,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                                     .name = self.env.idents.open_ext,
                                 } }, state.region);
                                 self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                                self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
                                 self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                                 last = try self.env.addTypeAnno(.{ .record = .{
                                     .fields = field_anno_idxs,
@@ -18536,7 +18646,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             },
                             .type_decl_anno, .for_clause_anno => {
                                 self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                                self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
                                 self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
                                 last = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{
                                     .open_ext_not_allowed_in_type_decl = .{
@@ -18551,7 +18660,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .region = state.region,
                             .field_anno_idxs = field_anno_idxs,
                             .scratch_top = state.scratch_top,
-                            .scratch_record_fields_top = state.scratch_record_fields_top,
                             .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                         });
                         try stacks.pushParse(frame_allocator, named.anno);
@@ -18565,7 +18673,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .region = state.region,
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
-                            .scratch_record_fields_top = state.scratch_record_fields_top,
                             .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                             .is_nominal_backing = state.is_nominal_backing,
                         });
@@ -18587,7 +18694,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = state.region,
                         .field_index = state.field_index + 1,
                         .scratch_top = state.scratch_top,
-                        .scratch_record_fields_top = state.scratch_record_fields_top,
                         .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                         .is_nominal_backing = state.is_nominal_backing,
                     });
@@ -18615,7 +18721,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                             .region = state.region,
                             .field_index = state.field_index + 1,
                             .scratch_top = state.scratch_top,
-                            .scratch_record_fields_top = state.scratch_record_fields_top,
                             .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                             .is_nominal_backing = state.is_nominal_backing,
                         });
@@ -18626,17 +18731,34 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = field_name_region,
                     });
                 }
+                // A default combines with neither `?:` (a default makes the
+                // field never missing, so the tagged slot and `.?` would be
+                // pointless) nor unnamed padding; the default is dropped and
+                // the error reported (design.md "Defaulted Fields").
+                var ast_default_value = ast_field.default_value;
+                if (ast_default_value != null and ast_field.optional_mark != null) {
+                    try self.env.pushDiagnostic(Diagnostic{ .optional_field_cannot_have_default = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
+                } else if (ast_default_value != null and is_unnamed) {
+                    try self.env.pushDiagnostic(Diagnostic{ .unnamed_field_cannot_have_default = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
+                }
                 try stacks.pushRecordAfterField(frame_allocator, .{
                     .record = state.record,
                     .region = state.region,
                     .field_index = state.field_index,
                     .scratch_top = state.scratch_top,
-                    .scratch_record_fields_top = state.scratch_record_fields_top,
                     .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                     .field_name = field_name,
                     .field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     .is_nominal_backing = state.is_nominal_backing,
                     .is_unnamed = is_unnamed,
+                    .is_optional = ast_field.optional_mark != null,
+                    .ast_default_value = ast_default_value,
                 });
                 try stacks.pushParse(frame_allocator, ast_field.ty);
             }
@@ -18646,28 +18768,38 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         .record_after_field => {
             const state = stacks.takeRecordAfterField();
             const canonicalized_ty = last orelse unreachable;
+            // Canonicalize the default value expression (an ordinary
+            // expression in the enclosing scope); the checker types it
+            // against the field's type (design.md "Defaulted Fields").
+            const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
+                const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
+                // A default must be a closed literal: it is materialized by
+                // the compiler at construction sites, and anything that
+                // refers to another value could form an evaluation cycle the
+                // compiler will not chase (design.md "Defaulted Fields").
+                // The default is dropped and the error reported.
+                if (try self.defaultNonLiteralNode(can_default.idx)) |non_literal_idx| {
+                    try self.env.pushDiagnostic(Diagnostic{ .record_default_not_literal = .{
+                        .field_name = state.field_name,
+                        .region = self.env.store.getExprRegion(non_literal_idx),
+                    } });
+                    break :blk null;
+                }
+                break :blk can_default.idx;
+            } else null;
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
                 .is_unnamed = state.is_unnamed,
+                .is_optional = state.is_optional,
+                .default_value = default_value,
             }, state.field_region);
             try self.env.store.addScratchAnnoRecordField(field_cir_idx);
-            // Unnamed fields stay in the canonical record annotation (so the
-            // nominal declaration keeps its declared field order, including
-            // padding) but are excluded from the backing record row, so they
-            // are never name-resolved, unified, or required at construction.
-            if (!state.is_unnamed) {
-                try self.scratch_record_fields.append(types.RecordField{
-                    .name = state.field_name,
-                    .var_ = ModuleEnv.varFrom(field_cir_idx),
-                });
-            }
             try stacks.pushRecordNext(frame_allocator, .{
                 .record = state.record,
                 .region = state.region,
                 .field_index = state.field_index + 1,
                 .scratch_top = state.scratch_top,
-                .scratch_record_fields_top = state.scratch_record_fields_top,
                 .scratch_seen_record_fields_top = state.scratch_seen_record_fields_top,
                 .is_nominal_backing = state.is_nominal_backing,
             });
@@ -18678,7 +18810,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             const state = stacks.takeRecordAfterNamedExt();
             const ext = last orelse unreachable;
             self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-            self.scratch_record_fields.clearFrom(state.scratch_record_fields_top);
             self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
             last = try self.env.addTypeAnno(.{ .record = .{
                 .fields = state.field_anno_idxs,
@@ -20929,30 +21060,6 @@ fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx
         false, // Type imports are not package-qualified
         null, // No parent lookup function for now
     );
-}
-
-/// Resolve an identifier token or return an "unknown" identifier.
-///
-/// This helps maintain the "inform don't block" philosophy - even if we can't
-/// resolve an identifier (due to malformed input), we continue compilation.
-///
-/// Examples:
-/// - Valid token for "name" -> returns the interned identifier for "name"
-/// - Malformed/missing token -> returns identifier for "unknown"
-fn resolveIdentOrUnknown(self: *Self, token: Token.Idx) std.mem.Allocator.Error!Ident.Idx {
-    if (self.parse_ir.tokens.resolveIdentifier(token)) |ident_idx| {
-        return ident_idx;
-    } else {
-        return try self.createUnknownIdent();
-    }
-}
-
-/// Create an "unknown" identifier for malformed/unresolved cases.
-///
-/// Used when we encounter malformed or unexpected syntax but want to continue
-/// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
-fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
-    return try self.env.insertIdent(base.Ident.for_text("unknown"));
 }
 
 /// Generate a unique tag name for a closure.

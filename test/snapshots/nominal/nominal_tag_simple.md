@@ -81,8 +81,7 @@ NO CHANGE
 			(ty-lookup (name "Color") (local))))
 	(d-let
 		(p-assign (ident "yellow"))
-		(e-nominal (nominal "Color")
-			(e-tag (name "Yellow")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Color") (local))))
 	(s-nominal-decl

@@ -169,6 +169,7 @@ pub const RepChild = struct {
     role: ChildRole,
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
+    record_field_kind: checked.CheckedFieldKind.Tag = .required,
 };
 
 /// One tag name and its planned payload representation span.
@@ -1366,6 +1367,7 @@ const Builder = struct {
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
+    optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
     body_exprs_seen: std.AutoHashMap(BodyExprVisit, void),
     body_patterns_seen: std.AutoHashMap(BodyPatternVisit, void),
@@ -1391,6 +1393,7 @@ const Builder = struct {
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
+            .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
             .body_exprs_seen = std.AutoHashMap(BodyExprVisit, void).init(allocator),
             .body_patterns_seen = std.AutoHashMap(BodyPatternVisit, void).init(allocator),
@@ -1407,6 +1410,7 @@ const Builder = struct {
         self.body_statements_seen.deinit();
         self.body_patterns_seen.deinit();
         self.body_exprs_seen.deinit();
+        self.optional_slots.deinit();
         self.by_type.deinit();
         self.by_stored_type.deinit();
         self.plan.deinit();
@@ -4148,6 +4152,12 @@ const Builder = struct {
                 .role = .{ .record_field = field.name },
                 .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
                 .rep = rep,
+                .record_field_kind = if (field.value_ty != null)
+                    .optional
+                else if (field.default != null)
+                    .defaulted
+                else
+                    .required,
             });
         }
         sortRecordFieldChildrenByName(store_view, children.items);
@@ -4514,7 +4524,7 @@ const Builder = struct {
         ext: ?checked.CheckedTypeId,
     ) Allocator.Error!bool {
         for (fields) |field| {
-            try self.appendPendingChild(children, view, .{ .record_field = field.name }, field.ty);
+            try self.appendRecordFieldChild(children, view, field);
         }
 
         var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
@@ -4540,13 +4550,13 @@ const Builder = struct {
                 .empty_record => return true,
                 .record => |record| {
                     for (record.fields) |field| {
-                        try self.appendPendingChild(children, view, .{ .record_field = field.name }, field.ty);
+                        try self.appendRecordFieldChild(children, view, field);
                     }
                     current = record.ext;
                 },
                 .record_unbound => |tail_fields| {
                     for (tail_fields) |field| {
-                        try self.appendPendingChild(children, view, .{ .record_field = field.name }, field.ty);
+                        try self.appendRecordFieldChild(children, view, field);
                     }
                     return true;
                 },
@@ -4556,6 +4566,78 @@ const Builder = struct {
             }
         }
         return true;
+    }
+
+    fn appendRecordFieldChild(
+        self: *Builder,
+        children: *std.ArrayList(RepChild),
+        view: ModuleView,
+        field: checked.CheckedRecordField,
+    ) Allocator.Error!void {
+        const source_type = typeRef(view, field.ty);
+        const rep = switch (field.kind.tag) {
+            .required, .defaulted, .undetermined => try self.analyzeType(view, field.ty),
+            .optional => try self.optionalSlotRepresentation(view, field.ty),
+            .err => boxyPlanInvariant("checked-error record field reached boxy representation planning"),
+        };
+        try children.append(self.allocator, .{
+            .role = .{ .record_field = field.name },
+            .source_type = source_type,
+            .rep = rep,
+            .record_field_kind = switch (field.kind.tag) {
+                .undetermined => .required,
+                .required, .optional, .defaulted => |kind| kind,
+                .err => unreachable,
+            },
+        });
+    }
+
+    fn optionalSlotRepresentation(
+        self: *Builder,
+        view: ModuleView,
+        payload_ty: checked.CheckedTypeId,
+    ) Allocator.Error!TypeRepId {
+        const source_type = typeRef(view, payload_ty);
+        const entry = try self.optional_slots.getOrPut(source_type);
+        if (entry.found_existing) return entry.value_ptr.*;
+
+        const rep_id: TypeRepId = @enumFromInt(@as(u32, @intCast(self.plan.representations.items.len)));
+        entry.value_ptr.* = rep_id;
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = source_type,
+            .kind = .in_progress,
+        });
+
+        const names = view.canonical_names orelse
+            boxyPlanInvariant("optional field slot representation ModuleView had no name store");
+        const missing = names.lookupTagLabel("#Missing") orelse
+            boxyPlanInvariant("optional field slot representation was missing the reserved Missing label");
+        const present = names.lookupTagLabel("#Present") orelse
+            boxyPlanInvariant("optional field slot representation was missing the reserved Present label");
+        const payload_rep = try self.analyzeType(view, payload_ty);
+
+        const child_start: u32 = @intCast(self.plan.children.items.len);
+        try self.plan.children.append(self.allocator, .{
+            .role = .{ .tag_payload = .{ .tag = present, .index = 0 } },
+            .source_type = source_type,
+            .rep = payload_rep,
+        });
+        const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        try self.plan.tag_variants.appendSlice(self.allocator, &.{
+            .{ .name = missing, .name_module = view.key },
+            .{ .name = present, .name_module = view.key, .payloads = .{ .start = child_start, .len = 1 } },
+        });
+
+        self.plan.representations.items[@intFromEnum(rep_id)] = .{
+            .source_type = source_type,
+            .kind = .tag_union,
+            .children = .{ .start = child_start, .len = 1 },
+            .tag_variants = .{ .start = variant_start, .len = 2 },
+            // Slot tags carry their payload descriptor through enclosing
+            // records even when this particular payload is concrete.
+            .contains_dynamic = true,
+        };
+        return rep_id;
     }
 
     fn tupleRepresentation(
@@ -5464,9 +5546,8 @@ const Builder = struct {
         while (changed) {
             changed = false;
             for (self.plan.representations.items) |*rep| {
-                const next = self.representationContainsDynamic(rep.*);
-                if (next != rep.contains_dynamic) {
-                    rep.contains_dynamic = next;
+                if (!rep.contains_dynamic and self.representationContainsDynamic(rep.*)) {
+                    rep.contains_dynamic = true;
                     changed = true;
                 }
             }
@@ -13179,6 +13260,59 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
     try std.testing.expectEqual(@as(usize, 2), plan.childSlice(record.children).len);
     try std.testing.expectEqual(@as(usize, 2), plan.descriptors.items.len);
     try std.testing.expectEqual(DescriptorReason.aggregate_contains_dynamic, plan.descriptors.items[@intFromEnum(record.descriptor.?)].reason);
+}
+
+test "boxy planner preserves optional record field representation and descriptor" {
+    const gpa = std.testing.allocator;
+
+    var canonical_names = checked_names.CanonicalNameStore.init(gpa);
+    defer canonical_names.deinit();
+    const field_name = try canonical_names.internRecordFieldLabel("value");
+    const missing = try canonical_names.internTagLabel("#Missing");
+    const present = try canonical_names.internTagLabel("#Present");
+
+    const fields = [_]checked.CheckedRecordField{.{
+        .name = field_name,
+        .ty = @enumFromInt(fixtureTableIndex(0)),
+        .kind = .optional,
+    }};
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @enumFromInt(1) } },
+    };
+    const checked_types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .record_field_pool = &fields,
+    };
+
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{
+            .canonical_names = &canonical_names,
+            .checked_types = checked_types,
+        },
+        .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(2))},
+    }, .{});
+    defer plan.deinit();
+
+    const record = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const record_children = plan.childSlice(record.children);
+    try std.testing.expectEqual(@as(usize, 1), record_children.len);
+    try std.testing.expectEqual(checked.CheckedFieldKind.Tag.optional, record_children[0].record_field_kind);
+    try std.testing.expect(record.contains_dynamic);
+    try std.testing.expect(record.descriptor != null);
+
+    const slot = plan.representations.items[@intFromEnum(record_children[0].rep)];
+    try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
+    try std.testing.expect(slot.contains_dynamic);
+    try std.testing.expect(slot.descriptor != null);
+    const variants = plan.tagVariantSlice(slot.tag_variants);
+    try std.testing.expectEqual(@as(usize, 2), variants.len);
+    try std.testing.expectEqual(missing, variants[0].name);
+    try std.testing.expectEqual(present, variants[1].name);
+    const present_payloads = plan.childSlice(variants[1].payloads);
+    try std.testing.expectEqual(@as(usize, 1), present_payloads.len);
+    try std.testing.expectEqual(record_children[0].source_type, present_payloads[0].source_type);
 }
 
 test "boxy planner represents open record rows dynamically" {

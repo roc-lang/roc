@@ -445,8 +445,10 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_field_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
-            .field_name = rand_ident_idx(),
-            .field_name_region = rand_region(),
+            .segments = .{
+                .start = rand_idx(CIR.Expr.FieldAccessSegment.Idx),
+                .len = @max(rand.random().int(u30), 1),
+            },
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -599,6 +601,71 @@ test "NodeStore round trip - Expressions" {
     if (actual_test_count < NodeStore.MODULEENV_EXPR_NODE_COUNT) {
         return error.IncompleteExpressionTestCoverage;
     }
+}
+
+test "NodeStore mixed field-access path preserves segment order, modes, and regions" {
+    const gpa = testing.allocator;
+
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const expected_segments = [_]CIR.Expr.FieldAccessSegment{
+        .{ .name = @bitCast(@as(u32, 11)), .mode = .required },
+        .{ .name = @bitCast(@as(u32, 22)), .mode = .optional },
+        .{ .name = @bitCast(@as(u32, 33)), .mode = .required },
+    };
+    const expected_regions = [_]base.Region{
+        from_raw_offsets(10, 14),
+        from_raw_offsets(14, 21),
+        from_raw_offsets(21, 29),
+    };
+
+    // A path builder owns only its reserved node tail. Rolling one back must
+    // leave unrelated index spans untouched.
+    const sentinel_expr: CIR.Expr.Idx = @enumFromInt(0x1234_5678);
+    const prefix = try store.appendExprSpan(&.{sentinel_expr});
+    const abandoned = try store.startFieldAccessPath(2);
+    _ = store.appendFieldAccessPathSegmentAssumeCapacity(abandoned, .{
+        .name = @bitCast(@as(u32, 99)),
+        .mode = .optional,
+    }, from_raw_offsets(1, 2));
+    store.rollbackFieldAccessPath(abandoned);
+    try testing.expectEqualSlices(CIR.Expr.Idx, &.{sentinel_expr}, store.sliceExpr(prefix));
+
+    // Canon consumes the flat AST in source order, and CIR retains that order
+    // directly in the contiguous node range.
+    const builder = try store.startFieldAccessPath(expected_segments.len);
+    for (expected_segments, expected_regions) |segment, region| {
+        _ = store.appendFieldAccessPathSegmentAssumeCapacity(builder, segment, region);
+    }
+    const segments = store.finishFieldAccessPath(builder);
+    try testing.expectEqualSlices(CIR.Expr.Idx, &.{sentinel_expr}, store.sliceExpr(prefix));
+
+    const expected_expr = CIR.Expr{ .e_field_access = .{
+        .receiver = @enumFromInt(41),
+        .segments = segments,
+    } };
+    const expr_idx = try store.addExpr(expected_expr, from_raw_offsets(2, 29));
+    try testing.expectEqualDeep(expected_expr, store.getExpr(expr_idx));
+
+    try testing.expectEqual(@as(u32, expected_segments.len), segments.len);
+    for (expected_segments, expected_regions, 0..) |expected_segment, expected_region, position| {
+        const segment_idx = store.fieldAccessSegmentAt(segments, @intCast(position));
+        try testing.expectEqualDeep(expected_segment, store.getFieldAccessSegment(segment_idx));
+        try testing.expectEqualDeep(expected_region, store.getFieldAccessSegmentRegion(segment_idx));
+    }
+
+    var cloned = try store.clone(gpa);
+    defer cloned.deinit();
+    try testing.expectEqualDeep(expected_expr, cloned.getExpr(expr_idx));
+    for (expected_segments, expected_regions, 0..) |expected_segment, expected_region, position| {
+        const segment_idx = cloned.fieldAccessSegmentAt(segments, @intCast(position));
+        try testing.expectEqualDeep(expected_segment, cloned.getFieldAccessSegment(segment_idx));
+        try testing.expectEqualDeep(expected_region, cloned.getFieldAccessSegmentRegion(segment_idx));
+    }
+
+    try cloned.ensureScratch();
+    try testing.expectEqual(@as(u32, 0), cloned.scratchExprTop());
 }
 
 test "NodeStore round trip - Diagnostics" {
@@ -842,6 +909,25 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .unnamed_field_not_allowed_in_structural_record = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .optional_field_cannot_have_default = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .unnamed_field_cannot_have_default = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .record_default_not_literal = .{
+            .field_name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
@@ -1381,6 +1467,39 @@ test "NodeStore round trip - TypeAnno" {
     }
 }
 
+test "NodeStore round trip - annotation record field optionality" {
+    const gpa = testing.allocator;
+
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const fields = [_]CIR.TypeAnno.RecordField{
+        .{
+            .name = @bitCast(@as(u32, 1)),
+            .ty = @enumFromInt(2),
+            .is_optional = false,
+            .is_unnamed = false,
+        },
+        .{
+            .name = @bitCast(@as(u32, 3)),
+            .ty = @enumFromInt(4),
+            .is_optional = true,
+            .is_unnamed = false,
+        },
+        .{
+            .name = @bitCast(@as(u32, 5)),
+            .ty = @enumFromInt(6),
+            .is_optional = false,
+            .is_unnamed = true,
+        },
+    };
+
+    for (fields, 0..) |field, i| {
+        const idx = try store.addAnnoRecordField(field, from_raw_offsets(@intCast(i * 10), @intCast(i * 10 + 5)));
+        try testing.expectEqualDeep(field, store.getAnnoRecordField(idx));
+    }
+}
+
 test "NodeStore round trip - Pattern" {
     const gpa = testing.allocator;
 
@@ -1612,4 +1731,85 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const cloned_owners = cloned.sliceWhereClauseOwners(where);
     try testing.expectEqualSlices(NodeStore.WhereClauseOwnerData, owners, cloned_owners);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, cloned.sliceWhereClausesForOwner(cloned_owners[1]));
+}
+
+test "field access paths are direct contiguous node ranges" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const receiver = try store.addExpr(.{ .e_empty_record = .{} }, from_raw_offsets(0, 2));
+    const index_data_len = store.index_data.len();
+    const builder = try store.startFieldAccessPath(3);
+    var finished = false;
+    errdefer if (!finished) store.rollbackFieldAccessPath(builder);
+
+    const expected_names = [_]u32{ 11, 12, 13 };
+    const expected_modes = [_]CIR.Expr.FieldAccessMode{ .required, .optional, .required };
+    const expected_regions = [_]base.Region{
+        from_raw_offsets(2, 4),
+        from_raw_offsets(4, 7),
+        from_raw_offsets(7, 9),
+    };
+    for (expected_names, expected_modes, expected_regions) |name, mode, region| {
+        _ = store.appendFieldAccessPathSegmentAssumeCapacity(builder, .{
+            .name = @bitCast(name),
+            .mode = mode,
+        }, region);
+    }
+
+    const segments = store.finishFieldAccessPath(builder);
+    const access_idx = try store.addExpr(.{ .e_field_access = .{
+        .receiver = receiver,
+        .segments = segments,
+    } }, from_raw_offsets(0, 9));
+    finished = true;
+
+    try testing.expectEqual(@as(u32, 3), segments.len);
+    try testing.expectEqual(index_data_len, store.index_data.len());
+    try testing.expectEqual(@intFromEnum(segments.start) + segments.len, @intFromEnum(access_idx));
+
+    for (expected_names, expected_modes, expected_regions, 0..) |name, mode, region, position| {
+        const segment_idx = store.fieldAccessSegmentAt(segments, @intCast(position));
+        try testing.expectEqual(
+            @intFromEnum(segments.start) + @as(u32, @intCast(position)),
+            @intFromEnum(segment_idx),
+        );
+        const segment = store.getFieldAccessSegment(segment_idx);
+        try testing.expectEqual(name, @as(u32, @bitCast(segment.name)));
+        try testing.expectEqual(mode, segment.mode);
+        try testing.expectEqualDeep(region, store.getFieldAccessSegmentRegion(segment_idx));
+    }
+
+    const access_expr = store.getExpr(access_idx);
+    if (access_expr != .e_field_access) return error.ExpectedFieldAccess;
+    const access = access_expr.e_field_access;
+    try testing.expectEqual(receiver, access.receiver);
+    try testing.expectEqualDeep(segments, access.segments);
+}
+
+test "field access path rollback removes every partial auxiliary node" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    _ = try store.addExpr(.{ .e_empty_record = .{} }, from_raw_offsets(0, 2));
+    const nodes_before = store.nodes.len();
+    const regions_before = store.regions.len();
+    const index_data_before = store.index_data.len();
+
+    const builder = try store.startFieldAccessPath(3);
+    _ = store.appendFieldAccessPathSegmentAssumeCapacity(builder, .{
+        .name = @bitCast(@as(u32, 21)),
+        .mode = .optional,
+    }, from_raw_offsets(2, 5));
+    _ = store.appendFieldAccessPathSegmentAssumeCapacity(builder, .{
+        .name = @bitCast(@as(u32, 22)),
+        .mode = .required,
+    }, from_raw_offsets(5, 7));
+    store.rollbackFieldAccessPath(builder);
+
+    try testing.expectEqual(nodes_before, store.nodes.len());
+    try testing.expectEqual(regions_before, store.regions.len());
+    try testing.expectEqual(index_data_before, store.index_data.len());
 }

@@ -26,19 +26,20 @@ EndOfFile,
 ~~~clojure
 (e-question-suffix
 	(e-field-access
-		(e-question-suffix
-			(e-method-call (method ".next_static_dispatch_method")
-				(receiver
-					(e-question-suffix
-						(e-method-call (method ".static_dispatch_method")
-							(receiver
-								(e-question-suffix
-									(e-apply
-										(e-ident (raw "some_fn"))
-										(e-ident (raw "arg1")))))
-							(args))))
-				(args)))
-		(e-ident (raw ".record_field"))))
+		(receiver
+			(e-question-suffix
+				(e-method-call (method ".next_static_dispatch_method")
+					(receiver
+						(e-question-suffix
+							(e-method-call (method ".static_dispatch_method")
+								(receiver
+									(e-question-suffix
+										(e-apply
+											(e-ident (raw "some_fn"))
+											(e-ident (raw "arg1")))))
+								(args))))
+					(args))))
+		(segment (mode "required") (field "record_field"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -49,7 +50,7 @@ NO CHANGE
 (e-match
 	(match
 		(cond
-			(e-field-access (field "record_field")
+			(e-field-access
 				(receiver
 					(e-match
 						(match
@@ -116,7 +117,9 @@ NO CHANGE
 											(p-nominal-external (builtin)
 												(p-applied-tag))))
 									(value
-										(e-runtime-error (tag "return_outside_fn"))))))))))
+										(e-runtime-error (tag "return_outside_fn"))))))))
+				(segments
+					(segment (name "record_field") (mode "required")))))
 		(branches
 			(branch
 				(patterns
