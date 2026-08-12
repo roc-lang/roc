@@ -658,6 +658,113 @@ test "record literals request and retain only immediate exact field nodes" {
     try expectNotContains(lower_source, "instantiateProducedOccurrenceWithSelections");
 }
 
+test "Monotype producers return and compose exact graph nodes directly" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const solve_source = @embedFile("monotype/solve.zig");
+
+    const lower_expr = sourceSliceBetween(
+        lower_source,
+        "fn lowerExpr(self: *BodyContext",
+        "fn lowerExprInner(",
+    );
+    try expectContains(lower_expr, "self.exprTypeCell(lowered).toGraphNode(self.graph)");
+    try expectContains(lower_expr, "return try self.requireLoweredExpr(");
+
+    const tuple = sourceSliceBetween(
+        lower_source,
+        "fn lowerTupleConstructorAtNodeWithRelation(",
+        "fn lowerListConstructorAtNode(",
+    );
+    try expectContains(tuple, "produced_item.* = try self.exprTypeCell(item).toGraphNode(self.graph)");
+    try expectContains(tuple, "self.graph.newNode(.{ .tuple = produced_items })");
+
+    const list = sourceSliceBetween(
+        lower_source,
+        "fn lowerListConstructorAtNodeWithRelation(",
+        "fn lowerRecordConstructorAtNode(",
+    );
+    try expectContains(list, "const produced_element = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph)");
+    try expectContains(list, "self.graph.newNode(.{ .list = produced_element })");
+    try expectContains(list, "requireSameExactProducedValue(");
+
+    const tag = sourceSliceBetween(
+        lower_source,
+        "fn lowerTagConstructorAtNodeWithRelation(",
+        "fn lowerNominalConstructorAtNode(",
+    );
+    try expectContains(tag, "produced_payload.* = try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
+    try expectContains(tag, "self.graph.newNode(.{ .tag_union");
+
+    const low_level = sourceSliceBetween(
+        lower_source,
+        "fn lowerProducedLowLevelExprAtNode(",
+        "fn lowerExprAtTypeCellInner(",
+    );
+    try expectContains(low_level, ".box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] })");
+    try expectContains(low_level, ".box_item => |box| try self.graph.boxElementNode(arg_nodes[box.box_arg])");
+
+    const lookup = sourceSliceBetween(
+        lower_source,
+        "fn lowerLookupExprAtNode(",
+        "fn deferConstUseAtNode(",
+    );
+    try expectContains(lookup, "const local_cell = self.localTypeCell(local_id)");
+    try expectContains(lookup, "self.addExprWithTypeCell(\n                local_cell,");
+
+    const captures = sourceSliceBetween(
+        lower_source,
+        "fn lowerClosureCaptureExprSpan(",
+        "fn closureFunctionNode(",
+    );
+    try expectContains(captures, "const cell = self.localTypeCell(local)");
+    try expectContains(captures, "self.addExprWithTypeCell(\n                cell,");
+
+    const function_result = sourceSliceBetween(
+        solve_source,
+        "pub fn completeFunctionResult(",
+        "pub fn completeProducedSelection(",
+    );
+    try expectContains(function_result, "const exact_produced = self.find(produced_ret)");
+    try expectContains(function_result, ".{ .redirect = exact_produced }");
+}
+
+test "generated identities are atomic and reserve before backing work" {
+    const solve_source = @embedFile("monotype/solve.zig");
+    const writer = sourceSliceBetween(
+        solve_source,
+        "fn writeNode(self: *GeneratedIdentityWriter",
+        "fn writeNodeSpan(",
+    );
+    const atomic = std.mem.find(u8, writer, "InstGraph.isGeneratedPrivateRootContent(content)") orelse
+        return error.TestExpectedEqual;
+    const cycle_walk = std.mem.find(u8, writer, "for (self.visiting.items") orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(atomic < cycle_walk);
+    try expectContains(writer, "self.writeBytes(&digest.bytes)");
+
+    const generated_lookup = sourceSliceBetween(
+        solve_source,
+        "pub fn lookupGeneratedIterator(",
+        "pub fn addRecursiveGeneratedIterator(",
+    );
+    const dense_lookup = std.mem.find(u8, generated_lookup, "generated_iterators_by_item.getPtr(item_root)") orelse
+        return error.TestExpectedEqual;
+    const sha_lookup = std.mem.find(u8, generated_lookup, "generatedIteratorInternDigest(public_def, item_root)") orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(dense_lookup < sha_lookup);
+
+    const reservation = sourceSliceBetween(
+        solve_source,
+        "pub fn addRecursiveGeneratedIterator(",
+        "pub fn registerGeneratedIteratorAtDigest(",
+    );
+    const publish_identity = std.mem.find(u8, reservation, "entry.value_ptr.* = reserved") orelse
+        return error.TestExpectedEqual;
+    const fill_backing = std.mem.find(u8, reservation, "try fill(context, reserved)") orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(publish_identity < fill_backing);
+}
+
 test "Monotype graph nodes cannot become TypeId views before freeze" {
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(solve_source, "activeTypeViewForNode");
