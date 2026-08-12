@@ -977,6 +977,14 @@ test "Monotype method type instantiation does not construct body contexts" {
     );
     try expectContains(signature, "self.typeOnlyCheckedNode(");
     try expectNotContains(signature, "BodyContext.init");
+
+    const template_request = sourceSliceBetween(
+        lower_source,
+        "fn lowerDraftTemplateFromContext(",
+        "if (partial_evidence.len > template.evidence_params.len)",
+    );
+    try expectContains(template_request, "enterTypeOnlyInstantiation(");
+    try expectNotContains(template_request, "BodyContext.init");
 }
 
 test "Monotype match lowering projects exact scrutinee cells without checked root relations" {

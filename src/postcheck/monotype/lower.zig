@@ -3167,42 +3167,33 @@ const Builder = struct {
         self.count("template_requests");
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        var target_request_ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            view,
-            source_ctx.method_scope,
-            template_ref,
-            source_ctx.graph,
-            source_ctx.draft,
-        );
-        defer target_request_ctx.deinit();
-        var source_request_ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self,
-            self.moduleForId(source_view),
-            source_ctx.method_scope,
-            source_ctx.owner_template,
-            source_ctx.graph,
-            source_ctx.draft,
-        );
-        defer source_request_ctx.deinit();
-        source_request_ctx.active_checked_selections = source_ctx.active_checked_selections;
-        const source_request_fn_node = try source_request_ctx.scopedExactFunctionRequest(
-            source_fn_ty,
-            raw_request_fn_node,
-        );
-        try source_request_ctx.publishProcedureTargetSelections(
-            source_view,
-            source_fn_ty,
-            view,
-            template.checked_fn_root,
-            source_request_fn_node,
-        );
-        const request_fn_node = try target_request_ctx.scopedExactFunctionRequest(
-            template.checked_fn_root,
-            source_request_fn_node,
-        );
+        const source_request_fn_node = source_request: {
+            const scope = source_ctx.enterTypeOnlyInstantiation(
+                self.moduleForId(source_view),
+                source_ctx.active_checked_selections,
+            );
+            defer scope.leave();
+            const request = try source_ctx.scopedExactFunctionRequest(
+                source_fn_ty,
+                raw_request_fn_node,
+            );
+            try source_ctx.publishProcedureTargetSelections(
+                source_view,
+                source_fn_ty,
+                view,
+                template.checked_fn_root,
+                request,
+            );
+            break :source_request request;
+        };
+        const request_fn_node = target_request: {
+            const scope = source_ctx.enterTypeOnlyInstantiation(view, null);
+            defer scope.leave();
+            break :target_request try source_ctx.scopedExactFunctionRequest(
+                template.checked_fn_root,
+                source_request_fn_node,
+            );
+        };
         if (partial_evidence.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
         }
