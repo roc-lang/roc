@@ -2745,7 +2745,9 @@ pub fn build(b: *std.Build) void {
     const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
     const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
+    const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
+    const build_repl_wasm_archive_step = b.step("build-repl-wasm-archive", "Build repl.wasm and zstd-compress it under zig-out/lib/repl");
     const run_test_repl_wasm_step = b.step("run-test-repl-wasm", "Run the dedicated REPL WebAssembly protocol tests");
     const build_web_step = b.step("build-web", "Build the playground, REPL, and echo web artifacts");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
@@ -2993,6 +2995,10 @@ pub fn build(b: *std.Build) void {
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
+        .optimize = optimize,
+    });
+    const host_zstd = b.dependency("zstd", .{
+        .target = b.graph.host,
         .optimize = optimize,
     });
 
@@ -4131,6 +4137,19 @@ pub fn build(b: *std.Build) void {
         run_test_simd_differential_step.dependOn(&lambda_mono_differential_exe.step);
     }
 
+    const wasm_archive_exe = b.addExecutable(.{
+        .name = "wasm_archive",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/wasm_archive.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    configureBackend(wasm_archive_exe, b.graph.host);
+    wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+    wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
+    wasm_archive_exe.root_module.linkLibrary(host_zstd.artifact("zstd"));
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -4161,6 +4180,12 @@ pub fn build(b: *std.Build) void {
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     build_playground_step.dependOn(&playground_install.step);
+
+    const playground_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
+    playground_wasm_archive_cmd.addFileArg(playground_exe.getEmittedBin());
+    const playground_wasm_archive_out = playground_wasm_archive_cmd.addOutputFileArg("playground.wasm.zst");
+    const playground_wasm_archive_install = b.addInstallFileWithDir(playground_wasm_archive_out, .lib, "playground/playground.wasm.zst");
+    build_playground_wasm_archive_step.dependOn(&playground_wasm_archive_install.step);
 
     const repl_wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -4201,6 +4226,12 @@ pub fn build(b: *std.Build) void {
 
     const repl_wasm_install = b.addInstallFile(repl_wasm.getEmittedBin(), "lib/repl/repl.wasm");
     build_repl_wasm_step.dependOn(&repl_wasm_install.step);
+
+    const repl_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
+    repl_wasm_archive_cmd.addFileArg(repl_wasm.getEmittedBin());
+    const repl_wasm_archive_out = repl_wasm_archive_cmd.addOutputFileArg("repl.wasm.zst");
+    const repl_wasm_archive_install = b.addInstallFileWithDir(repl_wasm_archive_out, .lib, "repl/repl.wasm.zst");
+    build_repl_wasm_archive_step.dependOn(&repl_wasm_archive_install.step);
     inline for (.{ "index.html", "app.js", "cells.js", "worker.js" }) |filename| {
         const install_file = b.addInstallFile(b.path("src/repl_wasm/www/" ++ filename), "lib/repl/" ++ filename);
         build_repl_wasm_step.dependOn(&install_file.step);
@@ -4265,22 +4296,7 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_install = b.addInstallFile(echo_wasm.getEmittedBin(), "lib/echo/echo.wasm");
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
-        // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
-        // the same zstd streaming compressor as `roc bundle` (src/bundle/).
-        const echo_wasm_archive_exe = b.addExecutable(.{
-            .name = "echo_wasm_archive",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/echo_platform/echo_wasm_archive.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        configureBackend(echo_wasm_archive_exe, target);
-        echo_wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
-        echo_wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
-        echo_wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
-
-        const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
+        const echo_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
         echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
         const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
         const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo/echo.wasm.zst");
