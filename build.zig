@@ -7235,7 +7235,6 @@ fn addMainExe(
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
                 b.path("src/boxy_runtime/main.zig"),
             );
-            add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
             const boxy_runtime_artifact = if (cross_is_wasm)
                 wasmObjectArtifact(b, cross_boxy_runtime_obj)
             else
