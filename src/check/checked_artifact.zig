@@ -2727,12 +2727,22 @@ pub const RowDefault = enum {
     empty_tag_union,
 };
 
+/// The representation selected when a specialization supplies no exact value
+/// for an otherwise-unconstrained checked identity. This is distinct from a
+/// row-extension default: an ordinary generic type parameter can receive this
+/// default, while an occurrence used as a record or tag row still carries its
+/// own contextual `RowDefault`.
+pub const SpecializationDefault = enum {
+    empty_tag_union,
+};
+
 /// Public `CheckedTypeVariable` declaration.
 pub const CheckedTypeVariable = struct {
     name: ?[]const u8 = null,
     constraints: []const CheckedStaticDispatchConstraint = &.{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
+    specialization_default: ?SpecializationDefault = null,
 };
 
 /// Artifact-stable identity of a `??` default in its declaring module; see
@@ -3194,6 +3204,7 @@ pub const StoredTypeVariable = struct {
     constraints: CheckedTypeRange = .{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
+    specialization_default: ?SpecializationDefault = null,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3331,6 +3342,7 @@ fn reconstructCheckedTypeVariable(pool_owner: anytype, v: StoredTypeVariable) Ch
         .constraints = pool_owner.constraintPool()[v.constraints.start .. v.constraints.start + v.constraints.len],
         .numeric_default_phase = v.numeric_default_phase,
         .row_default = v.row_default,
+        .specialization_default = v.specialization_default,
     };
 }
 
@@ -3663,7 +3675,7 @@ fn checkedTypeViewIsConcreteConstProducerSchemeInner(
     }
     return switch (checked_types.payload(@enumFromInt(index))) {
         .pending => checkedArtifactInvariant("const producer checked type view was pending", .{}),
-        .flex, .rigid => |variable| variable.row_default != null,
+        .flex, .rigid => |variable| variable.row_default != null or variable.specialization_default != null,
         .empty_record,
         .empty_tag_union,
         => true,
@@ -3989,6 +4001,7 @@ pub const CheckedTypeStore = struct {
             .constraints = constraints,
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .specialization_default = variable.specialization_default,
         };
     }
 
@@ -5018,12 +5031,14 @@ pub const CheckedTypeStore = struct {
                 .constraints = try self.cloneCheckedStaticDispatchConstraintsSubstituting(allocator, names, flex.constraints, formals, actuals, active),
                 .numeric_default_phase = flex.numeric_default_phase,
                 .row_default = flex.row_default,
+                .specialization_default = flex.specialization_default,
             } },
             .rigid => |rigid| .{ .rigid = .{
                 .name = if (rigid.name) |name| try allocator.dupe(u8, name) else null,
                 .constraints = try self.cloneCheckedStaticDispatchConstraintsSubstituting(allocator, names, rigid.constraints, formals, actuals, active),
                 .numeric_default_phase = rigid.numeric_default_phase,
                 .row_default = rigid.row_default,
+                .specialization_default = rigid.specialization_default,
             } },
             .alias => |alias| .{ .alias = .{
                 .name = alias.name,
@@ -5237,6 +5252,7 @@ fn snapshotCheckedTypeVariable(allocator: Allocator, variable: CheckedTypeVariab
         .constraints = constraints,
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
+        .specialization_default = variable.specialization_default,
     };
 }
 
@@ -8171,15 +8187,38 @@ fn copyCheckedTypePayload(
                     // tail and a tag-row tail. The caller attaches the explicit
                     // contextual default after publishing this payload.
                     .row_default = null,
+                    .specialization_default = if (constraints.len == 0 and numeric_default_phase == null)
+                        .empty_tag_union
+                    else
+                        null,
                 },
             };
         },
-        .rigid => |rigid| .{ .rigid = .{
-            .name = try copyIdentText(allocator, module, rigid.name),
-            .constraints = try copyCheckedStaticDispatchConstraints(allocator, module, names, imports, store, active, rigid.constraints),
-            .numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints),
-            .row_default = null,
-        } },
+        .rigid => |rigid| blk: {
+            const name = try copyIdentText(allocator, module, rigid.name);
+            errdefer allocator.free(name);
+            const constraints = try copyCheckedStaticDispatchConstraints(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                rigid.constraints,
+            );
+            errdefer if (constraints.len != 0) allocator.free(constraints);
+            const numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
+            break :blk .{ .rigid = .{
+                .name = name,
+                .constraints = constraints,
+                .numeric_default_phase = numeric_default_phase,
+                .row_default = null,
+                .specialization_default = if (constraints.len == 0 and numeric_default_phase == null)
+                    .empty_tag_union
+                else
+                    null,
+            } };
+        },
         .alias => |alias| .{ .alias = .{
             .name = try names.internTypeIdent(module.identStoreConst(), alias.ident.ident_idx),
             .origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(alias.origin_module)),
@@ -9137,6 +9176,31 @@ fn withEmptyTagCheckedOutputForTest(
         .direct = &.{},
         .available = &.{},
     }, &store, &active, mutable_types, explicit_empty);
+}
+
+test "checked output publishes an explicit default for an unconstrained specialization identity" {
+    const allocator = std.testing.allocator;
+    try withEmptyTagCheckedOutputForTest(allocator, struct {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, active: *CheckedSourceTypeRoots, type_store: *types.Store, _: Var) EmptyTagCheckedOutputTestError!void {
+            const identity = try type_store.fresh();
+            const checked_identity = try appendCheckedTypeRoot(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                identity,
+            );
+            const payload = store.payload(checked_identity);
+            if (payload != .flex) return error.ExpectedFlexIdentity;
+            try std.testing.expectEqual(
+                SpecializationDefault.empty_tag_union,
+                payload.flex.specialization_default.?,
+            );
+            try std.testing.expectEqual(@as(?RowDefault, null), payload.flex.row_default);
+        }
+    }.inspect);
 }
 
 test "checked output preserves shared defaulted empty-tag identity" {
@@ -33611,7 +33675,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 70;
+    const serialized_layout_version: u32 = 71;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35373,6 +35437,7 @@ pub const CheckedTypeProjector = struct {
             .constraints = constraints,
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .specialization_default = variable.specialization_default,
         };
     }
 
@@ -35703,6 +35768,7 @@ pub const CheckedTypeProjector = struct {
             .constraints = constraints,
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .specialization_default = variable.specialization_default,
         };
     }
 
@@ -36115,6 +36181,7 @@ const CheckedTypeStoreImportProjector = struct {
             .constraints = try self.projectConstraints(variable.constraints),
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
+            .specialization_default = variable.specialization_default,
         };
     }
 
@@ -39891,8 +39958,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x17, 0xA6, 0x45, 0x32, 0xCA, 0xD7, 0x71, 0xEA, 0x82, 0x71, 0xC1, 0x7D, 0xA9, 0x53, 0x97, 0x6F,
-        0x18, 0x64, 0x6D, 0x09, 0x15, 0x6A, 0xA0, 0x05, 0xB6, 0xC6, 0x55, 0x94, 0xE4, 0x23, 0xB7, 0x3C,
+        0xE7, 0xF5, 0xC3, 0xE7, 0xEE, 0x13, 0x46, 0x6D, 0x29, 0xCC, 0x91, 0xFB, 0x77, 0x84, 0xFD, 0x71,
+        0x46, 0xC0, 0x32, 0x97, 0x96, 0xD2, 0xE1, 0x3C, 0xE2, 0x6D, 0x58, 0x71, 0xDC, 0x1E, 0x70, 0xAA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

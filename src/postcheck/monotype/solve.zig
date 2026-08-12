@@ -119,6 +119,7 @@ pub const InstVariable = struct {
     origin: InstVariableOrigin,
     numeric_default_phase: ?checked.NumericDefaultPhase = null,
     row_default: ?checked.RowDefault = null,
+    specialization_default: ?checked.SpecializationDefault = null,
     /// Stable checked identity for a polymorphic substitution slot. This is
     /// absent on graph-only variables created by tests and compiler-owned
     /// structural work.
@@ -138,12 +139,14 @@ pub const InstVariable = struct {
     pub fn checkedVariableAtKey(
         numeric_default_phase: ?checked.NumericDefaultPhase,
         row_default: ?checked.RowDefault,
+        specialization_default: ?checked.SpecializationDefault,
         checked_key: [32]u8,
     ) InstVariable {
         return .{
             .origin = .checked_variable,
             .numeric_default_phase = numeric_default_phase,
             .row_default = row_default,
+            .specialization_default = specialization_default,
             .checked_key = checked_key,
         };
     }
@@ -896,8 +899,8 @@ pub const InstGraph = struct {
         raw_right: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
-        const left = self.find(raw_left);
-        const right = self.find(raw_right);
+        const left = try self.canonicalizeProducedNode(raw_left);
+        const right = try self.canonicalizeProducedNode(raw_right);
         if (left == right) return;
         if (self.nodes.items[@intFromEnum(left)] != .unresolved and
             self.nodes.items[@intFromEnum(right)] != .unresolved)
@@ -1234,6 +1237,7 @@ pub const InstGraph = struct {
                 .unresolved => |variable| {
                     if (variable.numeric_default_phase != null) return false;
                     if (variable.row_default) |row_default| return row_default == .empty_tag_union;
+                    if (variable.specialization_default) |default| return default == .empty_tag_union;
                     return switch (variable.origin) {
                         .checked_variable => Common.invariant("checked variable reached final demand validation without an explicit default"),
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
@@ -1365,6 +1369,7 @@ pub const InstGraph = struct {
             .unresolved => |variable| blk: {
                 if (variable.numeric_default_phase != null) break :blk false;
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
+                if (variable.specialization_default) |default| break :blk default == .empty_tag_union;
                 break :blk switch (variable.origin) {
                     .checked_variable => Common.invariant("checked variable reached final inhabitance validation without an explicit default"),
                     .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
@@ -1641,6 +1646,61 @@ pub const InstGraph = struct {
         return node;
     }
 
+    /// Construct and intern one function whose argument and result nodes are
+    /// already exact. Open call requests must continue to use `newNode`
+    /// directly so their forward result cells remain independently owned.
+    pub fn newProducedFunction(
+        self: *InstGraph,
+        args: []const NodeId,
+        ret: NodeId,
+    ) Allocator.Error!NodeId {
+        const stored_args = try self.arena().dupe(NodeId, args);
+        const node = try self.newNode(.{ .func = .{
+            .args = stored_args,
+            .ret = self.find(ret),
+        } });
+        return try self.canonicalizeCompletedFunction(node);
+    }
+
+    /// Finish the exact identity of the produced node encountered at a value
+    /// boundary. A compound may have been assembled while an immediate child
+    /// was a forward cell; once that child completes, rebuild only this one
+    /// parent from the child's current root. This never descends into a child.
+    pub fn canonicalizeProducedNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        const canonical = switch (self.nodes.items[@intFromEnum(node)]) {
+            .list => |element| try self.newNode(.{ .list = self.find(element) }),
+            .box => |element| try self.newNode(.{ .box = self.find(element) }),
+            .tuple => |items| blk: {
+                const roots = try self.arena().alloc(NodeId, items.len);
+                for (items, roots) |item, *root| root.* = self.find(item);
+                break :blk try self.newNode(.{ .tuple = roots });
+            },
+            .func => |function| try self.newProducedFunction(function.args, function.ret),
+            .record => |record| try self.newProducedRecord(record.fields, record.ext),
+            .tag_union => |tag_union| try self.newProducedTagUnion(tag_union.tags, tag_union.ext),
+            .named => |named| if (named.kind == .alias)
+                try self.canonicalImmediateChild(node)
+            else
+                try self.newNode(.{ .named = named }),
+            .redirect => unreachable,
+            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
+        };
+        if (canonical == node) return node;
+        // Function nodes carry request/result metadata indexed by their
+        // original NodeId, and named nodes can own recursive backing state.
+        // Exact expressions use the returned canonical node directly. Plain
+        // structural parents carry no such side data, so redirecting them
+        // updates every already-built immediate parent edge as well.
+        if (self.nodes.items[@intFromEnum(node)] != .func and
+            self.nodes.items[@intFromEnum(node)] != .named and
+            !self.checked_base_nodes.items[@intFromEnum(node)])
+        {
+            try self.redirectRoot(canonical, node);
+        }
+        return canonical;
+    }
+
     fn recordShapeHash(self: *InstGraph, record: InstNode) u64 {
         const row = record.record;
         var hasher = std.hash.Wyhash.init(0);
@@ -1710,7 +1770,16 @@ pub const InstGraph = struct {
     /// child. Row extensions are normalized once here, when a parent records
     /// that child, rather than being rediscovered by later call consumers.
     fn canonicalImmediateChild(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
-        const node = self.find(raw_node);
+        var node = self.find(raw_node);
+        var remaining = self.nodes.items.len;
+        while (self.nodes.items[@intFromEnum(node)] == .named and
+            self.nodes.items[@intFromEnum(node)].named.kind == .alias)
+        {
+            if (remaining == 0) Common.invariant("transparent alias chain contained a cycle");
+            remaining -= 1;
+            node = self.find((self.nodes.items[@intFromEnum(node)].named.backing orelse
+                Common.invariant("transparent alias child had no backing")).node);
+        }
         return switch (self.nodes.items[@intFromEnum(node)]) {
             .tag_union => blk: {
                 const row = try self.flattenTagRow(node);
@@ -2217,6 +2286,11 @@ pub const InstGraph = struct {
         if (variable.row_default) |row_default| {
             return try self.newNode(switch (row_default) {
                 .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            });
+        }
+        if (variable.specialization_default) |default| {
+            return try self.newNode(switch (default) {
                 .empty_tag_union => .empty_tag_union,
             });
         }
@@ -2983,6 +3057,36 @@ pub const InstGraph = struct {
             }
             self.primitive_nodes[@intFromEnum(primitive)] = root;
         }
+        if (new_content == .empty_tag_union) {
+            if (self.empty_tag_union_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.empty_tag_union_node = root;
+        }
+        if (new_content == .empty_record) {
+            if (self.empty_record_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.empty_record_node = root;
+        }
+        if (new_content == .zst) {
+            if (self.zst_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.zst_node = root;
+        }
         if (new_content == .list) {
             if (self.existingListElement(new_content.list)) |existing| {
                 if (existing != root) {
@@ -3184,6 +3288,7 @@ pub const InstGraph = struct {
             .origin = mergeVariableOrigin(a.origin, b.origin),
             .numeric_default_phase = a.numeric_default_phase orelse b.numeric_default_phase,
             .row_default = a.row_default orelse b.row_default,
+            .specialization_default = a.specialization_default orelse b.specialization_default,
             .checked_key = mergeCheckedVariableKey(a.checked_key, b.checked_key),
         };
     }
@@ -4125,7 +4230,10 @@ pub const InstGraph = struct {
             .zst => .zst,
         };
         try self.setContent(node, imported);
-        return node;
+        if (imported == .func) {
+            _ = try self.canonicalizeCompletedFunction(node);
+        }
+        return self.find(node);
     }
 
     fn importMonoSliceInner(
@@ -4428,6 +4536,8 @@ const GeneratedIdentityWriter = struct {
             } else if (content.unresolved.row_default) |row_default| switch (row_default) {
                 .empty_record => .empty_record,
                 .empty_tag_union => .empty_tag_union,
+            } else if (content.unresolved.specialization_default) |default| switch (default) {
+                .empty_tag_union => .empty_tag_union,
             } else switch (content.unresolved.origin) {
                 .checked_variable => Common.invariant("generated identity input contained a checked variable without an explicit default"),
                 .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
@@ -4610,6 +4720,9 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     }
     if (variable.row_default) |row_default| switch (row_default) {
         .empty_record => return .{ .record = Type.Span.empty() },
+        .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
+    };
+    if (variable.specialization_default) |default| switch (default) {
         .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
     };
     return switch (variable.origin) {
@@ -5427,6 +5540,41 @@ test "unresolved row graph node seals to closed empty tag union only at finaliza
     try std.testing.expectEqual(Type.Span.empty(), content.tag_union);
 }
 
+test "unconstrained specialization default closes only without exact selection" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const defaulted = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{0} ** 32,
+    ) });
+    const selected = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{1} ** 32,
+    ) });
+    const exact = try graph.newNode(.{ .primitive = .str });
+    try graph.completeProducedSelection(selected, exact);
+
+    try graph.freezeRelations();
+    const sealed_defaulted = try graph.sealNode(defaulted);
+    const sealed_selected = try graph.sealNode(selected);
+
+    try std.testing.expectEqual(Type.Span.empty(), type_store.get(sealed_defaulted).tag_union);
+    try std.testing.expectEqual(Type.Primitive.str, type_store.get(sealed_selected).primitive);
+}
+
 test "relation mutation remains available only before freezing" {
     const gpa = std.testing.allocator;
 
@@ -5568,6 +5716,31 @@ test "explicit empty tag union imports as closed uninhabited row" {
     const imported = try graph.importMono(explicit_empty);
 
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(imported));
+}
+
+test "imported singleton types share ordinary exact graph nodes" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const empty_record = try graph.newNode(.empty_record);
+    const empty_record_ty = try type_store.add(.{ .record = Type.Span.empty() });
+    try std.testing.expectEqual(empty_record, try graph.importMono(empty_record_ty));
+
+    const empty_tag_union = try graph.newNode(.empty_tag_union);
+    const empty_tag_union_ty = try type_store.add(.{ .tag_union = Type.Span.empty() });
+    try std.testing.expectEqual(empty_tag_union, try graph.importMono(empty_tag_union_ty));
+
+    const zst = try graph.newNode(.zst);
+    const zst_ty = try type_store.add(.zst);
+    try std.testing.expectEqual(zst, try graph.importMono(zst_ty));
 }
 
 test "generated identity treats public opaque and private nominal views as one type" {

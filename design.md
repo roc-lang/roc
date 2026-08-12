@@ -6103,13 +6103,16 @@ Structural equality follows the same rule. The checker has already established
 that the operands are equality-compatible and has either emitted a dispatch plan
 that permits derived `is_eq` to lower as structural equality or rewritten the
 expression to an explicit structural equality node. Monotype lowering
-constrains the two checked operand types to the same instantiation relation and
-lowers both operands at that single Monotype operand type. It must not
-independently lower the left and right operand types and then attempt to
+creates one shared operand request. If checker-published value flow identifies
+an operand that already has an exact produced selection, that operand produces
+first; otherwise source order selects the producer. The producer returns its
+exact runtime node, and the other operand is lowered at that exact node. It must
+not independently lower the left and right operand types and then attempt to
 reconcile the results. Independent operand lowering is order-sensitive: an
 unconstrained operand can default to an uninhabited type before the other
-operand provides evidence. A shared instantiated operand type preserves the
-checked equality relation directly.
+operand provides evidence. The request-to-produced-to-request chain preserves
+the checked equality relation directly, and the emitted expression retains
+source operand order regardless of lowering order.
 
 The reason this is the long-term design rather than a local implementation
 detail is that it makes specialization, dispatch, lambda lowering, and equality
@@ -6164,14 +6167,26 @@ span, evidence identity, and graph-native identity bytes. A memo hit reuses the
 completed specialization and its stored exact result `NodeId`; it does not
 relate duplicate request trees or serialize and re-import an interface.
 
-The only time an unresolved checked variable with an empty-tag-union row
-default may become durable `tag_union []` is final graph sealing, after every
-checked interface relation and specialization demand for that body has been
-applied.
-Checking records `empty_tag_union` explicitly on every truly unconstrained checked
-variable. A checked-variable origin alone never authorizes post-check to derive
-`empty_tag_union`; a missing numeric or row default at sealing or while forming a
-generated identity is a compiler invariant.
+Checked output records two different kinds of closing evidence. A `RowDefault`
+belongs to a particular row-extension occurrence and closes that record or tag
+row. A `SpecializationDefault` belongs to an unconstrained checked identity and
+provides `empty_tag_union` only when a runtime specialization supplies no exact
+selection for that identity. They are separate fields because the same checked
+identity can occur both as a value slot and as a contextually classified row
+tail. An exact request-to-produced selection always wins over the specialization
+default; post-check never probes the produced graph to decide whether to apply
+it.
+
+The only time an unresolved specialization-defaulted variable may become
+durable `tag_union []` is final graph sealing, after every checked interface
+relation and specialization demand for that body has been applied. Generated
+identity production may also complete such a variable to `empty_tag_union`,
+because generated identities must be closed and deterministic before they are
+hashed. Checking records the specialization default explicitly on every truly
+unconstrained checked variable. A checked-variable origin alone never
+authorizes post-check to derive `empty_tag_union`; a missing numeric, row, or
+specialization default at sealing or while forming a generated identity is a
+compiler invariant.
 After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
 still be represented as `List(tag_union [])` because they contain no items,
 and code that would need an actual item value must have constrained the
@@ -6201,7 +6216,8 @@ other body-specialization demand must request a concrete body specialization
 with sufficient type evidence.
 
 During Monotype construction, an open checked variable is an unresolved graph
-node carrying the variable's numeric and row defaults. Unification resolves it
+node carrying the variable's numeric, row, and specialization defaults.
+An exact producer selection or an explicit checked relation resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
 type relations provide concrete evidence; defaults apply only at the declared
 relation-freeze/final-sealing boundary. A context-free root with no requested

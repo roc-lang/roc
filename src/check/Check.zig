@@ -15161,7 +15161,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
-            _ = try self.unify(lhs_var, rhs_var, env);
+            const operand_result = try self.unify(lhs_var, rhs_var, env);
+            if (operand_result.isOk()) {
+                try self.closeAbsentConstructedPayloadVars(eq.lhs, lhs_var);
+                try self.closeAbsentConstructedPayloadVars(eq.rhs, rhs_var);
+            }
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
         },
         .e_structural_hash => |h| {
@@ -18851,6 +18855,22 @@ fn rewriteDerivedIsEqMethodCallAsStructuralEq(
     }
 
     return true;
+}
+
+/// Apply the declared absent-constructor payload-closing rule at the point
+/// where checked dispatch has proved that an `is_eq` call is structural.
+/// The operands already belong to one solved equality relation, so a default
+/// established by either constructed value belongs to their shared type.
+fn closeAbsentStructuralEqPayloads(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!void {
+    const expr_idx = constraintIntroExpr(constraint) orelse return;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_structural_eq) return;
+    const eq = expr.e_structural_eq;
+    try self.closeAbsentConstructedPayloadVars(eq.lhs, ModuleEnv.varFrom(eq.lhs));
+    try self.closeAbsentConstructedPayloadVars(eq.rhs, ModuleEnv.varFrom(eq.rhs));
 }
 
 /// Rewrite a derived `to_hash` method call into an explicit structural-hash node.
@@ -25655,6 +25675,8 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+    } else {
+        try self.closeAbsentStructuralEqPayloads(constraint);
     }
 }
 

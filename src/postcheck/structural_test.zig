@@ -711,7 +711,10 @@ test "record literals request and retain only immediate exact field nodes" {
         "fn lowerRecordExprAtNode(",
         "fn lowerTagConstructorAtNode(",
     );
+    try expectContains(record_literal, "const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);");
     try expectContains(record_literal, "self.graph.recordConstructionFieldValueNode(");
+    try expectContains(record_literal, "const request = if (checked_seed)");
+    try expectContains(record_literal, "constructor_node,\n                            try self.builder.recordFieldName(self.view, field.label),");
     try expectContains(record_literal, "specializationRecordPlanForExpr(checked_expr)");
     try expectContains(record_literal, "projectionSelectionArgumentNode(plan, selections.items, index)");
     try expectContains(record_literal, "specializationProjectionOperandConsumerBindings(plan, index)");
@@ -1040,17 +1043,19 @@ test "Monotype rejects unfilled deferred equality emission plans" {
     try expectNotContains(lower_source, "changed after derivation sealing");
 }
 
-test "Monotype structural equality consumes exact lowered operand roots" {
+test "Monotype structural equality lowers through one directional exact operand request" {
     const lower_source = @embedFile("monotype/lower.zig");
     const equality_source = sourceSliceBetween(
         lower_source,
         "fn lowerDirectStructuralEqAtNode(",
         "fn lowerStructuralEqFromOperands(",
     );
-    try expectContains(equality_source, "const lhs = try self.lowerExpr(eq.lhs)");
-    try expectContains(equality_source, "const rhs = try self.lowerExpr(eq.rhs)");
-    try expectContains(equality_source, "requireSameExactProducedValue(lhs_node, rhs_node)");
+    try expectContains(equality_source, "specializationValueFlowForExpr(eq.lhs)");
+    try expectContains(equality_source, "const shared_request = try self.lowerExprTypeNode(first_checked)");
+    try expectContains(equality_source, "const produced_request = try self.exprTypeCell(first).toGraphNode(self.graph)");
+    try expectContains(equality_source, "DraftTypeCell.fromGraphNode(produced_request)");
     try expectContains(equality_source, "deferStructuralDerivationOperandsAtNode(");
+    try expectNotContains(equality_source, "requireSameExactProducedValue");
     try expectNotContains(lower_source, "structuralEqualityExprResultNode");
     try expectNotContains(lower_source, "structuralEqualityOperandNode");
 
@@ -1832,7 +1837,8 @@ test "Monotype returns share the active specialization result selection" {
         "fn lambdaFunctionNode(",
         "fn lowerLambdaExprAtNode(",
     );
-    try expectContains(lambda_node, "const fn_node = try self.instNode(source_fn_ty)");
+    try expectContains(lambda_node, "self.graph.functionNodes(try self.instNode(source_fn_ty))");
+    try expectContains(lambda_node, "self.graph.newProducedFunction(fn_nodes.args, fn_nodes.ret)");
     try expectNotContains(lambda_node, "lowerExprTypeNode(lambda.body)");
 }
 

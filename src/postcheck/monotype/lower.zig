@@ -1949,7 +1949,8 @@ const Builder = struct {
         if ((try seen.getOrPut(checked_ty)).found_existing) return false;
         switch (checkedPayload(view, checked_ty)) {
             .flex, .rigid => |variable| {
-                return variable.numeric_default_phase == null and variable.row_default == null;
+                return variable.numeric_default_phase == null and
+                    variable.row_default == null;
             },
             .pending, .err, .empty_record, .empty_tag_union => return false,
             .alias => |alias| {
@@ -3718,7 +3719,12 @@ const Builder = struct {
                 .empty_tag_union => .{ .tag_union = .empty() },
             };
         }
-        return .{ .tag_union = .empty() };
+        if (variable.specialization_default) |default| {
+            return switch (default) {
+                .empty_tag_union => .{ .tag_union = .empty() },
+            };
+        }
+        return Common.invariant("checked variable reached direct Monotype lowering without an explicit default");
     }
 
     fn namedBackingType(self: *Builder, ty: Type.TypeId) ?Type.TypeId {
@@ -13819,12 +13825,19 @@ const BodyContext = struct {
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
+        const produced_ty = switch (ty) {
+            .sealed => ty,
+            .graph_node => |raw_node| blk: {
+                const node = self.constructorRepresentationNode(raw_node);
+                break :blk DraftTypeCell.fromGraphNode(try self.graph.canonicalizeProducedNode(node));
+            },
+        };
         const id = try self.draft.addExprWithSource(
-            .{ .ty = ty, .data = data },
+            .{ .ty = produced_ty, .data = data },
             self.builder.program.current_loc,
             self.builder.program.current_region,
         );
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(ty, data);
+        self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(produced_ty, data);
         return id;
     }
 
@@ -16085,11 +16098,16 @@ const BodyContext = struct {
             .content => |content| try self.graph.newNode(content),
             .existing => |existing| self.graph.rootNode(existing),
         };
-        state.* = .{ .ready = completed };
+        const runtime_completed = if (self.instantiation.authority != .checked_base and
+            checkedPayload(self.view, checked_ty) == .alias)
+            self.constructorRepresentationNode(completed)
+        else
+            completed;
+        state.* = .{ .ready = runtime_completed };
         if (self.instantiation.authority == .checked_base) {
             self.graph.markCheckedBase(completed);
         }
-        return completed;
+        return runtime_completed;
     }
 
     fn exactSelectionRequiresLocalDefault(
@@ -16102,7 +16120,9 @@ const BodyContext = struct {
             return false;
         }
         return switch (checkedPayload(self.view, checked_ty)) {
-            .flex, .rigid => |variable| variable.numeric_default_phase != null or variable.row_default != null,
+            .flex, .rigid => |variable| variable.numeric_default_phase != null or
+                variable.row_default != null or
+                variable.specialization_default != null,
             else => false,
         };
     }
@@ -16313,6 +16333,11 @@ const BodyContext = struct {
                 .empty_tag_union => .empty_tag_union,
             };
         }
+        if (variable.specialization_default) |default| {
+            return switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
         return null;
     }
 
@@ -16330,6 +16355,7 @@ const BodyContext = struct {
                 break :blk .{ .content = .{ .unresolved = InstVariable.checkedVariableAtKey(
                     variable.numeric_default_phase,
                     variable.row_default,
+                    variable.specialization_default,
                     key,
                 ) } };
             },
@@ -16358,10 +16384,14 @@ const BodyContext = struct {
                 .ext = try self.instNode(record.ext),
             } } },
             .tuple => |items| .{ .content = .{ .tuple = try self.instNodeSlice(items) } },
-            .function => |function| .{ .content = .{ .func = .{
-                .args = try self.instNodeSlice(function.args),
-                .ret = try self.instNode(function.ret),
-            } } },
+            .function => |function| blk: {
+                const args = try self.instNodeSlice(function.args);
+                const ret = try self.instNode(function.ret);
+                if (self.consumesProducedDefaults()) {
+                    break :blk .{ .existing = try self.graph.newProducedFunction(args, ret) };
+                }
+                break :blk .{ .content = .{ .func = .{ .args = args, .ret = ret } } };
+            },
             .tag_union => |tag_union| blk: {
                 const tags = try self.instTags(tag_union.tags);
                 const ext = try self.instNode(tag_union.ext);
@@ -17263,7 +17293,10 @@ const BodyContext = struct {
         const lowered_ret_node = try lowered_ret.toGraphNode(self.graph);
         switch (self.graph.functionResultRelation(result_fn_node) orelse
             Common.invariant("completed function had no explicit result authority")) {
-            .exact_destination => if (!self.graph.sameClass(function.ret, lowered_ret_node)) {
+            .exact_destination => if (!self.graph.sameClass(
+                try self.graph.canonicalizeProducedNode(function.ret),
+                try self.graph.canonicalizeProducedNode(lowered_ret_node),
+            )) {
                 Common.invariant("lowered procedure result differed from its exact destination");
             },
             .produced => try self.graph.completeFunctionResult(result_fn_node, lowered_ret_node),
@@ -26235,7 +26268,7 @@ const BodyContext = struct {
             materialization_nodes.items,
         );
         defer scope.leave();
-        return self.graph.rootNode(try self.instNode(checked_node));
+        return self.constructorRepresentationNode(try self.instNode(checked_node));
     }
 
     /// Instantiate one checker-published root directly under its immutable
@@ -26254,7 +26287,7 @@ const BodyContext = struct {
             Common.invariant("call projection materialization referenced a missing root");
         }
         switch (root_base) {
-            .exact => |exact| return self.graph.rootNode(exact),
+            .exact => |exact| return self.constructorRepresentationNode(exact),
             .checked => {},
         }
 
@@ -26884,7 +26917,7 @@ const BodyContext = struct {
             .checked = checked_ty,
         };
         if (self.draft.persistent_concrete_checked_nodes.getPtr(key)) |state| switch (state.*) {
-            .ready => |node| return node,
+            .ready => |node| return self.constructorRepresentationNode(node),
             .building => {},
         };
         const previous_instantiation = self.instantiation;
@@ -26913,7 +26946,7 @@ const BodyContext = struct {
             self.direct_materialization_nodes = previous_materialization_nodes;
             self.direct_materialization_module = previous_materialization_module;
         }
-        return try self.instNode(checked_ty);
+        return self.constructorRepresentationNode(try self.instNode(checked_ty));
     }
 
     /// Refine the flat substitutions of an unmaterialized call request. The
@@ -34451,12 +34484,14 @@ const BodyContext = struct {
         var children = std.ArrayList(PreLoweredChild).empty;
         defer children.deinit(self.allocator);
 
+        const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
         if (destination_relation == .exact_request) {
-            const exact_record = request_node orelse
+            if (request_node == null) {
                 Common.invariant("exact record literal destination had no request node");
+            }
             for (record.fields) |field| {
                 const field_node = try self.graph.recordConstructionFieldValueNode(
-                    exact_record,
+                    constructor_node,
                     try self.builder.recordFieldName(self.view, field.label),
                 );
                 const value = try self.lowerExprAtExactRequest(
@@ -34469,7 +34504,7 @@ const BodyContext = struct {
                     .node = try self.exprTypeCell(value).toGraphNode(self.graph),
                 });
             }
-            return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, exact_record, children.items);
+            return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
         }
 
         var has_requested_field = false;
@@ -34488,7 +34523,6 @@ const BodyContext = struct {
                     .node = try self.exprTypeCell(value).toGraphNode(self.graph),
                 });
             }
-            const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
             return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
         }
 
@@ -34533,7 +34567,18 @@ const BodyContext = struct {
                     selections.items,
                 )) continue;
                 const value = if (needs_request) blk: {
-                    const request = try self.projectionSelectionArgumentNode(plan, selections.items, index);
+                    // A checked-seed field consumes the exact immediate child
+                    // already selected by its enclosing record recipe. In
+                    // particular, a callable field must not be rebuilt as an
+                    // isolated checked function: that would discard nominal-
+                    // argument substitutions carried by the parent record.
+                    const request = if (checked_seed)
+                        try self.graph.recordConstructionFieldValueNode(
+                            constructor_node,
+                            try self.builder.recordFieldName(self.view, field.label),
+                        )
+                    else
+                        try self.projectionSelectionArgumentNode(plan, selections.items, index);
                     break :blk try self.lowerExprAtCallConsumerRequest(
                         consumer_bindings,
                         selections.items,
@@ -34577,7 +34622,6 @@ const BodyContext = struct {
             );
         }
 
-        const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);
         return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
     }
 
@@ -34741,8 +34785,7 @@ const BodyContext = struct {
     }
 
     fn lambdaFunctionNode(self: *BodyContext, source_fn_ty: checked.CheckedTypeId, lambda: anytype) Allocator.Error!NodeId {
-        const fn_node = try self.instNode(source_fn_ty);
-        const fn_nodes = try self.graph.functionNodes(fn_node);
+        const fn_nodes = try self.graph.functionNodes(try self.instNode(source_fn_ty));
         std.debug.assert(fn_nodes.args.len == lambda.args.len);
         for (lambda.args, fn_nodes.args) |pattern_id, arg_node| {
             try self.publishExactCheckedPatternAtCell(
@@ -34750,7 +34793,7 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(arg_node),
             );
         }
-        return fn_node;
+        return try self.graph.newProducedFunction(fn_nodes.args, fn_nodes.ret);
     }
 
     fn lowerLambdaExprAtNode(
@@ -43465,14 +43508,32 @@ const BodyContext = struct {
         eq: anytype,
         ret_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const lhs = try self.lowerExpr(eq.lhs);
-        const rhs = try self.lowerExpr(eq.rhs);
-        const lhs_node = try self.exprTypeCell(lhs).toGraphNode(self.graph);
-        const rhs_node = try self.exprTypeCell(rhs).toGraphNode(self.graph);
-        try self.graph.requireSameExactProducedValue(lhs_node, rhs_node);
+        const lhs_flow = self.view.templates.specializationValueFlowForExpr(eq.lhs);
+        const rhs_flow = self.view.templates.specializationValueFlowForExpr(eq.rhs);
+        const lhs_first = lhs_flow == .produced or rhs_flow != .produced;
+        const first_checked = if (lhs_first) eq.lhs else eq.rhs;
+        const second_checked = if (lhs_first) eq.rhs else eq.lhs;
+
+        // Equality is an explicit checked relation between the operands, so
+        // instantiate that relation once. The first value lowers against the
+        // shared request; the exact node it actually produces is then the
+        // second value's request. No independently produced type graphs are
+        // compared, merged, or reconciled after either value has been built.
+        const shared_request = try self.lowerExprTypeNode(first_checked);
+        const first = try self.lowerExprAtExactRequest(
+            first_checked,
+            DraftTypeCell.fromGraphNode(shared_request),
+        );
+        const produced_request = try self.exprTypeCell(first).toGraphNode(self.graph);
+        const second = try self.lowerExprAtExactRequest(
+            second_checked,
+            DraftTypeCell.fromGraphNode(produced_request),
+        );
+        const lhs = if (lhs_first) first else second;
+        const rhs = if (lhs_first) second else first;
         return try self.deferStructuralDerivationOperandsAtNode(
             ret_node,
-            lhs_node,
+            produced_request,
             lhs,
             rhs,
             .{ .equality = .{ .negated = eq.negated } },
