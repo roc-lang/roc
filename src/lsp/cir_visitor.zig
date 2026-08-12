@@ -20,6 +20,7 @@
 //! ```
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const CIR = can.CIR;
 const NodeStore = can.NodeStore;
@@ -730,4 +731,48 @@ test "CirVisitor basic initialization" {
     // Just verify the visitor initializes without error
     try std.testing.expect(visitor.ctx == &ctx);
     try std.testing.expect(visitor.stopped == false);
+}
+
+test "CirVisitor flattened field access visits exactly its receiver expression" {
+    const TestContext = struct {
+        visited: [2]CIR.Expr.Idx = undefined,
+        len: usize = 0,
+
+        fn visitExpr(self: *@This(), expr_idx: CIR.Expr.Idx, _: CIR.Expr) VisitAction {
+            if (self.len < self.visited.len) self.visited[self.len] = expr_idx;
+            self.len += 1;
+            return .continue_traversal;
+        }
+    };
+
+    const allocator = std.testing.allocator;
+    var store = try NodeStore.init(allocator);
+    defer store.deinit();
+
+    const region = base.Region.zero();
+    const receiver = try store.addExpr(.{ .e_empty_record = .{} }, region);
+    const path = try store.startFieldAccessPath(2);
+    _ = store.appendFieldAccessPathSegmentAssumeCapacity(path, .{
+        .name = base.Ident.Idx.NONE,
+        .mode = .optional,
+    }, region);
+    _ = store.appendFieldAccessPathSegmentAssumeCapacity(path, .{
+        .name = base.Ident.Idx.NONE,
+        .mode = .required,
+    }, region);
+    const segments = store.finishFieldAccessPath(path);
+    const access = try store.addExpr(.{ .e_field_access = .{
+        .receiver = receiver,
+        .segments = segments,
+    } }, region);
+
+    var context = TestContext{};
+    var visitor = CirVisitor(TestContext).init(&context, .{
+        .visit_expr_pre = TestContext.visitExpr,
+    });
+    visitor.walkExpr(&store, access);
+
+    try std.testing.expectEqual(@as(usize, 2), context.len);
+    try std.testing.expectEqual(access, context.visited[0]);
+    try std.testing.expectEqual(receiver, context.visited[1]);
 }

@@ -52,8 +52,9 @@ EndOfFile,
 					(field (field "y")
 						(e-binop (op "+")
 							(e-field-access
-								(e-ident (raw "robot"))
-								(e-ident (raw "y")))
+								(receiver
+									(e-ident (raw "robot")))
+								(segment (mode "required") (field "y")))
 							(e-int (raw "1")))))))
 		(s-expect
 			(e-binop (op "==")
@@ -90,10 +91,12 @@ NO CHANGE
 					(field (name "y")
 						(e-dispatch-call (method "plus") (constraint-fn-var 281)
 							(receiver
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "robot"))))))
+											(p-assign (ident "robot"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(args
 								(e-num (value "1"))))))))
 		(annotation
@@ -110,7 +113,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 305)
+				(e-call (constraint-fn-var 311)
 					(e-lookup-local
 						(p-assign (ident "advance")))
 					(e-record

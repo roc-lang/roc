@@ -523,8 +523,9 @@ EndOfFile,
 					(statements
 						(e-binop (op "+")
 							(e-field-access
-								(e-ident (raw "container1"))
-								(e-ident (raw "value")))
+								(receiver
+									(e-ident (raw "container1")))
+								(segment (mode "required") (field "value")))
 							(e-int (raw "10")))))))))
 ~~~
 # FORMATTED
@@ -851,21 +852,21 @@ main = |_| {
 									(p-assign (ident "val"))))))))))
 	(d-let
 		(p-assign (ident "container1"))
-		(e-call (constraint-fn-var 749)
+		(e-call (constraint-fn-var 777)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "container2"))
-		(e-call (constraint-fn-var 754)
+		(e-call (constraint-fn-var 784)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "container3"))
-		(e-call (constraint-fn-var 759)
+		(e-call (constraint-fn-var 791)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -894,13 +895,13 @@ main = |_| {
 												(elems
 													(e-lookup-local
 														(p-assign (ident "num")))
-													(e-dispatch-call (method "times") (constraint-fn-var 768)
+													(e-dispatch-call (method "times") (constraint-fn-var 803)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "num"))))
 														(args
 															(e-num (value "2"))))
-													(e-dispatch-call (method "times") (constraint-fn-var 777)
+													(e-dispatch-call (method "times") (constraint-fn-var 812)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "num"))))
@@ -944,7 +945,7 @@ main = |_| {
 											(e-literal (string "more"))))))))))))
 	(d-let
 		(p-assign (ident "compute1"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 858)
+		(e-dispatch-call (method "plus") (constraint-fn-var 904)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -952,7 +953,7 @@ main = |_| {
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "compute2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 867)
+		(e-dispatch-call (method "times") (constraint-fn-var 913)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -978,13 +979,13 @@ main = |_| {
 						(elems
 							(e-lookup-local
 								(p-assign (ident "num")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 876)
+							(e-dispatch-call (method "plus") (constraint-fn-var 923)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
 								(args
 									(e-num (value "1"))))
-							(e-dispatch-call (method "plus") (constraint-fn-var 885)
+							(e-dispatch-call (method "plus") (constraint-fn-var 932)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
@@ -1044,14 +1045,14 @@ main = |_| {
 					(e-record
 						(fields
 							(field (name "from_num")
-								(e-dispatch-call (method "times") (constraint-fn-var 899)
+								(e-dispatch-call (method "times") (constraint-fn-var 959)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num"))))
 									(args
 										(e-num (value "100")))))
 							(field (name "from_frac")
-								(e-dispatch-call (method "times") (constraint-fn-var 908)
+								(e-dispatch-call (method "times") (constraint-fn-var 969)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "frac"))))
@@ -1072,12 +1073,14 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-dispatch-call (method "plus") (constraint-fn-var 923)
+				(e-dispatch-call (method "plus") (constraint-fn-var 987)
 					(receiver
-						(e-field-access (field "value")
+						(e-field-access
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "container1"))))))
+									(p-assign (ident "container1"))))
+							(segments
+								(segment (name "value") (mode "required")))))
 					(args
 						(e-num (value "10"))))))))
 ~~~

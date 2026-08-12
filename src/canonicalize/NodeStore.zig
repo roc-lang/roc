@@ -231,6 +231,8 @@ const DiagnosticNodeTag = enum {
     diag_where_alias_constraint_not_on_receiver,
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
+    diag_optional_field_cannot_have_default,
+    diag_record_default_not_literal,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -263,6 +265,7 @@ const DiagnosticNodeTag = enum {
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
+    diag_unnamed_field_cannot_have_default,
 };
 
 gpa: Allocator,
@@ -737,7 +740,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 88;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 91;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -1021,6 +1024,13 @@ pub fn getPatternRegion(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) R
 /// Helper function to get a region by expression index
 pub fn getExprRegion(store: *const NodeStore, expr_idx: CIR.Expr.Idx) Region {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    return store.getRegionAt(node_idx);
+}
+
+/// Returns the exact source region of one field-access path segment.
+pub fn getFieldAccessSegmentRegion(store: *const NodeStore, segment_idx: CIR.Expr.FieldAccessSegment.Idx) Region {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(segment_idx));
+    std.debug.assert(store.nodes.get(node_idx).tag == .field_access_segment);
     return store.getRegionAt(node_idx);
 }
 
@@ -1756,15 +1766,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_field_access => {
             const p = payload.expr_field_access;
-            const region_span = store.span2_data.items.items[p.field_name_region_span2_idx];
-            const field_name_region = base.Region{
-                .start = .{ .offset = region_span.start },
-                .end = .{ .offset = region_span.len },
-            };
             return CIR.Expr{ .e_field_access = .{
                 .receiver = @enumFromInt(p.receiver),
-                .field_name = @bitCast(p.field_name),
-                .field_name_region = field_name_region,
+                .segments = .{
+                    .start = @enumFromInt(p.segments_start),
+                    .len = p.segments_len,
+                },
             } };
         },
         .expr_method_call => {
@@ -2606,11 +2613,23 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
-    const p = node.getPayload().ty_record_field;
+    if (node.tag == .ty_record_field) {
+        const p = node.getPayload().ty_record_field;
+        return .{
+            .name = @bitCast(p.name),
+            .ty = @enumFromInt(p.ty),
+            .is_optional = p.is_optional,
+            .is_unnamed = p.is_unnamed,
+        };
+    }
+    std.debug.assert(node.tag == .ty_record_field_defaulted);
+    const p = node.getPayload().ty_record_field_defaulted;
     return .{
         .name = @bitCast(p.name),
         .ty = @enumFromInt(p.ty),
-        .is_unnamed = p.is_unnamed,
+        .is_optional = false,
+        .is_unnamed = false,
+        .default_value = @enumFromInt(p.default_value),
     };
 }
 
@@ -3092,16 +3111,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             } });
         },
         .e_field_access => |e| {
+            std.debug.assert(e.segments.len > 0);
             node.tag = .expr_field_access;
-            const span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.field_name_region.start.offset,
-                .len = e.field_name_region.end.offset,
-            });
             node.setPayload(.{ .expr_field_access = .{
                 .receiver = @intFromEnum(e.receiver),
-                .field_name = @bitCast(e.field_name),
-                .field_name_region_span2_idx = span2_idx,
+                .segments_start = @intFromEnum(e.segments.start),
+                .segments_len = e.segments.len,
             } });
         },
         .e_method_call => |e| {
@@ -3898,12 +3913,27 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    var node = Node.init(.ty_record_field);
-    node.setPayload(.{ .ty_record_field = .{
-        .name = @bitCast(annoRecordField.name),
-        .ty = @intFromEnum(annoRecordField.ty),
-        .is_unnamed = annoRecordField.is_unnamed,
-    } });
+    const node = if (annoRecordField.default_value) |default_idx| blk: {
+        // A defaulted field is never optional or unnamed (rejected at
+        // canonicalization), so the payload carries the default instead.
+        std.debug.assert(!annoRecordField.is_optional and !annoRecordField.is_unnamed);
+        var defaulted_node = Node.init(.ty_record_field_defaulted);
+        defaulted_node.setPayload(.{ .ty_record_field_defaulted = .{
+            .name = @bitCast(annoRecordField.name),
+            .ty = @intFromEnum(annoRecordField.ty),
+            .default_value = @intFromEnum(default_idx),
+        } });
+        break :blk defaulted_node;
+    } else blk: {
+        var plain_node = Node.init(.ty_record_field);
+        plain_node.setPayload(.{ .ty_record_field = .{
+            .name = @bitCast(annoRecordField.name),
+            .ty = @intFromEnum(annoRecordField.ty),
+            .is_optional = annoRecordField.is_optional,
+            .is_unnamed = annoRecordField.is_unnamed,
+        } });
+        break :blk plain_node;
+    };
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -4143,6 +4173,20 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
     store.def_data.items.items[payload.def.def_data_idx].expr = @intFromEnum(new_expr);
 }
 
+/// Retrieves one segment of a flattened field-access path.
+pub fn getFieldAccessSegment(store: *const NodeStore, segment_idx: CIR.Expr.FieldAccessSegment.Idx) CIR.Expr.FieldAccessSegment {
+    const nid: Node.Idx = @enumFromInt(@intFromEnum(segment_idx));
+    const node = store.nodes.get(nid);
+
+    std.debug.assert(node.tag == .field_access_segment);
+    const payload = node.getPayload().field_access_segment;
+
+    return .{
+        .name = @bitCast(payload.name),
+        .mode = @enumFromInt(payload.mode),
+    };
+}
+
 /// Retrieves a capture from the store.
 pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CIR.Expr.Capture {
     const nid: Node.Idx = @enumFromInt(@intFromEnum(capture_idx));
@@ -4262,6 +4306,85 @@ pub fn addScratchExpr(store: *NodeStore, idx: CIR.Expr.Idx) Allocator.Error!void
     try store.addScratch("exprs", idx);
 }
 
+/// In-progress, scratch-free assembly of a contiguous field-access path.
+///
+/// Segment nodes are appended directly to the node and region stores. The
+/// builder makes that contiguity explicit and provides one rollback boundary
+/// for allocation failure while constructing the path.
+pub const FieldAccessPathBuilder = struct {
+    start: CIR.Expr.FieldAccessSegment.Idx,
+    segment_count: u32,
+};
+
+/// Reserves all storage needed to build one field-access path and its enclosing
+/// expression.
+///
+/// Reserving the auxiliary nodes and their regions in a batch makes every
+/// append in the path-construction loop allocation-free. The extra node slot
+/// ensures adding the enclosing `e_field_access` cannot strand a finished path
+/// after an allocation failure.
+pub fn startFieldAccessPath(store: *NodeStore, segment_count: u32) Allocator.Error!FieldAccessPathBuilder {
+    std.debug.assert(segment_count > 0);
+    std.debug.assert(store.nodes.len() == store.regions.len());
+
+    const start = store.nodes.len();
+    const after_segments = std.math.add(u32, start, segment_count) catch return error.OutOfMemory;
+    const total = std.math.add(u32, after_segments, 1) catch return error.OutOfMemory;
+
+    try store.nodes.ensureTotalCapacity(store.gpa, total);
+    try store.regions.items.ensureUnusedCapacity(store.gpa, @as(usize, segment_count) + 1);
+
+    return .{
+        .start = @enumFromInt(start),
+        .segment_count = segment_count,
+    };
+}
+
+/// Appends one source-ordered segment without allocating.
+pub fn appendFieldAccessPathSegmentAssumeCapacity(
+    store: *NodeStore,
+    builder: FieldAccessPathBuilder,
+    segment: CIR.Expr.FieldAccessSegment,
+    region: Region,
+) CIR.Expr.FieldAccessSegment.Idx {
+    const start = @intFromEnum(builder.start);
+    std.debug.assert(store.nodes.len() == store.regions.len());
+    std.debug.assert(store.nodes.len() >= start);
+    const appended = store.nodes.len() - start;
+    std.debug.assert(appended < builder.segment_count);
+
+    var node = Node.init(.field_access_segment);
+    node.setPayload(.{ .field_access_segment = .{
+        .name = @bitCast(segment.name),
+        .mode = @intFromEnum(segment.mode),
+    } });
+
+    const node_idx = store.nodes.appendAssumeCapacity(node);
+    const region_idx = store.regions.appendAssumeCapacity(region);
+    std.debug.assert(@intFromEnum(node_idx) == start + appended);
+    std.debug.assert(@intFromEnum(region_idx) == start + appended);
+    return @enumFromInt(@intFromEnum(node_idx));
+}
+
+/// Finishes a source-ordered path and returns its direct node-index span.
+pub fn finishFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder) CIR.Expr.FieldAccessSegment.Span {
+    const start = @intFromEnum(builder.start);
+    std.debug.assert(store.nodes.len() == store.regions.len());
+    std.debug.assert(store.nodes.len() == start + builder.segment_count);
+    return .{ .start = builder.start, .len = builder.segment_count };
+}
+
+/// Rolls back a path whose construction failed before it was finalized.
+pub fn rollbackFieldAccessPath(store: *NodeStore, builder: FieldAccessPathBuilder) void {
+    const start: usize = @intFromEnum(builder.start);
+    const end = start + builder.segment_count;
+    std.debug.assert(store.nodes.items.len >= start);
+    std.debug.assert(store.nodes.items.len <= end);
+    std.debug.assert(store.regions.items.items.len == store.nodes.items.len);
+    store.nodes.items.shrinkRetainingCapacity(start);
+    store.regions.items.shrinkRetainingCapacity(start);
+}
+
 /// Appends a persistent expression span directly to index storage.
 pub fn appendExprSpan(store: *NodeStore, exprs: []const CIR.Expr.Idx) Allocator.Error!CIR.Expr.Span {
     const index_start = store.index_data.len();
@@ -4304,6 +4427,21 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 /// Returns a slice of expressions from the scratch space.
 pub fn exprSlice(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
+}
+
+/// Returns the auxiliary node identity at one source-order path position.
+pub fn fieldAccessSegmentAt(
+    store: *const NodeStore,
+    span: CIR.Expr.FieldAccessSegment.Span,
+    position: u32,
+) CIR.Expr.FieldAccessSegment.Idx {
+    std.debug.assert(position < span.len);
+    const raw = std.math.add(u32, @intFromEnum(span.start), position) catch unreachable;
+    const segment_idx: CIR.Expr.FieldAccessSegment.Idx = @enumFromInt(raw);
+    const node_idx: Node.Idx = @enumFromInt(raw);
+    std.debug.assert(raw < store.nodes.len());
+    std.debug.assert(store.nodes.get(node_idx).tag == .field_access_segment);
+    return segment_idx;
 }
 
 /// Returns the top index for scratch definitions.
@@ -5034,6 +5172,19 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_unnamed_field_not_allowed_in_structural_record;
             region = r.region;
         },
+        .optional_field_cannot_have_default => |r| {
+            node.tag = .diag_optional_field_cannot_have_default;
+            region = r.region;
+        },
+        .unnamed_field_cannot_have_default => |r| {
+            node.tag = .diag_unnamed_field_cannot_have_default;
+            region = r.region;
+        },
+        .record_default_not_literal => |r| {
+            node.tag = .diag_record_default_not_literal;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.field_name) } });
+        },
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
@@ -5608,6 +5759,16 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_unnamed_field_not_allowed_in_structural_record => return CIR.Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_optional_field_cannot_have_default => return CIR.Diagnostic{ .optional_field_cannot_have_default = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_record_default_not_literal => return CIR.Diagnostic{ .record_default_not_literal = .{
+            .field_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
@@ -6245,13 +6406,34 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     } });
     const float_node_idx = try original.nodes.append(gpa, float_node);
 
+    // Add both field-access modes explicitly. These bytes previously belonged
+    // to payload padding, so this roundtrip pins that serialization preserves
+    // the new semantic discriminant rather than zeroing it.
+    var required_segment_node = Node.init(.field_access_segment);
+    required_segment_node.setPayload(.{ .field_access_segment = .{
+        .name = 41,
+        .mode = @intFromEnum(CIR.Expr.FieldAccessMode.required),
+    } });
+    const required_segment_node_idx = try original.nodes.append(gpa, required_segment_node);
+
+    var optional_segment_node = Node.init(.field_access_segment);
+    optional_segment_node.setPayload(.{ .field_access_segment = .{
+        .name = 42,
+        .mode = @intFromEnum(CIR.Expr.FieldAccessMode.optional),
+    } });
+    const optional_segment_node_idx = try original.nodes.append(gpa, optional_segment_node);
+
     // Add regions for each node
     const region1 = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } };
     const region2 = Region{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } };
     const region3 = Region{ .start = .{ .offset = 25 }, .end = .{ .offset = 32 } };
+    const region4 = Region{ .start = .{ .offset = 40 }, .end = .{ .offset = 49 } };
+    const region5 = Region{ .start = .{ .offset = 50 }, .end = .{ .offset = 59 } };
     const region1_idx = try original.regions.append(gpa, region1);
     const region2_idx = try original.regions.append(gpa, region2);
     const region3_idx = try original.regions.append(gpa, region3);
+    const region4_idx = try original.regions.append(gpa, region4);
+    const region5_idx = try original.regions.append(gpa, region5);
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -6281,7 +6463,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
-    try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
+    try testing.expectEqual(@as(usize, 5), deserialized.nodes.len());
 
     // Verify var node using captured index
     const retrieved_var = deserialized.nodes.get(var_node_idx);
@@ -6303,8 +6485,15 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const retrieved_float_value: f64 = @bitCast(retrieved_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
 
+    const required_segment = deserialized.getFieldAccessSegment(@enumFromInt(@intFromEnum(required_segment_node_idx)));
+    try testing.expectEqual(@as(u32, 41), @as(u32, @bitCast(required_segment.name)));
+    try testing.expectEqual(CIR.Expr.FieldAccessMode.required, required_segment.mode);
+    const optional_segment = deserialized.getFieldAccessSegment(@enumFromInt(@intFromEnum(optional_segment_node_idx)));
+    try testing.expectEqual(@as(u32, 42), @as(u32, @bitCast(optional_segment.name)));
+    try testing.expectEqual(CIR.Expr.FieldAccessMode.optional, optional_segment.mode);
+
     // Verify regions using captured indices
-    try testing.expectEqual(@as(usize, 3), deserialized.regions.len());
+    try testing.expectEqual(@as(usize, 5), deserialized.regions.len());
     const retrieved_region1 = deserialized.regions.get(region1_idx);
     try testing.expectEqual(region1.start.offset, retrieved_region1.start.offset);
     try testing.expectEqual(region1.end.offset, retrieved_region1.end.offset);
@@ -6314,6 +6503,12 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const retrieved_region3 = deserialized.regions.get(region3_idx);
     try testing.expectEqual(region3.start.offset, retrieved_region3.start.offset);
     try testing.expectEqual(region3.end.offset, retrieved_region3.end.offset);
+    const retrieved_region4 = deserialized.regions.get(region4_idx);
+    try testing.expectEqual(region4.start.offset, retrieved_region4.start.offset);
+    try testing.expectEqual(region4.end.offset, retrieved_region4.end.offset);
+    const retrieved_region5 = deserialized.regions.get(region5_idx);
+    try testing.expectEqual(region5.start.offset, retrieved_region5.start.offset);
+    try testing.expectEqual(region5.end.offset, retrieved_region5.end.offset);
 
     // Verify scratch is null (deserialized NodeStores don't allocate scratch)
     try testing.expect(deserialized.scratch == null);

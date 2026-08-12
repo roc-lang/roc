@@ -316,21 +316,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 (can-ir
 	(d-let
 		(p-assign (ident "parseConfig"))
-		(e-lambda
-			(args
-				(p-assign (ident "settings")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "authenticate"))
-		(e-lambda
-			(args
-				(p-assign (ident "user"))
-				(p-assign (ident "pass")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -338,11 +331,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
-		(e-lambda
-			(args
-				(p-assign (ident "advancedConfig"))
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -352,20 +341,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
-		(e-lambda
-			(args
-				(p-assign (ident "text")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "validateAuth"))
-		(e-lambda
-			(args
-				(p-assign (ident "creds")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

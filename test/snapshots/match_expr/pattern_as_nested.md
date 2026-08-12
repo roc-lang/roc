@@ -31,7 +31,7 @@ TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 
     But the expression between the `match` parenthesis has the type:
 
-        { address: { city: _field }, name: _field2 }
+        { address: _field, name: _field2 }
 
     These can never match! Either the pattern or expression has a problem.
     Hint: This pattern doesn't bind the `address` field. Match it explicitly

@@ -19,6 +19,7 @@ const InstNode = solve.InstNode;
 const NodeId = solve.NodeId;
 const InstTag = solve.InstTag;
 const InstField = solve.InstField;
+const FieldKindId = solve.FieldKindId;
 const InstBacking = solve.InstBacking;
 const InstDeclaredField = solve.InstDeclaredField;
 const InstVariable = solve.InstVariable;
@@ -892,7 +893,14 @@ fn constrainDeferredTemplateTypeArgumentsAt(
                 for (checked_record.fields) |checked_field| {
                     for (request_record.fields) |request_field| {
                         if (!graph.name_store.recordFieldLabelTextEql(checked_field.name, request_field.name)) continue;
-                        try constrainDeferredTemplateTypeArgumentsAt(graph, checked_field.ty, request_field.ty, seen);
+                        graph.relateRecordFieldKind(checked_field, request_field);
+                        try constrainDeferredTemplateArgument(
+                            graph,
+                            checked_field.value_ty orelse checked_field.ty,
+                            request_field.value_ty orelse request_field.ty,
+                            seen,
+                        );
+                        try constrainDeferredTemplateArgument(graph, checked_field.ty, request_field.ty, seen);
                         break;
                     }
                 }
@@ -1249,6 +1257,13 @@ fn relateCheckedMonoRequestNodeAt(
                         if (checked_field.name != request_field.name) break;
                     } else {
                         for (checked_row.fields, request_row.fields) |checked_field, request_field| {
+                            graph.relateRecordFieldKind(checked_field, request_field);
+                            try relateCheckedMonoRequestNodeAt(
+                                graph,
+                                checked_field.value_ty orelse checked_field.ty,
+                                request_field.value_ty orelse request_field.ty,
+                                seen,
+                            );
                             try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
                         }
                         try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
@@ -3082,7 +3097,11 @@ const Builder = struct {
         root_evidence: ?checked.CheckedEvidenceSpan,
         root_batch: ?*RootTemplateBatch,
     ) Allocator.Error!Ast.DefId {
-        const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
+        const fn_ty = try self.lowerContextFreeSpecializationType(
+            source_ty_view,
+            template_ref,
+            source_fn_ty,
+        );
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const fn_template = self.fnDefForTemplate(
             view,
@@ -3712,11 +3731,15 @@ const Builder = struct {
         var selection = DraftOpenCandidateSelection{};
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
             try source_ctx.activeTypeFromNode(request_fn_node)
+        else if (try source_ctx.graph.typeIsSpecializationDefaultable(request_fn_node))
+            try source_ctx.graph.specializationTypeViewForNode(request_fn_node)
         else
             null;
-        // Resolved requests key directly on their structural type digest, so a
-        // repeat of an already-answered resolved request skips the graph-native
-        // recursive lookup below.
+        // Closed requests—and requests whose only open cells have the explicit
+        // required field-kind default—key on an immutable structural view, so
+        // a repeat skips the graph-native recursive lookup below. The latter
+        // view does not mutate the live request; a hit joins the live
+        // interfaces below.
         const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
             .family = family,
             .evidence_digest = evidence_digest.bytes,
@@ -3729,8 +3752,8 @@ const Builder = struct {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -3787,12 +3810,13 @@ const Builder = struct {
                     }
                 }
             }
-            // Independently instantiated recursive calls do not necessarily share
-            // graph cells with the specialization currently being lowered. Once
-            // both requests are fully resolved, exact structural type equality is
-            // the durable proof that they are the same specialization request.
-            // This scan retains graph-interface identity for active recursive
-            // and partially overlapping requests.
+            // Independently instantiated calls do not necessarily share graph
+            // cells with the specialization currently being lowered. Once both
+            // requests are closed or defaultable only by the declared required
+            // field-kind rule, exact structural type equality proves that they
+            // are the same specialization request. This scan retains graph-
+            // interface identity for active recursive and partially overlapping
+            // requests.
             if (resolved_request_ty) |request_fn_ty| {
                 for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                     const raw_spec: u32 = @intCast(raw_spec_usize);
@@ -3804,8 +3828,8 @@ const Builder = struct {
                     // that they refer to the same active specialization.
                     if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try source_ctx.graph.typeIsSpecializationDefaultable(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.graph.specializationTypeViewForNode(spec.request_fn_node);
                     if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
                 }
@@ -4209,6 +4233,34 @@ const Builder = struct {
         };
     }
 
+    /// Materialize a context-free Monotype request through the same explicit
+    /// instantiation/freeze boundary as an ordinary requested specialization.
+    /// A generalized checked field kind can therefore default for this one
+    /// root without entering `type_cache` as a context-free required layout
+    /// that would poison a later optional specialization.
+    fn lowerContextFreeSpecializationType(
+        self: *Builder,
+        view: ModuleView,
+        owner_template: names.ProcTemplate,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Type.TypeId {
+        const graph = try self.createGraph();
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var body_draft = BodyDraftStore.init(self.allocator);
+        self.active_body_draft = &body_draft;
+        defer self.active_body_draft = saved_body_draft;
+        defer body_draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, owner_template, graph, &body_draft);
+        defer ctx.deinit();
+        const node = try ctx.instNode(checked_ty);
+        try graph.freezeRelations();
+        return try graph.sealNode(node);
+    }
+
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         if (self.type_cache.get(address)) |cached| return cached;
@@ -4595,29 +4647,111 @@ const Builder = struct {
         return self.program.types.span(self.tupleItemSpan(ty));
     }
 
-    fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
+    fn recordField(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
         const fields = self.program.types.fieldSpan(self.recordFieldsSpan(ty));
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
+            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field;
         }
         Common.invariant("record pattern field was absent from checked record type");
+    }
+
+    fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
+        return self.recordField(ty, name).ty;
     }
 
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
         return self.program.types.span(self.tagPayloadSpan(ty, name));
     }
 
+    /// The closed structural tagged slot of an optional field:
+    /// `[#Missing, #Present(payload)]`. Tag variants normalize to sorted label
+    /// order, so `#Missing` is variant 0 (no payload) and `#Present` is
+    /// variant 1—the discriminant contract every consumer (construction,
+    /// `.?` runtime tests, layout, glue) shares.
+    fn optionalSlotType(self: *Builder, payload_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const missing = try self.program.names.internTagLabel(optional_slot_missing_tag);
+        const present = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const tags = [_]Type.Tag{
+            .{ .name = missing, .checked_name = missing, .payloads = Type.Span.empty() },
+            .{ .name = present, .checked_name = present, .payloads = try self.program.types.addSpan(&[_]Type.TypeId{payload_ty}) },
+        };
+        return try self.program.types.add(.{ .tag_union = try self.program.types.addTagVariants(&self.program.names, &tags) });
+    }
+
+    /// The tags and payload type of an optional field's Monotype tagged slot.
+    fn optionalSlotInfo(self: *Builder, slot_ty: Type.TypeId) Allocator.Error!OptionalSlotInfo {
+        const missing_name = try self.program.names.internTagLabel(optional_slot_missing_tag);
+        const present_name = try self.program.names.internTagLabel(optional_slot_present_tag);
+        const missing_tag = self.tagByNameOrNull(slot_ty, missing_name) orelse
+            Common.invariant("optional field slot type had no Missing tag");
+        const present_tag = self.tagByNameOrNull(slot_ty, present_name) orelse
+            Common.invariant("optional field slot type had no Present tag");
+        if (self.program.types.span(missing_tag.payloads).len != 0) {
+            Common.invariant("optional field slot Missing tag unexpectedly had payloads");
+        }
+        const present_payloads = self.program.types.span(present_tag.payloads);
+        if (present_payloads.len != 1) {
+            Common.invariant("optional field slot Present tag must carry exactly one payload");
+        }
+        return .{
+            .payload_ty = GuardedList.at(present_payloads, 0),
+            .missing_tag = missing_tag,
+            .present_tag = present_tag,
+        };
+    }
+
+    /// Recognize the compiler-reserved optional-slot encoding when only a
+    /// completed Monotype is available (design.md "Field Kinds").
+    fn optionalFieldSlot(self: *Builder, slot_ty: Type.TypeId) ?OptionalSlotInfo {
+        const tags = switch (self.program.types.get(slot_ty)) {
+            .tag_union => |span_| self.program.types.tagSpan(span_),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+        };
+        if (tags.len != 2) return null;
+        // Tag normalization gives #Missing index 0 and #Present index 1.
+        const missing_tag = GuardedList.at(tags, 0);
+        const present_tag = GuardedList.at(tags, 1);
+        if (!std.mem.eql(u8, self.program.names.tagLabelText(missing_tag.name), optional_slot_missing_tag)) return null;
+        if (!std.mem.eql(u8, self.program.names.tagLabelText(present_tag.name), optional_slot_present_tag)) return null;
+        if (self.program.types.span(missing_tag.payloads).len != 0) return null;
+        const present_payloads = self.program.types.span(present_tag.payloads);
+        if (present_payloads.len != 1) return null;
+        return .{
+            .payload_ty = GuardedList.at(present_payloads, 0),
+            .missing_tag = missing_tag,
+            .present_tag = present_tag,
+        };
+    }
+
     fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
         const lowered = try self.allocator.alloc(Type.Field, fields.len);
         defer self.allocator.free(lowered);
         for (fields, 0..) |field, i| {
+            const value_ty = try self.lowerType(view, field.ty);
             lowered[i] = .{
                 .name = try self.recordFieldName(view, field.name),
-                .ty = try self.lowerType(view, field.ty),
+                .ty = switch (field.kind.tag) {
+                    .required, .defaulted => value_ty,
+                    .optional => try self.optionalSlotType(value_ty),
+                    .undetermined => Common.invariant("undetermined checked field kind reached direct record lowering"),
+                    .err => Common.invariant("poisoned checked field kind reached direct record lowering"),
+                },
+                .value_ty = if (field.kind.tag == .optional) value_ty else null,
+                .default = try self.monoFieldDefault(view, field),
             };
         }
         return .{ .record = try self.program.types.addRecordFields(&self.program.names, lowered) };
+    }
+
+    /// Translate a checked `??` identity into the Monotype name store.
+    fn monoFieldDefault(self: *Builder, view: ModuleView, field: checked.CheckedRecordField) Allocator.Error!?Type.FieldDefault {
+        const default = field.kind.defaultIdentity() orelse return null;
+        const origin_module = default.origin() orelse Common.invariant("defaulted checked field carried no default origin module");
+        return .{
+            .module = try self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(origin_module)),
+            .expr_node = default.expr_node,
+        };
     }
 
     fn lowerRecordRow(
@@ -4668,9 +4802,17 @@ const Builder = struct {
         fields: []const checked.CheckedRecordField,
     ) Allocator.Error!void {
         for (fields) |field| {
+            const value_ty = try self.lowerType(view, field.ty);
             try out.append(self.allocator, .{
                 .name = try self.recordFieldName(view, field.name),
-                .ty = try self.lowerType(view, field.ty),
+                .ty = switch (field.kind.tag) {
+                    .required, .defaulted => value_ty,
+                    .optional => try self.optionalSlotType(value_ty),
+                    .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
+                    .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
+                },
+                .value_ty = if (field.kind.tag == .optional) value_ty else null,
+                .default = try self.monoFieldDefault(view, field),
             });
         }
     }
@@ -4748,6 +4890,23 @@ const Builder = struct {
             if (moduleBytesEqual(module_digest.bytes, relation.key.bytes)) return moduleView(relation);
         }
         Common.invariant("procedure template referenced a checked module that is not in the lowering input");
+    }
+
+    /// The module view whose content identity matches `origin_hash`, or null
+    /// (used to resolve a defaulted field's declaring module—design.md
+    /// "Defaulted Fields").
+    fn moduleForIdentityHash(self: *Builder, origin_hash: *const [32]u8) ?ModuleView {
+        const root = moduleView(self.root_view);
+        if (moduleViewIdentityMatches(root, origin_hash)) return root;
+        for (self.modules.imports) |imported| {
+            const view = moduleView(imported);
+            if (moduleViewIdentityMatches(view, origin_hash)) return view;
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            const view = moduleView(relation);
+            if (moduleViewIdentityMatches(view, origin_hash)) return view;
+        }
+        return null;
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
@@ -8524,11 +8683,51 @@ const Builder = struct {
             out = try self.concatExpr(out, try self.stringExpr(": ", str_ty), str_ty);
             const field_value = try self.program.addExpr(.{
                 .ty = field.ty,
-                .data = .{ .field_access = .{ .receiver = value, .field = field.name } },
+                .data = .{ .field_access = .{
+                    .receiver = value,
+                    .segments = try self.program.addFieldAccessSegmentSpan(&.{.{ .field = field.name }}),
+                } },
             });
-            out = try self.concatExpr(out, try self.inspectCall(field_value, field.ty, str_ty), str_ty);
+            out = try self.concatExpr(out, try self.inspectFieldSlot(field_value, field.ty, str_ty), str_ty);
         }
         return try self.concatExpr(out, try self.stringExpr(" }", str_ty), str_ty);
+    }
+
+    /// Render one record field's slot. An inline (required/defaulted) slot
+    /// renders as the value itself. An optional field's tagged slot never
+    /// leaks its #Missing/#Present encoding: a present slot renders its
+    /// payload exactly as a required field's value would, and a missing
+    /// slot renders the literal `<missing>` marker.
+    fn inspectFieldSlot(self: *Builder, slot_value: Ast.ExprId, slot_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const slot = self.optionalFieldSlot(slot_ty) orelse
+            return try self.inspectCall(slot_value, slot_ty, str_ty);
+
+        const payload_local = try self.program.addLocal(self.symbols.fresh(), slot.payload_ty);
+        const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
+        const present_pat = try self.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot.present_tag.name,
+            .payloads = try self.program.addPatSpan(&.{payload_pat}),
+        } } });
+        const present_body = try self.inspectCall(
+            try self.localExpr(payload_local, slot.payload_ty),
+            slot.payload_ty,
+            str_ty,
+        );
+
+        const missing_pat = try self.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot.missing_tag.name,
+            .payloads = try self.program.addPatSpan(&.{}),
+        } } });
+        const missing_body = try self.stringExpr(optional_field_missing_render, str_ty);
+
+        const branches = [_]Ast.Branch{
+            .{ .pat = present_pat, .body = present_body },
+            .{ .pat = missing_pat, .body = missing_body },
+        };
+        return try self.program.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
+            .scrutinee = slot_value,
+            .branches = try self.program.addBranchSpan(&branches),
+        } } });
     }
 
     fn typeIsProvenUninhabited(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
@@ -8838,6 +9037,20 @@ const Builder = struct {
         err_ty: Type.TypeId,
         ok_tag: Type.Tag,
         err_tag: Type.Tag,
+    };
+
+    /// Reserved labels for the optional-slot encoding; see design.md "Field
+    /// Kinds". Sorting fixes Missing at index 0 and Present at index 1.
+    const optional_slot_missing_tag = "#Missing";
+    const optional_slot_present_tag = "#Present";
+
+    /// `Str.inspect`'s non-value marker for a missing optional field.
+    const optional_field_missing_render = "<missing>";
+
+    const OptionalSlotInfo = struct {
+        payload_ty: Type.TypeId,
+        missing_tag: Type.Tag,
+        present_tag: Type.Tag,
     };
 
     /// Return the exact direct-hosted source type required when a request
@@ -9503,6 +9716,10 @@ const DraftStaticDataCandidate = struct {
     runtime_expr: DraftExprId,
 };
 
+const DraftFieldAccessSegment = struct {
+    field: names.RecordFieldNameId,
+};
+
 const DraftExpr = struct {
     ty: DraftTypeCell,
     data: DraftExprData,
@@ -9563,7 +9780,7 @@ const DraftExprData = union(enum(u8)) {
     low_level: DraftLowLevelCall,
     field_access: struct {
         receiver: DraftExprId,
-        field: names.RecordFieldNameId,
+        segments: DraftSpan(DraftFieldAccessSegment),
     },
     tuple_access: struct {
         tuple: DraftExprId,
@@ -10746,6 +10963,7 @@ const BodyDraftStore = struct {
     typed_locals: std.ArrayList(DraftTypedLocal),
     stmt_ids: std.ArrayList(DraftStmtId),
     field_exprs: std.ArrayList(DraftFieldExpr),
+    field_access_segments: std.ArrayList(DraftFieldAccessSegment),
     fn_def_captures: std.ArrayList(DraftFnDefCapture),
     record_destructs: std.ArrayList(DraftRecordDestruct),
     str_pattern_steps: std.ArrayList(DraftStrPatternStep),
@@ -10824,6 +11042,7 @@ const BodyDraftStore = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .field_access_segments = .empty,
             .fn_def_captures = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
@@ -10939,6 +11158,7 @@ const BodyDraftStore = struct {
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
+        self.field_access_segments.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -11249,6 +11469,16 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    fn addFieldAccessSegmentSpan(
+        self: *BodyDraftStore,
+        values: []const DraftFieldAccessSegment,
+    ) Allocator.Error!DraftSpan(DraftFieldAccessSegment) {
+        if (values.len == 0) Common.invariant("draft field access segment span must be nonempty");
+        const start: u32 = @intCast(self.field_access_segments.items.len);
+        try self.field_access_segments.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     fn addFnDefCaptureSpan(self: *BodyDraftStore, values: []const DraftFnDefCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
         const start: u32 = @intCast(self.fn_def_captures.items.len);
         try self.fn_def_captures.appendSlice(self.allocator, values);
@@ -11409,6 +11639,7 @@ const BodyDraftStore = struct {
             .typed_locals_start = @intCast(program.typedLocalCount()),
             .stmt_ids_start = @intCast(program.stmtIdCount()),
             .field_expr_start = @intCast(program.fieldExprCount()),
+            .field_access_segment_start = @intCast(program.fieldAccessSegmentCount()),
             .fn_def_capture_start = @intCast(program.fnDefCaptureCount()),
             .record_destruct_start = @intCast(program.recordDestructCount()),
             .str_pattern_step_start = @intCast(program.strPatternStepCount()),
@@ -11483,6 +11714,11 @@ const BodyDraftStore = struct {
                 .name = field.name,
                 .value = ids.expr(field.value),
             });
+        }
+
+        try program.field_access_segments.ensureUnusedCapacity(program.allocator, self.field_access_segments.items.len);
+        for (self.field_access_segments.items) |segment| {
+            program.field_access_segments.appendAssumeCapacity(.{ .field = segment.field });
         }
 
         try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
@@ -12062,7 +12298,7 @@ const BodyDraftStore = struct {
             } },
             .field_access => |access| .{ .field_access = .{
                 .receiver = ids.expr(access.receiver),
-                .field = access.field,
+                .segments = ids.fieldAccessSegmentSpan(access.segments),
             } },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = ids.expr(access.tuple),
@@ -12188,6 +12424,7 @@ const FinalIdOffsets = struct {
     typed_locals_start: u32,
     stmt_ids_start: u32,
     field_expr_start: u32,
+    field_access_segment_start: u32,
     fn_def_capture_start: u32,
     record_destruct_start: u32,
     str_pattern_step_start: u32,
@@ -12311,6 +12548,13 @@ const FinalIdOffsets = struct {
 
     fn fieldExprSpan(self: FinalIdOffsets, span: DraftSpan(DraftFieldExpr)) Ast.Span(Ast.FieldExpr) {
         return .{ .start = self.coreSpanStart(.field_exprs, span.start, span.len, self.field_expr_start), .len = span.len };
+    }
+
+    fn fieldAccessSegmentSpan(
+        self: FinalIdOffsets,
+        span: DraftSpan(DraftFieldAccessSegment),
+    ) Ast.Span(Ast.FieldAccessSegment) {
+        return .{ .start = self.field_access_segment_start + span.start, .len = span.len };
     }
 
     fn fnDefCaptureSpan(self: FinalIdOffsets, span: DraftSpan(DraftFnDefCapture)) Ast.Span(Ast.FnDefCapture) {
@@ -12584,6 +12828,12 @@ const InterfaceReplayState = struct {
 
 const InstantiationScopeId = enum(u64) { _ };
 
+const InstantiatedFieldKind = struct {
+    id: FieldKindId,
+    slot: NodeId,
+    value: NodeId,
+};
+
 /// The complete mutable state for one checked-type instantiation scope. Body
 /// lowering state remains on `BodyContext`; operations that only need a fresh
 /// type instantiation can swap this small state without constructing another
@@ -12593,9 +12843,11 @@ const TypeInstantiationContext = struct {
     id: InstantiationScopeId,
     module_bytes: [32]u8,
     node_map: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    field_kind_map: collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, NodeId)) = .empty,
+    field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
 
     fn init(
         allocator: Allocator,
@@ -12607,12 +12859,15 @@ const TypeInstantiationContext = struct {
             .id = id,
             .module_bytes = module_bytes,
             .node_map = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiationContext) void {
         self.decl_scopes.deinit(self.allocator);
+        self.field_kind_decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
+        self.field_kind_map.deinit();
     }
 };
 
@@ -12657,6 +12912,10 @@ const BodyContext = struct {
     /// on the branch comparing the bound value against the literal's
     /// `from_numeral`-converted constant.
     pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+    /// Pending user-binder preludes from translated optional-field destructs
+    /// (see `OptionalDestructBind`), drained by the same owners that drain
+    /// `pattern_literal_guards`.
+    optional_destruct_binds: std.ArrayList(OptionalDestructBind) = .empty,
     /// Frozen-at-creation reachability topology attached to runtime demands
     /// emitted while lowering one match branch. The root plus explicit
     /// constructor payload/element cells prove when that branch cannot run.
@@ -12755,6 +13014,25 @@ const BodyContext = struct {
             /// concrete type, so the branch can never match (checking reports
             /// these; an I8 can never equal 300).
             never,
+        },
+    };
+
+    /// A user binder deferred while an optional destructure is translated
+    /// from checked Try space into runtime slot space.
+    const OptionalDestructBind = struct {
+        /// The user binder's local (registered at the Try / error node).
+        binder_local: DraftLocalId,
+        value: union(enum) {
+            /// Materialize the bound slot as a one-segment `.?` result.
+            slot_to_try: struct {
+                slot_local: DraftLocalId,
+                slot_node: NodeId,
+                try_node: NodeId,
+            },
+            /// Bind the constant error represented by the payload-less Missing slot.
+            missing_err: struct {
+                err_node: NodeId,
+            },
         },
     };
 
@@ -12883,6 +13161,9 @@ const BodyContext = struct {
                 }
                 if (try self.missingTryInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_ty, encoding_ty, plan, inputs);
+                }
+                if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
+                    return try self.collectSerializationPlanInputs(kind, slot.payload_ty, encoding_ty, plan, inputs);
                 }
                 if ((try self.customParserLookup(shape_ty)) != null or self.parseScalarMethodName(shape_ty) != null) return;
             },
@@ -13268,6 +13549,7 @@ const BodyContext = struct {
         self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
+        self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
         self.instantiation.deinit();
@@ -13658,6 +13940,22 @@ const BodyContext = struct {
             expr.data,
         );
         return id;
+    }
+
+    fn addFieldAccessExpr(
+        self: *BodyContext,
+        receiver: DraftExprId,
+        field: names.RecordFieldNameId,
+        ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field }});
+        return try self.addExpr(.{
+            .ty = ty,
+            .data = .{ .field_access = .{
+                .receiver = receiver,
+                .segments = segments,
+            } },
+        });
     }
 
     fn addExprWithTypeCell(self: *BodyContext, ty: DraftTypeCell, data: BodyExprData) Allocator.Error!DraftExprId {
@@ -14249,13 +14547,48 @@ const BodyContext = struct {
             if (i != 0) out = try self.concatExpr(out, try self.stringExpr(", ", str_ty), str_ty);
             out = try self.concatExpr(out, try self.stringExpr(self.builder.program.names.recordFieldLabelText(field.name), str_ty), str_ty);
             out = try self.concatExpr(out, try self.stringExpr(": ", str_ty), str_ty);
-            const field_value = try self.addExpr(.{
-                .ty = field.ty,
-                .data = .{ .field_access = .{ .receiver = value, .field = field.name } },
-            });
-            out = try self.concatExpr(out, try self.inspectCall(field_value, field.ty, str_ty), str_ty);
+            const field_value = try self.addFieldAccessExpr(value, field.name, field.ty);
+            out = try self.concatExpr(out, try self.inspectFieldSlot(field_value, field.ty, str_ty), str_ty);
         }
         return try self.concatExpr(out, try self.stringExpr(" }", str_ty), str_ty);
+    }
+
+    /// Render one record field's slot. An inline (required/defaulted) slot
+    /// renders as the value itself. An optional field's tagged slot never
+    /// leaks its Missing/Present encoding: a present slot renders its
+    /// payload exactly as a required field's value would, and a missing
+    /// slot renders the literal `<missing>` marker. Twin of
+    /// `Builder.inspectFieldSlot` for draft-body inspect expansion.
+    fn inspectFieldSlot(self: *BodyContext, slot_value: DraftExprId, slot_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const slot = self.builder.optionalFieldSlot(slot_ty) orelse
+            return try self.inspectCall(slot_value, slot_ty, str_ty);
+
+        const payload_local = try self.addLocal(self.builder.symbols.fresh(), slot.payload_ty);
+        const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
+        const present_pat = try self.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot.present_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{payload_pat}),
+        } } });
+        const present_body = try self.inspectCall(
+            try self.localExpr(payload_local, slot.payload_ty),
+            slot.payload_ty,
+            str_ty,
+        );
+
+        const missing_pat = try self.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot.missing_tag.name,
+            .payloads = .empty(),
+        } } });
+        const missing_body = try self.stringExpr(Builder.optional_field_missing_render, str_ty);
+
+        const branches = [_]DraftBranch{
+            .{ .pat = present_pat, .body = present_body },
+            .{ .pat = missing_pat, .body = missing_body },
+        };
+        return try self.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
+            .scrutinee = slot_value,
+            .branches = try self.addBranchSpan(&branches),
+        } } });
     }
 
     fn inspectTagUnion(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, tags: anytype, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -15655,6 +15988,28 @@ const BodyContext = struct {
         try self.instantiation.node_map.put(checked_ty, node);
     }
 
+    fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
+        var index = self.instantiation.field_kind_decl_scopes.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.instantiation.field_kind_decl_scopes.items[index].get(checked_ty)) |existing| return existing;
+        }
+        if (self.instantiation.field_kind_decl_scopes.items.len != 0) return null;
+        return self.instantiation.field_kind_map.get(checked_ty);
+    }
+
+    fn putScopedFieldKind(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        field_kind: InstantiatedFieldKind,
+    ) Allocator.Error!void {
+        if (self.instantiation.field_kind_decl_scopes.items.len != 0) {
+            try self.instantiation.field_kind_decl_scopes.items[self.instantiation.field_kind_decl_scopes.items.len - 1].put(checked_ty, field_kind);
+            return;
+        }
+        try self.instantiation.field_kind_map.put(checked_ty, field_kind);
+    }
+
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
         const out = try self.graph.arena().alloc(NodeId, checked_tys.len);
         for (checked_tys, 0..) |checked_ty, index| {
@@ -15708,12 +16063,84 @@ const BodyContext = struct {
     fn instFields(self: *BodyContext, fields: []const checked.CheckedRecordField) Allocator.Error![]InstField {
         const out = try self.graph.arena().alloc(InstField, fields.len);
         for (fields, 0..) |field, index| {
-            out[index] = .{
-                .name = try self.builder.recordFieldName(self.view, field.name),
-                .ty = try self.instNode(field.ty),
+            const value_node = try self.instNode(field.ty);
+            const name = try self.builder.recordFieldName(self.view, field.name);
+            const default = try self.builder.monoFieldDefault(self.view, field);
+            out[index] = switch (field.kind.tag) {
+                .required => .{ .name = name, .ty = value_node, .kind = .required, .default = null },
+                .defaulted => .{
+                    .name = name,
+                    .ty = value_node,
+                    .kind = .{ .defaulted = default orelse Common.invariant("defaulted checked field carried no default identity") },
+                    .default = default,
+                },
+                .optional => .{
+                    .name = name,
+                    .ty = try self.optionalSlotNode(value_node),
+                    .value_ty = value_node,
+                    .kind = .optional,
+                    .default = null,
+                },
+                .undetermined => blk: {
+                    const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
+                        Common.invariant("undetermined checked field kind carried no presence variable"));
+                    if (self.scopedFieldKind(checked_kind)) |existing| {
+                        try self.graph.unify(existing.value, value_node);
+                        break :blk .{
+                            .name = name,
+                            .ty = existing.slot,
+                            .value_ty = existing.value,
+                            .kind = .{ .undetermined = existing.id },
+                            .default = null,
+                        };
+                    }
+                    const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                    const kind = try self.graph.newUndeterminedFieldKind();
+                    self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
+                    const instantiated = InstantiatedFieldKind{
+                        .id = kind,
+                        .slot = slot_node,
+                        .value = value_node,
+                    };
+                    try self.putScopedFieldKind(checked_kind, instantiated);
+                    break :blk .{
+                        .name = name,
+                        .ty = instantiated.slot,
+                        .value_ty = instantiated.value,
+                        .kind = .{ .undetermined = instantiated.id },
+                        .default = null,
+                    };
+                },
+                .err => Common.invariant("poisoned checked field kind reached Monotype instantiation"),
             };
         }
         return out;
+    }
+
+    /// The instantiation-graph node of an optional field's tagged slot: the
+    /// closed structural union `[#Missing, #Present(value)]`, matching
+    /// `Builder.optionalSlotType` exactly so graph-solved and directly-lowered
+    /// occurrences of one checked row seal to the same Monotype.
+    fn optionalSlotNode(self: *BodyContext, value_node: NodeId) Allocator.Error!NodeId {
+        const missing = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+        const present = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+        const tags = try self.graph.arena().alloc(InstTag, 2);
+        tags[0] = .{
+            .name = missing,
+            .checked_name = missing,
+            .payloads = try self.graph.arena().alloc(NodeId, 0),
+        };
+        const present_payloads = try self.graph.arena().alloc(NodeId, 1);
+        present_payloads[0] = value_node;
+        tags[1] = .{
+            .name = present,
+            .checked_name = present,
+            .payloads = present_payloads,
+        };
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) }),
+        } });
     }
 
     fn instTags(self: *BodyContext, tags: []const checked.CheckedTag) Allocator.Error![]InstTag {
@@ -15873,11 +16300,15 @@ const BodyContext = struct {
         }
         var scope = collections.DenseMap(checked.CheckedTypeId, NodeId).init(self.allocator);
         defer scope.deinit();
+        var field_kind_scope = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(self.allocator);
+        defer field_kind_scope.deinit();
         for (formal_args, args) |formal, arg| {
             try scope.put(self.scopedCheckedType(formal), arg);
         }
         try self.instantiation.decl_scopes.append(self.allocator, &scope);
         defer _ = self.instantiation.decl_scopes.pop();
+        try self.instantiation.field_kind_decl_scopes.append(self.allocator, &field_kind_scope);
+        defer _ = self.instantiation.field_kind_decl_scopes.pop();
         return try self.instNode(declaration.backing);
     }
 
@@ -16347,7 +16778,7 @@ const BodyContext = struct {
             for (entry.duplicates.items) |duplicate| {
                 try relateFunctionRequestInterface(
                     self.graph,
-                    try self.graph.importMono(final_ty),
+                    try self.graph.instantiateProvisionalTypeView(final_ty),
                     duplicate,
                 );
             }
@@ -16373,18 +16804,25 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => saved_source_region_override,
         };
-        const body = switch (root.kind) {
-            .numeral_conversion, .quote_conversion => blk: {
-                const ret_ty = try self.activeTypeFromCell(ret_cell);
-                break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
-            },
+        const body = if (root.literalConversionKind() != null) blk: {
+            const ret_ty = try self.activeTypeFromCell(ret_cell);
+            break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
+        } else switch (root.kind) {
+            // A field default's root body is an ordinary pure expression
+            // (design.md "Defaulted Fields"); it lowers through the general
+            // comptime-root path.
             .constant,
             .hoisted_constant,
             .callable_binding,
             .expect,
+            .field_default,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
+            .numeral_conversion,
+            .quote_conversion,
+            => Common.invariant("literal-conversion root bypassed literal-conversion lowering"),
         };
         const declared_ret_node = try ret_cell.toGraphNode(self.graph);
         const body_ret_cell = self.exprTypeCell(body);
@@ -16912,7 +17350,13 @@ const BodyContext = struct {
         for (checked_row.fields, produced_row.fields, fields) |checked_field, produced_field, *out| {
             if (checked_field.name != produced_field.name) return null;
             const ty = try self.relateCheckedNodeToProducedValueInner(checked_field.ty, produced_field.ty, visiting);
-            out.* = .{ .name = produced_field.name, .ty = ty };
+            out.* = .{
+                .name = produced_field.name,
+                .ty = ty,
+                .value_ty = produced_field.value_ty,
+                .kind = produced_field.kind,
+                .default = produced_field.default,
+            };
             changed = changed or !self.graph.sameClass(ty, produced_field.ty);
         }
         if (!changed) return produced_node;
@@ -17270,7 +17714,7 @@ const BodyContext = struct {
                 }
                 continue;
             }
-            if (self.patternNeedsExplicitBinding(pattern_id)) {
+            if (try self.patternNeedsExplicitBinding(pattern_id)) {
                 const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), arg_cell, null);
                 args[i] = .{ .local = local, .ty = arg_cell };
                 const value = try self.addExprWithTypeCell(arg_cell, .{ .local = local });
@@ -17415,7 +17859,7 @@ const BodyContext = struct {
             .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionNode(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionNode(closure),
-            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null),
+            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeNode(expr.ty),
         };
     }
@@ -17437,7 +17881,7 @@ const BodyContext = struct {
             .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionType(closure),
-            .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null)),
+            .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field, null)),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
         };
     }
@@ -17675,10 +18119,8 @@ const BodyContext = struct {
                 }
                 for (record.fields) |field| {
                     child_exprs[child_index] = field.value;
-                    child_nodes[child_index] = try self.graph.recordConstructionFieldNode(
-                        expr_node,
-                        try self.builder.recordFieldName(self.view, field.label),
-                    );
+                    const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
+                    child_nodes[child_index] = try self.graph.recordConstructionFieldValueNode(expr_node, mono_field_name);
                     child_index += 1;
                 }
                 try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
@@ -17697,15 +18139,21 @@ const BodyContext = struct {
                     });
                     child_index += 1;
                 }
-                return try self.lowerRecordExprAtNode(record, expr_node, children.items);
+                return try self.lowerRecordExprAtNode(expr_id, record, expr_node, children.items);
             },
-            .empty_list => {
+            .empty_list, .empty_record => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = .empty() });
-            },
-            .empty_record => {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.addConstructorExprAtNode(expr_node, .{ .record = .empty() });
+                if (expr.data == .empty_list) {
+                    return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(expr_node), .{ .list = .empty() });
+                }
+                // `{}` is a record construction that omits every field:
+                // lower it through the record path so the demanded row's
+                // DEFAULTED fields materialize their defaults into the
+                // inline slots (design.md "Defaulted Fields").
+                return try self.lowerRecordExprAtNode(expr_id, .{
+                    .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                    .ext = @as(?checked.CheckedExprId, null),
+                }, expr_node, &.{});
             },
             .field_access => |field| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -17912,7 +18360,14 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         const hoisted_ty = switch (template.state) {
             .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
-            .eval_template => try self.lowerTypeView(entry.checked_type),
+            // Dispatch requires one concrete specialization type for this
+            // selected const use. A generalized field whose presence has no
+            // other evidence takes the declared required default in an
+            // immutable view; the relation below then applies that exact
+            // choice to the live const-use graph before any body emits.
+            .eval_template => try self.graph.specializationTypeViewForNode(
+                try self.instNode(entry.checked_type),
+            ),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),
         };
         try relateCheckedNodeToMono(
@@ -17969,7 +18424,15 @@ const BodyContext = struct {
                 } };
             },
             .empty_list => .{ .list = .empty() },
-            .empty_record => return try self.addConstructorExpr(ty, .{ .record = .empty() }),
+            // `{}` is a record construction that omits every field: lower it
+            // through the same path as a non-empty literal so the demanded
+            // row's DEFAULTED fields materialize their defaults into the
+            // inline slots (design.md "Defaulted Fields"). With no defaulted
+            // fields demanded this produces the empty record constructor.
+            .empty_record => return try self.lowerRecordExpr(.{
+                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .ext = @as(?checked.CheckedExprId, null),
+            }, ty, &.{}),
             .str => |segments| try self.lowerStr(segments),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
             .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
@@ -18011,19 +18474,26 @@ const BodyContext = struct {
             .structural_eq => Common.invariant("structural equality reached ordinary expression lowering after explicit equality lowering"),
             .structural_hash => Common.invariant("structural hash reached ordinary expression lowering after explicit hash lowering"),
             .field_access => |field| field_access: {
+                if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
+                if (fieldAccessAnySegmentOptional(field.segments)) {
+                    return try self.lowerOptionalFieldAccessChain(field, try self.lowerExprType(field.receiver), ty);
+                }
                 const receiver_ty = try self.lowerExprType(field.receiver);
-                if (@import("builtin").mode == .Debug) {
-                    const field_ty = self.builder.recordFieldType(
-                        receiver_ty,
-                        try self.builder.recordFieldName(self.view, field.field_name),
-                    );
-                    if (!self.sameType(ty, field_ty)) {
-                        Common.invariant("Monotype field access type differed from its receiver field type");
-                    }
+                const start: u32 = @intCast(self.draft.field_access_segments.items.len);
+                try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
+
+                var prefix_ty = receiver_ty;
+                for (field.segments) |segment| {
+                    const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+                    prefix_ty = self.builder.recordFieldType(prefix_ty, field_name);
+                    self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
+                }
+                if (@import("builtin").mode == .Debug and !self.sameType(ty, prefix_ty)) {
+                    Common.invariant("Monotype field access path type differed from its final receiver field type");
                 }
                 break :field_access .{ .field_access = .{
                     .receiver = try self.lowerExprAtType(field.receiver, receiver_ty),
-                    .field = try self.builder.recordFieldName(self.view, field.field_name),
+                    .segments = .{ .start = start, .len = @intCast(field.segments.len) },
                 } };
             },
             .tuple_access => |access| .{ .tuple_access = .{
@@ -18995,11 +19465,36 @@ const BodyContext = struct {
                 cursor = existing.previous_same_address;
                 continue;
             }
-            try relateRequestComponent(
-                self.graph,
-                try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
-                try request_cell.toGraphNode(self.graph),
-            );
+            // Two SEALED cells need no graph relation: representation
+            // equality above already matched the finished monotypes, so
+            // relating them is a no-op—and sealed emission (a derived
+            // parser def restoring an archived constant) may not grow the
+            // graph at all. A disagreement here is an upstream invariant,
+            // not a case.
+            const reuse_relation: ?struct { existing: Type.TypeId, requested: Type.TypeId } = switch (self.exprTypeCell(existing.expr)) {
+                .sealed => |existing_ty| switch (request_cell) {
+                    .sealed => |request_ty| .{ .existing = existing_ty, .requested = request_ty },
+                    .graph_node => null,
+                },
+                .graph_node => null,
+            };
+            if (reuse_relation) |sealed_pair| {
+                if (sealed_pair.existing != sealed_pair.requested and
+                    !try self.builder.program.types.typeEql(
+                        &self.builder.program.names,
+                        sealed_pair.existing,
+                        sealed_pair.requested,
+                    ))
+                {
+                    Common.invariant("materialized ConstStore reuse cell disagreed with its sealed request type");
+                }
+            } else {
+                try relateRequestComponent(
+                    self.graph,
+                    try self.exprTypeCell(existing.expr).toGraphNode(self.graph),
+                    try request_cell.toGraphNode(self.graph),
+                );
+            }
             return existing.expr;
         }
         return null;
@@ -19312,24 +19807,20 @@ const BodyContext = struct {
         const renamed_name_exprs = try self.allocator.alloc(DraftExprId, item_fields.len);
         defer self.allocator.free(renamed_name_exprs);
 
-        const items_expr = try self.addExpr(.{
-            .ty = info.items_field.ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, fields_backing_ty),
-                .field = info.items_field.name,
-            } },
-        });
+        const items_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, fields_backing_ty),
+            info.items_field.name,
+            info.items_field.ty,
+        );
         const items_local = try self.addLocal(self.builder.symbols.fresh(), info.items_field.ty);
 
         for (item_fields, 0..) |field, index| {
             const field_ty = field.ty;
-            item_exprs[index] = try self.addExpr(.{
-                .ty = field_ty,
-                .data = .{ .field_access = .{
-                    .receiver = try self.localExpr(items_local, info.items_field.ty),
-                    .field = field.name,
-                } },
-            });
+            item_exprs[index] = try self.addFieldAccessExpr(
+                try self.localExpr(items_local, info.items_field.ty),
+                field.name,
+                field_ty,
+            );
             item_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field_ty);
             const current_name = try self.fieldNameFromLocal(item_locals[index], field_ty, str_ty);
             renamed_name_exprs[index] = try self.addExpr(.{
@@ -19469,13 +19960,11 @@ const BodyContext = struct {
             .longest => info.longest_field,
         };
         if (!self.sameType(bound_field.ty, ret_ty)) Common.invariant("generated FieldNames bound metadata type differed from result type");
-        const bound_expr = try self.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, fields_backing_ty),
-                .field = bound_field.name,
-            } },
-        });
+        const bound_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, fields_backing_ty),
+            bound_field.name,
+            ret_ty,
+        );
         const field_pat = try self.addPat(.{
             .ty = fields_ty,
             .data = .{ .nominal = try self.bindPat(backing_local, fields_backing_ty) },
@@ -19505,13 +19994,11 @@ const BodyContext = struct {
         const field_value = try self.lowerCallsiteIntrinsicArgAtType(args[0], field_ty);
         const field_local = try self.addLocal(self.builder.symbols.fresh(), field_ty);
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-        const name_expr = try self.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, backing_ty),
-                .field = name_field.name,
-            } },
-        });
+        const name_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, backing_ty),
+            name_field.name,
+            ret_ty,
+        );
         const field_pat = try self.addPat(.{
             .ty = field_ty,
             .data = .{ .nominal = try self.bindPat(backing_local, backing_ty) },
@@ -19695,13 +20182,11 @@ const BodyContext = struct {
         if (!self.sameType(index_field.ty, ret_ty)) Common.invariant("Field backing index field differed from U64");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-        const index_expr = try self.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, backing_ty),
-                .field = index_field.name,
-            } },
-        });
+        const index_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, backing_ty),
+            index_field.name,
+            ret_ty,
+        );
         const field_pat = try self.addPat(.{
             .ty = field_ty,
             .data = .{ .nominal = try self.bindPat(backing_local, backing_ty) },
@@ -19726,13 +20211,11 @@ const BodyContext = struct {
         if (!self.sameType(name_len_field.ty, ret_ty)) Common.invariant("Field backing name_len field differed from U64");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-        const name_len_expr = try self.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, backing_ty),
-                .field = name_len_field.name,
-            } },
-        });
+        const name_len_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, backing_ty),
+            name_len_field.name,
+            ret_ty,
+        );
         const field_pat = try self.addPat(.{
             .ty = field_ty,
             .data = .{ .nominal = try self.bindPat(backing_local, backing_ty) },
@@ -20441,6 +20924,9 @@ const BodyContext = struct {
                     try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
                 else
                     field.ty,
+                .value_ty = field.value_ty,
+                .kind = field.kind,
+                .default = field.default,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -20508,6 +20994,9 @@ const BodyContext = struct {
                     item_node
                 else
                     field.ty,
+                .value_ty = field.value_ty,
+                .kind = field.kind,
+                .default = field.default,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -20608,13 +21097,11 @@ const BodyContext = struct {
         defer self.allocator.free(item_fields);
         if (GuardedList.borrowLen(backing_fields) != item_fields.len) Common.invariant("generated FieldNames iterator arity differed from item count");
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), fields_backing_ty);
-        const items_expr = try self.addExpr(.{
-            .ty = info.items_field.ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, fields_backing_ty),
-                .field = info.items_field.name,
-            } },
-        });
+        const items_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, fields_backing_ty),
+            info.items_field.name,
+            info.items_field.ty,
+        );
         const items_local = try self.addLocal(self.builder.symbols.fresh(), info.items_field.ty);
         const body = try self.lowerFieldNamesValueIterFromIndex(
             item_fields,
@@ -20684,13 +21171,11 @@ const BodyContext = struct {
             checked_source_ty,
             source_expr_id,
         );
-        const item_expr = try self.addExpr(.{
-            .ty = field_handle_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(items_local, items_ty),
-                .field = backing_fields[index].name,
-            } },
-        });
+        const item_expr = try self.addFieldAccessExpr(
+            try self.localExpr(items_local, items_ty),
+            backing_fields[index].name,
+            field_handle_ty,
+        );
         const step_expr = if (size_local) |local|
             try self.lowerFieldNamesSizeFilteredStep(
                 checked_source_ty,
@@ -21090,13 +21575,11 @@ const BodyContext = struct {
         if (!self.sameType(name_field.ty, ret_ty)) Common.invariant("Field.name backing name field differed from Str");
 
         const backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-        const name_expr = try self.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(backing_local, backing_ty),
-                .field = name_field.name,
-            } },
-        });
+        const name_expr = try self.addFieldAccessExpr(
+            try self.localExpr(backing_local, backing_ty),
+            name_field.name,
+            ret_ty,
+        );
         const field_pat = try self.addPat(.{
             .ty = field_ty,
             .data = .{ .nominal = try self.bindPat(backing_local, backing_ty) },
@@ -21286,6 +21769,9 @@ const BodyContext = struct {
         }
         if (try self.missingTryInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
+        }
+        if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
+            return try self.buildParserConstructionPrecomputedPlan(plan, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
@@ -21811,26 +22297,18 @@ const BodyContext = struct {
                 self.allocator.free(values);
             };
 
-            const record_expr = try self.addExpr(.{
-                .ty = backing_field.ty,
-                .data = .{ .field_access = .{
-                    .receiver = try self.localExpr(spec_backing_local, spec_backing_ty),
-                    .field = backing_field.name,
-                } },
-            });
+            const record_expr = try self.addFieldAccessExpr(
+                try self.localExpr(spec_backing_local, spec_backing_ty),
+                backing_field.name,
+                backing_field.ty,
+            );
 
             for (backing_record_fields, 0..) |field, index| {
                 if (!self.sameType(field.ty, str_ty)) {
                     Common.invariant("generated tag-union spec field name value was not Str");
                 }
                 locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.addExpr(.{
-                    .ty = str_ty,
-                    .data = .{ .field_access = .{
-                        .receiver = record_expr,
-                        .field = field.name,
-                    } },
-                });
+                values[index] = try self.addFieldAccessExpr(record_expr, field.name, str_ty);
             }
 
             try self.parserPlanPut(plan, record_shape, .{
@@ -22243,9 +22721,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -23072,8 +23550,11 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const maybe_missing_try = try self.missingTryInfo(field.ty);
+        const maybe_slot = self.builder.optionalFieldSlot(field.ty);
         const field_parse_ty = if (maybe_missing_try) |info|
             info.ok_ty
+        else if (maybe_slot) |slot|
+            slot.payload_ty
         else
             field.ty;
         const parse_ok_ty = try self.parseResultOkType(field_parse_ty, state_ty);
@@ -23092,6 +23573,10 @@ const BodyContext = struct {
         const parsed_value_local = try self.addLocal(self.builder.symbols.fresh(), field_parse_ty);
         const field_value = if (maybe_missing_try != null)
             try self.tryOk(field.ty, try self.localExpr(parsed_value_local, field_parse_ty))
+        else if (maybe_slot) |slot|
+            // A matched `?:` field parses at the slot's Present payload type
+            // and wraps in the `#Present` tag (design.md "Field Kinds").
+            try self.optionalSlotPresentExpr(field.ty, slot, try self.localExpr(parsed_value_local, field_parse_ty))
         else
             try self.localExpr(parsed_value_local, field_parse_ty);
         const field_value_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
@@ -23551,9 +24036,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -23715,9 +24200,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
         const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty },
-            .{ .name = init_cursor_name, .ty = state_ty },
-            .{ .name = init_remaining_name, .ty = u64_ty },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
         const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
 
@@ -24750,8 +25235,8 @@ const BodyContext = struct {
         const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
         const fields = [_]Type.Field{
-            .{ .name = rest_name, .ty = rest_ty },
-            .{ .name = value_name, .ty = value_ty },
+            .{ .name = rest_name, .ty = rest_ty, .default = null },
+            .{ .name = value_name, .ty = value_ty, .default = null },
         };
         return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
     }
@@ -24811,8 +25296,8 @@ const BodyContext = struct {
         const u64_ty = try self.builder.primitiveType(.u64);
 
         const counted_fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = rest_name, .ty = state_ty },
+            .{ .name = len_name, .ty = u64_ty, .default = null },
+            .{ .name = rest_name, .ty = state_ty, .default = null },
         };
         const counted_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &counted_fields) });
 
@@ -24890,13 +25375,11 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const field_name = try self.builder.program.names.internRecordFieldLabel(field_text);
         const field_ty = self.builder.recordFieldType(payload_ty, field_name);
-        return try self.addExpr(.{
-            .ty = field_ty,
-            .data = .{ .field_access = .{
-                .receiver = try self.localExpr(payload_local, payload_ty),
-                .field = field_name,
-            } },
-        });
+        return try self.addFieldAccessExpr(
+            try self.localExpr(payload_local, payload_ty),
+            field_name,
+            field_ty,
+        );
     }
 
     fn finishGeneratedRecordSlots(
@@ -24937,7 +25420,9 @@ const BodyContext = struct {
         defer self.allocator.free(field_locals);
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null;
+            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null or
+                self.builder.optionalFieldSlot(field.ty) != null or
+                self.parserFieldDefaultFor(record_ty, field.name) != null;
             if (!field_can_be_missing) {
                 const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
                 field_try_tys[index] = field_try_ty;
@@ -24971,8 +25456,21 @@ const BodyContext = struct {
         var field_index = record_fields.len;
         while (field_index > 0) {
             field_index -= 1;
-            const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null;
-            body = if (field_can_be_missing)
+            const maybe_default = self.parserFieldDefaultFor(record_ty, record_fields[field_index].name);
+            const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null or
+                self.builder.optionalFieldSlot(record_fields[field_index].ty) != null or
+                maybe_default != null;
+            body = if (maybe_default) |default|
+                try self.finishDefaultedRecordFieldFromPresencePayload(
+                    body,
+                    ret_ty,
+                    record_slots,
+                    record_fields[field_index],
+                    field_index,
+                    field_locals[field_index],
+                    default,
+                )
+            else if (field_can_be_missing)
                 try self.finishOptionalRecordFieldFromPresencePayload(
                     body,
                     ret_ty,
@@ -25805,7 +26303,7 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(step_node),
             .{ .field_access = .{
                 .receiver = iterator,
-                .field = step_name,
+                .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = step_name }}),
             } },
         );
         return .{ .call_value = .{
@@ -26364,7 +26862,7 @@ const BodyContext = struct {
             .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
-            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty),
+            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field, expected_ty),
             .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
             .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
             .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
@@ -26559,17 +27057,61 @@ const BodyContext = struct {
     fn fieldAccessTypeNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        receiver: checked.CheckedExprId,
-        field_name: names.RecordFieldNameId,
-        backing_access: checked.CheckedFieldBackingAccess,
+        access: anytype,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
-        const receiver_node = try self.lowerExprTypeNode(receiver);
-        const mono_field_name = try self.builder.recordFieldName(self.view, field_name);
-        const field_node = switch (backing_access) {
-            .inspectable => try self.graph.recordFieldNode(receiver_node, mono_field_name),
-            .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, mono_field_name),
-        };
+        if (access.segments.len == 0) Common.invariant("checked field access path had no segments");
+        var saw_optional = false;
+        var field_node = try self.lowerExprTypeNode(access.receiver);
+        for (access.segments, 0..) |segment, index| {
+            const is_last = index + 1 == access.segments.len;
+            const mono_field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+            switch (segment.mode) {
+                // A required segment's slot IS the field's value: the chain
+                // continues from the receiver-derived slot node so a
+                // producer-authored (generated-private) representation—e.g.
+                // a stored iterator witness—survives the access. The
+                // segment's checked success type relates to the slot only as
+                // its public interface, never by direct unification; the
+                // final segment's relation is the trailing whole-expression
+                // constraint below.
+                .required => {
+                    const slot_node = switch (segment.backing_access) {
+                        .inspectable => try self.graph.requiredRecordFieldNode(field_node, mono_field_name),
+                        .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(field_node, mono_field_name),
+                    };
+                    if (!is_last) {
+                        try self.constrainCheckedInterfaceToCell(
+                            segment.success_ty,
+                            DraftTypeCell.fromGraphNode(slot_node),
+                        );
+                    }
+                    field_node = slot_node;
+                },
+                // A `.?` segment's slot is the tagged representation of the
+                // value; the chain continues from the Present payload.
+                .optional => {
+                    saw_optional = true;
+                    const field = switch (segment.backing_access) {
+                        .inspectable => try self.graph.optionalRecordFieldNodes(field_node, mono_field_name),
+                        .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(field_node, mono_field_name),
+                    };
+                    const value_node = try self.instNode(segment.success_ty);
+                    try self.graph.unify(field.value, value_node);
+                    try self.graph.unify(field.slot, try self.optionalSlotNode(value_node));
+                    field_node = field.value;
+                },
+            }
+        }
+        if (saw_optional) {
+            // The chain's observable type is the checked expression's own
+            // `Try(τ, [MissingField])` from the checking output; constrain
+            // its Ok argument with the receiver-refined final value node
+            // (instNode caches by checked identity, so this reaches the Try
+            // node's arg).
+            try self.graph.unify(field_node, try self.instNode(self.checkedTryOkArg(checked_ty)));
+            field_node = try self.instNode(checked_ty);
+        }
         try self.constrainCheckedInterfaceToCell(
             checked_ty,
             DraftTypeCell.fromGraphNode(field_node),
@@ -26578,6 +27120,25 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, try self.graph.importMono(expected), field_node);
         }
         return field_node;
+    }
+
+    /// The Ok type argument of a checked nominal `Try` type (behind
+    /// transparent aliases)—the type the checker gave an optional access
+    /// chain's successful value.
+    fn checkedTryOkArg(self: *BodyContext, checked_try_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+        var current = checked_try_ty;
+        while (true) {
+            switch (checkedPayload(self.view, current)) {
+                .alias => |alias| current = alias.backing,
+                .nominal => |nominal| {
+                    if (nominal.args.len != 2) {
+                        Common.invariant("optional access chain's checked Try type did not carry two type arguments");
+                    }
+                    return nominal.args[0];
+                },
+                .pending, .err, .flex, .rigid, .record, .record_unbound, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
+            }
+        }
     }
 
     fn callResultMonoType(
@@ -28689,6 +29250,11 @@ const BodyContext = struct {
                     out[index] = .{
                         .name = try self.constRecordFieldName(store_view, field.name),
                         .ty = try self.lowerConstCaptureTypeInner(store_view, field.ty, map),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.lowerConstCaptureTypeInner(store_view, value_ty, map)
+                        else
+                            null,
+                        .default = try self.constFieldDefault(store_view, field.default),
                     };
                 }
                 break :blk .{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, out) };
@@ -28756,6 +29322,21 @@ const BodyContext = struct {
         name: names.RecordFieldNameId,
     ) Allocator.Error!names.RecordFieldNameId {
         return try self.builder.program.names.internRecordFieldLabel(store_view.names.recordFieldLabelText(name));
+    }
+
+    /// Re-intern a field default's declaring-module identity from the const
+    /// store's name table into the program name store, like
+    /// `constRecordFieldName` does for the label.
+    fn constFieldDefault(
+        self: *BodyContext,
+        store_view: ModuleView,
+        default: ?check.ConstStore.TypeFieldDefault,
+    ) Allocator.Error!?Type.FieldDefault {
+        const field_default = default orelse return null;
+        return .{
+            .module = try self.builder.program.names.internModuleIdentity(store_view.names.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
     }
 
     fn constTagName(
@@ -30069,7 +30650,7 @@ const BodyContext = struct {
             .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
             .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
             .method_eq => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
-            .field_access => |field| try self.relateFieldAccessExprAtNode(field, expected_node),
+            .field_access => |field| try self.relateFieldAccessExprAtNode(expr.ty, field, expected_node),
             .tag => |tag| try self.relateTagExprAtNode(tag, expected_node),
             .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
             .nominal => |nominal| try self.relateNominalExprAtNode(nominal, expected_node),
@@ -30143,11 +30724,11 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         _ = try self.graph.recordConstructionNodes(record_node);
         for (record.fields) |field| {
-            const field_node = try self.graph.recordConstructionFieldNode(
-                record_node,
-                try self.builder.recordFieldName(self.view, field.label),
+            const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
+            try self.relateExprAtNode(
+                field.value,
+                try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name),
             );
-            try self.relateExprAtNode(field.value, field_node);
         }
     }
 
@@ -30204,15 +30785,11 @@ const BodyContext = struct {
 
     fn relateFieldAccessExprAtNode(
         self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
         field: anytype,
         expected_field_node: NodeId,
     ) Allocator.Error!void {
-        const receiver_node = try self.lowerExprTypeNode(field.receiver);
-        const field_name = try self.builder.recordFieldName(self.view, field.field_name);
-        const actual_field_node = switch (field.backing_access) {
-            .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
-            .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
-        };
+        const actual_field_node = try self.fieldAccessTypeNode(checked_ty, field, null);
         try relateRequestComponent(self.graph, actual_field_node, expected_field_node);
     }
 
@@ -30820,8 +31397,17 @@ const BodyContext = struct {
                         DraftTypeCell.fromGraphNode(expected_node),
                         .{ .list = .empty() },
                     ),
-                    .empty_record => break :blk try self.addConstructorExprAtNode(expected_node, .{ .record = .empty() }),
-                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, expected_node),
+                    // `{}` is a record construction that omits every field:
+                    // lower it through the record path so the demanded row's
+                    // DEFAULTED fields materialize their defaults into the
+                    // inline slots (design.md "Defaulted Fields").
+                    .empty_record => {
+                        break :blk try self.lowerRecordConstructorAtNode(checked_expr, .{
+                            .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                            .ext = @as(?checked.CheckedExprId, null),
+                        }, expected_node);
+                    },
+                    .record => |record| break :blk try self.lowerRecordConstructorAtNode(checked_expr, record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
                     .dispatch_call => |plan| {
                         try self.selectExprRepresentationAtNode(checked_expr, expected_node);
@@ -30965,23 +31551,43 @@ const BodyContext = struct {
 
     fn lowerFieldAccessExprAtNode(
         self: *BodyContext,
-        _: checked.CheckedExprId,
+        expr_id: checked.CheckedExprId,
         field: anytype,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
+        if (fieldAccessAnySegmentOptional(field.segments)) {
+            // A `.?` chain compiles to runtime slot tests producing the
+            // chain's checked `Try` (design.md "Field Kinds (All-Dynamic
+            // Optional Fields)"). Both the receiver and result stay attached
+            // to the specialization graph until their active Monotypes are
+            // needed by the runtime chain lowering.
+            const checked_ty = self.view.bodies.expr(expr_id).ty;
+            const receiver_node = try self.lowerExprTypeNode(field.receiver);
+            const observable = try self.fieldAccessTypeNode(checked_ty, field, null);
+            try relateRequestComponent(self.graph, expected_node, observable);
+            const result_node = if (try self.graph.containsGeneratedPrivate(observable)) observable else expected_node;
+            return try self.lowerOptionalFieldAccessChainAtNode(field, receiver_node, result_node);
+        }
         const receiver_node = try self.lowerExprTypeNode(field.receiver);
-        const field_name = try self.builder.recordFieldName(self.view, field.field_name);
-        const field_node = switch (field.backing_access) {
-            .inspectable => try self.graph.recordFieldNode(receiver_node, field_name),
-            .opaque_definition_private => try self.graph.opaqueDefinitionFieldNode(receiver_node, field_name),
-        };
-        try relateRequestComponent(self.graph, expected_node, field_node);
-        const result_node = if (try self.graph.containsGeneratedPrivate(field_node)) field_node else expected_node;
+        const start: u32 = @intCast(self.draft.field_access_segments.items.len);
+        try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
+        var prefix_node = receiver_node;
+        for (field.segments) |segment| {
+            const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+            prefix_node = switch (segment.backing_access) {
+                .inspectable => try self.graph.requiredRecordFieldNode(prefix_node, field_name),
+                .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(prefix_node, field_name),
+            };
+            self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
+        }
+        try relateRequestComponent(self.graph, expected_node, prefix_node);
+        const result_node = if (try self.graph.containsGeneratedPrivate(prefix_node)) prefix_node else expected_node;
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(result_node),
             .{ .field_access = .{
                 .receiver = try self.lowerExprAtTypeCell(field.receiver, DraftTypeCell.fromGraphNode(receiver_node)),
-                .field = field_name,
+                .segments = .{ .start = start, .len = @intCast(field.segments.len) },
             } },
         );
     }
@@ -31266,7 +31872,12 @@ const BodyContext = struct {
             const expected_field = GuardedList.at(expected_fields, index);
             const actual_field = GuardedList.at(actual_fields, index);
             if (expected_field.name != actual_field.name) return false;
+            if (expected_field.kind_state != actual_field.kind_state) return false;
             if (!self.sameTypeInner(expected_field.ty, actual_field.ty, visiting)) return false;
+            if ((expected_field.value_ty == null) != (actual_field.value_ty == null)) return false;
+            if (expected_field.value_ty) |expected_value_ty| {
+                if (!self.sameTypeInner(expected_value_ty, actual_field.value_ty.?, visiting)) return false;
+            }
         }
         return true;
     }
@@ -31289,6 +31900,681 @@ const BodyContext = struct {
         return true;
     }
 
+    /// Materialize a checked field-default identity at `field_ty`.
+    fn defaultedFieldValueFromDefault(
+        self: *BodyContext,
+        default: checked.CheckedFieldDefault,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
+        const origin_module = default.origin() orelse return null;
+        return try self.defaultedFieldValueAt(self.view.names.moduleIdentityBytes(origin_module), default.expr_node, field_ty);
+    }
+
+    /// Materialize a Monotype field-default identity at `field_ty`.
+    fn defaultedFieldValueFromMonoDefault(
+        self: *BodyContext,
+        default: Type.FieldDefault,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
+        return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
+    }
+
+    /// Restore a default from its declaring module, including during local root finalization.
+    fn defaultedFieldValueAt(
+        self: *BodyContext,
+        origin_hash: *const [32]u8,
+        expr_node: u32,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!?DraftExprId {
+        const declaring_view = if (moduleViewIdentityMatches(self.view, origin_hash))
+            self.view
+        else
+            self.builder.moduleForIdentityHash(origin_hash) orelse
+                Common.invariant("defaulted field's declaring module was not present in the lowering input");
+        const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
+            Common.invariant("defaulted field's default expression was not archived");
+        // Local roots may still be pending; imported roots must be finalized.
+        if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
+            switch (root.payload) {
+                .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
+                .pending, .fn_value, .expect => {},
+            }
+        }
+        if (!moduleViewIdentityMatches(self.view, origin_hash)) {
+            Common.invariant("imported defaulted field's default constant was not finalized");
+        }
+        return try self.lowerExprAtType(default_expr, field_ty);
+    }
+
+    /// The explicit `??` identity carried by a field in `record_ty`.
+    fn parserFieldDefaultFor(
+        self: *BodyContext,
+        record_ty: Type.TypeId,
+        field_name: names.RecordFieldNameId,
+    ) ?Type.FieldDefault {
+        const span = switch (self.builder.shapeContent(record_ty)) {
+            .record => |span| span,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+        };
+        const fields = self.builder.program.types.fieldSpan(span);
+        for (0..GuardedList.borrowLen(fields)) |index| {
+            const field = GuardedList.at(fields, index);
+            if (field.name == field_name) return field.default;
+        }
+        return null;
+    }
+
+    /// Read the concrete kind selected on an immutable Monotype field.
+    fn monotypeFieldKindTag(_: *BodyContext, field: Type.Field) checked.CheckedFieldKind.Tag {
+        if (field.kind_state != .resolved) {
+            Common.invariant("provisional field kind reached sealed record construction");
+        }
+        if (field.value_ty != null) {
+            if (field.default != null) Common.invariant("optional Monotype field carried a default identity");
+            return .optional;
+        }
+        return if (field.default != null) .defaulted else .required;
+    }
+
+    fn sealedDefaultedFieldIdentity(field: Type.Field) Type.FieldDefault {
+        if (field.kind_state != .resolved or field.value_ty != null) {
+            Common.invariant("sealed defaulted field did not have a resolved inline slot");
+        }
+        return field.default orelse
+            Common.invariant("sealed defaulted field carried no Monotype default identity");
+    }
+
+    /// Read the kind selected by the checker for a destructured field.
+    fn recordDestructFieldKind(
+        self: *BodyContext,
+        record_checked_ty: checked.CheckedTypeId,
+        destruct: checked.CheckedRecordDestruct,
+    ) Allocator.Error!checked.CheckedFieldKind.Tag {
+        const target = try self.builder.recordFieldName(self.view, destruct.label);
+        return recordDestructKindFromResolution(try self.checkedRecordFieldByName(record_checked_ty, target)) orelse
+            Common.invariant("record destructure field was missing from its checked row");
+    }
+
+    /// Whether a destructure needs checked-Try to runtime-slot translation.
+    fn recordDestructsHaveOptionalField(
+        self: *BodyContext,
+        record_checked_ty: checked.CheckedTypeId,
+        destructs: []const checked.CheckedRecordDestruct,
+    ) Allocator.Error!bool {
+        for (destructs) |destruct| {
+            switch (destruct.kind) {
+                .required, .sub_pattern => {
+                    if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) return true;
+                },
+                .rest => {},
+            }
+        }
+        return false;
+    }
+
+    /// The structural backing node behind a (possibly named) Try node.
+    fn optionalTryBackingNode(self: *BodyContext, node: NodeId) NodeId {
+        if (self.graph.content(node) == .named) {
+            const backing = self.graph.namedNodes(node).backing orelse
+                Common.invariant("optional destructure Try node had no runtime backing");
+            if (backing.node == node) Common.invariant("optional destructure Try backing did not advance");
+            return backing.node;
+        }
+        return node;
+    }
+
+    /// The Try value a destructured OPTIONAL field binds: a runtime test on
+    /// the field's tagged slot—EXACTLY a one-segment `.?` access chain
+    /// result (`optionalChainRest`, design.md "Field Kinds")—`Present(v)`
+    /// yields `Ok(v)` and `Missing` yields `Err(MissingField)`, constructed
+    /// at the binder's own checked `Try(payload, [MissingField])` node.
+    fn optionalDestructTryExprAtNode(
+        self: *BodyContext,
+        slot_expr: DraftExprId,
+        slot_node: NodeId,
+        try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const present_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+        const missing_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+        const ok_name = try self.builder.program.names.internTagLabel("Ok");
+        const err_name = try self.builder.program.names.internTagLabel("Err");
+        const slot_cell = DraftTypeCell.fromGraphNode(slot_node);
+
+        const payload_node = try self.graph.tagPayloadNode(slot_node, present_name, 0);
+        const payload_cell = DraftTypeCell.fromGraphNode(payload_node);
+        const payload_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), payload_cell, null);
+        const present_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+            .name = present_name,
+            .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(payload_cell, .{ .bind = payload_local })}),
+        } });
+        const ok_body = try self.addConstructorExprAtNode(try_node, .{ .tag = .{
+            .name = ok_name,
+            .payloads = try self.addExprSpan(&.{try self.addExprWithTypeCell(payload_cell, .{ .local = payload_local })}),
+        } });
+
+        const missing_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+            .name = missing_name,
+            .payloads = .empty(),
+        } });
+        const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(try_node), err_name, 0);
+        const err_body = try self.addConstructorExprAtNode(try_node, .{ .tag = .{
+            .name = err_name,
+            .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
+        } });
+
+        const branches = [_]DraftBranch{
+            .{ .pat = present_pat, .body = ok_body },
+            .{ .pat = missing_pat, .body = err_body },
+        };
+        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(try_node), .{ .match_ = .{
+            .scrutinee = slot_expr,
+            .branches = try self.addBranchSpan(&branches),
+        } });
+    }
+
+    /// The constant `MissingField` error value at the Try's error node (the
+    /// closed `[MissingField]` union the checker minted for the binder).
+    fn optionalDestructMissingFieldExprAtNode(self: *BodyContext, err_node: NodeId) Allocator.Error!DraftExprId {
+        const missing_field_name = try self.builder.program.names.internTagLabel("MissingField");
+        return try self.addConstructorExprAtNode(err_node, .{ .tag = .{
+            .name = missing_field_name,
+            .payloads = .empty(),
+        } });
+    }
+
+    /// Translate an optional destructure from checked Try space into flat
+    /// Present/Missing slot space, queueing binder preludes as needed.
+    fn lowerOptionalDestructChildAtSlotNode(
+        self: *BodyContext,
+        child: checked.CheckedPatternId,
+        slot_node: NodeId,
+        result_node: NodeId,
+    ) Allocator.Error!DraftPatId {
+        const slot_cell = DraftTypeCell.fromGraphNode(slot_node);
+        const pattern = self.view.bodies.pattern(child);
+        const data: BodyPatData = switch (pattern.data) {
+            .underscore => .wildcard,
+            .assign => |binder| blk: {
+                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
+                try self.queueOptionalDestructSlotBind(binder, slot_local, slot_node, result_node);
+                break :blk .{ .bind = slot_local };
+            },
+            .as => |as| blk: {
+                const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
+                try self.queueOptionalDestructSlotBind(as.binder, slot_local, slot_node, result_node);
+                break :blk .{ .as = .{
+                    .pattern = try self.lowerOptionalDestructChildAtSlotNode(as.pattern, slot_node, result_node),
+                    .local = slot_local,
+                } };
+            },
+            .nominal => |nominal| return try self.lowerOptionalDestructChildAtSlotNode(
+                nominal.backing_pattern,
+                slot_node,
+                self.optionalTryBackingNode(result_node),
+            ),
+            .applied_tag => |tag| blk: {
+                const tag_name = try self.builder.tagName(self.view, tag.name);
+                const ok_name = try self.builder.program.names.internTagLabel("Ok");
+                const err_name = try self.builder.program.names.internTagLabel("Err");
+                const present_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+                const missing_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+                if (tag.args.len != 1) {
+                    Common.invariant("optional destructure Try pattern tag did not carry exactly one payload");
+                }
+                if (tag_name == ok_name) {
+                    const payload_node = try self.graph.tagPayloadNode(slot_node, present_name, 0);
+                    break :blk .{ .tag = .{
+                        .name = present_name,
+                        .payloads = try self.addPatSpan(&.{try self.lowerPatternAtNode(tag.args[0], payload_node)}),
+                    } };
+                }
+                if (tag_name == err_name) {
+                    const err_node = try self.graph.tagPayloadNode(
+                        self.optionalTryBackingNode(result_node),
+                        err_name,
+                        0,
+                    );
+                    try self.queueOptionalDestructErrPayloadBinds(tag.args[0], err_node);
+                    break :blk .{ .tag = .{
+                        .name = missing_name,
+                        .payloads = .empty(),
+                    } };
+                }
+                Common.invariant("optional destructure Try pattern used a tag other than Ok or Err");
+            },
+            .pending,
+            .runtime_error,
+            .record_destructure,
+            .tuple,
+            .list,
+            .numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            => Common.invariant("optional destructure sub-pattern had a non-Try checked shape"),
+        };
+        return try self.addPatWithTypeCell(slot_cell, data);
+    }
+
+    /// Queue a translated optional-destruct binder whose value is the slot
+    /// local materialized as Try.
+    fn queueOptionalDestructSlotBind(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+        slot_local: DraftLocalId,
+        slot_node: NodeId,
+        result_node: NodeId,
+    ) Allocator.Error!void {
+        const binder_local = try self.materializePatternBinderAtCell(binder, DraftTypeCell.fromGraphNode(result_node));
+        try self.optional_destruct_binds.append(self.allocator, .{
+            .binder_local = binder_local,
+            .value = .{ .slot_to_try = .{
+                .slot_local = slot_local,
+                .slot_node = slot_node,
+                .try_node = result_node,
+            } },
+        });
+    }
+
+    /// Queue the binders of an `Err(p)` payload pattern translated to the
+    /// slot's `Missing` tag: `p` matches the closed `[MissingField]` union,
+    /// so its refutable part (`MissingField`) always matches and its binders
+    /// bind the constant error value.
+    fn queueOptionalDestructErrPayloadBinds(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        err_node: NodeId,
+    ) Allocator.Error!void {
+        const pattern = self.view.bodies.pattern(pattern_id);
+        switch (pattern.data) {
+            .underscore => {},
+            .assign => |binder| {
+                const binder_local = try self.materializePatternBinderAtCell(binder, DraftTypeCell.fromGraphNode(err_node));
+                try self.optional_destruct_binds.append(self.allocator, .{
+                    .binder_local = binder_local,
+                    .value = .{ .missing_err = .{ .err_node = err_node } },
+                });
+            },
+            .as => |as| {
+                const binder_local = try self.materializePatternBinderAtCell(as.binder, DraftTypeCell.fromGraphNode(err_node));
+                try self.optional_destruct_binds.append(self.allocator, .{
+                    .binder_local = binder_local,
+                    .value = .{ .missing_err = .{ .err_node = err_node } },
+                });
+                try self.queueOptionalDestructErrPayloadBinds(as.pattern, err_node);
+            },
+            .applied_tag => |tag| {
+                // `[MissingField]` has exactly one payload-less tag; the
+                // pattern always matches once the slot is Missing.
+                if (tag.args.len != 0) {
+                    Common.invariant("optional destructure MissingField pattern carried a payload");
+                }
+            },
+            .pending,
+            .nominal,
+            .record_destructure,
+            .list,
+            .tuple,
+            .numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .runtime_error,
+            => Common.invariant("optional destructure Err payload pattern had a non-[MissingField] checked shape"),
+        }
+    }
+
+    /// Take ownership of the optional-destruct binder preludes collected
+    /// since `start`, restoring the collection to that length (the
+    /// `drainPatternLiteralGuards` discipline).
+    fn drainOptionalDestructBinds(self: *BodyContext, start: usize) Allocator.Error![]OptionalDestructBind {
+        const drained = try self.allocator.dupe(OptionalDestructBind, self.optional_destruct_binds.items[start..]);
+        self.optional_destruct_binds.shrinkRetainingCapacity(start);
+        return drained;
+    }
+
+    /// Wrap an expression (a match branch's body or guard) in the queued
+    /// optional-destruct binder preludes: one `let` per user binder,
+    /// computing its Try (or constant error) value from the slot local the
+    /// translated pattern bound.
+    fn applyOptionalDestructBinds(
+        self: *BodyContext,
+        binds: []const OptionalDestructBind,
+        body: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const BoundValue = struct {
+            value: DraftExprId,
+            cell: DraftTypeCell,
+        };
+        var result = body;
+        const result_cell = self.exprTypeCell(body);
+        var index = binds.len;
+        while (index > 0) {
+            index -= 1;
+            const bind = binds[index];
+            const bound: BoundValue = switch (bind.value) {
+                .slot_to_try => |conv| blk: {
+                    const slot_expr = try self.addExprWithTypeCell(
+                        DraftTypeCell.fromGraphNode(conv.slot_node),
+                        .{ .local = conv.slot_local },
+                    );
+                    break :blk .{
+                        .value = try self.optionalDestructTryExprAtNode(slot_expr, conv.slot_node, conv.try_node),
+                        .cell = DraftTypeCell.fromGraphNode(conv.try_node),
+                    };
+                },
+                .missing_err => |err| .{
+                    .value = try self.optionalDestructMissingFieldExprAtNode(err.err_node),
+                    .cell = DraftTypeCell.fromGraphNode(err.err_node),
+                },
+            };
+            result = try self.addExprWithTypeCell(result_cell, .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(bound.cell, .{ .bind = bind.binder_local }),
+                .value = bound.value,
+                .rest = result,
+            } });
+        }
+        return result;
+    }
+
+    /// How a checked-row field lookup resolved. `scheme_interior` is not a
+    /// miss: the walk reached a row that is still a type VARIABLE at
+    /// template lowering (a generalized scheme interior, e.g. the result
+    /// row of a generic record update), which every read boundary treats
+    /// required-equivalent per design.md "Kind defaulting as a checker
+    /// pass". Only `absent`—a concrete row that does not carry the field—
+    /// is a genuine miss.
+    const CheckedFieldResolution = union(enum) {
+        found: checked.CheckedRecordField,
+        scheme_interior,
+        absent,
+    };
+
+    fn recordDestructKindFromResolution(resolution: CheckedFieldResolution) ?checked.CheckedFieldKind.Tag {
+        return switch (resolution) {
+            .found => |field| field.kind.tag,
+            .scheme_interior => .required,
+            .absent => null,
+        };
+    }
+
+    /// Find a checked field through aliases, nominal backing, and row tails.
+    fn checkedRecordFieldByName(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        field_name: names.RecordFieldNameId,
+    ) Allocator.Error!CheckedFieldResolution {
+        const Visited = struct { module: @TypeOf(self.view.key.bytes), ty: checked.CheckedTypeId };
+        var seen = std.AutoHashMap(Visited, void).init(self.allocator);
+        defer seen.deinit();
+        var view = self.view;
+        var current = checked_ty;
+        while (true) {
+            const visit = Visited{ .module = view.key.bytes, .ty = current };
+            if (seen.contains(visit)) return .absent;
+            try seen.put(visit, {});
+            switch (checkedPayload(view, current)) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| {
+                    for (record.fields) |checked_field| {
+                        const lowered_name = try self.builder.recordFieldName(view, checked_field.name);
+                        if (lowered_name == field_name) return .{ .found = checked_field };
+                    }
+                    current = record.ext;
+                },
+                .record_unbound => |tail_fields| {
+                    for (tail_fields) |checked_field| {
+                        const lowered_name = try self.builder.recordFieldName(view, checked_field.name);
+                        if (lowered_name == field_name) return .{ .found = checked_field };
+                    }
+                    // An unbound row has no committed extension: the tail is
+                    // still open exactly like a scheme-interior variable.
+                    return .scheme_interior;
+                },
+                .nominal => |nominal| {
+                    const lookup = self.builder.nominalDeclarationFor(view, nominal) orelse return .absent;
+                    view = lookup.view;
+                    current = lookup.declaration.backing;
+                },
+                .flex, .rigid => return .scheme_interior,
+                .pending, .err, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return .absent,
+            }
+        }
+    }
+
+    /// Construct an optional field's tagged Present slot at its graph node
+    /// (the closed `[#Missing, #Present(value)]` union). The supplied value's
+    /// node was already unified into the slot union's Present payload by the
+    /// caller, so no active Monotype view is demanded here.
+    fn optionalSlotPresentExprAtNode(
+        self: *BodyContext,
+        slot_node: NodeId,
+        value_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const present = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+        return try self.addConstructorExprAtNode(slot_node, .{ .tag = .{
+            .name = present,
+            .payloads = try self.addExprSpan(&[_]DraftExprId{value_expr}),
+        } });
+    }
+
+    /// Construct an optional field's tagged slot in the missing state at its
+    /// graph node.
+    fn optionalSlotMissingExprAtNode(self: *BodyContext, slot_node: NodeId) Allocator.Error!DraftExprId {
+        const missing = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+        return try self.addConstructorExprAtNode(slot_node, .{ .tag = .{
+            .name = missing,
+            .payloads = .empty(),
+        } });
+    }
+
+    fn optionalSlotPresentExpr(
+        self: *BodyContext,
+        slot_ty: Type.TypeId,
+        slot: Builder.OptionalSlotInfo,
+        value_expr: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        if (!self.sameType(try self.exprType(value_expr), slot.payload_ty)) {
+            Common.invariant("optional field's supplied value type differed from its slot payload type");
+        }
+        return try self.addExpr(.{
+            .ty = slot_ty,
+            .data = .{ .tag = .{
+                .name = slot.present_tag.name,
+                .payloads = try self.addExprSpan(&[_]DraftExprId{value_expr}),
+            } },
+        });
+    }
+
+    /// Construct an optional field's tagged slot in the missing state:
+    /// `Missing` at the slot's union type.
+    fn optionalSlotMissingExpr(self: *BodyContext, slot_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const slot = try self.builder.optionalSlotInfo(slot_ty);
+        return try self.addExpr(.{
+            .ty = slot_ty,
+            .data = .{ .tag = .{
+                .name = slot.missing_tag.name,
+                .payloads = .empty(),
+            } },
+        });
+    }
+
+    /// Lower a mixed access chain to one flat Try, short-circuiting on the
+    /// first Missing slot (design.md "Field Kinds").
+    fn lowerOptionalFieldAccessChainAtNode(
+        self: *BodyContext,
+        access: anytype,
+        receiver_node: NodeId,
+        out_try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const receiver_cell = DraftTypeCell.fromGraphNode(receiver_node);
+        const receiver = try self.lowerExprAtTypeCell(access.receiver, receiver_cell);
+        return try self.optionalChainRestAtNode(
+            access.segments,
+            0,
+            receiver,
+            receiver_node,
+            out_try_node,
+        );
+    }
+
+    fn optionalChainRestAtNode(
+        self: *BodyContext,
+        segments: []const checked.CheckedFieldAccessSegment,
+        index: usize,
+        current: DraftExprId,
+        current_node: NodeId,
+        out_try_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (index == segments.len) {
+            const ok_name = try self.builder.program.names.internTagLabel("Ok");
+            return try self.addConstructorExprAtNode(out_try_node, .{ .tag = .{
+                .name = ok_name,
+                .payloads = try self.addExprSpan(&.{current}),
+            } });
+        }
+
+        const segment = segments[index];
+        const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+        switch (segment.mode) {
+            .required => {
+                const field_node = switch (segment.backing_access) {
+                    .inspectable => try self.graph.requiredRecordFieldNode(current_node, field_name),
+                    .opaque_definition_private => try self.graph.requiredOpaqueDefinitionFieldNode(current_node, field_name),
+                };
+                const field_expr = try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(field_node),
+                    .{ .field_access = .{
+                        .receiver = current,
+                        .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field_name }}),
+                    } },
+                );
+                return try self.optionalChainRestAtNode(
+                    segments,
+                    index + 1,
+                    field_expr,
+                    field_node,
+                    out_try_node,
+                );
+            },
+            .optional => {
+                const field = switch (segment.backing_access) {
+                    .inspectable => try self.graph.optionalRecordFieldNodes(current_node, field_name),
+                    .opaque_definition_private => try self.graph.optionalOpaqueDefinitionFieldNodes(current_node, field_name),
+                };
+                const slot_cell = DraftTypeCell.fromGraphNode(field.slot);
+                const payload_cell = DraftTypeCell.fromGraphNode(field.value);
+                const slot_expr = try self.addExprWithTypeCell(slot_cell, .{ .field_access = .{
+                    .receiver = current,
+                    .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field_name }}),
+                } });
+
+                const present_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_present_tag);
+                const missing_name = try self.builder.program.names.internTagLabel(Builder.optional_slot_missing_tag);
+                const payload_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), payload_cell, null);
+                const present_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+                    .name = present_name,
+                    .payloads = try self.addPatSpan(&.{try self.addPatWithTypeCell(payload_cell, .{ .bind = payload_local })}),
+                } });
+                const present_body = try self.optionalChainRestAtNode(
+                    segments,
+                    index + 1,
+                    try self.addExprWithTypeCell(payload_cell, .{ .local = payload_local }),
+                    field.value,
+                    out_try_node,
+                );
+
+                const missing_pat = try self.addPatWithTypeCell(slot_cell, .{ .tag = .{
+                    .name = missing_name,
+                    .payloads = .empty(),
+                } });
+                const err_name = try self.builder.program.names.internTagLabel("Err");
+                const err_node = try self.graph.tagPayloadNode(self.optionalTryBackingNode(out_try_node), err_name, 0);
+                const missing_body = try self.addConstructorExprAtNode(out_try_node, .{ .tag = .{
+                    .name = err_name,
+                    .payloads = try self.addExprSpan(&.{try self.optionalDestructMissingFieldExprAtNode(err_node)}),
+                } });
+
+                const branches = [_]DraftBranch{
+                    .{ .pat = present_pat, .body = present_body },
+                    .{ .pat = missing_pat, .body = missing_body },
+                };
+                return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(out_try_node), .{ .match_ = .{
+                    .scrutinee = slot_expr,
+                    .branches = try self.addBranchSpan(&branches),
+                } });
+            },
+        }
+    }
+
+    fn lowerOptionalFieldAccessChain(
+        self: *BodyContext,
+        access: anytype,
+        receiver_ty: Type.TypeId,
+        out_try_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const receiver = try self.lowerExprAtType(access.receiver, receiver_ty);
+        return try self.optionalChainRest(access.segments, 0, receiver, receiver_ty, out_try_ty);
+    }
+
+    fn optionalChainRest(
+        self: *BodyContext,
+        segments: []const checked.CheckedFieldAccessSegment,
+        index: usize,
+        current: DraftExprId,
+        current_ty: Type.TypeId,
+        out_try_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (index == segments.len) return try self.tryOk(out_try_ty, current);
+        const segment = segments[index];
+        const field_name = try self.builder.recordFieldName(self.view, segment.field_name);
+        const slot_ty = self.builder.recordFieldType(current_ty, field_name);
+        switch (segment.mode) {
+            .required => return try self.optionalChainRest(
+                segments,
+                index + 1,
+                try self.addFieldAccessExpr(current, field_name, slot_ty),
+                slot_ty,
+                out_try_ty,
+            ),
+            .optional => {
+                const slot = try self.builder.optionalSlotInfo(slot_ty);
+                const slot_expr = try self.addFieldAccessExpr(current, field_name, slot_ty);
+
+                const payload_local = try self.addLocal(self.builder.symbols.fresh(), slot.payload_ty);
+                const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
+                const present_pat = try self.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+                    .name = slot.present_tag.name,
+                    .payloads = try self.addPatSpan(&[_]DraftPatId{payload_pat}),
+                } } });
+                const present_body = try self.optionalChainRest(
+                    segments,
+                    index + 1,
+                    try self.localExpr(payload_local, slot.payload_ty),
+                    slot.payload_ty,
+                    out_try_ty,
+                );
+
+                const missing_pat = try self.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+                    .name = slot.missing_tag.name,
+                    .payloads = .empty(),
+                } } });
+                const err_ty = self.tryInfo(out_try_ty).err_ty;
+                const missing_body = try self.tryErr(
+                    out_try_ty,
+                    try self.tagUnionValueWithoutPayload(err_ty, "MissingField"),
+                );
+
+                const branches = [_]DraftBranch{
+                    .{ .pat = present_pat, .body = present_body },
+                    .{ .pat = missing_pat, .body = missing_body },
+                };
+                return try self.addExpr(.{ .ty = out_try_ty, .data = .{ .match_ = .{
+                    .scrutinee = slot_expr,
+                    .branches = try self.addBranchSpan(&branches),
+                } } });
+            },
+        }
+    }
+
     fn lowerRecordExpr(
         self: *BodyContext,
         record: anytype,
@@ -31301,11 +32587,30 @@ const BodyContext = struct {
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
-                const value = if (self.preLoweredChildAt(pre_lowered, field.value)) |pre|
-                    pre
-                else
-                    try self.lowerExprAtType(field.value, self.builder.recordFieldType(ty, name));
-                fields[index] = .{ .name = name, .value = value };
+                const target_field = self.builder.recordField(ty, name);
+                const slot_ty = target_field.ty;
+                const field_kind: checked.CheckedFieldKind.Tag =
+                    self.monotypeFieldKindTag(target_field);
+                fields[index] = .{
+                    .name = name,
+                    .value = value: {
+                        // Supplied optional values enter the slot through #Present.
+                        if (field_kind == .optional) {
+                            const slot = try self.builder.optionalSlotInfo(slot_ty);
+                            const payload = if (self.preLoweredChildAt(pre_lowered, field.value)) |pre| pre_blk: {
+                                if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
+                                    Common.invariant("record update child lowered at a type different from its finalized field type");
+                                }
+                                break :pre_blk pre;
+                            } else try self.lowerExprAtType(field.value, slot.payload_ty);
+                            break :value try self.optionalSlotPresentExpr(slot_ty, slot, payload);
+                        }
+                        break :value if (self.preLoweredChildAt(pre_lowered, field.value)) |pre|
+                            pre
+                        else
+                            try self.lowerExprAtType(field.value, slot_ty);
+                    },
+                };
             }
             return try self.addExpr(.{ .ty = ty, .data = .{ .record_update = .{
                 .base = base_expr,
@@ -31340,28 +32645,55 @@ const BodyContext = struct {
 
         for (0..target_field_count) |i| {
             const field = target_field_list[i];
-            const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value|
-                if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| blk: {
+            const field_kind: checked.CheckedFieldKind.Tag =
+                self.monotypeFieldKindTag(field);
+            const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| supplied: {
+                // A SUPPLIED OPTIONAL field wraps its value in the slot's
+                // Present tag (design.md "Field Kinds"); the checked field
+                // expression's type is the VALUE type, never the slot.
+                if (field_kind == .optional) {
+                    const slot = try self.builder.optionalSlotInfo(field.ty);
+                    const payload = if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| pre_blk: {
+                        if (!self.sameType(slot.payload_ty, try self.exprType(pre))) {
+                            Common.invariant("record constructor child lowered at a type different from its finalized field type");
+                        }
+                        break :pre_blk pre;
+                    } else try self.lowerExprAtType(field_value, slot.payload_ty);
+                    break :supplied try self.optionalSlotPresentExpr(field.ty, slot, payload);
+                }
+                if (self.preLoweredChildAt(pre_lowered, field_value)) |pre| {
                     if (!self.sameType(field.ty, try self.exprType(pre))) {
                         Common.invariant("record constructor child lowered at a type different from its finalized field type");
                     }
-                    break :blk pre;
-                } else if (try self.typeIsProvenUninhabited(field.ty))
-                    try self.lowerExplicitUninhabitedInvocation(field_value, field.ty)
-                else
-                    try self.lowerExprAtType(field_value, field.ty)
-            else if (base_expr) |base_value| blk: {
-                const read = try self.addExpr(.{
-                    .ty = field.ty,
-                    .data = .{ .field_access = .{
-                        .receiver = base_value,
-                        .field = field.name,
-                    } },
-                });
+                    break :supplied pre;
+                }
+                if (try self.typeIsProvenUninhabited(field.ty)) {
+                    break :supplied try self.lowerExplicitUninhabitedInvocation(field_value, field.ty);
+                }
+                break :supplied try self.lowerExprAtType(field_value, field.ty);
+            } else if (base_expr) |base_value| blk: {
+                // Record update copies unmentioned slots verbatim—for an
+                // optional field that copies the tagged slot, presence state
+                // included. (A MENTIONED optional field takes the supplied
+                // branch above: the construction rule applies, the value wraps in
+                // `Present` exactly as construction does.) The read is
+                // hoisted into its own local so the base's last use ends
+                // before any updated field's expression runs (see the
+                // spread_reads comment above).
+                const read = try self.addFieldAccessExpr(base_value, field.name, field.ty);
                 const read_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
                 spread_reads[i] = .{ .local = read_local, .value = read };
                 break :blk try self.localExpr(read_local, field.ty);
-            } else Common.invariant("closed record literal was missing a checked field value");
+            } else if (field_kind == .defaulted) defaulted: {
+                const default = sealedDefaultedFieldIdentity(field);
+                break :defaulted (try self.defaultedFieldValueFromMonoDefault(default, field.ty)) orelse
+                    Common.invariant("sealed defaulted field had no archived default value");
+            } else if (field_kind == .optional)
+                // An OMITTED OPTIONAL field (admitted by width absorption)
+                // constructs the slot's Missing tag.
+                try self.optionalSlotMissingExpr(field.ty)
+            else
+                Common.invariant("closed record literal was missing a checked field value");
             lowered[i] = .{
                 .name = field.name,
                 .value = value,
@@ -31390,6 +32722,7 @@ const BodyContext = struct {
 
     fn lowerRecordExprAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         record: anytype,
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
@@ -31400,11 +32733,23 @@ const BodyContext = struct {
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
-                fields[index] = .{
-                    .name = try self.builder.recordFieldName(self.view, field.label),
-                    .value = self.preLoweredChildAt(pre_lowered, field.value) orelse
-                        Common.invariant("record graph update lost its pre-lowered field child"),
-                };
+                const name = try self.builder.recordFieldName(self.view, field.label);
+                const pre = self.preLoweredChildAt(pre_lowered, field.value) orelse
+                    Common.invariant("record graph update lost its pre-lowered field child");
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
+                // A SUPPLIED OPTIONAL field's child was lowered at the slot's
+                // Present payload; wrap it into the tagged slot at the slot's
+                // graph node (design.md "Field Kinds (All-Dynamic Optional
+                // Fields)"). Required and defaulted slots write the child
+                // verbatim.
+                const value = if (field_kind == .optional)
+                    try self.optionalSlotPresentExprAtNode(
+                        try self.graph.recordConstructionFieldNode(record_node, name),
+                        pre,
+                    )
+                else
+                    pre;
+                fields[index] = .{ .name = name, .value = value };
             }
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(record_node), .{ .record_update = .{
                 .base = base_expr,
@@ -31453,8 +32798,18 @@ const BodyContext = struct {
         for (0..target_fields.len) |index| {
             const field = target_fields[index];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value| blk: {
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, field.name);
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
+                // A SUPPLIED OPTIONAL field's child was lowered at the slot's
+                // Present payload; wrap it into the tagged slot (design.md
+                // "Field Kinds (All-Dynamic Optional Fields)").
+                if (field_kind == .optional) {
+                    // The slot node is not resolved during expression
+                    // lowering, so the construction stays in node space.
+                    produced_fields[index] = field;
+                    break :blk try self.optionalSlotPresentExprAtNode(field.ty, pre);
+                }
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 if (!self.graph.sameClass(field.ty, child_node)) {
                     // Either side may carry the generated-private
@@ -31479,19 +32834,47 @@ const BodyContext = struct {
                         distinct_witness_needs_relation = true;
                     }
                 }
-                produced_fields[index] = .{ .name = field.name, .ty = child_node };
+                produced_fields[index] = .{
+                    .name = field.name,
+                    .ty = child_node,
+                    .value_ty = field.value_ty,
+                    .kind = field.kind,
+                    .default = field.default,
+                };
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
+                // Record update copies unmentioned slots verbatim—for an
+                // optional field that copies the tagged slot, presence state
+                // included.
                 produced_fields[index] = field;
                 const read_cell = DraftTypeCell.fromGraphNode(field.ty);
                 const read = try self.addExprWithTypeCell(read_cell, .{ .field_access = .{
                     .receiver = base_value,
-                    .field = field.name,
+                    .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field.name }}),
                 } });
                 const read_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), read_cell, null);
                 spread_reads[index] = .{ .local = read_local, .cell = read_cell, .value = read };
                 break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
-            } else Common.invariant("closed record graph constructor was missing a checked field value");
+            } else omitted: {
+                produced_fields[index] = field;
+                if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
+                    const value_node = field.value_ty orelse field.ty;
+                    const value_ty = try self.resolvedTypeViewForNode(value_node);
+                    break :omitted (try self.defaultedFieldValueFromDefault(default, value_ty)) orelse
+                        Common.invariant("checker-selected omitted default had no archived default value");
+                }
+                const field_kind = try self.graph.recordOmittedFieldKind(record_node, field.name);
+                break :omitted switch (field_kind) {
+                    .defaulted => |default| blk: {
+                        const value_node = field.value_ty orelse field.ty;
+                        const value_ty = try self.resolvedTypeViewForNode(value_node);
+                        break :blk (try self.defaultedFieldValueFromMonoDefault(default, value_ty)) orelse
+                            Common.invariant("resolved defaulted field had no archived default value");
+                    },
+                    .optional => try self.optionalSlotMissingExprAtNode(field.ty),
+                    .required => Common.invariant("closed record graph constructor was missing a required field value"),
+                };
+            };
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
@@ -31616,6 +32999,7 @@ const BodyContext = struct {
 
     fn lowerRecordConstructorAtNode(
         self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
         record: anytype,
         record_node: NodeId,
     ) Allocator.Error!DraftExprId {
@@ -31634,10 +33018,8 @@ const BodyContext = struct {
         }
         for (record.fields) |field| {
             child_exprs[child_index] = field.value;
-            child_nodes[child_index] = try self.graph.recordConstructionFieldNode(
-                record_node,
-                try self.builder.recordFieldName(self.view, field.label),
-            );
+            const mono_field_name = try self.builder.recordFieldName(self.view, field.label);
+            child_nodes[child_index] = try self.graph.recordConstructionFieldValueNode(record_node, mono_field_name);
             child_index += 1;
         }
         try self.prepareConstructorChildrenAtNodes(child_exprs, child_nodes);
@@ -31656,7 +33038,22 @@ const BodyContext = struct {
             });
             child_index += 1;
         }
-        return try self.lowerRecordExprAtNode(record, record_node, children.items);
+        return try self.lowerRecordExprAtNode(checked_expr, record, record_node, children.items);
+    }
+
+    fn omittedRecordFieldDefault(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        field_name: names.RecordFieldNameId,
+    ) ?checked.CheckedFieldDefault {
+        const wanted = self.builder.program.names.recordFieldLabelText(field_name);
+        for (self.view.bodies.record_omitted_defaults) |entry| {
+            if (entry.expr != checked_expr) continue;
+            if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
+                return entry.default;
+            }
+        }
+        return null;
     }
 
     fn recordUpdateFieldValue(
@@ -36487,13 +37884,7 @@ const BodyContext = struct {
         }
 
         const field = record_fields[field_index];
-        const field_value_expr = try self.addExpr(.{
-            .ty = field.ty,
-            .data = .{ .field_access = .{
-                .receiver = value_expr,
-                .field = field.name,
-            } },
-        });
+        const field_value_expr = try self.addFieldAccessExpr(value_expr, field.name, field.ty);
 
         if (try self.missingTryInfo(field.ty)) |optional_info| {
             return try self.lowerEncodeOptionalRecordFieldFrom(
@@ -36510,6 +37901,24 @@ const BodyContext = struct {
                 field_index,
                 field_value_expr,
                 optional_info,
+            );
+        }
+
+        if (self.builder.optionalFieldSlot(field.ty)) |slot| {
+            return try self.lowerEncodeSlotOptionalRecordFieldFrom(
+                shape_ty,
+                value_expr,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                method,
+                precomputed_plan,
+                record_fields,
+                renamed_field_locals,
+                field_writer_expr,
+                field_index,
+                field_value_expr,
+                slot,
             );
         }
 
@@ -36672,6 +38081,81 @@ const BodyContext = struct {
         var branches = std.ArrayList(DraftBranch).empty;
         defer branches.deinit(self.allocator);
         try branches.append(self.allocator, .{ .pat = ok_pat, .body = ok_body });
+        try branches.append(self.allocator, .{ .pat = missing_pat, .body = missing_body });
+
+        const field_try = try self.addExpr(.{ .ty = method.container_result_ty, .data = .{ .match_ = .{
+            .scrutinee = field_value_expr,
+            .branches = try self.addBranchSpan(branches.items),
+        } } });
+        const after_field_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
+        const rest_body = try self.lowerEncodeRecordFieldNamesFrom(
+            shape_ty,
+            value_expr,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(after_field_local, method.container_state_ty),
+            method,
+            precomputed_plan,
+            record_fields,
+            renamed_field_locals,
+            field_writer_expr,
+            field_index + 1,
+        );
+        return try self.sequenceEncodeTry(field_try, method.container_result_ty, after_field_local, rest_body, method.container_result_ty);
+    }
+
+    /// The `?:` slot-kind sibling of `lowerEncodeOptionalRecordFieldFrom`
+    /// (design.md "Field Kinds (All-Dynamic Optional Fields)"): a `#Present`
+    /// slot encodes its payload with the ordinary present-field emitter and a
+    /// `#Missing` slot omits the field, passing the encoder state through
+    /// untouched. The slot union is structural (no nominal wrapper), so the
+    /// match is directly on the reserved-label tags.
+    fn lowerEncodeSlotOptionalRecordFieldFrom(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        value_expr: DraftExprId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: DraftExprId,
+        method: EncodeContainerMethod,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+        record_fields: []const Type.Field,
+        renamed_field_locals: []const DraftLocalId,
+        field_writer_expr: DraftExprId,
+        field_index: usize,
+        field_value_expr: DraftExprId,
+        slot: Builder.OptionalSlotInfo,
+    ) Allocator.Error!DraftExprId {
+        const field_ty = record_fields[field_index].ty;
+
+        const payload_local = try self.addLocal(self.builder.symbols.fresh(), slot.payload_ty);
+        const payload_pat = try self.bindPat(payload_local, slot.payload_ty);
+        const present_pat = try self.addPat(.{ .ty = field_ty, .data = .{ .tag = .{
+            .name = slot.present_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{payload_pat}),
+        } } });
+        const present_body = try self.lowerEncodePresentRecordField(
+            encoding_expr,
+            encoding_ty,
+            state_expr,
+            method,
+            precomputed_plan,
+            renamed_field_locals,
+            field_writer_expr,
+            field_index,
+            slot.payload_ty,
+            try self.localExpr(payload_local, slot.payload_ty),
+        );
+
+        const missing_pat = try self.addPat(.{ .ty = field_ty, .data = .{ .tag = .{
+            .name = slot.missing_tag.name,
+            .payloads = .empty(),
+        } } });
+        const missing_body = try self.tryOk(method.container_result_ty, state_expr);
+
+        var branches = std.ArrayList(DraftBranch).empty;
+        defer branches.deinit(self.allocator);
+        try branches.append(self.allocator, .{ .pat = present_pat, .body = present_body });
         try branches.append(self.allocator, .{ .pat = missing_pat, .body = missing_body });
 
         const field_try = try self.addExpr(.{ .ty = method.container_result_ty, .data = .{ .match_ = .{
@@ -36907,6 +38391,9 @@ const BodyContext = struct {
     fn encodeRecordFieldPayloadType(self: *BodyContext, field_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (try self.missingTryInfo(field_ty)) |optional_info| {
             return optional_info.ok_ty;
+        }
+        if (self.builder.optionalFieldSlot(field_ty)) |slot| {
+            return slot.payload_ty;
         }
         return field_ty;
     }
@@ -37393,6 +38880,10 @@ const BodyContext = struct {
         if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
             return try self.parseFieldTypeIsSupported(info.ok_ty, false);
+        }
+        if (self.builder.optionalFieldSlot(ty)) |slot| {
+            if (!allow_missing) return false;
+            return try self.parseFieldTypeIsSupported(slot.payload_ty, false);
         }
         if (self.tryNullInfo(ty)) |info| {
             return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
@@ -38015,6 +39506,7 @@ const BodyContext = struct {
                 inner_field.* = .{
                     .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
                     .ty = str_node,
+                    .default = null,
                 };
             }
             outer_field.* = .{
@@ -38023,6 +39515,7 @@ const BodyContext = struct {
                     .fields = inner_fields,
                     .ext = try self.graph.newNode(.empty_record),
                 } }),
+                .default = null,
             };
         }
         return try self.graph.newNode(.{ .record = .{
@@ -38091,12 +39584,12 @@ const BodyContext = struct {
         const name_label = try self.builder.program.names.internRecordFieldLabel("name");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_payload = try self.graphClosedRecord(&.{
-            .{ .name = field_label, .ty = field_handle_node },
-            .{ .name = rest_name, .ty = state_node },
+            .{ .name = field_label, .ty = field_handle_node, .default = null },
+            .{ .name = rest_name, .ty = state_node, .default = null },
         });
         const try_field_payload = try self.graphClosedRecord(&.{
-            .{ .name = name_label, .ty = str_node },
-            .{ .name = rest_name, .ty = state_node },
+            .{ .name = name_label, .ty = str_node, .default = null },
+            .{ .name = rest_name, .ty = state_node, .default = null },
         });
         const tag_texts = [_][]const u8{ "Continue", "Done", "Field", "TryField", "TryFieldCaseless" };
         const payloads = [_]NodeId{ state_node, state_node, field_payload, try_field_payload, try_field_payload };
@@ -38176,9 +39669,9 @@ const BodyContext = struct {
         const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_handle_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = str_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = str_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node, .default = null },
         });
         const field_handle = try self.cloneGraphNamedWithGeneratedBacking(
             field_handle_template,
@@ -38196,13 +39689,14 @@ const BodyContext = struct {
             field.* = .{
                 .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
                 .ty = field_handle,
+                .default = null,
             };
         }
         const items = try self.graphClosedRecord(item_fields);
         const fields_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node, .default = null },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node, .default = null },
         });
         const fields_node = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
@@ -39132,6 +40626,12 @@ const BodyContext = struct {
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     if (try self.graphMissingTryOkNode(field.ty)) |payload| {
                         if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
+                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
+                        // `?:` slot: an absent key parses to `#Missing`.
+                        if (try self.graphParserShapeNeedsRequiredFieldError(payload, seen)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: an absent key fills the archived default.
+                        if (try self.graphParserShapeNeedsRequiredFieldError(field.ty, seen)) break :blk true;
                     } else {
                         break :blk true;
                     }
@@ -39200,6 +40700,14 @@ const BodyContext = struct {
                 for ((try self.graph.recordNodes(node)).fields) |field| {
                     if (try self.graphMissingTryOkNode(field.ty)) |payload| {
                         if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                    } else if (try self.graphOptionalFieldSlotPayload(field.ty)) |payload| {
+                        // `?:` slot: absence is well-defined, only the present
+                        // payload's shape can demand more error tags.
+                        if (try self.graphParserShapeNeedsInvalidValue(payload, err_node, seen)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: absence fills the default; the value
+                        // shape parses at the inline type.
+                        if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
                     } else {
                         if (!has_missing_required_field) break :blk true;
                         if (try self.graphParserShapeNeedsInvalidValue(field.ty, err_node, seen)) break :blk true;
@@ -39238,6 +40746,34 @@ const BodyContext = struct {
             .zst,
             => false,
         };
+    }
+
+    /// The `#Present` payload node when `raw_node` is an optional field's
+    /// tagged slot (`[#Missing, #Present(payload)]`), mirroring
+    /// `Builder.optionalFieldSlot` over graph nodes. Labels are matched by
+    /// exact text in the compiler-reserved `#` namespace, so this is a
+    /// lossless read-back of the `?:` slot encoding, not a shape guess.
+    fn graphOptionalFieldSlotPayload(self: *BodyContext, raw_node: NodeId) Allocator.Error!?NodeId {
+        const node = self.graphShapeNode(raw_node);
+        if (self.graph.content(node) != .tag_union) return null;
+        const tags = (try self.graph.tagRowNodes(node)).tags;
+        if (tags.len != 2) return null;
+        var present_payload: ?NodeId = null;
+        var saw_missing = false;
+        for (tags) |tag| {
+            const text = self.builder.program.names.tagLabelText(tag.name);
+            if (std.mem.eql(u8, text, Builder.optional_slot_missing_tag)) {
+                if (tag.payloads.len != 0) return null;
+                saw_missing = true;
+            } else if (std.mem.eql(u8, text, Builder.optional_slot_present_tag)) {
+                if (tag.payloads.len != 1) return null;
+                present_payload = tag.payloads[0];
+            } else {
+                return null;
+            }
+        }
+        if (!saw_missing) return null;
+        return present_payload;
     }
 
     fn graphNodeIsUnitTagUnion(self: *BodyContext, raw_node: NodeId) Allocator.Error!bool {
@@ -39680,8 +41216,10 @@ const BodyContext = struct {
         field_local: DraftLocalId,
     ) Allocator.Error!DraftExprId {
         const field_ty = field.ty;
-        const optional_info = (try self.missingTryInfo(field_ty)) orelse
-            Common.invariant("optional record finish requested for a non-optional Try field");
+        const maybe_try_info = try self.missingTryInfo(field_ty);
+        if (maybe_try_info == null and self.builder.optionalFieldSlot(field_ty) == null) {
+            Common.invariant("optional record finish requested for a field that is neither Try-optional nor a `?:` slot");
+        }
         const payload_local = record_slots.payload_locals[field_index];
         const payload_ty = record_slots.payload_tys[field_index];
         if (!self.sameType(payload_ty, field_ty)) {
@@ -39691,8 +41229,12 @@ const BodyContext = struct {
             Common.invariant("record finish field local type differed from optional field type");
         }
 
-        const missing_tag = try self.tagUnionValueWithoutPayload(optional_info.err_ty, "Missing");
-        const missing_field = try self.tryErr(field_ty, missing_tag);
+        const missing_field = if (maybe_try_info) |optional_info|
+            try self.tryErr(field_ty, try self.tagUnionValueWithoutPayload(optional_info.err_ty, "Missing"))
+        else
+            // An absent `?:` field materializes the slot's `#Missing` tag
+            // (design.md "Field Kinds (All-Dynamic Optional Fields)").
+            try self.optionalSlotMissingExpr(field_ty);
         const present_field = try self.localExpr(payload_local, payload_ty);
         const presence_word = recordPresenceWordIndex(field_index);
         const is_present_expr = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);
@@ -39703,6 +41245,48 @@ const BodyContext = struct {
             .uninitialized_is_cold = false,
             .initialized = present_field,
             .uninitialized = missing_field,
+        } } });
+        return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
+    }
+
+    /// The `??`-defaulted sibling of
+    /// `finishOptionalRecordFieldFromPresencePayload`: an absent key
+    /// materializes the field's archived default constant into the inline
+    /// slot—exactly the construction-site omission behavior `{}`
+    /// literals get (design.md "Defaulted Fields"). A present key already parsed at
+    /// the field's inline type into the payload slot.
+    fn finishDefaultedRecordFieldFromPresencePayload(
+        self: *BodyContext,
+        next_body: DraftExprId,
+        ret_ty: Type.TypeId,
+        record_slots: ParseRecordSlots,
+        field: Type.Field,
+        field_index: usize,
+        field_local: DraftLocalId,
+        default: Type.FieldDefault,
+    ) Allocator.Error!DraftExprId {
+        const field_ty = field.ty;
+        const payload_local = record_slots.payload_locals[field_index];
+        const payload_ty = record_slots.payload_tys[field_index];
+        if (!self.sameType(payload_ty, field_ty)) {
+            Common.invariant("generated defaulted record payload type differed from field type");
+        }
+        if (!self.sameType(try self.localType(field_local), field_ty)) {
+            Common.invariant("record finish field local type differed from defaulted field type");
+        }
+
+        const default_field = (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
+            Common.invariant("defaulted record parse finish had no archived default to materialize");
+        const present_field = try self.localExpr(payload_local, payload_ty);
+        const presence_word = recordPresenceWordIndex(field_index);
+        const is_present_expr = try self.localExpr(record_slots.presence_locals[presence_word], record_slots.presence_tys[presence_word]);
+        const field_value = try self.addExpr(.{ .ty = field_ty, .data = .{ .if_initialized_payload = .{
+            .cond = is_present_expr,
+            .cond_mask = recordPresenceMask(field_index),
+            .payload = payload_local,
+            .uninitialized_is_cold = false,
+            .initialized = present_field,
+            .uninitialized = default_field,
         } } });
         return try self.wrapLet(field_local, field_ty, field_value, next_body, ret_ty);
     }
@@ -39797,6 +41381,13 @@ const BodyContext = struct {
                     const field = GuardedList.at(fields, index);
                     if (try self.missingTryInfo(field.ty)) |optional| {
                         if (try self.parserShapeNeedsRequiredFieldError(optional.ok_ty, visited)) break :blk true;
+                    } else if (self.builder.optionalFieldSlot(field.ty)) |slot| {
+                        // `?:` slot: an absent key parses to `#Missing`, so the
+                        // field itself never demands MissingRequiredField.
+                        if (try self.parserShapeNeedsRequiredFieldError(slot.payload_ty, visited)) break :blk true;
+                    } else if (field.default != null) {
+                        // `??` field: an absent key fills the archived default.
+                        if (try self.parserShapeNeedsRequiredFieldError(field.ty, visited)) break :blk true;
                     } else {
                         break :blk true;
                     }
@@ -40060,7 +41651,7 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
             .lookup_external => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
-            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, null),
+            .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
@@ -40700,32 +42291,33 @@ const BodyContext = struct {
         );
     }
 
-    fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+    fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
         const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .list => true,
             .record_destructure => |destructs| blk: {
                 if (self.recordDestructsNeedExplicitRest(destructs)) break :blk true;
+                if (try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) break :blk true;
                 for (destructs) |destruct| {
                     const child = switch (destruct.kind) {
                         .required, .sub_pattern => |child| child,
                         .rest => |rest| rest,
                     };
-                    if (self.patternNeedsExplicitBinding(child)) break :blk true;
+                    if (try self.patternNeedsExplicitBinding(child)) break :blk true;
                 }
                 break :blk false;
             },
-            .as => |as| self.patternNeedsExplicitBinding(as.pattern),
+            .as => |as| try self.patternNeedsExplicitBinding(as.pattern),
             .applied_tag => |tag| blk: {
                 for (tag.args) |arg| {
-                    if (self.patternNeedsExplicitBinding(arg)) break :blk true;
+                    if (try self.patternNeedsExplicitBinding(arg)) break :blk true;
                 }
                 break :blk false;
             },
-            .nominal => |nominal| self.patternNeedsExplicitBinding(nominal.backing_pattern),
+            .nominal => |nominal| try self.patternNeedsExplicitBinding(nominal.backing_pattern),
             .tuple => |items| blk: {
                 for (items) |item| {
-                    if (self.patternNeedsExplicitBinding(item)) break :blk true;
+                    if (try self.patternNeedsExplicitBinding(item)) break :blk true;
                 }
                 break :blk false;
             },
@@ -40740,10 +42332,12 @@ const BodyContext = struct {
         };
     }
 
-    fn patternRequiresOwnMaterialization(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
-        return switch (self.view.bodies.pattern(pattern_id).data) {
+    fn patternRequiresOwnMaterialization(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
+        const pattern = self.view.bodies.pattern(pattern_id);
+        return switch (pattern.data) {
             .list => true,
-            .record_destructure => |destructs| self.recordDestructsNeedExplicitRest(destructs),
+            .record_destructure => |destructs| self.recordDestructsNeedExplicitRest(destructs) or
+                try self.recordDestructsHaveOptionalField(pattern.ty, destructs),
             .assign,
             .as,
             .applied_tag,
@@ -41209,7 +42803,7 @@ const BodyContext = struct {
                 if (self.builder.nominalConstructionLayer(ty)) |layer| {
                     break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, checks_out) };
                 }
-                break :blk try self.lowerRecordPatternCollectingLists(destructs, ty, checks_out);
+                break :blk try self.lowerRecordPatternCollectingLists(pattern.ty, destructs, ty, checks_out);
             },
             .list => |list| blk: {
                 const local = try self.addLocal(self.builder.symbols.fresh(), ty);
@@ -41293,6 +42887,7 @@ const BodyContext = struct {
 
     fn lowerRecordPatternCollectingLists(
         self: *BodyContext,
+        record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
         ty: Type.TypeId,
         checks_out: *std.ArrayList(CollectedListPattern),
@@ -41308,6 +42903,12 @@ const BodyContext = struct {
                     Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
                 },
             };
+            // Optional-field destructs never reach the typed pattern family:
+            // the explicit-binding routes and match translation own them
+            // (design.md "Field Kinds").
+            if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                Common.invariant("optional-field record destructure reached typed pattern lowering");
+            }
             const name = try self.builder.recordFieldName(self.view, destruct.label);
             const child_ty = switch (destruct.kind) {
                 .required, .sub_pattern => self.builder.recordFieldType(ty, name),
@@ -41406,14 +43007,21 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const value_node = try value_cell.toGraphNode(self.graph);
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern_id).ty, value_cell);
-        if (!self.patternNeedsExplicitBinding(pattern_id)) {
+        if (!try self.patternNeedsExplicitBinding(pattern_id)) {
             const guards_start = self.pattern_literal_guards.items.len;
+            const binds_start = self.optional_destruct_binds.items.len;
             const pat = try self.lowerPatternAtNode(pattern_id, value_node);
             const literal_guards = try self.drainPatternLiteralGuards(guards_start);
             defer self.allocator.free(literal_guards);
+            const optional_binds = try self.drainOptionalDestructBinds(binds_start);
+            defer self.allocator.free(optional_binds);
+            var success = try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard);
+            if (optional_binds.len > 0) {
+                success = try self.applyOptionalDestructBinds(optional_binds, success);
+            }
             const rest = try self.applyPatternLiteralGuardsAtCell(
                 literal_guards,
-                try self.lowerPatternSuccessContinuation(continuation, result_cell, success_guard),
+                success,
                 miss,
                 result_cell,
             );
@@ -41473,9 +43081,10 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .list => |list| try self.lowerListPatternBindingThen(value, value_cell, list, result_cell, continuation, miss, success_guard),
-            .record_destructure => |destructs| if (self.recordDestructsNeedExplicitRest(destructs))
-                try self.lowerRecordRestPatternBindingThen(value, value_cell, destructs, result_cell, continuation, miss, success_guard)
-            else if (self.patternNeedsExplicitBinding(pattern_id))
+            .record_destructure => |destructs| if (self.recordDestructsNeedExplicitRest(destructs) or
+                try self.recordDestructsHaveOptionalField(pattern.ty, destructs))
+                try self.lowerRecordRestPatternBindingThen(value, value_cell, pattern.ty, destructs, result_cell, continuation, miss, success_guard)
+            else if (try self.patternNeedsExplicitBinding(pattern_id))
                 try self.lowerWrappedMaterializedPatternThen(pattern_id, value, value_node, value_cell, result_cell, continuation, miss, success_guard)
             else
                 try self.lowerMaterializedPatternValueThen(pattern_id, value, value_cell, result_cell, continuation, miss, success_guard),
@@ -41491,7 +43100,7 @@ const BodyContext = struct {
             .applied_tag,
             .nominal,
             .tuple,
-            => if (self.patternNeedsExplicitBinding(pattern_id))
+            => if (try self.patternNeedsExplicitBinding(pattern_id))
                 try self.lowerWrappedMaterializedPatternThen(pattern_id, value, value_node, value_cell, result_cell, continuation, miss, success_guard)
             else
                 try self.lowerMaterializedPatternValueThen(pattern_id, value, value_cell, result_cell, continuation, miss, success_guard),
@@ -41592,8 +43201,8 @@ const BodyContext = struct {
         const len_name = try self.builder.program.names.internRecordFieldLabel("len");
         const start_name = try self.builder.program.names.internRecordFieldLabel("start");
         const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty },
-            .{ .name = start_name, .ty = u64_ty },
+            .{ .name = len_name, .ty = u64_ty, .default = null },
+            .{ .name = start_name, .ty = u64_ty, .default = null },
         };
         const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
         const exprs = [_]DraftFieldExpr{
@@ -41697,6 +43306,7 @@ const BodyContext = struct {
         self: *BodyContext,
         value: DraftExprId,
         value_cell: DraftTypeCell,
+        record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
         result_cell: DraftTypeCell,
         continuation: BindingContinuation,
@@ -41731,9 +43341,26 @@ const BodyContext = struct {
                     const field_value = try self.addExprWithTypeCell(field_cell, .{
                         .field_access = .{
                             .receiver = value,
-                            .field = name,
+                            .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = name }}),
                         },
                     });
+                    if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                        // The field's slot holds the tagged
+                        // `[#Missing, #Present(v)]` union; the bound value is
+                        // that slot materialized as the binder's checked
+                        // `Try(v, [MissingField])` (design.md "Field
+                        // Kinds"), against which the sub-pattern matches.
+                        const try_node = try self.instNode(self.view.bodies.pattern(child).ty);
+                        const try_value = try self.optionalDestructTryExprAtNode(field_value, field_node, try_node);
+                        prepared[index] = .{
+                            .value = try_value,
+                            .cell = DraftTypeCell.fromGraphNode(try_node),
+                            .shell = try self.lowerPatternPlanPlaceholderAtNode(child, try_node, &pending),
+                            .pending = pending,
+                        };
+                        pending_owned = false;
+                        continue;
+                    }
                     prepared[index] = .{
                         .value = field_value,
                         .cell = field_cell,
@@ -41800,7 +43427,7 @@ const BodyContext = struct {
                     DraftTypeCell.fromGraphNode(try self.graph.recordFieldNode(value_node, field.name)),
                     .{ .field_access = .{
                         .receiver = value,
-                        .field = field.name,
+                        .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = field.name }}),
                     } },
                 ),
             };
@@ -42061,6 +43688,19 @@ const BodyContext = struct {
                 &record_rests,
             );
             if (try entry.ctx.checkedPatternIsProvenUninhabited(entry.pattern.pattern)) continue;
+            // Translated optional-field destructs bound their raw slots in
+            // the flat pattern; compute the user binders' Try values as
+            // preludes around the branch body—and the guard, which may
+            // also reference them (the pattern's slot locals are bound
+            // before either runs).
+            const optional_binds = try entry.ctx.drainOptionalDestructBinds(0);
+            defer entry.ctx.allocator.free(optional_binds);
+            if (optional_binds.len > 0) {
+                entry.body = try entry.ctx.applyOptionalDestructBinds(optional_binds, entry.body);
+                if (entry.user_guard) |user_guard| {
+                    entry.user_guard = try entry.ctx.applyOptionalDestructBinds(optional_binds, user_guard);
+                }
+            }
             const guard = try entry.ctx.conjoinPatternLiteralGuards(entry.user_guard);
             const materialized = try entry.ctx.lowerMatchRecordRestBindings(record_rests.items, entry.body);
             branches[index] = .{
@@ -42272,6 +43912,20 @@ const BodyContext = struct {
                             continue;
                         },
                     };
+                    // A destructured OPTIONAL field's sub-pattern runs in
+                    // Try space (its own checked-type node), not against the
+                    // record's tagged slot node—mirror the walk the
+                    // binder registration and pattern lowering use.
+                    if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
+                        try self.collectRuntimeDemandGuardsForPattern(
+                            child,
+                            try self.instNode(self.view.bodies.pattern(child).ty),
+                            guards,
+                            seen,
+                            active,
+                        );
+                        continue;
+                    }
                     const name = try self.builder.recordFieldName(self.view, destruct.label);
                     try self.collectRuntimeDemandGuardsForPattern(
                         child,
@@ -43432,7 +45086,14 @@ const BodyContext = struct {
             .record_destructure => |destructs| destructs,
             .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return false,
         };
-        if (!self.recordDestructsNeedExplicitRest(destructs)) return false;
+        // Expand into per-field `let` STATEMENTS both for an explicit rest
+        // binder and for any OPTIONAL destructured field: statement-level
+        // lets keep the binders bound for the rest of the block, whereas the
+        // materialized statement-EXPRESSION route scopes its internal binds
+        // to that expression (the lift capture analysis is lexical), which
+        // would leave later statements reading free locals.
+        if (!self.recordDestructsNeedExplicitRest(destructs) and
+            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs)) return false;
 
         const value_node = try self.lowerExprTypeNode(expr);
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
@@ -43449,7 +45110,14 @@ const BodyContext = struct {
             try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
             null;
-        try self.appendRecordRestPatternStatements(source_expr, value_node, destructs, lowered, comptime_site);
+        try self.appendRecordRestPatternStatements(
+            source_expr,
+            value_node,
+            self.view.bodies.pattern(pattern).ty,
+            destructs,
+            lowered,
+            comptime_site,
+        );
         return true;
     }
 
@@ -43530,7 +45198,7 @@ const BodyContext = struct {
             )
         else
             null;
-        if (!self.patternNeedsExplicitBinding(pattern)) {
+        if (!try self.patternNeedsExplicitBinding(pattern)) {
             const result_pattern = if (self.patternIsShapeFree(pattern))
                 try self.lowerShapeFreePatternAtCell(pattern, value_cell)
             else
@@ -43566,6 +45234,7 @@ const BodyContext = struct {
         self: *BodyContext,
         value: DraftExprId,
         value_node: NodeId,
+        record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
         comptime_site: ?DraftComptimeSiteId,
@@ -43579,9 +45248,22 @@ const BodyContext = struct {
                     const field_value = try self.addExprWithTypeCell(field_cell, .{
                         .field_access = .{
                             .receiver = value,
-                            .field = name,
+                            .segments = try self.draft.addFieldAccessSegmentSpan(&.{.{ .field = name }}),
                         },
                     });
+                    if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                        // A destructured OPTIONAL field binds its slot
+                        // materialized as `Try(v, [MissingField])` (design.md
+                        // "Field Kinds").
+                        const try_node = try self.instNode(self.view.bodies.pattern(child).ty);
+                        const try_value = try self.optionalDestructTryExprAtNode(field_value, field_node, try_node);
+                        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                            .pat = try self.lowerPatternAtNode(child, try_node),
+                            .value = try_value,
+                            .comptime_site = if (self.patternCanMiss(child)) comptime_site else null,
+                        } }));
+                        continue;
+                    }
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtNode(child, field_node),
                         .value = field_value,
@@ -44361,7 +46043,7 @@ const BodyContext = struct {
         defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames;
 
         const rest_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), iterator_cell, null);
-        const item_local: ?DraftLocalId = if (self.patternNeedsExplicitBinding(for_.pattern))
+        const item_local: ?DraftLocalId = if (try self.patternNeedsExplicitBinding(for_.pattern))
             try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, null)
         else
             null;
@@ -45167,7 +46849,7 @@ const BodyContext = struct {
             try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
         else
             null;
-        if (!self.patternNeedsExplicitBinding(pattern)) {
+        if (!try self.patternNeedsExplicitBinding(pattern)) {
             const pat = if (self.patternIsShapeFree(pattern))
                 try self.lowerShapeFreePatternAtCell(pattern, value_cell)
             else
@@ -45621,6 +47303,21 @@ const BodyContext = struct {
                 } else {
                     for (destructs) |destruct| switch (destruct.kind) {
                         .required, .sub_pattern => |child| {
+                            // A destructured OPTIONAL field's binders hold the
+                            // slot materialized as Try, so they register at
+                            // the sub-pattern's own checked-type node, not
+                            // the record's tagged slot node (design.md
+                            // "Field Kinds").
+                            if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
+                                try self.preRegisterPatternBindersAtNodeInner(
+                                    child,
+                                    try self.instNode(self.view.bodies.pattern(child).ty),
+                                    binders,
+                                    rebind_existing,
+                                    active,
+                                );
+                                continue;
+                            }
                             const name = try self.builder.recordFieldName(self.view, destruct.label);
                             try self.preRegisterPatternBindersAtNodeInner(
                                 child,
@@ -45704,7 +47401,7 @@ const BodyContext = struct {
         defer _ = active.remove(key);
 
         const cell = DraftTypeCell.fromGraphNode(node);
-        if (self.patternRequiresOwnMaterialization(pattern_id)) {
+        if (try self.patternRequiresOwnMaterialization(pattern_id)) {
             return try self.lowerPatternPlanPlaceholderAtNode(pattern_id, node, pending);
         }
 
@@ -45861,7 +47558,7 @@ const BodyContext = struct {
         node: NodeId,
         match_lowering: ?*MatchPatternLowering,
     ) Allocator.Error!DraftPatId {
-        if (self.patternNeedsExplicitBinding(pattern_id) and
+        if (try self.patternNeedsExplicitBinding(pattern_id) and
             !self.allow_recursive_pattern_lowering_for_match)
         {
             Common.invariant("recursively materialized pattern reached ordinary graph pattern lowering");
@@ -45994,10 +47691,27 @@ const BodyContext = struct {
         var lowered = std.ArrayList(DraftRecordDestruct).empty;
         defer lowered.deinit(self.allocator);
         var source_local: ?DraftLocalId = null;
+        const record_checked_ty = self.view.bodies.pattern(pattern_id).ty;
         for (destructs) |destruct| {
             switch (destruct.kind) {
                 .required, .sub_pattern => |child| {
                     const name = try self.builder.recordFieldName(self.view, destruct.label);
+                    if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                        // A destructured OPTIONAL field's sub-pattern is typed
+                        // at the nominal Try while the slot holds the tagged
+                        // `[#Missing, #Present(v)]` union: translate it into
+                        // slot space, queueing binder preludes for the
+                        // enclosing branch (design.md "Field Kinds").
+                        try lowered.append(self.allocator, .{
+                            .name = name,
+                            .pattern = try self.lowerOptionalDestructChildAtSlotNode(
+                                child,
+                                try self.graph.recordFieldNode(representation_node, name),
+                                try self.instNode(self.view.bodies.pattern(child).ty),
+                            ),
+                        });
+                        continue;
+                    }
                     try lowered.append(self.allocator, .{
                         .name = name,
                         .pattern = try self.lowerPatternAtNodeInner(
@@ -46158,7 +47872,7 @@ const BodyContext = struct {
                 if (self.builder.nominalConstructionLayer(ty)) |layer| {
                     break :blk .{ .nominal = try self.lowerConstructorPatWrapped(pattern_id, layer.backing, null) };
                 }
-                break :blk try self.lowerRecordPattern(destructs, ty);
+                break :blk try self.lowerRecordPattern(pattern.ty, destructs, ty);
             },
             .list => |list| try self.lowerListPattern(list, ty),
             .tuple => |items| blk: {
@@ -46270,9 +47984,9 @@ const BodyContext = struct {
             else
                 try self.lowerTagPattern(tag, ty),
             .record_destructure => |destructs| if (checks_out) |checks|
-                try self.lowerRecordPatternCollectingLists(destructs, ty, checks)
+                try self.lowerRecordPatternCollectingLists(pattern.ty, destructs, ty, checks)
             else
-                try self.lowerRecordPattern(destructs, ty),
+                try self.lowerRecordPattern(pattern.ty, destructs, ty),
             .tuple => |items| if (checks_out) |checks|
                 BodyPatData{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks) }
             else
@@ -46282,7 +47996,7 @@ const BodyContext = struct {
         return try self.addPat(.{ .ty = ty, .data = data });
     }
 
-    fn lowerRecordPattern(self: *BodyContext, destructs: []const checked.CheckedRecordDestruct, ty: Type.TypeId) Allocator.Error!BodyPatData {
+    fn lowerRecordPattern(self: *BodyContext, record_checked_ty: checked.CheckedTypeId, destructs: []const checked.CheckedRecordDestruct, ty: Type.TypeId) Allocator.Error!BodyPatData {
         var lowered = std.ArrayList(DraftRecordDestruct).empty;
         defer lowered.deinit(self.allocator);
         for (destructs) |destruct| {
@@ -46294,6 +48008,12 @@ const BodyContext = struct {
                     Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
                 },
             };
+            // Optional-field destructs never reach the typed pattern family:
+            // the explicit-binding routes and match translation own them
+            // (design.md "Field Kinds").
+            if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) {
+                Common.invariant("optional-field record destructure reached typed pattern lowering");
+            }
             const name = try self.builder.recordFieldName(self.view, destruct.label);
             const child_ty = switch (destruct.kind) {
                 .required, .sub_pattern => self.builder.recordFieldType(ty, name),
@@ -46510,6 +48230,31 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
+test "sealed record omission takes its default identity from the monotype field" {
+    const expected: Type.FieldDefault = .{
+        .module = @enumFromInt(17),
+        .expr_node = 23,
+    };
+    const field: Type.Field = .{
+        .name = @enumFromInt(5),
+        .ty = @enumFromInt(11),
+        .default = expected,
+    };
+
+    try std.testing.expectEqual(expected, BodyContext.sealedDefaultedFieldIdentity(field));
+}
+
+test "record destructure treats a scheme-interior field as required" {
+    try std.testing.expectEqual(
+        @as(?checked.CheckedFieldKind.Tag, .required),
+        BodyContext.recordDestructKindFromResolution(.scheme_interior),
+    );
+    try std.testing.expectEqual(
+        @as(?checked.CheckedFieldKind.Tag, null),
+        BodyContext.recordDestructKindFromResolution(.absent),
+    );
+}
+
 test "open draft recursive provenance joins fresh interface cells only while lowering" {
     const gpa = std.testing.allocator;
 
@@ -46612,7 +48357,7 @@ test "runtime demand guards exempt only frozen impossible constructor branches" 
     const item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const item_name = try name_store.internRecordFieldLabel("item");
     const payload_fields = try graph.arena().alloc(InstField, 1);
-    payload_fields[0] = .{ .name = item_name, .ty = item };
+    payload_fields[0] = .{ .name = item_name, .ty = item, .default = null };
     const one_payload = try graph.newNode(.{ .record = .{
         .fields = payload_fields,
         .ext = try graph.newNode(.empty_record),
@@ -46941,14 +48686,8 @@ const EqDeriver = struct {
     }
 
     fn componentForField(self: *BodyContext, operand: Operand, _: DraftExprId, field: Type.Field) Allocator.Error!Operand {
-        const lhs_field = try self.addExpr(.{ .ty = field.ty, .data = .{ .field_access = .{
-            .receiver = operand.lhs,
-            .field = field.name,
-        } } });
-        const rhs_field = try self.addExpr(.{ .ty = field.ty, .data = .{ .field_access = .{
-            .receiver = operand.rhs,
-            .field = field.name,
-        } } });
+        const lhs_field = try self.addFieldAccessExpr(operand.lhs, field.name, field.ty);
+        const rhs_field = try self.addFieldAccessExpr(operand.rhs, field.name, field.ty);
         return .{ .lhs = lhs_field, .rhs = rhs_field };
     }
 
@@ -47169,10 +48908,7 @@ const HashDeriver = struct {
     }
 
     fn componentForField(self: *BodyContext, operand: Operand, state: DraftExprId, field: Type.Field) Allocator.Error!Operand {
-        const field_value = try self.addExpr(.{ .ty = field.ty, .data = .{ .field_access = .{
-            .receiver = operand.value,
-            .field = field.name,
-        } } });
+        const field_value = try self.addFieldAccessExpr(operand.value, field.name, field.ty);
         return .{ .value = field_value, .hasher = state };
     }
 
@@ -47482,6 +49218,15 @@ fn generatedFieldNamesIterStepKey(
     };
     hasher.update(&[_]u8{mode_byte});
     return .{ .bytes = hasher.finalResult() };
+}
+
+/// Whether any segment of a checked field-access path is a `.?` access, which
+/// routes the whole chain through the optional-chain lowering (one flat Try).
+fn fieldAccessAnySegmentOptional(segments: []const checked.CheckedFieldAccessSegment) bool {
+    for (segments) |segment| {
+        if (segment.mode == .optional) return true;
+    }
+    return false;
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
@@ -48690,7 +50435,13 @@ test "body draft store appends draft-local ids spans and type cells" {
     const pat_span = try draft.addPatSpan(&.{pat});
     const typed_local_span = try draft.addTypedLocalSpan(&.{.{ .local = local, .ty = ty }});
     const field_name = try program.names.internRecordFieldLabel("field");
+    const nested_field_name = try program.names.internRecordFieldLabel("nested");
+    const existing_access_segments = try program.addFieldAccessSegmentSpan(&.{.{ .field = field_name }});
     const field_span = try draft.addFieldExprSpan(&.{.{ .name = field_name, .value = expr }});
+    const access_segment_span = try draft.addFieldAccessSegmentSpan(&.{
+        .{ .field = field_name },
+        .{ .field = nested_field_name },
+    });
     const destruct_span = try draft.addRecordDestructSpan(&.{.{ .name = field_name, .pattern = pat }});
     const branch_span = try draft.addBranchSpan(&.{.{ .pat = pat, .body = expr }});
     const if_branch_span = try draft.addIfBranchSpan(&.{.{ .cond = expr, .body = expr }});
@@ -48719,6 +50470,10 @@ test "body draft store appends draft-local ids spans and type cells" {
         .branches = if_branch_span,
         .final_else = expr,
     } } });
+    const field_access_expr = try draft.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
+        .receiver = expr,
+        .segments = access_segment_span,
+    } } });
     const stmt = try draft.addStmt(.{ .let_ = .{
         .pat = pat,
         .value = expr,
@@ -48728,7 +50483,7 @@ test "body draft store appends draft-local ids spans and type cells" {
 
     try std.testing.expectEqual(@as(usize, 1), draft.locals.items.len);
     try std.testing.expectEqual(@as(usize, 3), draft.pats.items.len);
-    try std.testing.expectEqual(@as(usize, 4), draft.exprs.items.len);
+    try std.testing.expectEqual(@as(usize, 5), draft.exprs.items.len);
     try std.testing.expectEqual(@as(usize, 1), draft.stmts.items.len);
     try std.testing.expectEqual(@as(u32, 0), expr_span.start);
     try std.testing.expectEqual(@as(u32, 1), expr_span.len);
@@ -48740,6 +50495,10 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(u32, 1), stmt_span.len);
     try std.testing.expectEqual(@as(u32, 0), field_span.start);
     try std.testing.expectEqual(@as(u32, 1), field_span.len);
+    try std.testing.expectEqual(@as(u32, 0), existing_access_segments.start);
+    try std.testing.expectEqual(@as(u32, 1), existing_access_segments.len);
+    try std.testing.expectEqual(@as(u32, 0), access_segment_span.start);
+    try std.testing.expectEqual(@as(u32, 2), access_segment_span.len);
     try std.testing.expectEqual(@as(u32, 0), destruct_span.start);
     try std.testing.expectEqual(@as(u32, 1), destruct_span.len);
     try std.testing.expectEqual(@as(u32, 0), branch_span.start);
@@ -48770,17 +50529,19 @@ test "body draft store appends draft-local ids spans and type cells" {
     const sealed_record_expr: Ast.ExprId = @enumFromInt(@intFromEnum(record_expr));
     const sealed_match_expr: Ast.ExprId = @enumFromInt(@intFromEnum(match_expr));
     const sealed_if_expr: Ast.ExprId = @enumFromInt(@intFromEnum(if_expr));
+    const sealed_field_access_expr: Ast.ExprId = @enumFromInt(@intFromEnum(field_access_expr));
     const sealed_literal: Ast.StringLiteralId = @enumFromInt(@intFromEnum(literal));
     const sealed_site: Ast.ComptimeSiteId = @enumFromInt(@intFromEnum(site));
 
     try std.testing.expectEqual(@as(usize, 1), program.localCount());
     try std.testing.expectEqual(@as(usize, 3), program.patCount());
-    try std.testing.expectEqual(@as(usize, 4), program.exprCount());
+    try std.testing.expectEqual(@as(usize, 5), program.exprCount());
     try std.testing.expectEqual(@as(usize, 1), program.stmtCount());
     try std.testing.expectEqual(@as(usize, 1), program.sourceFileCount());
     try std.testing.expectEqual(@as(usize, 1), program.stringLiteralCount());
     try std.testing.expectEqual(@as(usize, 1), program.comptimeSiteCount());
     try std.testing.expectEqual(@as(usize, 1), program.fieldExprCount());
+    try std.testing.expectEqual(@as(usize, 3), program.fieldAccessSegmentCount());
     try std.testing.expectEqual(@as(usize, 1), program.recordDestructCount());
     try std.testing.expectEqual(@as(usize, 1), program.strPatternStepCount());
     try std.testing.expectEqual(@as(usize, 1), program.branchCount());
@@ -48791,6 +50552,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqualStrings("value", program.localName(sealed_local));
     try std.testing.expectEqual(field_name, program.getFieldExprAt(0).name);
     try std.testing.expectEqual(sealed_expr, program.getFieldExprAt(0).value);
+    try std.testing.expectEqual(field_name, program.fieldAccessSegmentAt(existing_access_segments, 0).field);
     try std.testing.expectEqual(field_name, program.getRecordDestructAt(0).name);
     try std.testing.expectEqual(sealed_pat, program.getRecordDestructAt(0).pattern);
     try std.testing.expectEqual(@as(?Ast.PatId, sealed_pat), program.getStrPatternStepAt(0).capture);
@@ -48799,42 +50561,74 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(sealed_expr, program.getBranchAt(0).body);
     try std.testing.expectEqual(sealed_expr, program.getIfBranchAt(0).cond);
     try std.testing.expectEqual(sealed_expr, program.getIfBranchAt(0).body);
-    const sealed_bind = program.getPatAt(0).data;
-    if (sealed_bind != .bind) return error.TestExpectedEqual;
-    try std.testing.expectEqual(sealed_local, sealed_bind.bind);
-    const sealed_record = program.getPat(sealed_record_pat).data;
-    if (sealed_record != .record) return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(u32, 0), sealed_record.record.start);
-    try std.testing.expectEqual(@as(u32, 1), sealed_record.record.len);
-    const sealed_str = program.getPat(sealed_str_pat).data;
-    if (sealed_str != .str_pattern) return error.TestExpectedEqual;
-    try std.testing.expectEqual(sealed_literal, sealed_str.str_pattern.prefix);
-    try std.testing.expectEqual(@as(u32, 0), sealed_str.str_pattern.steps.start);
-    try std.testing.expectEqual(@as(u32, 1), sealed_str.str_pattern.steps.len);
-    try std.testing.expectEqual(Ast.StrPatternEnd.exact, sealed_str.str_pattern.end);
-    const sealed_local_expr = program.getExprAt(0).data;
-    if (sealed_local_expr != .local) return error.TestExpectedEqual;
-    try std.testing.expectEqual(sealed_local, sealed_local_expr.local);
-    const sealed_record_expr_data = program.getExpr(sealed_record_expr).data;
-    if (sealed_record_expr_data != .record) return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(u32, 0), sealed_record_expr_data.record.start);
-    try std.testing.expectEqual(@as(u32, 1), sealed_record_expr_data.record.len);
-    const sealed_match = program.getExpr(sealed_match_expr).data;
-    if (sealed_match != .match_) return error.TestExpectedEqual;
-    try std.testing.expectEqual(sealed_expr, sealed_match.match_.scrutinee);
-    try std.testing.expectEqual(@as(u32, 0), sealed_match.match_.branches.start);
-    try std.testing.expectEqual(@as(u32, 1), sealed_match.match_.branches.len);
-    try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), sealed_match.match_.comptime_site);
-    const sealed_if = program.getExpr(sealed_if_expr).data;
-    if (sealed_if != .if_) return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(u32, 0), sealed_if.if_.branches.start);
-    try std.testing.expectEqual(@as(u32, 1), sealed_if.if_.branches.len);
-    try std.testing.expectEqual(sealed_expr, sealed_if.if_.final_else);
-    const sealed_stmt = program.getStmtAt(0);
-    if (sealed_stmt != .let_) return error.TestExpectedEqual;
-    try std.testing.expectEqual(sealed_pat, sealed_stmt.let_.pat);
-    try std.testing.expectEqual(sealed_expr, sealed_stmt.let_.value);
-    try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), sealed_stmt.let_.comptime_site);
+    {
+        const data = program.getPatAt(0).data;
+        if (data != .bind) return error.TestExpectedEqual;
+        try std.testing.expectEqual(sealed_local, data.bind);
+    }
+    {
+        const data = program.getPat(sealed_record_pat).data;
+        if (data != .record) return error.TestExpectedEqual;
+        const span = data.record;
+        try std.testing.expectEqual(@as(u32, 0), span.start);
+        try std.testing.expectEqual(@as(u32, 1), span.len);
+    }
+    {
+        const data = program.getPat(sealed_str_pat).data;
+        if (data != .str_pattern) return error.TestExpectedEqual;
+        const pattern = data.str_pattern;
+        try std.testing.expectEqual(sealed_literal, pattern.prefix);
+        try std.testing.expectEqual(@as(u32, 0), pattern.steps.start);
+        try std.testing.expectEqual(@as(u32, 1), pattern.steps.len);
+        try std.testing.expectEqual(Ast.StrPatternEnd.exact, pattern.end);
+    }
+    {
+        const data = program.getExprAt(0).data;
+        if (data != .local) return error.TestExpectedEqual;
+        try std.testing.expectEqual(sealed_local, data.local);
+    }
+    {
+        const data = program.getExpr(sealed_record_expr).data;
+        if (data != .record) return error.TestExpectedEqual;
+        const span = data.record;
+        try std.testing.expectEqual(@as(u32, 0), span.start);
+        try std.testing.expectEqual(@as(u32, 1), span.len);
+    }
+    {
+        const data = program.getExpr(sealed_match_expr).data;
+        if (data != .match_) return error.TestExpectedEqual;
+        const match_ = data.match_;
+        try std.testing.expectEqual(sealed_expr, match_.scrutinee);
+        try std.testing.expectEqual(@as(u32, 0), match_.branches.start);
+        try std.testing.expectEqual(@as(u32, 1), match_.branches.len);
+        try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), match_.comptime_site);
+    }
+    {
+        const data = program.getExpr(sealed_if_expr).data;
+        if (data != .if_) return error.TestExpectedEqual;
+        const if_ = data.if_;
+        try std.testing.expectEqual(@as(u32, 0), if_.branches.start);
+        try std.testing.expectEqual(@as(u32, 1), if_.branches.len);
+        try std.testing.expectEqual(sealed_expr, if_.final_else);
+    }
+    {
+        const data = program.getExpr(sealed_field_access_expr).data;
+        if (data != .field_access) return error.TestExpectedEqual;
+        const access = data.field_access;
+        try std.testing.expectEqual(sealed_expr, access.receiver);
+        try std.testing.expectEqual(@as(u32, 1), access.segments.start);
+        try std.testing.expectEqual(@as(u32, 2), access.segments.len);
+        try std.testing.expectEqual(field_name, program.fieldAccessSegmentAt(access.segments, 0).field);
+        try std.testing.expectEqual(nested_field_name, program.fieldAccessSegmentAt(access.segments, 1).field);
+    }
+    {
+        const sealed_stmt = program.getStmtAt(0);
+        if (sealed_stmt != .let_) return error.TestExpectedEqual;
+        const let_ = sealed_stmt.let_;
+        try std.testing.expectEqual(sealed_pat, let_.pat);
+        try std.testing.expectEqual(sealed_expr, let_.value);
+        try std.testing.expectEqual(@as(?Ast.ComptimeSiteId, sealed_site), let_.comptime_site);
+    }
 }
 
 test "body draft ownership runs restore the parent across nested lowering" {

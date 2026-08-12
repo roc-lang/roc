@@ -2589,7 +2589,8 @@ const Pass = struct {
         if (iterator_type != .named) return false;
         const named = iterator_type.named;
         const topology = named.def.iterator_topology orelse return false;
-        if (access.field != topology.step_field) return false;
+        if (access.segments.len != 1) return false;
+        if (self.program.fieldAccessSegmentAt(access.segments, 0).field != topology.step_field) return false;
         const backing = named.backing orelse return false;
         if (backing.authority != .generated_private) return false;
         const backing_type = self.program.types.get(backing.ty);
@@ -2924,7 +2925,7 @@ const Pass = struct {
         const base_param_ref = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .local = base_param } });
         const step = try self.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .field_access = .{
             .receiver = base_param_ref,
-            .field = topology.step_field,
+            .segments = try self.program.addFieldAccessSegmentSpan(&.{.{ .field = topology.step_field }}),
         } } });
         const next = try self.program.addExpr(.{ .ty = step_ty, .data = .{ .call_value = .{
             .callee = step,
@@ -3384,7 +3385,7 @@ const Pass = struct {
             } },
             .field_access => |field| .{ .field_access = .{
                 .receiver = (try self.cloneExprFresh(field.receiver, renames)) orelse return null,
-                .field = field.field,
+                .segments = field.segments,
             } },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = (try self.cloneExprFresh(access.tuple, renames)) orelse return null,
@@ -5161,7 +5162,7 @@ const Cloner = struct {
 
                     const read = try self.addExpr(.{ .ty = type_field.ty, .data = .{ .field_access = .{
                         .receiver = base_ref,
-                        .field = type_field.name,
+                        .segments = try self.pass.program.addFieldAccessSegmentSpan(&.{.{ .field = type_field.name }}),
                     } } });
                     const read_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), type_field.ty);
                     try bindings.appendBinding(self.arena.allocator(), .{
@@ -5224,14 +5225,7 @@ const Cloner = struct {
                 if (try self.cloneBlockValue(block, bindings)) |value| return value;
                 return .{ .expr = try self.cloneExprPlain(expr_id) };
             },
-            .field_access => |field| {
-                const receiver = try self.cloneExprValueDemandingShapeInto(field.receiver, bindings);
-                if (fieldFromValue(self.pass.program, receiver, field.field)) |value| return value;
-                return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
-                    .receiver = try self.materialize(receiver),
-                    .field = field.field,
-                } } }) };
-            },
+            .field_access => |field| return try self.cloneFieldAccessValue(expr.ty, field, bindings),
             .tuple_access => |access| {
                 const receiver = try self.cloneExprValueDemandingShapeInto(access.tuple, bindings);
                 if (itemFromValue(receiver, access.elem_index)) |value| return value;
@@ -5473,7 +5467,11 @@ const Cloner = struct {
             .field_access => |field| blk: {
                 const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
                 const receiver = self.subst.getExact(receiver_local) orelse break :blk false;
-                const value = fieldFromValue(self.pass.program, receiver, field.field) orelse break :blk false;
+                const value = fieldPathFromValue(
+                    self.pass.program,
+                    receiver,
+                    self.pass.program.fieldAccessSegmentSpan(field.segments),
+                ) orelse break :blk false;
                 break :blk shapeProofIsProven(try self.pass.shapeFromValue(value));
             },
             .tuple_access => |access| blk: {
@@ -7835,10 +7833,11 @@ const Cloner = struct {
                             const fields = try self.arena.allocator().alloc(FieldShape, record.fields.len);
                             var demoted = false;
                             for (record.fields, 0..) |field_shape, index| {
-                                const field_expr = try self.addExpr(.{ .ty = shapeType(field_shape.shape), .data = .{ .field_access = .{
-                                    .receiver = receiver,
-                                    .field = field_shape.name,
-                                } } });
+                                const field_expr = try self.addFieldAccessExpr(
+                                    shapeType(field_shape.shape),
+                                    receiver,
+                                    field_shape.name,
+                                );
                                 const supplied = try self.supplyLoopSlotLeaves(field_shape.shape, .{ .expr = field_expr }, out);
                                 fields[index] = .{ .name = field_shape.name, .shape = supplied.shape };
                                 demoted = demoted or supplied.demoted;
@@ -7931,16 +7930,32 @@ const Cloner = struct {
         return .{ .shape = .{ .any = ty }, .demoted = true };
     }
 
-    fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
-        const receiver = try self.cloneExprValueDemandingShape(field.receiver);
-        if (fieldFromValue(self.pass.program, receiver.value, field.field)) |value| {
-            return try self.wrapBindings(receiver.bindings, try self.materialize(value));
+    fn cloneFieldAccessValue(self: *Cloner, ty: Type.TypeId, field: anytype, bindings: *BindingChain) Common.LowerError!Value {
+        const receiver = try self.cloneExprValueDemandingShapeInto(field.receiver, bindings);
+        if (field.segments.len == 0) Common.invariant("field access path had no segments");
+
+        var prefix = receiver;
+        var consumed: u32 = 0;
+        while (consumed < field.segments.len) : (consumed += 1) {
+            const segment = self.pass.program.fieldAccessSegmentAt(field.segments, consumed);
+            prefix = fieldFromValue(self.pass.program, prefix, segment.field) orelse break;
         }
-        const access = try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
-            .receiver = try self.materialize(receiver.value),
-            .field = field.field,
-        } } });
-        return try self.wrapBindings(receiver.bindings, access);
+        if (consumed == field.segments.len) return prefix;
+
+        const residual_segments: Ast.Span(Ast.FieldAccessSegment) = .{
+            .start = field.segments.start + consumed,
+            .len = field.segments.len - consumed,
+        };
+        return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
+            .receiver = try self.materialize(prefix),
+            .segments = residual_segments,
+        } } }) };
+    }
+
+    fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
+        var bindings: BindingChain = .{};
+        const value = try self.cloneFieldAccessValue(ty, field, &bindings);
+        return try self.wrapBindings(bindings, try self.materialize(value));
     }
 
     fn cloneTupleAccess(self: *Cloner, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
@@ -8109,10 +8124,7 @@ const Cloner = struct {
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
                             const field_ty = self.pass.program.getPat(field.pattern).ty;
-                            const field_expr = try self.addExpr(.{ .ty = field_ty, .data = .{ .field_access = .{
-                                .receiver = receiver,
-                                .field = field.name,
-                            } } });
+                            const field_expr = try self.addFieldAccessExpr(field_ty, receiver, field.name);
                             _ = (try self.bindPatToMatchValue(field.pattern, .{ .expr = field_expr }, body, bindings)) orelse return null;
                         }
                         return value;
@@ -8385,7 +8397,11 @@ const Cloner = struct {
             },
             .field_access => |field| blk: {
                 const receiver = self.peekKnownValue(field.receiver) orelse break :blk null;
-                break :blk fieldFromValue(self.pass.program, receiver, field.field);
+                break :blk fieldPathFromValue(
+                    self.pass.program,
+                    receiver,
+                    self.pass.program.fieldAccessSegmentSpan(field.segments),
+                );
             },
             .tuple_access => |access| blk: {
                 const receiver = self.peekKnownValue(access.tuple) orelse break :blk null;
@@ -9211,10 +9227,7 @@ const Cloner = struct {
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
                             const field_ty = self.pass.program.getPat(field.pattern).ty;
-                            const field_expr = try self.addExpr(.{ .ty = field_ty, .data = .{ .field_access = .{
-                                .receiver = receiver,
-                                .field = field.name,
-                            } } });
+                            const field_expr = try self.addFieldAccessExpr(field_ty, receiver, field.name);
                             const child_verdict = try self.bindPatToValue(field.pattern, .{ .expr = field_expr });
                             switch (child_verdict) {
                                 .match => {},
@@ -9376,10 +9389,7 @@ const Cloner = struct {
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
                             const field_ty = self.pass.program.getPat(field.pattern).ty;
-                            const field_expr = try self.addExpr(.{ .ty = field_ty, .data = .{ .field_access = .{
-                                .receiver = receiver,
-                                .field = field.name,
-                            } } });
+                            const field_expr = try self.addFieldAccessExpr(field_ty, receiver, field.name);
                             if (!try self.bindPatToFlowValue(field.pattern, .{ .expr = field_expr })) return false;
                         }
                     },
@@ -10015,10 +10025,17 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(source);
         if (expr.data == .field_access) {
             const field = expr.data.field_access;
-            return try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
-                .receiver = try self.cloneFieldTupleReadReplacingRoot(field.receiver, root, replacement),
-                .field = field.field,
-            } } });
+            return try self.addExpr(.{
+                .ty = expr.ty,
+                .data = .{
+                    .field_access = .{
+                        .receiver = try self.cloneFieldTupleReadReplacingRoot(field.receiver, root, replacement),
+                        // The clone stays within `pass.program`, so the source span
+                        // remains valid for the replacement expression.
+                        .segments = field.segments,
+                    },
+                },
+            });
         }
         if (expr.data == .tuple_access) {
             const access = expr.data.tuple_access;
@@ -10339,6 +10356,19 @@ const Cloner = struct {
             .call_site = call_site,
             .parent = self.current_inline_scope,
         });
+    }
+
+    fn addFieldAccessExpr(
+        self: *Cloner,
+        ty: Type.TypeId,
+        receiver: Ast.ExprId,
+        field: names.RecordFieldNameId,
+    ) Allocator.Error!Ast.ExprId {
+        const segments = try self.pass.program.addFieldAccessSegmentSpan(&.{.{ .field = field }});
+        return try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
+            .receiver = receiver,
+            .segments = segments,
+        } } });
     }
 
     fn addExpr(self: *Cloner, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
@@ -12350,6 +12380,16 @@ fn fieldFromValueStripping(program: *const Ast.Program, value: Value, name: name
     };
 }
 
+fn fieldPathFromValue(program: *const Ast.Program, receiver: Value, segments: anytype) ?Value {
+    if (segments.len == 0) Common.invariant("field access path had no segments");
+    var value = receiver;
+    for (0..segments.len) |index| {
+        const segment = GuardedList.at(segments, index);
+        value = fieldFromValue(program, value, segment.field) orelse return null;
+    }
+    return value;
+}
+
 fn fieldFromRecord(program: *const Ast.Program, record: RecordValue, name: names.RecordFieldNameId) ?Value {
     for (record.fields) |field| {
         if (program.names.recordFieldLabelTextEql(field.name, name)) return field.value;
@@ -12438,6 +12478,7 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // typed_locals
         .empty, // stmt_ids
         .empty, // field_exprs
+        .empty, // field_access_segments
         .empty, // fn_def_captures
         .empty, // capture_operands
         .empty, // record_destructs
@@ -12470,8 +12511,8 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const a = try program.names.internRecordFieldLabel("a");
     const b = try program.names.internRecordFieldLabel("b");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = a, .ty = u8_ty },
-        .{ .name = b, .ty = u8_ty },
+        .{ .name = a, .ty = u8_ty, .default = null },
+        .{ .name = b, .ty = u8_ty, .default = null },
     }) });
     const base_local = try program.addLocal(@enumFromInt(1), record_ty);
     const update_local = try program.addLocal(@enumFromInt(2), u8_ty);
@@ -12498,10 +12539,14 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const base_binding = cloned.bindings.first orelse return error.TestUnexpectedResult;
     const read_binding = base_binding.next orelse return error.TestUnexpectedResult;
     try std.testing.expect(read_binding.next == null);
-    const read_data = program.getExpr(read_binding.binding.value).data;
-    if (read_data != .field_access) return error.TestUnexpectedResult;
-    const read = read_data.field_access;
-    try std.testing.expectEqual(a, read.field);
+    const read = blk_read: {
+        const scrutinee = program.getExpr(read_binding.binding.value).data;
+        if (scrutinee != .field_access) return error.TestUnexpectedResult;
+        break :blk_read scrutinee.field_access;
+    };
+    const read_segments = program.fieldAccessSegmentSpan(read.segments);
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(read_segments));
+    try std.testing.expectEqual(a, GuardedList.at(read_segments, 0).field);
     try std.testing.expectEqual(base_binding.binding.local, program.getExpr(read.receiver).data.local);
 
     try std.testing.expectEqual(a, record.fields[0].name);
@@ -12970,6 +13015,100 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     try std.testing.expectEqual(@as(usize, 2), callable.captures.len);
     try std.testing.expectEqual(first_id, callable.captures[0].id);
     try std.testing.expectEqual(second_id, callable.captures[1].id);
+}
+
+test "field access folding preserves shared residual suffix spans" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const outer_name = try program.names.internRecordFieldLabel("outer");
+    const middle_name = try program.names.internRecordFieldLabel("middle");
+    const leaf_name = try program.names.internRecordFieldLabel("leaf");
+
+    const leaf_ty = try program.types.add(.{ .primitive = .u8 });
+    const inner_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = leaf_name, .ty = leaf_ty, .default = null },
+    }) });
+    const middle_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = middle_name, .ty = inner_ty, .default = null },
+    }) });
+    const outer_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = outer_name, .ty = middle_ty, .default = null },
+    }) });
+
+    const leaf_local = try program.addLocal(@enumFromInt(1), leaf_ty);
+    const leaf_expr = try program.addExpr(.{ .ty = leaf_ty, .data = .{ .local = leaf_local } });
+    const inner_expr = try program.addExpr(.{ .ty = inner_ty, .data = .{
+        .record = try program.addFieldExprSpan(&.{.{ .name = leaf_name, .value = leaf_expr }}),
+    } });
+    const middle_expr = try program.addExpr(.{ .ty = middle_ty, .data = .{
+        .record = try program.addFieldExprSpan(&.{.{ .name = middle_name, .value = inner_expr }}),
+    } });
+    const full_receiver = try program.addExpr(.{ .ty = outer_ty, .data = .{
+        .record = try program.addFieldExprSpan(&.{.{ .name = outer_name, .value = middle_expr }}),
+    } });
+    const full_segments = try program.addFieldAccessSegmentSpan(&.{
+        .{ .field = outer_name },
+        .{ .field = middle_name },
+        .{ .field = leaf_name },
+    });
+    const full_access = try program.addExpr(.{ .ty = leaf_ty, .data = .{ .field_access = .{
+        .receiver = full_receiver,
+        .segments = full_segments,
+    } } });
+
+    const unknown_middle_local = try program.addLocal(@enumFromInt(2), middle_ty);
+    const unknown_middle_expr = try program.addExpr(.{ .ty = middle_ty, .data = .{ .local = unknown_middle_local } });
+    const observable_unknown_middle = try program.addExpr(.{ .ty = middle_ty, .data = .{ .dbg = unknown_middle_expr } });
+    const partial_receiver = try program.addExpr(.{ .ty = outer_ty, .data = .{
+        .record = try program.addFieldExprSpan(&.{.{ .name = outer_name, .value = observable_unknown_middle }}),
+    } });
+    const partial_access = try program.addExpr(.{ .ty = leaf_ty, .data = .{ .field_access = .{
+        .receiver = partial_receiver,
+        .segments = full_segments,
+    } } });
+
+    const original_segment_count = program.field_access_segments.len();
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const full_expr_start = program.exprCount();
+    const folded_leaf = try cloner.cloneExpr(full_access);
+    try std.testing.expectEqual(full_expr_start + 1, program.exprCount());
+    try std.testing.expectEqual(leaf_local, program.getExpr(folded_leaf).data.local);
+    try std.testing.expectEqual(original_segment_count, program.field_access_segments.len());
+
+    const partial_expr_start = program.exprCount();
+    const residual_expr = try cloner.cloneExpr(partial_access);
+    const residual = blk_residual: {
+        const scrutinee = program.getExpr(residual_expr).data;
+        if (scrutinee != .field_access) return error.TestUnexpectedResult;
+        break :blk_residual scrutinee.field_access;
+    };
+    const residual_receiver_child = blk_residual_receiver_child: {
+        const scrutinee = program.getExpr(residual.receiver).data;
+        if (scrutinee != .dbg) return error.TestUnexpectedResult;
+        break :blk_residual_receiver_child scrutinee.dbg;
+    };
+    try std.testing.expectEqual(unknown_middle_local, program.getExpr(residual_receiver_child).data.local);
+    try std.testing.expectEqual(full_segments.start + 1, residual.segments.start);
+    try std.testing.expectEqual(full_segments.len - 1, residual.segments.len);
+    try std.testing.expectEqual(middle_name, program.fieldAccessSegmentAt(residual.segments, 0).field);
+    try std.testing.expectEqual(leaf_name, program.fieldAccessSegmentAt(residual.segments, 1).field);
+    try std.testing.expectEqual(original_segment_count, program.field_access_segments.len());
+
+    var dbg_count: usize = 0;
+    var field_access_count: usize = 0;
+    for (partial_expr_start..program.exprCount()) |raw_expr| {
+        const counted_expr = program.getExpr(@enumFromInt(@as(u32, @intCast(raw_expr)))).data;
+        if (counted_expr == .dbg) dbg_count += 1;
+        if (counted_expr == .field_access) field_access_count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), dbg_count);
+    try std.testing.expectEqual(@as(usize, 1), field_access_count);
 }
 
 test "expression traversal visits both operands of structural_hash" {

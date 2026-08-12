@@ -1,6 +1,6 @@
 //! Resolves checked-artifact types into committed ordinary-data layouts.
 //!
-//! This is the glue/cache-path sibling of `type_layout_resolver.zig`: it consumes
+//! This is the glue/cache-path layout resolver: it consumes
 //! serialized checked artifacts instead of live checker vars, then finalizes
 //! through the shared layout graph/store.
 
@@ -443,7 +443,7 @@ pub const Resolver = struct {
                     const match = backingFieldByName(lookup.artifact, backing_fields.items, field_name) orelse unreachable;
                     graph_fields.appendAssumeCapacity(.{
                         .index = match.index,
-                        .child = try self.buildRefForType(lookup.artifact, match.field.ty, .ordinary, build_state),
+                        .child = try self.buildFieldSlotRef(lookup.artifact, match.field, build_state),
                     });
                 },
                 .padding => |padding_ty| {
@@ -484,10 +484,40 @@ pub const Resolver = struct {
         for (fields.items, 0..) |field, index| {
             graph_fields.appendAssumeCapacity(.{
                 .index = @intCast(index),
-                .child = try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+                .child = try self.buildFieldSlotRef(artifact, field, build_state),
             });
         }
         return self.buildStructNode(build_state, graph_fields.items, false);
+    }
+
+    /// The internal layout slot of one checked record field (design.md "Field
+    /// Kinds"): `required` and `defaulted` kinds use the field's own inline
+    /// layout, while `optional` uses the compiler's two-variant
+    /// `[#Missing, #Present(value)]` slot. The checker separately forbids every
+    /// reachable optional field in hosted/provided signatures; being able to
+    /// resolve checked metadata here does not make this representation part of
+    /// the platform-host ABI.
+    fn buildFieldSlotRef(
+        self: *Resolver,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        field: CheckedArtifact.CheckedRecordField,
+        build_state: *BuildState,
+    ) Error!GraphRef {
+        switch (field.kind.tag) {
+            .required, .defaulted => return try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+            .optional => {
+                const variants = [_]GraphRef{
+                    try self.buildPayloadRef(artifact, &.{}, build_state),
+                    try self.buildPayloadRef(artifact, &.{field.ty}, build_state),
+                };
+                const node_id = try build_state.graph.reserveNode(self.allocator);
+                const span = try build_state.graph.appendRefs(self.allocator, &variants);
+                build_state.graph.setNode(node_id, .{ .tag_union = span });
+                return .{ .local = node_id };
+            },
+            .undetermined => return error.UnresolvedByValue,
+            .err => return error.UnresolvedByValue,
+        }
     }
 
     fn buildTupleRef(

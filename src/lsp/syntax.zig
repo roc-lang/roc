@@ -1049,13 +1049,13 @@ pub const SyntaxChecker = struct {
         // Prefer lookup expression semantics when hovering over identifiers in
         // calls (e.g. `multiply(…)`): callers expect the callee's function type
         // and docs, not the enclosing call expression's return type.
-        var lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
-        if (lookup_expr_idx_opt == null and result.region.start.offset != target_offset) {
-            lookup_expr_idx_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
+        var lookup_result_opt = cir_queries.findLookupAtOffset(module_env, target_offset);
+        if (lookup_result_opt == null and result.region.start.offset != target_offset) {
+            lookup_result_opt = cir_queries.findLookupAtOffset(module_env, result.region.start.offset);
         }
 
-        var hover_type_var = if (lookup_expr_idx_opt) |lookup_expr_idx|
-            ModuleEnv.varFrom(lookup_expr_idx)
+        var hover_type_var = if (lookup_result_opt) |lookup_result|
+            lookup_result.typeVar()
         else
             result.type_var;
 
@@ -1063,24 +1063,33 @@ pub const SyntaxChecker = struct {
         // resolve an explicit annotation for a symbol, prefer that exact text.
         var hover_type_text_opt: ?[]const u8 = null;
 
-        if (lookup_expr_idx_opt) |lookup_expr_idx| {
-            const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
-            const lookup_tag = std.meta.activeTag(lookup_expr);
-            const method_parts: ?struct { receiver: CIR.Expr.Idx, method_name: base.Ident.Idx } = if (lookup_tag == .e_method_call)
-                .{ .receiver = lookup_expr.e_method_call.receiver, .method_name = lookup_expr.e_method_call.method_name }
-            else if (lookup_tag == .e_dispatch_call)
-                .{ .receiver = lookup_expr.e_dispatch_call.receiver, .method_name = lookup_expr.e_dispatch_call.method_name }
-            else
-                null;
-            if (method_parts) |method_call| {
-                const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-                if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                    if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
-                        if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
-                            hover_type_var = method_type_var;
+        if (lookup_result_opt) |lookup_result| {
+            switch (lookup_result) {
+                .expr => |lookup_expr_idx| {
+                    const lookup_expr = module_env.store.getExpr(lookup_expr_idx);
+                    if (lookup_expr == .e_method_call) {
+                        const method_call = lookup_expr.e_method_call;
+                        const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                        if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                            if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
+                                if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                    hover_type_var = method_type_var;
+                                }
+                            }
+                        }
+                    } else if (lookup_expr == .e_dispatch_call) {
+                        const method_call = lookup_expr.e_dispatch_call;
+                        const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
+                        if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
+                            if (findMethodQualifiedIdent(module_env, method_owner.owner, method_call.method_name)) |qualified_ident| {
+                                if (findTypeForQualifiedIdent(module_env, qualified_ident)) |method_type_var| {
+                                    hover_type_var = method_type_var;
+                                }
+                            }
                         }
                     }
-                }
+                },
+                .field_access => {},
             }
         }
 
@@ -1094,8 +1103,8 @@ pub const SyntaxChecker = struct {
         // Extract documentation for the definition/pattern at this location.
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
-        var documentation = if (lookup_expr_idx_opt) |lookup_expr_idx|
-            try self.resolveDocForLookup(env, module_env, lookup_expr_idx)
+        var documentation = if (lookup_result_opt) |lookup_result|
+            try self.resolveDocForLookup(env, module_env, lookup_result)
         else
             try self.findDocumentationForRegion(env, module_env, result.region, target_offset);
 
@@ -1201,8 +1210,8 @@ pub const SyntaxChecker = struct {
 
         // First, check if this is a lookup expression (e.g., a function call)
         // If so, resolve it to the definition and extract docs from there
-        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |expr_idx| {
-            if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |lookup_result| {
+            if (try self.resolveDocForLookup(env, module_env, lookup_result)) |doc| return doc;
         }
 
         // Hover positions can land on delimiters around the symbol (e.g. `(` in
@@ -1210,8 +1219,8 @@ pub const SyntaxChecker = struct {
         // the start of the selected type region as an anchor for lookup-based
         // documentation resolution.
         if (region.start.offset != target_offset) {
-            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |expr_idx| {
-                if (try self.resolveDocForLookup(env, module_env, expr_idx)) |doc| return doc;
+            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |lookup_result| {
+                if (try self.resolveDocForLookup(env, module_env, lookup_result)) |doc| return doc;
             }
         }
 
@@ -1251,9 +1260,13 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve documentation for a local lookup, external lookup, or attached method dispatch.
-    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!?[]const u8 {
+    fn resolveDocForLookup(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, lookup_result: cir_queries.LookupResult) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
+        const expr_idx = switch (lookup_result) {
+            .expr => |idx| idx,
+            .field_access => return null,
+        };
         const expr = store.getExpr(expr_idx);
 
         const expr_tag = std.meta.activeTag(expr);
@@ -1532,8 +1545,7 @@ pub const SyntaxChecker = struct {
     /// Find the definition location for the expression at the given byte offset.
     /// Looks for lookups (e_lookup_local, e_lookup_external) and returns the definition location.
     fn findDefinitionAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32, current_uri: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
-        var best_expr: ?CIR.Expr.Idx = null;
-        var best_size: u32 = std.math.maxInt(u32);
+        var best_lookup: ?cir_queries.LookupResult = null;
 
         // Iterate through all definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
@@ -1566,8 +1578,7 @@ pub const SyntaxChecker = struct {
                 }
                 // Then search for lookup expressions
                 if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                    best_expr = found;
-                    best_size = 0; // found the narrowest match
+                    best_lookup = found;
                 }
             }
         }
@@ -1617,8 +1628,7 @@ pub const SyntaxChecker = struct {
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
                     if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                        best_expr = found;
-                        best_size = 0;
+                        best_lookup = found;
                     }
                 }
             }
@@ -1629,15 +1639,18 @@ pub const SyntaxChecker = struct {
 
                 if (cir_queries.regionContainsOffset(expr_region, target_offset)) {
                     if (cir_queries.findLookupAtOffset(module_env, target_offset)) |found| {
-                        best_expr = found;
-                        best_size = 0;
+                        best_lookup = found;
                     }
                 }
             }
         }
 
         // If we found a lookup expression, resolve it to a definition
-        if (best_expr) |expr_idx| {
+        if (best_lookup) |lookup_result| {
+            const expr_idx = switch (lookup_result) {
+                .expr => |idx| idx,
+                .field_access => return null,
+            };
             const expr = module_env.store.getExpr(expr_idx);
             const expr_tag = std.meta.activeTag(expr);
             if (expr_tag == .e_lookup_local) {

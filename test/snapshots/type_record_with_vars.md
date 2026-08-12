@@ -53,8 +53,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "record")))
 				(e-field-access
-					(e-ident (raw "record"))
-					(e-ident (raw "field")))))
+					(receiver
+						(e-ident (raw "record")))
+					(segment (mode "required") (field "field")))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -79,10 +80,12 @@ main! = |_| {}
 		(e-lambda
 			(args
 				(p-assign (ident "record")))
-			(e-field-access (field "field")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "record"))))))
+						(p-assign (ident "record"))))
+				(segments
+					(segment (name "field") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

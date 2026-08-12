@@ -331,12 +331,13 @@ Numbers cannot have leading zeros.
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+    Required record access uses `.name`, optional record access uses `.?name`,
+    and tuple access uses `.0`. Accessor names must be lowercase and adjacent
+    to their punctuation.
 
     For example:
         person.name
+        maybe_person.?name
         pair.0
 
     I found `...` here.
@@ -1780,7 +1781,7 @@ main! = |_| { # Yeah Ie
 (can-ir
 	(d-let
 		(p-assign (ident "line"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-tuple
 				(ty-malformed)
@@ -1800,27 +1801,7 @@ main! = |_| { # Yeah Ie
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "other"))
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-runtime-error (tag "erroneous_value_use"))
-							(e-block
-								(s-dbg
-									(e-runtime-error (tag "empty_tuple")))
-								(e-num (value "0")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-lookup-local
-								(p-assign (ident "other"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -1830,61 +1811,7 @@ main! = |_| { # Yeah Ie
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "world"))
-					(e-string
-						(e-literal (string "World"))))
-				(s-var
-					(p-assign (ident "number"))
-					(e-num (value "123")))
-				(s-expect
-					(e-method-eq (negated "false")
-						(lhs
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(rhs
-							(e-num (value "1")))))
-				(s-let
-					(p-assign (ident "tag"))
-					(e-tag (name "Blue")))
-				(s-return
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-expr
-					(e-run-low-level (op "crash")
-						(args
-							(e-string
-								(e-literal (string "Unreachtement"))))))
-				(s-let
-					(p-assign (ident "tag_with"))
-					(e-tag (name "Ok")
-						(args
-							(e-lookup-local
-								(p-assign (ident "number"))))))
-				(s-let
-					(p-assign (ident "ited"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_0"))
-							(e-lookup-local
-								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1148) (dispatcher-var 318)
-							(first
-								(e-literal (string "Hello, ")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string ""))))))
-				(s-let
-					(p-assign (ident "list"))
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(e-empty_record)))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

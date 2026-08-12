@@ -960,7 +960,7 @@ is_named_color = |str| {
 																		(p-assign (ident "#interp_0"))
 																		(e-lookup-local
 																			(p-assign (ident "str"))))
-																	(e-interpolation (constraint-fn-var 912) (dispatcher-var 173)
+																	(e-interpolation (constraint-fn-var 923) (dispatcher-var 173)
 																		(first
 																			(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got ")))
 																		(parts
@@ -981,7 +981,7 @@ is_named_color = |str| {
 															(p-assign (ident "#interp_1"))
 															(e-lookup-local
 																(p-assign (ident "str"))))
-														(e-interpolation (constraint-fn-var 938) (dispatcher-var 189)
+														(e-interpolation (constraint-fn-var 947) (dispatcher-var 189)
 															(first
 																(e-literal (string "Expected Hex must start with # and be 7 characters long, got ")))
 															(parts
@@ -1067,7 +1067,7 @@ is_named_color = |str| {
 											(p-assign (ident "#interp_9"))
 											(e-lookup-local
 												(p-assign (ident "str"))))
-										(e-interpolation (constraint-fn-var 1111) (dispatcher-var 353)
+										(e-interpolation (constraint-fn-var 1127) (dispatcher-var 353)
 											(first
 												(e-literal (string "Unknown color ")))
 											(parts
@@ -1090,7 +1090,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 1159)
+					(e-call (constraint-fn-var 1173)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1101,7 +1101,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1160)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1174)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1141,9 +1141,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1262)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1276)
 					(receiver
-						(e-call (constraint-fn-var 1261)
+						(e-call (constraint-fn-var 1275)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

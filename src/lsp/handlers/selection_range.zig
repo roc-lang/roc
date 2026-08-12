@@ -389,7 +389,31 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, b.right, target_offset, regions);
         },
         .field_access => |f| {
-            try collectContainingRegionsFromExpr(allocator, ast, f.left, target_offset, regions);
+            // A flat field-access node replaces the nested expression nodes that
+            // previously represented each prefix of a chain. Preserve those
+            // semantic selections directly from the receiver and segment token
+            // boundaries. The complete chain was appended above, so visit the
+            // proper prefixes from outermost to innermost before the receiver.
+            const receiver_region = ast.store.getExpr(f.receiver).to_tokenized_region();
+            const segments = ast.store.fieldAccessSegmentSlice(f.segments);
+
+            var prefix_len = segments.len -| 1;
+            while (prefix_len > 0) {
+                prefix_len -= 1;
+                const prefix_region = ast.tokenizedRegionToRegion(.{
+                    .start = receiver_region.start,
+                    .end = segments[prefix_len].field_token + 1,
+                });
+
+                if (rangeContainsOffset(prefix_region.start.offset, prefix_region.end.offset, target_offset)) {
+                    try regions.append(allocator, .{
+                        .start = prefix_region.start.offset,
+                        .end = prefix_region.end.offset,
+                    });
+                }
+            }
+
+            try collectContainingRegionsFromExpr(allocator, ast, f.receiver, target_offset, regions);
         },
         .method_call => |m| {
             try collectContainingRegionsFromExpr(allocator, ast, m.receiver, target_offset, regions);
@@ -505,4 +529,25 @@ fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
         .line = line,
         .character = offset - line_start,
     };
+}
+
+test "selection ranges preserve flat field access prefixes" {
+    const source = "main = root.first.?second.third\n";
+    const selection = try computeSelectionRange(std.testing.allocator, source, 0, 8);
+    defer freeSelectionRange(std.testing.allocator, selection);
+
+    try std.testing.expectEqual(@as(u32, 7), selection.range.start.character);
+    try std.testing.expectEqual(@as(u32, 11), selection.range.end.character);
+
+    const first_prefix = selection.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), first_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 17), first_prefix.range.end.character);
+
+    const second_prefix = first_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), second_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 25), second_prefix.range.end.character);
+
+    const full_chain = second_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), full_chain.range.start.character);
+    try std.testing.expectEqual(@as(u32, 31), full_chain.range.end.character);
 }

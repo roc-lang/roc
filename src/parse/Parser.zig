@@ -281,6 +281,7 @@ const ExprParentKind = enum(u16) {
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
     expr_lambda_body = 0xdca0,
+    type_record_field_default = 0x61f2,
 };
 
 const PatternParentKind = enum(u16) {
@@ -2689,6 +2690,7 @@ const OpenSyntaxStack = struct {
     type_zero_arg_fn_ret: std.ArrayList(TypeZeroArgFnRetState) = .empty,
     type_record_ext: std.ArrayList(TypeRecordExtState) = .empty,
     type_record_field: std.ArrayList(TypeRecordFieldState) = .empty,
+    type_record_field_default: std.ArrayList(TypeRecordFieldDefaultState) = .empty,
     type_tag_union_ext: std.ArrayList(TypeTagUnionExtState) = .empty,
     type_tag_union_item: std.ArrayList(TypeTagUnionItemState) = .empty,
     type_fn_arg: std.ArrayList(TypeFnArgsState) = .empty,
@@ -2943,8 +2945,20 @@ const TypeRecordFieldState = struct {
     scratch_top: u32,
     field_start: Token.Idx,
     name: Token.Idx,
+    optional_mark: ?Token.Idx,
     ext: AST.TypeAnno.RecordExt,
     looking_for_args: TyFnArgs,
+};
+
+const TypeRecordFieldDefaultState = struct {
+    record_start: Token.Idx,
+    scratch_top: u32,
+    field_start: Token.Idx,
+    name: Token.Idx,
+    optional_mark: ?Token.Idx,
+    ext: AST.TypeAnno.RecordExt,
+    looking_for_args: TyFnArgs,
+    ty: AST.TypeAnno.Idx,
 };
 
 const TypeTagUnionState = struct {
@@ -3659,7 +3673,7 @@ fn runExprStatementKernel(
             // Trivia-separated postfixes apply to the completed pipe; adjacent
             // NoSpaceDot* postfixes remain part of the pipe target.
             if (open_syntax.peekExpr() == .expr_pipe_rhs and
-                (tok == .DotInt or tok == .DotLowerIdent))
+                (tok == .DotInt or tok == .DotLowerIdent or tok == .DotQuestionLowerIdent))
             {
                 last_expr = expr_finish_state.expr;
                 continue :expr_kernel .complete;
@@ -3720,7 +3734,7 @@ fn runExprStatementKernel(
             }
 
             if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
-                if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                if (tok_int >= @intFromEnum(Token.Tag.DotInt) and tok_int <= @intFromEnum(Token.Tag.NoSpaceDotInt)) {
                     const elem_token = self.pos;
                     self.advance();
                     expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
@@ -3730,15 +3744,10 @@ fn runExprStatementKernel(
                     } });
                     continue :expr_kernel .suffix;
                 }
-                if (tok == .NoSpaceDotLowerIdent or tok == .DotLowerIdent) {
+                if (tok_int >= @intFromEnum(Token.Tag.DotLowerIdent) and tok_int <= @intFromEnum(Token.Tag.NoSpaceDotLowerIdent)) {
                     const s = self.pos;
+                    const receiver = expr_finish_state.expr;
                     self.advance();
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const ident = try self.store.addExpr(.{ .ident = .{
-                        .region = .{ .start = s, .end = self.pos },
-                        .token = s,
-                        .qualifiers = empty_qualifiers,
-                    } });
                     if (self.peek() == .NoSpaceOpenRound) {
                         self.advance();
                         try expr_collections.enter(open_allocator, .{
@@ -3749,26 +3758,32 @@ fn runExprStatementKernel(
                             .result = .{ .method_apply = .{
                                 .start = expr_finish_state.start,
                                 .min_bp = expr_finish_state.min_bp,
-                                .receiver = expr_finish_state.expr,
+                                .receiver = receiver,
                                 .method_token = s,
                             } },
                             .close_error = .expected_expr_apply_close_round,
                         });
                         continue :expr_kernel .collection_next;
                     }
-                    expr_finish_state.expr = try self.store.addExpr(.{ .field_access = .{
-                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
-                        .operator = expr_finish_state.start,
-                        .left = expr_finish_state.expr,
-                        .right = ident,
-                    } });
+                    expr_finish_state.expr = try self.store.addOrExtendFieldAccess(
+                        receiver,
+                        .{ .field_token = s, .mode = .required },
+                        .{ .start = expr_finish_state.start, .end = self.pos },
+                    );
                     continue :expr_kernel .suffix;
                 }
-                if (tok == .Dot or
-                    tok == .DotUpperIdent or
-                    tok == .NoSpaceDotUpperIdent or
-                    tok == .MalformedDotUnicodeIdent or
-                    tok == .MalformedNoSpaceDotUnicodeIdent)
+                if (tok_int >= @intFromEnum(Token.Tag.DotQuestionLowerIdent) and tok_int <= @intFromEnum(Token.Tag.NoSpaceDotQuestionLowerIdent)) {
+                    const field_token = self.pos;
+                    self.advance();
+                    expr_finish_state.expr = try self.store.addOrExtendFieldAccess(
+                        expr_finish_state.expr,
+                        .{ .field_token = field_token, .mode = .optional },
+                        .{ .start = expr_finish_state.start, .end = self.pos },
+                    );
+                    continue :expr_kernel .suffix;
+                }
+                if (tok_int >= @intFromEnum(Token.Tag.DotUpperIdent) and
+                    tok_int <= @intFromEnum(Token.Tag.MalformedNoSpaceDotQuestionUnicodeIdent))
                 {
                     const expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
                     expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
@@ -3776,6 +3791,12 @@ fn runExprStatementKernel(
                 }
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .NoSpaceOpenRound) {
+                    if (self.store.fieldAccessContainsOptional(expr_finish_state.expr)) {
+                        try self.pushDiagnostic(
+                            .optional_field_access_cannot_be_called_directly,
+                            .{ .start = self.pos, .end = self.pos + 1 },
+                        );
+                    }
                     self.advance();
                     try expr_collections.enter(open_allocator, .{
                         .start = expr_finish_state.start,
@@ -4056,6 +4077,32 @@ fn runExprStatementKernel(
                             .nominal_mapper = state.nominal_mapper,
                         };
                         continue :expr_kernel .record_fields_next;
+                    },
+                    .type_record_field_default => {
+                        const state = open_syntax.popExprPayload(.type_record_field_default, TypeRecordFieldDefaultState);
+                        last_expr = null;
+                        const field = try self.store.addAnnoRecordField(.{
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                            .name = state.name,
+                            .optional_mark = state.optional_mark,
+                            .ty = state.ty,
+                            .default_value = completed,
+                        });
+                        try self.store.addScratchAnnoRecordField(field);
+                        type_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .type_record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .type_record_finish;
+                        }
+                        continue :expr_kernel .type_record_next;
                     },
                     .expr_record_field => {
                         const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
@@ -4866,7 +4913,10 @@ fn runExprStatementKernel(
             // so `, _ :` / `, _name :` begins the next record field just like
             // `, name :` does, and must not be mistaken for a function-arg list.
             const next_is_not_field_name = next_tok != .LowerIdent and next_tok != .Underscore and next_tok != .NamedUnderscore;
-            const not_followed_by_colon = two_away_tok != .OpColon;
+            const followed_by_field_separator = two_away_tok == .OpColon or
+                ((two_away_tok == .OpQuestion or two_away_tok == .NoSpaceOpQuestion) and
+                    three_away_tok == .OpColon);
+            const not_followed_by_colon = !followed_by_field_separator;
             const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
             const next_starts_where_clause = next_tok == .LowerIdent and
                 (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or
@@ -4984,9 +5034,28 @@ fn runExprStatementKernel(
                     .type_record_field => {
                         const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
                         last_type_anno = null;
+                        // `a : T ?? default`—a defaulted field: parse the
+                        // default value expression, then finish the field in
+                        // the `.type_record_field_default` expr continuation.
+                        if (self.peek() == .OpDoubleQuestion) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .type_record_field_default, TypeRecordFieldDefaultState, .{
+                                .record_start = state.record_start,
+                                .scratch_top = state.scratch_top,
+                                .field_start = state.field_start,
+                                .name = state.name,
+                                .optional_mark = state.optional_mark,
+                                .ext = state.ext,
+                                .looking_for_args = state.looking_for_args,
+                                .ty = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
                         const field = try self.store.addAnnoRecordField(.{
                             .region = .{ .start = state.field_start, .end = self.pos },
                             .name = state.name,
+                            .optional_mark = state.optional_mark,
                             .ty = completed,
                         });
                         try self.store.addScratchAnnoRecordField(field);
@@ -5291,11 +5360,28 @@ fn runExprStatementKernel(
             // record types. They parse like any other field name.
             else if (self.peek() == .LowerIdent or self.peek() == .Underscore or self.peek() == .NamedUnderscore) {
                 const field_start = self.pos;
-                if (self.peek() == .LowerIdent and self.isVarIdent(field_start)) {
+                const name_tag = self.peek();
+                if (name_tag == .LowerIdent and self.isVarIdent(field_start)) {
                     try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
                 }
                 const name = self.pos;
                 self.advance();
+                var optional_mark: ?Token.Idx = null;
+                // `name ?: Type`—a `?` before the colon marks the field
+                // optional (design.md "Field Kinds").
+                if ((self.peek() == .OpQuestion or self.peek() == .NoSpaceOpQuestion) and
+                    self.peekNext() == .OpColon)
+                {
+                    if (name_tag == .LowerIdent) {
+                        optional_mark = self.pos;
+                    } else {
+                        try self.pushDiagnostic(.optional_unnamed_record_field, .{
+                            .start = self.pos,
+                            .end = self.pos + 1,
+                        });
+                    }
+                    self.advance();
+                }
                 if (self.peek() != .OpColon) {
                     while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
                         self.advance();
@@ -5304,11 +5390,29 @@ fn runExprStatementKernel(
                     continue :expr_kernel .type_complete;
                 }
                 self.advance();
+                // Legacy `:?` (question AFTER the colon): recover as an
+                // optional field and point at the `?:` spelling.
+                if (self.peek() == .OpQuestion or self.peek() == .NoSpaceOpQuestion) {
+                    try self.pushDiagnostic(.optional_field_mark_after_colon, .{
+                        .start = self.pos,
+                        .end = self.pos + 1,
+                    });
+                    if (name_tag == .LowerIdent) {
+                        if (optional_mark == null) optional_mark = self.pos;
+                    } else {
+                        try self.pushDiagnostic(.optional_unnamed_record_field, .{
+                            .start = self.pos,
+                            .end = self.pos + 1,
+                        });
+                    }
+                    self.advance();
+                }
                 try open_syntax.pushType(open_allocator, .type_record_field, TypeRecordFieldState, .{
                     .record_start = type_record_state.start,
                     .scratch_top = type_record_state.scratch_top,
                     .field_start = field_start,
                     .name = name,
+                    .optional_mark = optional_mark,
                     .ext = type_record_state.ext,
                     .looking_for_args = type_record_state.looking_for_args,
                 });

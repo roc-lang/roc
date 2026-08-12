@@ -48,6 +48,14 @@ capture_renames: std.AutoHashMap(PatternMod.Pattern.Idx, []const u8),
 /// Counter for generating unique names
 rename_counter: u32,
 
+/// Record-field order used while emitting expressions.
+record_field_order: RecordFieldOrder,
+
+const RecordFieldOrder = enum {
+    source,
+    lexicographic,
+};
+
 /// Initialize a new Emitter
 pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
     return .{
@@ -59,6 +67,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
         .names_in_scope = std.StringHashMap(void).init(allocator),
         .capture_renames = std.AutoHashMap(PatternMod.Pattern.Idx, []const u8).init(allocator),
         .rename_counter = 0,
+        .record_field_order = .source,
     };
 }
 
@@ -100,6 +109,16 @@ pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) EmitError!void {
     try self.emitFromFrame(.{ .expr = expr_idx });
 }
 
+/// Emit an expression with record fields ordered lexicographically at every
+/// nesting level. This is used when source-equivalent record literals need one
+/// deterministic textual identity rather than source-preserving output.
+pub fn emitExprWithLexicographicRecords(self: *Self, expr_idx: Expr.Idx) EmitError!void {
+    const previous_order = self.record_field_order;
+    self.record_field_order = .lexicographic;
+    defer self.record_field_order = previous_order;
+    try self.emitFromFrame(.{ .expr = expr_idx });
+}
+
 /// Emit a pattern as Roc source code
 pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) EmitError!void {
     try self.emitFromFrame(.{ .pattern = pattern_idx });
@@ -110,6 +129,7 @@ const EmitFrame = union(enum) {
     pattern: CIR.Pattern.Idx,
     statement: CIR.Statement.Idx,
     binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op, side: BinopSide },
+    field_access_suffix: Expr.FieldAccessSegment.Span,
     write: []const u8,
     indent,
     inc_indent,
@@ -134,6 +154,7 @@ fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
             .pattern => |idx| try self.emitPatternFrame(idx, &frames, stack_allocator),
             .statement => |idx| try self.emitStatementFrame(idx, &frames, stack_allocator),
             .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, operand.side, &frames, stack_allocator),
+            .field_access_suffix => |segments| try self.emitFieldAccessSuffix(segments),
             .pattern_record_field => |field| try self.emitPatternRecordFieldFrame(field.destruct_idx, field.index, &frames, stack_allocator),
         }
     }
@@ -168,6 +189,42 @@ fn pushPatternList(
         i -= 1;
         try frames.append(allocator, .{ .pattern = patterns[i] });
         if (i > 0) try frames.append(allocator, .{ .write = separator });
+    }
+}
+
+fn recordFieldIdxLessThan(module_env: *const ModuleEnv, lhs_idx: CIR.RecordField.Idx, rhs_idx: CIR.RecordField.Idx) bool {
+    const lhs = module_env.store.getRecordField(lhs_idx);
+    const rhs = module_env.store.getRecordField(rhs_idx);
+    return module_env.getIdentStoreConst().idxTextLessThan(lhs.name, rhs.name);
+}
+
+fn pushRecordFields(
+    self: *Self,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+    fields: []const CIR.RecordField.Idx,
+) EmitError!void {
+    var mb_sorted_fields: ?[]CIR.RecordField.Idx = null;
+    defer if (mb_sorted_fields) |sorted_fields| allocator.free(sorted_fields);
+
+    const ordered_fields: []const CIR.RecordField.Idx = switch (self.record_field_order) {
+        .source => fields,
+        .lexicographic => ordered: {
+            const sorted_fields = try allocator.dupe(CIR.RecordField.Idx, fields);
+            mb_sorted_fields = sorted_fields;
+            std.mem.sort(CIR.RecordField.Idx, sorted_fields, self.module_env, recordFieldIdxLessThan);
+            break :ordered sorted_fields;
+        },
+    };
+
+    var i = ordered_fields.len;
+    while (i > 0) {
+        i -= 1;
+        const field = self.module_env.store.getRecordField(ordered_fields[i]);
+        try frames.append(allocator, .{ .expr = field.value });
+        try frames.append(allocator, .{ .write = ": " });
+        try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+        if (i > 0) try frames.append(allocator, .{ .write = ", " });
     }
 }
 
@@ -267,6 +324,244 @@ fn pushUnaryReceiverFrames(
     }
 }
 
+/// Whether a field-access path receiver needs parentheses to reparse as the
+/// same CIR expression.
+///
+/// Field access is a postfix operator, so prefix and lower-precedence
+/// expressions need parentheses. Numeric literals need them independently of
+/// precedence so their trailing text cannot fuse with the accessor's leading
+/// dot. A nested field-access node also needs parentheses: it denotes a source
+/// path boundary which would otherwise flatten into one canonical path.
+fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
+    var current_idx = receiver_idx;
+    while (true) {
+        switch (self.module_env.store.getExpr(current_idx)) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            => return true,
+
+            .e_if,
+            .e_match,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_structural_eq,
+            .e_method_eq,
+            .e_crash,
+            .e_dbg,
+            .e_expect,
+            .e_return,
+            .e_for,
+            => return true,
+
+            .e_dispatch_call => |call| return switch (call.surface_origin) {
+                .binop, .unary_minus, .unary_not => true,
+                .method_call => false,
+            },
+
+            // Nominal nodes emit only their transparent backing expression,
+            // so iteratively peel them before classifying surface precedence.
+            .e_nominal => |nominal| current_idx = nominal.backing_expr,
+            .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
+
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_zero_argument_tag,
+            .e_method_call,
+            .e_interpolation,
+            .e_structural_hash,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_expect_err,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_break,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => return false,
+        }
+    }
+}
+
+/// Push a field-access path receiver with the parentheses required by
+/// `fieldAccessPathReceiverNeedsParens`.
+fn pushFieldAccessPathReceiverFrames(
+    self: *Self,
+    receiver_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.fieldAccessPathReceiverNeedsParens(receiver_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = receiver_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = receiver_idx });
+    }
+}
+
+/// Whether emitting a call callee without parentheses would select different
+/// source syntax.
+///
+/// A record-field path followed immediately by an argument list is method-call
+/// syntax. Ordinary application of a function stored in a record field must
+/// therefore retain the source boundary as `(value.field)(arg)`. Nominal CIR
+/// nodes emit only their transparent backing expression, so inspect through
+/// them before deciding.
+fn callCalleeNeedsParens(self: *Self, callee_idx: Expr.Idx) bool {
+    var current_idx = callee_idx;
+    while (true) {
+        const expr = self.module_env.store.getExpr(current_idx);
+        if (expr == .e_field_access) return true;
+        if (expr == .e_nominal) {
+            current_idx = expr.e_nominal.backing_expr;
+            continue;
+        }
+        if (expr == .e_nominal_external) {
+            current_idx = expr.e_nominal_external.backing_expr;
+            continue;
+        }
+        return false;
+    }
+}
+
+/// Push a call callee while preserving any field-path boundary required to
+/// keep ordinary application distinct from method dispatch.
+fn pushCallCalleeFrames(
+    self: *Self,
+    callee_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.callCalleeNeedsParens(callee_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = callee_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = callee_idx });
+    }
+}
+
+/// Emit every segment of one flattened field-access path.
+/// Keeping the span in one frame makes emitter stack usage independent of path
+/// length.
+fn emitFieldAccessSuffix(self: *Self, segments: Expr.FieldAccessSegment.Span) EmitError!void {
+    const segment_count = segments.len;
+    for (0..segment_count) |position| {
+        const segment_idx = self.module_env.store.fieldAccessSegmentAt(segments, @intCast(position));
+        const segment = self.module_env.store.getFieldAccessSegment(segment_idx);
+        try self.write(switch (segment.mode) {
+            .required => ".",
+            .optional => ".?",
+        });
+        try self.write(self.module_env.getIdent(segment.name));
+    }
+}
+
+/// Emit decoded string bytes as one valid, unambiguous Roc string literal.
+/// Canonical CIR stores literal contents after escape processing, so the
+/// emitter must restore every syntactically significant byte rather than
+/// writing the decoded contents verbatim.
+fn emitStringBytes(self: *Self, bytes: []const u8) EmitError!void {
+    for (bytes) |byte| {
+        switch (byte) {
+            '\n' => try self.write("\\n"),
+            '\r' => try self.write("\\r"),
+            '\t' => try self.write("\\t"),
+            '\\' => try self.write("\\\\"),
+            '"' => try self.write("\\\""),
+            '$' => try self.write("\\$"),
+            else => if (byte < 0x20 or byte == 0x7f) {
+                try self.output.print(self.allocator, "\\u({x})", .{byte});
+            } else {
+                try self.output.append(self.allocator, byte);
+            },
+        }
+    }
+}
+
+fn emitStringLiteral(self: *Self, bytes: []const u8) EmitError!void {
+    try self.write("\"");
+    try self.emitStringBytes(bytes);
+    try self.write("\"");
+}
+
+/// Emit a small decimal from its exact base-10 representation. Using integer
+/// division here loses leading fractional zeroes (and overflows for powers
+/// larger than the numerator's integer width), so place the decimal point in
+/// the numerator's digit string instead.
+fn emitSmallDec(self: *Self, value: CIR.SmallDecValue) EmitError!void {
+    const magnitude: u16 = @abs(value.numerator);
+    var digit_buffer: [5]u8 = undefined;
+    const digits = std.fmt.bufPrint(&digit_buffer, "{d}", .{magnitude}) catch unreachable;
+    const power: usize = value.denominator_power_of_ten;
+
+    if (value.numerator < 0) try self.write("-");
+    if (power == 0) {
+        try self.write(digits);
+    } else if (power >= digits.len) {
+        try self.write("0.");
+        var padding = power - digits.len;
+        while (padding > 0) : (padding -= 1) try self.write("0");
+        try self.write(digits);
+    } else {
+        const decimal_point = digits.len - power;
+        try self.write(digits[0..decimal_point]);
+        try self.write(".");
+        try self.write(digits[decimal_point..]);
+    }
+}
+
+/// Emit an i128 fixed-point decimal while preserving the sign of values whose
+/// integer part truncates to zero. Typed fractional literals must retain a
+/// fractional component so they cannot be reparsed as typed integers.
+fn emitScaledDec(self: *Self, value: i128, force_fraction: bool) EmitError!void {
+    const scale: i128 = RocDec.one_point_zero_i128;
+    const whole = i128h.divTrunc_i128(value, scale);
+    const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
+
+    if (value < 0 and whole == 0) try self.write("-");
+    try self.write(try self.formatI128(whole));
+
+    if (frac_part != 0) {
+        try self.write(".");
+        const frac_str = try self.formatU128(frac_part);
+        var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
+        while (pad > 0) : (pad -= 1) try self.write("0");
+        try self.write(frac_str);
+    } else if (force_fraction) {
+        try self.write(".0");
+    }
+}
+
 fn emitExprFrame(
     self: *Self,
     expr_idx: Expr.Idx,
@@ -278,60 +573,29 @@ fn emitExprFrame(
         .e_num => |num| try self.emitIntValue(num.value),
         .e_frac_f32 => |frac| try self.output.print(self.allocator, "{d}f32", .{frac.value}),
         .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
-        .e_dec => |dec| {
-            const value = dec.value.num;
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            try self.write(try self.formatI128(whole));
-            if (frac_part != 0) {
-                try self.write(".");
-                const frac_str = try self.formatU128(frac_part);
-                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
-                while (pad > 0) : (pad -= 1) try self.write("0");
-                try self.write(frac_str);
-            }
-        },
-        .e_dec_small => |small| {
-            const numerator = small.value.numerator;
-            const power = small.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                var divisor: i32 = 1;
-                for (0..power) |_| divisor *= 10;
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
+        .e_dec => |dec| try self.emitScaledDec(dec.value.num, false),
+        .e_dec_small => |small| try self.emitSmallDec(small.value),
         .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_frac => |typed| {
-            const value = typed.value.toI128();
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            if (frac_part == 0) {
-                try self.output.print(self.allocator, "{d}.0", .{whole});
-            } else {
-                try self.output.print(self.allocator, "{d}.{d:0>18}", .{ whole, frac_part });
-            }
+            try self.emitScaledDec(typed.value.toI128(), true);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
-        .e_str_segment => |seg| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(seg.literal)}),
+        .e_str_segment => |seg| try self.emitStringLiteral(self.module_env.common.getString(seg.literal)),
         .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
         .e_str => |str| {
             const segments = self.module_env.store.sliceExpr(str.span);
-            var i = segments.len;
-            while (i > 0) {
-                i -= 1;
-                try frames.append(allocator, .{ .expr = segments[i] });
+            try self.write("\"");
+            for (segments) |segment_idx| {
+                const segment = self.module_env.store.getExpr(segment_idx);
+                std.debug.assert(segment == .e_str_segment);
+                try self.emitStringBytes(self.module_env.common.getString(segment.e_str_segment.literal));
             }
+            try self.write("\"");
         },
         .e_lookup_local => |lookup| {
             if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
@@ -383,26 +647,18 @@ fn emitExprFrame(
             try self.write("");
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(call.args), ")", ", ");
             try frames.append(allocator, .{ .write = "(" });
-            try frames.append(allocator, .{ .expr = call.func });
+            try self.pushCallCalleeFrames(call.func, frames, allocator);
         },
         .e_record => |record| {
             try self.write("{ ");
             try frames.append(allocator, .{ .write = " }" });
+            const fields = self.module_env.store.sliceRecordFields(record.fields);
             if (record.ext) |ext_idx| {
                 try frames.append(allocator, .{ .expr = ext_idx });
                 try frames.append(allocator, .{ .write = ".." });
-                if (self.module_env.store.sliceRecordFields(record.fields).len > 0) try frames.append(allocator, .{ .write = ", " });
+                if (fields.len > 0) try frames.append(allocator, .{ .write = ", " });
             }
-            const fields = self.module_env.store.sliceRecordFields(record.fields);
-            var i = fields.len;
-            while (i > 0) {
-                i -= 1;
-                const field = self.module_env.store.getRecordField(fields[i]);
-                try frames.append(allocator, .{ .expr = field.value });
-                try frames.append(allocator, .{ .write = ": " });
-                try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
-                if (i > 0) try frames.append(allocator, .{ .write = ", " });
-            }
+            try self.pushRecordFields(frames, allocator, fields);
         },
         .e_empty_record => try self.write("{}"),
         .e_block => |block| {
@@ -461,9 +717,8 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "!" });
         },
         .e_field_access => |field_access| {
-            try frames.append(allocator, .{ .write = self.module_env.getIdent(field_access.field_name) });
-            try frames.append(allocator, .{ .write = "." });
-            try frames.append(allocator, .{ .expr = field_access.receiver });
+            try frames.append(allocator, .{ .field_access_suffix = field_access.segments });
+            try self.pushFieldAccessPathReceiverFrames(field_access.receiver, frames, allocator);
         },
         .e_method_call => |method_call| {
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
@@ -693,33 +948,8 @@ fn emitPatternFrame(
         .runtime_error => try self.write("<pattern_error>"),
         .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
-        .small_dec_literal => |dec| {
-            const numerator = dec.value.numerator;
-            const power = dec.value.denominator_power_of_ten;
-            if (power == 0) {
-                try self.output.print(self.allocator, "{}", .{numerator});
-            } else {
-                var divisor: i32 = 1;
-                for (0..power) |_| divisor *= 10;
-                const whole = @divTrunc(numerator, @as(i16, @intCast(divisor)));
-                const frac_part = @mod(@abs(numerator), @as(u16, @intCast(divisor)));
-                try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
-            }
-        },
-        .dec_literal => |dec| {
-            const value = dec.value.num;
-            const scale: i128 = RocDec.one_point_zero_i128;
-            const whole = i128h.divTrunc_i128(value, scale);
-            const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
-            try self.write(try self.formatI128(whole));
-            if (frac_part != 0) {
-                try self.write(".");
-                const frac_str = try self.formatU128(frac_part);
-                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
-                while (pad > 0) : (pad -= 1) try self.write("0");
-                try self.write(frac_str);
-            }
-        },
+        .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
+        .dec_literal => |dec| try self.emitScaledDec(dec.value.num, false),
         .frac_f32_literal => |frac| {
             try self.write(try self.formatF32(frac.value));
             try self.write("f32");

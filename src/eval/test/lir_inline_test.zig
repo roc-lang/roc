@@ -118,13 +118,22 @@ fn lowerModuleWithOptions(
         view_index += 1;
     }
 
+    const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
+    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+        switch (request.source) {
+            .def => |def| if (def == main_def) break request,
+            .expr, .statement, .required_binding, .hoisted => {},
+        }
+    } else return error.MissingRootProcedure;
+    const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = &published_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
             .specialization_strategy = options.specialization_strategy,
@@ -1142,8 +1151,7 @@ fn expectInlinePlanDecision(
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
-    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
-    return lowered.lir_result.root_procs.items[0];
+    return lowered.main_proc orelse error.MissingRootProcedure;
 }
 
 fn collectAssignCallProcs(
@@ -1995,7 +2003,10 @@ test "issue 10529 open Try chain with named local callback stays bounded" {
 
     const counters = try monotypeCountersForModule(allocator, source);
     try std.testing.expect(counters.template_misses <= 20);
-    try std.testing.expect(counters.nominal_backing_instantiations <= 300);
+    // Generalized record fields retain distinct source-value/runtime-slot
+    // cells until specialization freeze. Keep that fixed linear bookkeeping
+    // bounded while guarding against the former exponential Try-chain growth.
+    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
 }
 
 test "specialization interface replay follows returned local functions through wrappers" {
@@ -6289,6 +6300,48 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+}
+
+test "custom literal field default owns its conversion root" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\MyNum := [Value(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
+        \\}
+        \\
+        \\Label := [Label(Str)].{
+        \\    from_quote : Str -> Try(Label, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Label(str))
+        \\}
+        \\
+        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\
+        \\config : Config
+        \\config = {}
+        \\
+        \\main = config.size
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var default_count: usize = 0;
+    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .field_default) continue;
+        default_count += 1;
+        try std.testing.expect(root.literalConversionKind() != null);
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(root.id, conversion.id);
+    }
+    try std.testing.expectEqual(@as(usize, 2), default_count);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {

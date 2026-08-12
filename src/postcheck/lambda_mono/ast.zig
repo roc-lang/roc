@@ -100,6 +100,10 @@ pub const RecordUpdate = struct {
     base: ExprId,
     fields: Span(FieldExpr),
 };
+/// One source-ordered segment in a flattened record-field access path.
+pub const FieldAccessSegment = struct {
+    field: Type.names.RecordFieldNameId,
+};
 
 /// Record destructuring field pattern.
 pub const RecordDestruct = struct {
@@ -268,7 +272,7 @@ pub const ExprData = union(enum) {
     },
     field_access: struct {
         receiver: ExprId,
-        field: Type.names.RecordFieldNameId,
+        segments: Span(FieldAccessSegment),
     },
     capture_access: CaptureSlot,
     tuple_access: struct {
@@ -477,6 +481,7 @@ pub const Program = struct {
     typed_locals: ProgramList(TypedLocal, "typed_locals"),
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    field_access_segments: ProgramList(FieldAccessSegment, "field_access_segments"),
     record_destructs: ProgramList(RecordDestruct, "record_destructs"),
     str_pattern_steps: ProgramList(StrPatternStep, "str_pattern_steps"),
     branches: ProgramList(Branch, "branches"),
@@ -532,6 +537,7 @@ pub const Program = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .field_access_segments = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
             .branches = .empty,
@@ -580,6 +586,7 @@ pub const Program = struct {
         self.branches.deinit(self.allocator);
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
+        self.field_access_segments.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -742,6 +749,13 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addFieldAccessSegmentSpan(self: *Program, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
+        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
+        const start: u32 = @intCast(self.field_access_segments.len());
+        try self.field_access_segments.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.len());
         try self.record_destructs.appendSlice(self.allocator, values);
@@ -784,6 +798,15 @@ pub const Program = struct {
 
     pub fn fieldExprSpan(self: *const Program, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
         return self.field_exprs.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAccessSegmentSpan(self: *const Program, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
+        return self.field_access_segments.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAccessSegmentAt(self: *const Program, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
+        if (index >= span_.len) Common.invariant("field access segment index was outside span");
+        return self.field_access_segments.get(span_.start + index);
     }
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {

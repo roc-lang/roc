@@ -266,6 +266,25 @@ const Builder = struct {
                 }
                 invariantViolation("canonical type key reached an unsolved rigid without its root identity");
             },
+            .field_presence => |field_presence| {
+                // A resolved presence fact keyed as the content of a field's
+                // presence variable (see `writeFieldPresenceForKey`).
+                switch (field_presence) {
+                    .required => self.writeTag("presence_required"),
+                    .optional => self.writeTag("presence_optional"),
+                    .defaulted => |id| {
+                        // The default identity is part of the canonical key:
+                        // two rows defaulting a field differently are
+                        // different types (design.md "Defaulted Fields").
+                        // Written in CANONICAL form—the declaring module's
+                        // content hash, never the env-local identity index,
+                        // so the key is stable across environments.
+                        self.writeTag("presence_defaulted");
+                        self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                        self.writeU32(id.expr_node);
+                    },
+                }
+            },
             .alias => |alias| {
                 self.writeTag("alias");
                 self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
@@ -386,7 +405,7 @@ const Builder = struct {
 
     const RecordFieldForKey = struct {
         name: Ident.Idx,
-        var_: Var,
+        presence: types.RecordField.Presence,
     };
 
     const TagForKey = struct {
@@ -401,11 +420,11 @@ const Builder = struct {
     ) Allocator.Error!void {
         const slice = self.store.getRecordFieldsSlice(range);
         const names = slice.items(.name);
-        const vars = slice.items(.var_);
-        for (names, vars) |name, var_| {
+        const presences = slice.items(.presence);
+        for (names, presences) |name, presence| {
             try fields.append(self.allocator, .{
                 .name = name,
-                .var_ = var_,
+                .presence = presence,
             });
         }
     }
@@ -455,7 +474,7 @@ const Builder = struct {
                 invariantViolation("canonical type key row normalization found duplicate record fields");
             }
             self.writeIdent(field.name);
-            try self.writeVar(field.var_);
+            try self.writeFieldPresenceForKey(field.presence);
         }
         if (tail) |tail_var| {
             try self.writeVar(tail_var);
@@ -515,7 +534,7 @@ const Builder = struct {
                 invariantViolation("canonical type key row normalization found duplicate record fields");
             }
             self.writeIdent(field.name);
-            try self.writeVar(field.var_);
+            try self.writeFieldPresenceForKey(field.presence);
         }
         if (tail) |tail_var| {
             try self.writeVar(tail_var);
@@ -665,6 +684,72 @@ const Builder = struct {
         self.hasher.update(std.mem.asBytes(&byte));
     }
 
+    /// Key both axes of a field's presence: a discriminant so that fields
+    /// differing only in kind hash differently, followed by the axis
+    /// variable(s). A concrete required field keys its type; an `unknown`
+    /// wrapper keys its resolved kind and its type. The variables route back
+    /// through `writeVar`, so a kind variable's resolved `field_presence`
+    /// content is keyed here rather than by `writeContent`.
+    fn writeFieldPresenceForKey(self: *Builder, presence: types.RecordField.Presence) Allocator.Error!void {
+        // Field kinds key by their RESOLVED state, byte-for-byte the same as
+        // the checked artifact's encoding (`writeCheckedFieldKind`), so
+        // solver and checked canonical keys agree: required (concrete
+        // `required`, a kind var solved `required`, or a scheme interior's
+        // still-flex kind—required-equivalent, see the `.flex` arm) writes
+        // `writeBool(false)` + the type; a `defaulted` kind writes the
+        // checked `field_default` tag + the declaring module's content hash
+        // + the default's expr node + the type; an `optional` kind writes
+        // the `presence_optional_field` tag + the type.
+        switch (presence.decode()) {
+            .required => |type_var| {
+                self.writeBool(false);
+                try self.writeVar(type_var);
+            },
+            .unknown => |unknown| switch (self.store.resolveVar(unknown.presence).desc.content) {
+                .field_presence => |fp| switch (fp) {
+                    .required => {
+                        self.writeBool(false);
+                        try self.writeVar(unknown.var_);
+                    },
+                    .defaulted => |id| {
+                        self.writeTag("field_default");
+                        self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                        self.writeU32(id.expr_node);
+                        try self.writeVar(unknown.var_);
+                    },
+                    .optional => {
+                        self.writeTag("presence_optional_field");
+                        try self.writeVar(unknown.var_);
+                    },
+                },
+                // A still-flex kind is a quantified scheme interior. Its
+                // identity is part of the type: instantiation may later solve
+                // it to required, optional, or defaulted, so collapsing it to
+                // required here would collide distinct specialization
+                // behavior at the checked boundary.
+                .flex => {
+                    self.writeTag("presence_variable");
+                    try self.writeVar(unknown.presence);
+                    try self.writeVar(unknown.var_);
+                },
+                // A poisoned presence var: a presence mismatch merges to err
+                // like every other content (unify.zig `unifyFieldPresence`),
+                // so key it as an error the same way `.err` type content is
+                // keyed.
+                .err => {
+                    if (self.detect_errors) self.contains_error = true;
+                    self.writeTag("err");
+                    try self.writeVar(unknown.var_);
+                },
+                // A presence variable may only hold a committed `.field_presence`
+                // kind, a still-undetermined `.flex`, or a poisoned `.err`. Any
+                // other content (structure, alias, rigid, ...) means the
+                // presence var was constructed incorrectly.
+                .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
+            },
+        }
+    }
+
     fn writeU32(self: *Builder, value: u32) void {
         self.hasher.update(&.{
             @as(u8, @truncate(value)),
@@ -802,6 +887,91 @@ test "source type keys normalize closed empty records to empty record" {
     const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
+}
+
+test "record field presence participates in canonical type keys" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const field_name = try env.insertIdent(Ident.for_text("field"));
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const field_var = try store.freshFromContent(.{ .structure = .empty_record });
+    const empty_ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    const required_fields = try store.appendRecordFields(&.{.{
+        .name = field_name,
+        .presence = .required(field_var),
+    }});
+    const optional_fields = try store.appendRecordFields(&.{.{
+        .name = field_name,
+        .presence = .unknown(optional_presence, field_var),
+    }});
+    const required_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = required_fields,
+        .ext = empty_ext,
+    } } });
+    const optional_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = optional_fields,
+        .ext = empty_ext,
+    } } });
+    const required_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = required_fields } });
+    const optional_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = optional_fields } });
+
+    const required_key = try fromVar(allocator, &store, &env, required_record);
+    const optional_key = try fromVar(allocator, &store, &env, optional_record);
+    const required_unbound_key = try fromVar(allocator, &store, &env, required_unbound);
+    const optional_unbound_key = try fromVar(allocator, &store, &env, optional_unbound);
+    try std.testing.expect(!std.meta.eql(required_key, optional_key));
+    try std.testing.expect(!std.meta.eql(required_unbound_key, optional_unbound_key));
+}
+
+test "record field presence is stable across normalized row extensions" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const first_name = try env.insertIdent(Ident.for_text("first"));
+    const second_name = try env.insertIdent(Ident.for_text("second"));
+
+    var store = try TypeStore.initCapacity(allocator, 32, 16);
+    defer store.deinit();
+
+    const field_var = try store.freshFromContent(.{ .structure = .empty_record });
+    const empty_ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    const flat_fields = try store.appendRecordFields(&.{
+        .{ .name = first_name, .presence = .required(field_var) },
+        .{ .name = second_name, .presence = .unknown(optional_presence, field_var) },
+    });
+    const flat_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = flat_fields,
+        .ext = empty_ext,
+    } } });
+
+    const tail_fields = try store.appendRecordFields(&.{.{
+        .name = second_name,
+        .presence = .unknown(optional_presence, field_var),
+    }});
+    const tail_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = tail_fields,
+        .ext = empty_ext,
+    } } });
+    const head_fields = try store.appendRecordFields(&.{.{
+        .name = first_name,
+        .presence = .required(field_var),
+    }});
+    const extended_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = head_fields,
+        .ext = tail_record,
+    } } });
+
+    const flat_key = try fromVar(allocator, &store, &env, flat_record);
+    const extended_key = try fromVar(allocator, &store, &env, extended_record);
+    try std.testing.expectEqualSlices(u8, flat_key.bytes[0..], extended_key.bytes[0..]);
 }
 
 test "source type keys normalize closed empty tag unions to empty tag union" {

@@ -191,6 +191,7 @@ scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
 pattern_string_parts: std.ArrayList(AST.PatternStringPart),
+field_access_segments: std.ArrayList(AST.FieldAccessSegment),
 
 fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
@@ -224,6 +225,13 @@ fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
     return 0;
 }
 
+fn packOptionalToken(value: ?Token.Idx) std.mem.Allocator.Error!u32 {
+    if (value) |idx| {
+        return packNonNullOptionalU32(idx);
+    }
+    return 0;
+}
+
 fn unpackNonNullOptionalU32(value: u32) u32 {
     std.debug.assert(value != 0);
     return value - OPTIONAL_VALUE_OFFSET;
@@ -232,6 +240,11 @@ fn unpackNonNullOptionalU32(value: u32) u32 {
 fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
     if (value == 0) return null;
     return @enumFromInt(unpackNonNullOptionalU32(value));
+}
+
+fn unpackOptionalToken(value: u32) ?Token.Idx {
+    if (value == 0) return null;
+    return unpackNonNullOptionalU32(value);
 }
 
 const TypeDeclExtra = struct {
@@ -340,6 +353,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer numeric_literal_bytes.deinit(gpa);
     var pattern_string_parts = try std.ArrayList(AST.PatternStringPart).initCapacity(gpa, capacity / 8);
     errdefer pattern_string_parts.deinit(gpa);
+    var field_access_segments = try std.ArrayList(AST.FieldAccessSegment).initCapacity(gpa, capacity / 4);
+    errdefer field_access_segments.deinit(gpa);
 
     var store: NodeStore = .{
         .gpa = gpa,
@@ -367,6 +382,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .numeric_literals = numeric_literals,
         .numeric_literal_bytes = numeric_literal_bytes,
         .pattern_string_parts = pattern_string_parts,
+        .field_access_segments = field_access_segments,
     };
 
     const expected_idx = store.nodes.items.len;
@@ -413,6 +429,7 @@ pub fn deinit(store: *NodeStore) void {
     store.numeric_literals.deinit(store.gpa);
     store.numeric_literal_bytes.deinit(store.gpa);
     store.pattern_string_parts.deinit(store.gpa);
+    store.field_access_segments.deinit(store.gpa);
 }
 
 /// Ensures that all scratch buffers in the store
@@ -1150,9 +1167,9 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
-            node.main_token = fa.operator;
-            node.data.lhs = @intFromEnum(fa.left);
-            node.data.rhs = @intFromEnum(fa.right);
+            node.data.lhs = @intFromEnum(fa.receiver);
+            node.data.rhs = fa.segments.span.start;
+            node.main_token = fa.segments.span.len;
         },
         .method_call => |mc| {
             node.tag = .method_call;
@@ -1385,9 +1402,22 @@ pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) std.mem.Allocato
 
 /// TODO
 pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) std.mem.Allocator.Error!AST.AnnoRecordField.Idx {
-    const node = Node{
+    const node = if (field.default_value) |default_idx| blk: {
+        const ed_start = store.extra_data.items.len;
+        try store.extra_data.append(store.gpa, @intFromEnum(field.ty));
+        try store.extra_data.append(store.gpa, @intFromEnum(default_idx));
+        break :blk Node{
+            .tag = .ty_record_field_defaulted,
+            .main_token = try packOptionalToken(field.optional_mark),
+            .data = .{
+                .lhs = field.name,
+                .rhs = @intCast(ed_start),
+            },
+            .region = field.region,
+        };
+    } else Node{
         .tag = .ty_record_field,
-        .main_token = 0,
+        .main_token = try packOptionalToken(field.optional_mark),
         .data = .{
             .lhs = field.name,
             .rhs = @intFromEnum(field.ty),
@@ -1617,6 +1647,96 @@ pub fn getCollectionLayout(store: *const NodeStore, idx: anytype) AST.Collection
 /// Returns the number of nodes in the store.
 pub fn nodeCount(store: *const NodeStore) usize {
     return store.nodes.len();
+}
+
+/// Returns the source-ordered segments of a record-field access path.
+pub fn fieldAccessSegmentSlice(
+    store: *const NodeStore,
+    span: AST.FieldAccessSegment.Span,
+) []const AST.FieldAccessSegment {
+    const start: usize = span.span.start;
+    const len: usize = span.span.len;
+    return store.field_access_segments.items[start..][0..len];
+}
+
+/// Adds one segment to the dedicated record-field access segment store.
+///
+/// This low-level operation is primarily useful to producers that already own
+/// the enclosing path span. Parser code should use `addOrExtendFieldAccess` so
+/// a failed node allocation rolls the segment append back atomically.
+pub fn addFieldAccessSegment(
+    store: *NodeStore,
+    segment: AST.FieldAccessSegment,
+) std.mem.Allocator.Error!u32 {
+    const start = std.math.cast(u32, store.field_access_segments.items.len) orelse return error.OutOfMemory;
+    // Keep `start + len` representable for every non-empty DataSpan consumer.
+    if (start == std.math.maxInt(u32)) return error.OutOfMemory;
+    try store.field_access_segments.append(store.gpa, segment);
+    return start;
+}
+
+/// Appends a source segment to the current contiguous field path, or creates a
+/// new path whose receiver is `receiver` when the expression is a path
+/// boundary.
+///
+/// The parser produces field paths at the tail of the segment store and passes
+/// only its current, not-yet-owned expression to this function. Extending such
+/// a path in place is therefore O(1) amortized and does not copy earlier
+/// segments. A non-tail field-access node is already closed and is treated as
+/// the receiver of a new path instead of being mutated.
+/// Segment storage is rolled back if allocating the enclosing expression node
+/// fails.
+pub fn addOrExtendFieldAccess(
+    store: *NodeStore,
+    receiver: AST.Expr.Idx,
+    segment: AST.FieldAccessSegment,
+    region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!AST.Expr.Idx {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(receiver));
+    var receiver_node = store.nodes.get(node_idx);
+
+    if (receiver_node.tag == .field_access) {
+        const segment_start: usize = receiver_node.data.rhs;
+        const segment_len: usize = receiver_node.main_token;
+        const path_is_open_tail = segment_len <= store.field_access_segments.items.len and
+            segment_start == store.field_access_segments.items.len - segment_len and
+            receiver_node.region.start == region.start;
+
+        if (path_is_open_tail) {
+            if (receiver_node.main_token == std.math.maxInt(u32)) return error.OutOfMemory;
+            try store.field_access_segments.append(store.gpa, segment);
+            receiver_node.main_token += 1;
+            receiver_node.region.end = region.end;
+            store.nodes.set(node_idx, receiver_node);
+            return receiver;
+        }
+    }
+
+    const previous_segment_len = store.field_access_segments.items.len;
+    const segment_start = try store.addFieldAccessSegment(segment);
+    errdefer store.field_access_segments.items.len = previous_segment_len;
+
+    return store.addExpr(.{ .field_access = .{
+        .receiver = receiver,
+        .segments = .{ .span = .{ .start = segment_start, .len = 1 } },
+        .region = region,
+    } });
+}
+
+/// Returns whether a field-access path explicitly contains an optional
+/// segment. Every non-field expression is a path boundary and returns false.
+pub fn fieldAccessContainsOptional(store: *const NodeStore, expr_idx: AST.Expr.Idx) bool {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+    if (node.tag != .field_access) return false;
+
+    const access = AST.FieldAccessSegment.Span{ .span = .{
+        .start = node.data.rhs,
+        .len = node.main_token,
+    } };
+    for (store.fieldAccessSegmentSlice(access)) |segment| {
+        if (segment.mode == .optional) return true;
+    }
+    return false;
 }
 
 /// Retrieves header data from a stored header node, reconstructing the appropriate header type.
@@ -2312,9 +2432,11 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .field_access => {
             return .{ .field_access = .{
-                .left = @enumFromInt(node.data.lhs),
-                .right = @enumFromInt(node.data.rhs),
-                .operator = node.main_token,
+                .receiver = @enumFromInt(node.data.lhs),
+                .segments = .{ .span = .{
+                    .start = node.data.rhs,
+                    .len = node.main_token,
+                } },
                 .region = node.region,
             } };
         },
@@ -2565,15 +2687,25 @@ pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) er
 pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) error{MalformedNode}!AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
 
-    if (node.tag == .malformed) {
-        return error.MalformedNode;
+    if (node.tag == .ty_record_field) {
+        return .{
+            .region = node.region,
+            .name = node.data.lhs,
+            .optional_mark = unpackOptionalToken(node.main_token),
+            .ty = @enumFromInt(node.data.rhs),
+        };
     }
-
-    return .{
-        .region = node.region,
-        .name = node.data.lhs,
-        .ty = @enumFromInt(node.data.rhs),
-    };
+    if (node.tag == .ty_record_field_defaulted) {
+        const ed_start = @as(usize, @intCast(node.data.rhs));
+        return .{
+            .region = node.region,
+            .name = node.data.lhs,
+            .optional_mark = unpackOptionalToken(node.main_token),
+            .ty = @enumFromInt(store.extra_data.items[ed_start]),
+            .default_value = @enumFromInt(store.extra_data.items[ed_start + 1]),
+        };
+    }
+    return error.MalformedNode;
 }
 
 /// Returns the source region for a stored type annotation without reconstructing the full AST union.

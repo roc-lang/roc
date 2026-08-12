@@ -208,10 +208,46 @@ pub const NamedKind = enum(u8) {
     alias,
 };
 
+/// Identity of a `??` field's default value, carried on the Monotype record
+/// field itself so rows that disagree about defaults are distinct monotypes:
+/// distinct digests, hence distinct specializations and derived-codec defs.
+/// This keeps "same monotype ⇒ same behavior" an invariant instead of an
+/// approximation—a required row and a defaulted row of the same shape must
+/// not share a derived parser. The slot encoding stays kind-free (`defaulted`
+/// fields remain plain inline slots) and layout never reads this. `module` is
+/// the declaring module's interned identity in the program name store;
+/// `expr_node` is the default expression's CIR node index in that module—
+/// the same identity the checked side carries in `CheckedFieldDefault`.
+pub const FieldDefault = struct {
+    module: names.ModuleIdentityId,
+    expr_node: u32,
+};
+
+/// Whether a Monotype-shaped record field already has a committed runtime
+/// slot. Durable Monotypes are always `resolved`. Interface-replay memoization
+/// also uses immutable provisional Type views; an `undetermined` field in one
+/// of those views records that its checked presence variable still owns the
+/// slot decision. In that state `ty` mirrors `value_ty` for structural identity
+/// only and must not reach layout or completed Monotype output.
+pub const FieldKindState = enum(u8) {
+    resolved,
+    undetermined,
+};
+
 /// Record field type entry.
 pub const MonoTypeField = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
+    /// Source value type for an optional slot. This is explicit post-check
+    /// evidence retained alongside the runtime slot so a finished Monotype
+    /// can participate in later specialization without reconstructing field
+    /// presence from the slot's shape.
+    value_ty: ?TypeId = null,
+    /// Explicitly distinguishes a finished slot from a provisional field whose
+    /// checked presence variable has not selected inline or optional encoding.
+    kind_state: FieldKindState = .resolved,
+    /// Present exactly for `??`-defaulted fields; see `FieldDefault`.
+    default: ?FieldDefault,
 };
 
 /// Compatibility name for existing Monotype record field entries.
@@ -596,6 +632,9 @@ pub const Store = struct {
             }
             for (self.fields) |field| {
                 if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+                if (field.value_ty) |value_ty| {
+                    if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+                }
             }
             for (self.tags) |tag| {
                 if (!self.spanInBounds(self.spans.len, tag.payloads)) return .type_span_out_of_bounds;
@@ -655,6 +694,9 @@ pub const Store = struct {
             const fields_ = self.fieldSpan(span_);
             for (fields_) |field| {
                 if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+                if (field.value_ty) |value_ty| {
+                    if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+                }
             }
             if (fields_.len > 1) {
                 for (fields_[1..], 1..) |field, index| {
@@ -816,6 +858,9 @@ pub const Store = struct {
         const fields_ = self.fieldSpan(span_);
         for (fields_) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+            if (field.value_ty) |value_ty| {
+                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+            }
         }
         if (fields_.len > 1) {
             for (fields_[1..], 1..) |field, index| {
@@ -1008,6 +1053,14 @@ pub const Store = struct {
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    writeFieldDefaultDigest(name_store, hasher, field.default);
+                    writeBytes(hasher, @tagName(field.kind_state));
+                    if (field.value_ty) |value_ty| {
+                        writeBytes(hasher, "field-optional-value");
+                        self.writeCachedChildDigest(name_store, hasher, value_ty, named_mode, ctx, stats);
+                    } else {
+                        writeBytes(hasher, "field-inline-value");
+                    }
                     self.writeCachedChildDigest(name_store, hasher, field.ty, named_mode, ctx, stats);
                 }
             },
@@ -1269,6 +1322,14 @@ pub const Store = struct {
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
+                    writeFieldDefaultDigest(name_store, hasher, field.default);
+                    writeBytes(hasher, @tagName(field.kind_state));
+                    if (field.value_ty) |value_ty| {
+                        writeBytes(hasher, "field-optional-value");
+                        self.writeTypeDigest(name_store, hasher, value_ty, visiting, named_mode);
+                    } else {
+                        writeBytes(hasher, "field-inline-value");
+                    }
                     self.writeTypeDigest(name_store, hasher, field.ty, visiting, named_mode);
                 }
             },
@@ -1511,6 +1572,26 @@ fn typeSpanViewEql(
     return true;
 }
 
+fn fieldDefaultEql(name_store: *const names.NameStore, lhs: ?FieldDefault, rhs: ?FieldDefault) bool {
+    const lhs_default = lhs orelse return rhs == null;
+    const rhs_default = rhs orelse return false;
+    if (lhs_default.expr_node != rhs_default.expr_node) return false;
+    return std.mem.eql(u8, name_store.moduleIdentityBytes(lhs_default.module), name_store.moduleIdentityBytes(rhs_default.module));
+}
+
+/// Fold one record field's `??` default identity (or its absence) into a
+/// type digest; shared by the Monotype and lambda-mono digest writers so
+/// rows disagreeing about defaults digest differently at every stage.
+pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *std.crypto.hash.sha2.Sha256, default: ?FieldDefault) void {
+    if (default) |field_default| {
+        writeBytes(hasher, "field-default");
+        writeBytes(hasher, name_store.moduleIdentityBytes(field_default.module));
+        writeU32(hasher, field_default.expr_node);
+    } else {
+        writeBytes(hasher, "field-no-default");
+    }
+}
+
 fn fieldSpanViewEql(
     type_view: anytype,
     name_store: *const names.NameStore,
@@ -1524,6 +1605,12 @@ fn fieldSpanViewEql(
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
+        if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
+        if (lhs_field.kind_state != rhs_field.kind_state) return false;
+        if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
+        if (lhs_field.value_ty) |lhs_value_ty| {
+            if (!try typeViewEqlInner(type_view, name_store, lhs_value_ty, rhs_field.value_ty.?, visited, mode)) return false;
+        }
         if (!try typeViewEqlInner(type_view, name_store, lhs_field.ty, rhs_field.ty, visited, mode)) return false;
     }
     return true;
@@ -1598,6 +1685,9 @@ pub const DurableView = struct {
         }
         for (self.fields) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+            if (field.value_ty) |value_ty| {
+                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+            }
         }
         for (self.tags) |tag| {
             if (!self.spanInBounds(self.spans.len, tag.payloads)) return .type_span_out_of_bounds;
@@ -1657,6 +1747,9 @@ pub const DurableView = struct {
         const fields_ = self.fieldSpan(span_);
         for (fields_) |field| {
             if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
+            if (field.value_ty) |value_ty| {
+                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
+            }
         }
         if (fields_.len > 1) {
             for (fields_[1..], 1..) |field, index| {
@@ -1829,6 +1922,12 @@ fn fieldSpanEqlAcrossStores(
     if (lhs.len != rhs.len) return false;
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
+        if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
+        if (lhs_field.kind_state != rhs_field.kind_state) return false;
+        if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
+        if (lhs_field.value_ty) |lhs_value_ty| {
+            if (!try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_value_ty, rhs_view, rhs_field.value_ty.?, visited)) return false;
+        }
         if (!try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_field.ty, rhs_view, rhs_field.ty, visited)) return false;
     }
     return true;
@@ -2075,6 +2174,9 @@ pub const Interner = opaque {
     pub const RecursiveField = struct {
         name: names.RecordFieldNameId,
         ty: RecursiveLink,
+        value_ty: ?RecursiveLink = null,
+        kind_state: FieldKindState = .resolved,
+        default: ?FieldDefault,
     };
 
     pub const RecursiveTag = struct {
@@ -2197,6 +2299,9 @@ pub const Interner = opaque {
             lowered[index] = .{
                 .name = field.name,
                 .ty = self.lowerRecursiveLink(ids, root, field.ty),
+                .value_ty = if (field.value_ty) |value_ty| self.lowerRecursiveLink(ids, root, value_ty) else null,
+                .kind_state = field.kind_state,
+                .default = field.default,
             };
         }
         return try state_.store.addRecordFields(state_.name_store, lowered);
@@ -2458,12 +2563,12 @@ test "monotype type interner normalizes record and tag rows" {
 
     const unit = try interner.internZst();
     const first_record = try interner.internRecord(&.{
-        .{ .name = b_field, .ty = unit },
-        .{ .name = a_field, .ty = unit },
+        .{ .name = b_field, .ty = unit, .default = null },
+        .{ .name = a_field, .ty = unit, .default = null },
     });
     const second_record = try interner.internRecord(&.{
-        .{ .name = a_field, .ty = unit },
-        .{ .name = b_field, .ty = unit },
+        .{ .name = a_field, .ty = unit, .default = null },
+        .{ .name = b_field, .ty = unit, .default = null },
     });
     try std.testing.expectEqual(first_record, second_record);
 
@@ -2546,7 +2651,7 @@ test "monotype type interner seals recursive root before exposing type id" {
     defer interner.deinit();
 
     const root = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root },
+        .{ .name = field_name, .ty = .root, .default = null },
     } });
 
     const fields = interner.fieldSpan(interner.get(root).record);
@@ -2565,10 +2670,10 @@ test "monotype type interner reuses equivalent recursive roots" {
     defer interner.deinit();
 
     const first = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root },
+        .{ .name = field_name, .ty = .root, .default = null },
     } });
     const second = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = field_name, .ty = .root },
+        .{ .name = field_name, .ty = .root, .default = null },
     } });
 
     try std.testing.expectEqual(first, second);
@@ -2588,7 +2693,7 @@ test "monotype type interner seals multi-node recursive group privately" {
     const func_node = Interner.recursiveNodeId(1);
     const first = try interner.internRecursiveGroupRoot(&.{
         .{ .record = &.{
-            .{ .name = field_name, .ty = .{ .node = func_node } },
+            .{ .name = field_name, .ty = .{ .node = func_node }, .default = null },
         } },
         .{ .func = .{
             .args = &.{},
@@ -2597,7 +2702,7 @@ test "monotype type interner seals multi-node recursive group privately" {
     }, record_node);
     const second = try interner.internRecursiveGroupRoot(&.{
         .{ .record = &.{
-            .{ .name = field_name, .ty = .{ .node = func_node } },
+            .{ .name = field_name, .ty = .{ .node = func_node }, .default = null },
         } },
         .{ .func = .{
             .args = &.{},
@@ -2626,11 +2731,11 @@ test "monotype type interner keeps distinct recursive roots with different child
 
     const bool_ty = try interner.internPrimitive(.bool);
     const recursive_only = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = next_name, .ty = .root },
+        .{ .name = next_name, .ty = .root, .default = null },
     } });
     const recursive_with_bool = try interner.internRecursiveRoot(.{ .record = &.{
-        .{ .name = next_name, .ty = .root },
-        .{ .name = done_name, .ty = .{ .interned = bool_ty } },
+        .{ .name = next_name, .ty = .root, .default = null },
+        .{ .name = done_name, .ty = .{ .interned = bool_ty }, .default = null },
     } });
 
     try std.testing.expect(recursive_only != recursive_with_bool);
@@ -2820,7 +2925,7 @@ test "monotype row entries retain checked label ids" {
     defer store.deinit();
 
     const i64_ty = try store.add(.{ .primitive = .i64 });
-    const fields = try store.addFields(&.{.{ .name = field_name, .ty = i64_ty }});
+    const fields = try store.addFields(&.{.{ .name = field_name, .ty = i64_ty, .default = null }});
     const payloads = try store.addSpan(&.{i64_ty});
     const tags = try store.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = payloads }});
 
@@ -2834,7 +2939,7 @@ test "monotype empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
@@ -2859,8 +2964,8 @@ test "monotype type verifier accepts normalized rows" {
 
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const fields = try store.addFields(&.{
-        .{ .name = a_field, .ty = i64_ty },
-        .{ .name = b_field, .ty = i64_ty },
+        .{ .name = a_field, .ty = i64_ty, .default = null },
+        .{ .name = b_field, .ty = i64_ty, .default = null },
     });
     const payloads = try store.addSpan(&.{i64_ty});
     const tags = try store.addTags(&.{
@@ -2886,8 +2991,8 @@ test "monotype type verifier rejects malformed rows and references" {
 
         const i64_ty = try store.add(.{ .primitive = .i64 });
         const unsorted = try store.addFields(&.{
-            .{ .name = b_field, .ty = i64_ty },
-            .{ .name = a_field, .ty = i64_ty },
+            .{ .name = b_field, .ty = i64_ty, .default = null },
+            .{ .name = a_field, .ty = i64_ty, .default = null },
         });
         _ = try store.add(.{ .record = unsorted });
         try std.testing.expectEqual(Store.VerifyError.record_fields_not_sorted, store.verify(&name_store).?);
@@ -2897,7 +3002,7 @@ test "monotype type verifier rejects malformed rows and references" {
         var store = Store.init(std.testing.allocator);
         defer store.deinit();
 
-        const bad_fields = try store.addFields(&.{.{ .name = a_field, .ty = @enumFromInt(99) }});
+        const bad_fields = try store.addFields(&.{.{ .name = a_field, .ty = @enumFromInt(99), .default = null }});
         _ = try store.add(.{ .record = bad_fields });
         try std.testing.expectEqual(Store.VerifyError.type_ref_out_of_bounds, store.verify(&name_store).?);
     }
@@ -2915,7 +3020,7 @@ test "monotype digest terminates on recursive structural types" {
     // A record whose field is a function returning the record itself.
     const rec_a = try store.reserveSlot();
     const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
-    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a, .default = null }});
     store.fillReservedSlot(rec_a, .{ .record = fields_a });
 
     const first = store.typeDigest(&name_store, rec_a);
@@ -2926,7 +3031,7 @@ test "monotype digest terminates on recursive structural types" {
     // encoded as back references by position, not by id.
     const rec_b = try store.reserveSlot();
     const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
-    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b, .default = null }});
     store.fillReservedSlot(rec_b, .{ .record = fields_b });
 
     const other = store.typeDigest(&name_store, rec_b);
@@ -2944,7 +3049,7 @@ test "monotype cached digest survives completion of an unrelated reserved slot" 
     const outer_field = try name_store.internRecordFieldLabel("outer");
 
     const i64_ty = try store.add(.{ .primitive = .i64 });
-    const inner_fields = try store.addFields(&.{.{ .name = inner_field, .ty = i64_ty }});
+    const inner_fields = try store.addFields(&.{.{ .name = inner_field, .ty = i64_ty, .default = null }});
     const inner = try store.add(.{ .record = inner_fields });
 
     var inner_stats: Store.DigestStats = .{};
@@ -2953,7 +3058,7 @@ test "monotype cached digest survives completion of an unrelated reserved slot" 
     try std.testing.expectEqual(@as(u64, 2), inner_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 2), inner_stats.nodes_visited);
 
-    const outer_fields = try store.addFields(&.{.{ .name = outer_field, .ty = inner }});
+    const outer_fields = try store.addFields(&.{.{ .name = outer_field, .ty = inner, .default = null }});
     const outer = try store.add(.{ .record = outer_fields });
 
     var outer_stats: Store.DigestStats = .{};
@@ -2986,8 +3091,8 @@ test "monotype cached digest stays stable across multiple edges into one recursi
     const first_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
     const second_fn = try store.add(.{ .func = .{ .args = Span.empty(), .ret = recursive } });
     const fields = try store.addFields(&.{
-        .{ .name = first_field, .ty = first_fn },
-        .{ .name = second_field, .ty = second_fn },
+        .{ .name = first_field, .ty = first_fn, .default = null },
+        .{ .name = second_field, .ty = second_fn, .default = null },
     });
     store.fillReservedSlot(recursive, .{ .record = fields });
 
@@ -3011,19 +3116,19 @@ test "monotype type equality accepts isomorphic recursive structural types" {
 
     const rec_a = try store.reserveSlot();
     const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
-    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a, .default = null }});
     store.fillReservedSlot(rec_a, .{ .record = fields_a });
 
     const rec_b = try store.reserveSlot();
     const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
-    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b, .default = null }});
     store.fillReservedSlot(rec_b, .{ .record = fields_b });
 
     try std.testing.expect(try store.typeEql(&name_store, rec_a, rec_b));
 
     const str = try store.add(.{ .primitive = .str });
     const rec_c = try store.reserveSlot();
-    const fields_c = try store.addFields(&.{.{ .name = field_name, .ty = str }});
+    const fields_c = try store.addFields(&.{.{ .name = field_name, .ty = str, .default = null }});
     store.fillReservedSlot(rec_c, .{ .record = fields_c });
     try std.testing.expect(!try store.typeEql(&name_store, rec_a, rec_c));
 }
@@ -3109,7 +3214,7 @@ test "monotype type equality compares exact types across stores" {
     const type_name = try name_store.internTypeName("Alias");
 
     const current_unit = try current.add(.zst);
-    const current_fields = try current.addFields(&.{.{ .name = field_name, .ty = current_unit }});
+    const current_fields = try current.addFields(&.{.{ .name = field_name, .ty = current_unit, .default = null }});
     const current_record = try current.add(.{ .record = current_fields });
     const current_args = try current.addSpan(&.{current_record});
     const current_fn = try current.add(.{ .func = .{
@@ -3126,7 +3231,7 @@ test "monotype type equality compares exact types across stores" {
 
     _ = try loaded.add(.{ .primitive = .str });
     const loaded_unit = try loaded.add(.zst);
-    const loaded_fields = try loaded.addFields(&.{.{ .name = field_name, .ty = loaded_unit }});
+    const loaded_fields = try loaded.addFields(&.{.{ .name = field_name, .ty = loaded_unit, .default = null }});
     const loaded_record = try loaded.add(.{ .record = loaded_fields });
     const loaded_args = try loaded.addSpan(&.{loaded_record});
     const loaded_fn = try loaded.add(.{ .func = .{
@@ -3364,8 +3469,8 @@ test "monotype named type digest includes declared field order" {
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const fields = try store.addFields(&.{
-        .{ .name = field_a, .ty = i64_ty },
-        .{ .name = field_b, .ty = i64_ty },
+        .{ .name = field_a, .ty = i64_ty, .default = null },
+        .{ .name = field_b, .ty = i64_ty, .default = null },
     });
     const backing = try store.add(.{ .record = fields });
     const order_ab = try store.addDeclaredFields(&.{

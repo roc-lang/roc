@@ -454,7 +454,10 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
         try self.assertNoTypeProblems();
     }
 
-    try testing.expect(self.module_env.all_defs.span.len > 0);
+    if (self.module_env.all_defs.span.len == 0) {
+        std.debug.print("Expected module to have at least one top-level def, but it has none\n", .{});
+        return error.TestUnexpectedResult;
+    }
 
     const idents = self.module_env.getIdentStoreConst();
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -462,7 +465,13 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
         const def = self.module_env.store.getDef(def_idx);
         const ptrn = self.module_env.store.getPattern(def.pattern);
 
-        if (ptrn != .assign) return error.TestUnexpectedResult;
+        if (ptrn != .assign) {
+            std.debug.print(
+                "Found a top-level def whose pattern is '{s}', not a plain assign, while looking up def '{s}'\n",
+                .{ @tagName(ptrn), target_def_name },
+            );
+            return error.TestUnexpectedResult;
+        }
         const def_name = idents.getText(ptrn.assign.ident);
         if (std.mem.eql(u8, target_def_name, def_name)) {
             try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
@@ -470,6 +479,15 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
             return;
         }
     }
+
+    // Not found: list the module's def names so typos are obvious.
+    std.debug.print("No top-level def named '{s}'. This module's defs are:", .{target_def_name});
+    for (defs_slice) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const ptrn = self.module_env.store.getPattern(def.pattern);
+        if (ptrn == .assign) std.debug.print(" '{s}'", .{idents.getText(ptrn.assign.ident)});
+    }
+    std.debug.print("\n", .{});
     return error.TestUnexpectedResult;
 }
 
@@ -692,6 +710,23 @@ pub fn assertOneCanError(self: *TestEnv, expected: []const u8) TestEnvError!void
     defer report.deinit();
 
     try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that canonicalization produced exactly the expected diagnostics, in
+/// order, each matching its expected title.
+pub fn assertCanErrors(self: *TestEnv, expected: []const []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+
+    try testing.expectEqual(expected.len, diagnostics.len);
+    for (expected, diagnostics) |expected_title, diagnostic| {
+        var report = try self.module_env.diagnosticToReport(diagnostic, self.gpa, self.module_env.module_name);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_title, report.title);
+    }
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected rendered message.
