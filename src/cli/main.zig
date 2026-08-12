@@ -15220,7 +15220,7 @@ fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnosti
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [24]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [30]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15247,6 +15247,12 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [24]p
         .{ .name = "Substituted checked node misses", .count = body.substituted_checked_node_misses },
         .{ .name = "Declaration checked node misses", .count = body.declaration_checked_node_misses },
         .{ .name = "Recursive checked node reservations", .count = body.recursive_checked_node_reservations },
+        .{ .name = "Call selection refinements", .count = body.call_selection_refinements },
+        .{ .name = "Call selection entries published", .count = body.call_selection_entries_published },
+        .{ .name = "Call selection non-slot entries", .count = body.call_selection_non_slot_entries },
+        .{ .name = "Call selection slot visits", .count = body.call_selection_slot_visits },
+        .{ .name = "Call selection binding visits", .count = body.call_selection_binding_visits },
+        .{ .name = "Call selection occurrences evaluated", .count = body.call_selection_occurrences_evaluated },
     };
 }
 

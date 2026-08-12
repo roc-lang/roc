@@ -614,7 +614,8 @@ pub const InstGraph = struct {
         if (left.len != right.len) return false;
         for (left) |left_selection| {
             const right_selection = for (right) |candidate| {
-                if (std.meta.eql(candidate.base, left_selection.base)) break candidate;
+                if (candidate.base.checked == left_selection.base.checked and
+                    std.mem.eql(u8, &candidate.base.module_bytes, &left_selection.base.module_bytes)) break candidate;
             } else return false;
             if (!self.sameClass(left_selection.produced, right_selection.produced)) return false;
         }

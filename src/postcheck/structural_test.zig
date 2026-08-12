@@ -122,7 +122,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "const checked_callee = try self.graph.functionNodes(checked_callee_node)");
     try expectNotContains(lower_call, "lowerExprTypeNode(call.func)");
     try expectContains(lower_call, "try self.preLowerDirectCallOperands(call.args, null, &pre_lowered);");
-    try expectContains(lower_call, "selections = try self.directCallSelectionsFromPublishedPlan(");
+    try expectContains(lower_call, "try self.refineDirectCallSelectionsFromPublishedPlan(");
     try expectContains(lower_call, "const request_fn_node = try self.materializeCallSelectionSpan(");
     try expectNotContains(lower_call, "functionRequestNode(");
     try expectContains(lower_call, "const callee = try self.lowerExprAtCallConsumerRequest(");
@@ -652,9 +652,10 @@ test "record literals request and retain only immediate exact field nodes" {
     );
     try expectContains(record_literal, "self.graph.recordConstructionFieldNode(");
     try expectContains(record_literal, "specializationRecordPlanForExpr(checked_expr)");
-    try expectContains(record_literal, "projectionSelectionArgumentNode(plan, selections, index)");
+    try expectContains(record_literal, "projectionSelectionArgumentNode(plan, selections.items, index)");
     try expectContains(record_literal, "specializationProjectionOperandConsumerBindings(plan, index)");
-    try expectContains(record_literal, "self.directSelectionsForCall(");
+    try expectContains(record_literal, "var selections = std.ArrayList(solve.DirectRequestSelection).empty;");
+    try expectContains(record_literal, "self.refineDirectSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
     try expectContains(record_literal, ".ty = self.preLoweredChildNodeAt(children, field.value)");
     try expectNotContains(record_literal, "checkedRecordLiteralFieldType");
@@ -1793,7 +1794,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
     try expectContains(iterator, "produced_nodes[operand_index] = try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph)");
-    try expectContains(iterator, "directCallSelectionsFromPublishedPlan(");
+    try expectContains(iterator, "refineDirectCallSelectionsFromPublishedPlan(");
     try expectContains(iterator, "materializeCallSelectionSpan(");
     try expectNotContains(iterator, "functionRequestNode(");
     try expectNotContains(lower_source, "checkedMonoRequestNode");

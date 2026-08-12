@@ -364,6 +364,12 @@ pub const BodyDiagnostics = struct {
     nested_callable_checks: u64 = 0,
     nested_lambdas_prepared: u64 = 0,
     nested_closures_prepared: u64 = 0,
+    call_selection_refinements: u64 = 0,
+    call_selection_entries_published: u64 = 0,
+    call_selection_non_slot_entries: u64 = 0,
+    call_selection_slot_visits: u64 = 0,
+    call_selection_binding_visits: u64 = 0,
+    call_selection_occurrences_evaluated: u64 = 0,
 };
 
 /// Deterministic Monotype workload counts. These diagnose how much exact
@@ -16308,7 +16314,7 @@ const BodyContext = struct {
         var selected = active.iterator();
         while (selected.next()) |entry| {
             for (exact.items) |*existing| {
-                if (!std.meta.eql(existing.base, entry.key_ptr.*)) continue;
+                if (!directRequestBaseEql(existing.base, entry.key_ptr.*)) continue;
                 existing.produced = entry.value_ptr.*;
                 break;
             } else try exact.append(self.allocator, .{
@@ -24705,9 +24711,16 @@ const BodyContext = struct {
         base_id: solve.CheckedBaseKey,
     ) ?solve.DirectRequestSelection {
         for (selections) |selection| {
-            if (std.meta.eql(selection.base, base_id)) return selection;
+            if (directRequestBaseEql(selection.base, base_id)) return selection;
         }
         return null;
+    }
+
+    /// Checked ids are the dense, usually-distinguishing part of a request
+    /// address. Compare them before the 32-byte module identity so a sparse
+    /// span search does not scan module digests for unrelated slots.
+    fn directRequestBaseEql(left: solve.CheckedBaseKey, right: solve.CheckedBaseKey) bool {
+        return left.checked == right.checked and moduleBytesEqual(left.module_bytes, right.module_bytes);
     }
 
     /// A producer occurrence owns its exact node. A consumer occurrence may
@@ -24749,7 +24762,7 @@ const BodyContext = struct {
         defer selections.deinit(self.allocator);
         try selections.appendSlice(self.allocator, self.graph.directRequestSelections(request_fn_node));
         for (selections.items) |*selection| {
-            if (!std.meta.eql(selection.base, selection_base)) continue;
+            if (!directRequestBaseEql(selection.base, selection_base)) continue;
             selection.produced = produced_root;
             try self.graph.recordDirectRequestSelections(request_fn_node, selections.items);
             return;
@@ -25525,7 +25538,7 @@ const BodyContext = struct {
     fn directSelectionsForCall(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
-        _: checked.CheckedTypeId,
+        checked_fn_ty: checked.CheckedTypeId,
         current_selections: []const solve.DirectRequestSelection,
         produced_args: []const NodeId,
         newly_available: []const bool,
@@ -25537,6 +25550,38 @@ const BodyContext = struct {
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
         try selections.appendSlice(self.allocator, current_selections);
+        try self.refineDirectSelectionsForCall(
+            plan,
+            checked_fn_ty,
+            &selections,
+            produced_args,
+            newly_available,
+            dispatcher_node,
+            target_signature_node,
+            request_ret,
+            include_result,
+        );
+        return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
+    }
+
+    /// Apply newly completed checker-published call edges to one mutable flat
+    /// selection span. Operand scheduling owns this list for the lifetime of
+    /// the call, so refining one producer edge does not allocate and retain a
+    /// complete replacement span after every operand.
+    fn refineDirectSelectionsForCall(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        _: checked.CheckedTypeId,
+        selections: *std.ArrayList(solve.DirectRequestSelection),
+        produced_args: []const NodeId,
+        newly_available: []const bool,
+        dispatcher_node: ?NodeId,
+        target_signature_node: ?NodeId,
+        request_ret: ?NodeId,
+        include_result: bool,
+    ) Allocator.Error!void {
+        self.builder.countBodyDiagnosticBy("call_selection_slot_visits", plan.slots.len *
+            (3 + @as(usize, if (self.active_checked_selections != null) 1 else 0)));
         // A call shape's slot ID is itself the explicit self-edge into the
         // current checked scope. Consume that exact value directly even for
         // shape-only synthetic calls that have no expression binding delta.
@@ -25554,7 +25599,7 @@ const BodyContext = struct {
                             try self.graph.completeProducedSelection(existing.produced, active_node);
                         }
                         for (selections.items) |*entry| {
-                            if (!std.meta.eql(entry.base, key)) continue;
+                            if (!directRequestBaseEql(entry.base, key)) continue;
                             entry.produced = self.graph.rootNode(active_node);
                             break;
                         }
@@ -25573,7 +25618,7 @@ const BodyContext = struct {
                 });
             }
         }
-        try self.applyCallConsumerBindingsToSelections(plan.context_bindings, &selections, true);
+        try self.applyCallConsumerBindingsToSelections(plan.context_bindings, selections, true);
         const target_signature = if (target_signature_node) |node|
             try self.graph.functionNodes(node)
         else
@@ -25585,7 +25630,7 @@ const BodyContext = struct {
             };
             if (slot.kind == .generated_nominal) {
                 for (selections.items, 0..) |selection, index| {
-                    if (!std.meta.eql(selection.base, base_id)) continue;
+                    if (!directRequestBaseEql(selection.base, base_id)) continue;
                     if (!self.graph.nodeIsGeneratedNominal(selection.produced)) {
                         _ = selections.orderedRemove(index);
                     }
@@ -25663,14 +25708,14 @@ const BodyContext = struct {
             const next = selected orelse continue;
             var replaced = false;
             for (selections.items) |*existing| {
-                if (!std.meta.eql(existing.base, base_id)) continue;
+                if (!directRequestBaseEql(existing.base, base_id)) continue;
                 existing.* = next;
                 replaced = true;
                 break;
             }
             if (!replaced) try selections.append(self.allocator, next);
         }
-        try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, &selections, false);
+        try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, selections, false);
         // Checking stores generated slots after every generated dependency.
         // One forward pass therefore constructs every identity whose public
         // arguments are available at this call stage; no retry or descendant
@@ -25699,9 +25744,20 @@ const BodyContext = struct {
         // Result-context identities may themselves be supplied by an operand
         // producer in this invocation. Apply the same direct checker edges
         // once more after those producer projections have been appended.
-        try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, &selections, false);
-        try self.applyCallConsumerBindingsToSelections(plan.context_bindings, &selections, true);
-        return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
+        try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, selections, false);
+        try self.applyCallConsumerBindingsToSelections(plan.context_bindings, selections, true);
+        self.builder.countBodyDiagnosticBy("call_selection_occurrences_evaluated", evaluated.items.len);
+        if (self.builder.diagnostics != null) {
+            self.builder.countBodyDiagnostic("call_selection_refinements");
+            self.builder.countBodyDiagnosticBy("call_selection_entries_published", selections.items.len);
+            for (selections.items) |selection| {
+                for (plan.slots) |slot| {
+                    if (selection.base.checked == slot.checked and
+                        moduleBytesEqual(selection.base.module_bytes, self.view.key.bytes)) break;
+                } else self.builder.countBodyDiagnostic("call_selection_non_slot_entries");
+            }
+        }
+        return;
     }
 
     fn applyCallConsumerBindingsToSelections(
@@ -25710,6 +25766,7 @@ const BodyContext = struct {
         selections: *std.ArrayList(solve.DirectRequestSelection),
         allow_active_source: bool,
     ) Allocator.Error!void {
+        self.builder.countBodyDiagnosticBy("call_selection_binding_visits", bindings.len);
         for (bindings) |binding| {
             const source = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
@@ -25753,7 +25810,7 @@ const BodyContext = struct {
                         try self.graph.completeProducedSelection(existing.produced, produced);
                     }
                     for (selections.items) |*entry| {
-                        if (!std.meta.eql(entry.base, destination)) continue;
+                        if (!directRequestBaseEql(entry.base, destination)) continue;
                         entry.produced = self.graph.rootNode(produced);
                         break;
                     }
@@ -25983,6 +26040,31 @@ const BodyContext = struct {
             plan,
             checked_fn_ty,
             current_selections,
+            produced_args,
+            newly_available,
+            dispatcher_node,
+            target_signature_node,
+            request_ret,
+            include_result,
+        );
+    }
+
+    fn refineDirectCallSelectionsFromPublishedPlan(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_fn_ty: checked.CheckedTypeId,
+        selections: *std.ArrayList(solve.DirectRequestSelection),
+        produced_args: []const NodeId,
+        newly_available: []const bool,
+        dispatcher_node: ?NodeId,
+        target_signature_node: ?NodeId,
+        request_ret: NodeId,
+        include_result: bool,
+    ) Allocator.Error!void {
+        return try self.refineDirectSelectionsForCall(
+            plan,
+            checked_fn_ty,
+            selections,
             produced_args,
             newly_available,
             dispatcher_node,
@@ -26228,6 +26310,17 @@ const BodyContext = struct {
         return true;
     }
 
+    fn replaceMutableCallSelections(
+        self: *BodyContext,
+        selections: *std.ArrayList(solve.DirectRequestSelection),
+        updated: []const solve.DirectRequestSelection,
+    ) Allocator.Error!void {
+        if (updated.len == selections.items.len and
+            (updated.len == 0 or updated.ptr == selections.items.ptr)) return;
+        selections.clearRetainingCapacity();
+        try selections.appendSlice(self.allocator, updated);
+    }
+
     fn applyIteratorProducerToSelectionSpan(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
@@ -26293,7 +26386,7 @@ const BodyContext = struct {
                 .checked = slot.checked,
             };
             for (selections.items) |*selected| {
-                if (!std.meta.eql(selected.base, base_id)) continue;
+                if (!directRequestBaseEql(selected.base, base_id)) continue;
                 // The result projection is the consumer's exact destination
                 // cell. The iterator constructor is the value producer and
                 // therefore supplies the atomic generated node directly.
@@ -26475,11 +26568,12 @@ const BodyContext = struct {
         else
             checked_callee.ret;
         const call_plan = self.view.templates.specializationCallPlanForExpr(expr_id);
-        var selections: []const solve.DirectRequestSelection = &.{};
-        selections = try self.directCallSelectionsFromPublishedPlan(
+        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selections.deinit(self.allocator);
+        try self.refineDirectCallSelectionsFromPublishedPlan(
             call_plan,
             call.source_fn_ty_payload,
-            selections,
+            &selections,
             produced_args,
             produced_available,
             null,
@@ -26492,20 +26586,20 @@ const BodyContext = struct {
             arg.* = try self.callSelectionArgumentNode(
                 call_plan,
                 call.source_fn_ty_payload,
-                selections,
+                selections.items,
                 index,
             );
         }
         try self.preLowerContextualCallOperandsAtNodes(
             call_plan,
-            selections,
+            selections.items,
             call.args,
             preliminary_args,
             &pre_lowered,
         );
         try self.preLowerNestedCallOperandsAtNodes(
             call_plan,
-            selections,
+            selections.items,
             call.args,
             preliminary_args,
             &pre_lowered,
@@ -26520,10 +26614,10 @@ const BodyContext = struct {
         for (produced_available, newly_available) |was_available, *newly| {
             newly.* = !was_available;
         }
-        selections = try self.directCallSelectionsFromPublishedPlan(
+        try self.refineDirectCallSelectionsFromPublishedPlan(
             call_plan,
             call.source_fn_ty_payload,
-            selections,
+            &selections,
             completed_args,
             newly_available,
             null,
@@ -26535,7 +26629,7 @@ const BodyContext = struct {
             call_plan,
             call.source_fn_ty_payload,
             checked_callee_node,
-            selections,
+            selections.items,
             completed_args,
             all_available,
             request_ret,
@@ -26545,7 +26639,7 @@ const BodyContext = struct {
         const callee = try self.lowerExprAtCallConsumerRequest(
             call_plan,
             call_plan.callee_consumer_bindings,
-            selections,
+            selections.items,
             call.func,
             request_fn_node,
         );
@@ -27969,7 +28063,7 @@ const BodyContext = struct {
             };
             var produced: ?NodeId = null;
             for (direct.items) |selection| {
-                if (std.meta.eql(selection.base, source)) {
+                if (directRequestBaseEql(selection.base, source)) {
                     produced = selection.produced;
                     break;
                 }
@@ -27981,7 +28075,7 @@ const BodyContext = struct {
                 .checked = relation.dependent,
             };
             for (direct.items) |selection| {
-                if (!std.meta.eql(selection.base, dependent)) continue;
+                if (!directRequestBaseEql(selection.base, dependent)) continue;
                 if (!self.graph.sameClass(selection.produced, exact)) {
                     Common.invariant("one procedure target identity received two exact runtime nodes");
                 }
@@ -30189,11 +30283,12 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, checked_args.len);
         @memset(newly_available, false);
-        var selections: []const solve.DirectRequestSelection = &.{};
-        selections = try self.directCallSelectionsFromPublishedPlan(
+        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selections.deinit(self.allocator);
+        try self.refineDirectCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            selections,
+            &selections,
             produced_args,
             newly_available,
             null,
@@ -30202,14 +30297,16 @@ const BodyContext = struct {
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            selections = (try self.applyIteratorProducerToSelectionSpan(
+            if (try self.applyIteratorProducerToSelectionSpan(
                 plan,
-                selections,
+                selections.items,
                 procedure,
                 checked_fn_ty,
                 produced_args,
                 available,
-            )) orelse selections;
+            )) |updated| {
+                try self.replaceMutableCallSelections(&selections, updated);
+            }
         }
         var lowered = std.ArrayList(PreLoweredOperand).empty;
         errdefer lowered.deinit(self.allocator);
@@ -30232,19 +30329,19 @@ const BodyContext = struct {
                 if (needs_request and !self.callConsumerBindingsReady(
                     plan,
                     consumer_bindings,
-                    selections,
+                    selections.items,
                 )) continue;
                 const request_arg = try self.callSelectionArgumentNode(
                     plan,
                     checked_fn_ty,
-                    selections,
+                    selections.items,
                     index,
                 );
                 const value = if (needs_request)
                     try self.lowerExprAtCallConsumerRequest(
                         plan,
                         consumer_bindings,
-                        selections,
+                        selections.items,
                         checked_expr,
                         request_arg,
                     )
@@ -30267,10 +30364,10 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published call operand dependencies had no exact source");
             }
-            selections = try self.directCallSelectionsFromPublishedPlan(
+            try self.refineDirectCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
-                selections,
+                &selections,
                 produced_args,
                 newly_available,
                 null,
@@ -30279,21 +30376,23 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try self.applyIteratorProducerToSelectionSpan(
+                if (try self.applyIteratorProducerToSelectionSpan(
                     plan,
-                    selections,
+                    selections.items,
                     procedure,
                     checked_fn_ty,
                     produced_args,
                     available,
-                )) orelse selections;
+                )) |updated| {
+                    try self.replaceMutableCallSelections(&selections, updated);
+                }
             }
         }
         const materialized_request = try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
-            selections,
+            selections.items,
             produced_args,
             available,
             null,
@@ -30353,11 +30452,12 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, operands.len);
         @memset(newly_available, false);
-        var selections: []const solve.DirectRequestSelection = &.{};
-        selections = try self.directCallSelectionsFromPublishedPlan(
+        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selections.deinit(self.allocator);
+        try self.refineDirectCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
-            selections,
+            &selections,
             produced_args,
             newly_available,
             if (dispatcher_arg_index) |index| if (index < produced_args.len and available[index]) produced_args[index] else null else type_only_dispatcher,
@@ -30366,14 +30466,16 @@ const BodyContext = struct {
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            selections = (try self.applyIteratorProducerToSelectionSpan(
+            if (try self.applyIteratorProducerToSelectionSpan(
                 plan,
-                selections,
+                selections.items,
                 procedure,
                 checked_fn_ty,
                 produced_args,
                 available,
-            )) orelse selections;
+            )) |updated| {
+                try self.replaceMutableCallSelections(&selections, updated);
+            }
         }
         var lowered = std.ArrayList(PreLoweredOperand).empty;
         errdefer lowered.deinit(self.allocator);
@@ -30397,7 +30499,7 @@ const BodyContext = struct {
                 if (needs_request and !self.callConsumerBindingsReady(
                     plan,
                     consumer_bindings,
-                    selections,
+                    selections.items,
                 )) continue;
                 // A contextual operand consumes the exact argument edge of
                 // the checker-selected target directly. Its lambda/pattern
@@ -30410,14 +30512,14 @@ const BodyContext = struct {
                     try self.callSelectionArgumentNode(
                         plan,
                         checked_fn_ty,
-                        selections,
+                        selections.items,
                         index,
                     );
                 const value = if (needs_request) switch (operand) {
                     .checked_expr => |expr| try self.lowerExprAtCallConsumerRequest(
                         plan,
                         consumer_bindings,
-                        selections,
+                        selections.items,
                         expr,
                         request_arg,
                     ),
@@ -30440,10 +30542,10 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published dispatch operand dependencies had no exact source");
             }
-            selections = try self.directCallSelectionsFromPublishedPlan(
+            try self.refineDirectCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
-                selections,
+                &selections,
                 produced_args,
                 newly_available,
                 if (dispatcher_arg_index) |index|
@@ -30455,21 +30557,23 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try self.applyIteratorProducerToSelectionSpan(
+                if (try self.applyIteratorProducerToSelectionSpan(
                     plan,
-                    selections,
+                    selections.items,
                     procedure,
                     checked_fn_ty,
                     produced_args,
                     available,
-                )) orelse selections;
+                )) |updated| {
+                    try self.replaceMutableCallSelections(&selections, updated);
+                }
             }
         }
         const materialized = try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
-            selections,
+            selections.items,
             produced_args,
             available,
             null,
@@ -32459,7 +32563,8 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, record.fields.len);
         @memset(newly_available, false);
-        var selections: []const solve.DirectRequestSelection = &.{};
+        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selections.deinit(self.allocator);
         var remaining = record.fields.len;
         while (remaining != 0) {
             @memset(newly_available, false);
@@ -32485,14 +32590,14 @@ const BodyContext = struct {
                 if (needs_request and !checked_seed and !self.callConsumerBindingsReady(
                     plan,
                     consumer_bindings,
-                    selections,
+                    selections.items,
                 )) continue;
                 const value = if (needs_request) blk: {
-                    const request = try self.projectionSelectionArgumentNode(plan, selections, index);
+                    const request = try self.projectionSelectionArgumentNode(plan, selections.items, index);
                     break :blk try self.lowerExprAtCallConsumerRequest(
                         plan,
                         consumer_bindings,
-                        selections,
+                        selections.items,
                         field.value,
                         request,
                     );
@@ -32519,10 +32624,10 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published record field dependencies had no exact source");
             }
-            selections = try self.directSelectionsForCall(
+            try self.refineDirectSelectionsForCall(
                 plan,
                 self.view.bodies.expr(checked_expr).ty,
-                selections,
+                &selections,
                 produced_fields,
                 newly_available,
                 null,
@@ -34537,7 +34642,7 @@ const BodyContext = struct {
                                 .checked = relation.dependent,
                             };
                             for (selections.items) |*selection| {
-                                if (!std.meta.eql(selection.base, dependent)) continue;
+                                if (!directRequestBaseEql(selection.base, dependent)) continue;
                                 if (!self.graph.sameClass(selection.produced, produced)) {
                                     Common.invariant("dispatch evidence target identity received two exact runtime selections");
                                 }
@@ -45255,10 +45360,12 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, produced_nodes.len);
         @memset(newly_available, false);
-        var selections = try self.directCallSelectionsFromPublishedPlan(
+        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selections.deinit(self.allocator);
+        try self.refineDirectCallSelectionsFromPublishedPlan(
             call_plan,
             plan.callable_ty,
-            &.{},
+            &selections,
             produced_nodes,
             newly_available,
             null,
@@ -45286,13 +45393,13 @@ const BodyContext = struct {
                 if (needs_request and !self.callConsumerBindingsReady(
                     call_plan,
                     consumer_bindings,
-                    selections,
+                    selections.items,
                 )) continue;
                 const request_arg = if (needs_request)
                     try self.callSelectionArgumentNode(
                         call_plan,
                         plan.callable_ty,
-                        selections,
+                        selections.items,
                         operand_index,
                     )
                 else
@@ -45302,7 +45409,7 @@ const BodyContext = struct {
                         try self.lowerExprAtCallConsumerRequest(
                             call_plan,
                             consumer_bindings,
-                            selections,
+                            selections.items,
                             expr,
                             request_arg,
                         )
@@ -45327,10 +45434,10 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published iterator operand dependencies had no exact source");
             }
-            selections = try self.directCallSelectionsFromPublishedPlan(
+            try self.refineDirectCallSelectionsFromPublishedPlan(
                 call_plan,
                 plan.callable_ty,
-                selections,
+                &selections,
                 produced_nodes,
                 newly_available,
                 if (available[plan.dispatcher_arg_index]) produced_nodes[plan.dispatcher_arg_index] else null,
@@ -45339,21 +45446,23 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try self.applyIteratorProducerToSelectionSpan(
+                if (try self.applyIteratorProducerToSelectionSpan(
                     call_plan,
-                    selections,
+                    selections.items,
                     procedure,
                     plan.callable_ty,
                     produced_nodes,
                     available,
-                )) orelse selections;
+                )) |updated| {
+                    try self.replaceMutableCallSelections(&selections, updated);
+                }
             }
         }
         const callsite_callable = try self.materializeCallSelectionSpan(
             call_plan,
             plan.callable_ty,
             checked_callable_node,
-            selections,
+            selections.items,
             produced_nodes,
             available,
             null,

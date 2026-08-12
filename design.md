@@ -3012,8 +3012,11 @@ operands by following only the checker-published root-to-child paths whose
 producer edge has just completed. Lowering keeps a sparse list of only the
 immediate edges reached by those paths; it never allocates demand, result, or
 base columns sized to every descendant in the shared call shape, and it never
-walks a checked operand beside a produced operand. Materialization rebuilds
-only the ancestors on changed paths. It treats a generated nominal as an
+walks a checked operand beside a produced operand. One call schedule owns and
+refines one mutable sparse list; completing an operand does not allocate and
+retain a replacement copy of the entire span. Only the completed request
+publishes an immutable span into the graph. Materialization rebuilds only the
+ancestors on changed paths. It treats a generated nominal as an
 atomic leaf and never enters its private backing. Any complete exact node
 selected at an ordinary compound edge is also a hard boundary for that
 occurrence: the producer already returned the whole runtime value, so

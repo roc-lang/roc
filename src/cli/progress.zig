@@ -45,7 +45,7 @@ const name_width: usize = 28;
 const max_phases: usize = 16;
 const max_subphases: usize = 24;
 const max_counter_groups: usize = 4;
-const max_counters_per_group: usize = 24;
+const max_counters_per_group: usize = 32;
 
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
