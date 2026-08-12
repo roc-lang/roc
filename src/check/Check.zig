@@ -15447,9 +15447,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // should still get `I64 -> Str` from the annotation.
         self.var_set.clearRetainingCapacity();
         if (try self.varContainsError(expr_var, &self.var_set)) {
-            // Keep the clean annotation type for references, but ensure the
-            // invalid body cannot be published as an executable constant.
-            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            // A method's callable wrapper is explicit input to method-template
+            // publication, so keep that wrapper around its already-erroneous
+            // child. Other annotated values are the executable boundary and
+            // must themselves become the runtime error.
+            const is_method_callable = isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr_idx)) and
+                self.exprDefinesMethod(expr_idx);
+            if (!is_method_callable) {
+                try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            }
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
@@ -16057,6 +16063,13 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
         expr == .e_anno_only or
         expr == .e_derived_method or
         expr == .e_hosted_lambda;
+}
+
+fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    for (self.cir.method_defs.entries.items) |entry| {
+        if (self.cir.store.getDef(entry.value.def_idx).expr == expr_idx) return true;
+    }
+    return false;
 }
 
 /// Should this expression generalize in its current binding context—i.e. push

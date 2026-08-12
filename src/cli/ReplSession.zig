@@ -1622,7 +1622,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = eval.Inspected.compileProgramForTargetWithBuiltinAndContext(
+    const compile_outcome = eval.Inspected.compileProgramForTargetWithBuiltinAndContextReporting(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1733,6 +1733,18 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.WouldBlock,
         error.WriteFailed,
         => return err,
+    };
+    var compiled = switch (compile_outcome) {
+        .compiled => |compiled| compiled,
+        .diagnostics => |resources_value| {
+            var resources = resources_value;
+            defer resources.deinit(self.allocator);
+            return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
+                self.allocator,
+                &resources,
+                report_config,
+            ) };
+        },
     };
     defer compiled.deinit(self.allocator);
 

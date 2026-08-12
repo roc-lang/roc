@@ -582,6 +582,14 @@ pub const CompiledTargetProgram = struct {
     }
 };
 
+/// The result of preparing one explicit evaluation root. A rejected program
+/// retains the exact checked resources that produced its diagnostics so an
+/// interactive caller can render them without checking the source again.
+pub const CompileTargetOutcome = union(enum) {
+    compiled: CompiledTargetProgram,
+    diagnostics: ParsedResources,
+};
+
 /// Type alias for CompiledProgram used for inspect-wrapped expressions.
 pub const CompiledInspectedExpr = CompiledProgram;
 
@@ -903,6 +911,40 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
     roc_ctx: ?CoreCtx,
     specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
+    const outcome = try compileProgramForTargetWithBuiltinAndContextReporting(
+        allocator,
+        io,
+        source_kind,
+        source,
+        imports,
+        target_usize,
+        pre_published_builtin,
+        roc_ctx,
+        specialization_strategy,
+    );
+    return switch (outcome) {
+        .compiled => |compiled| compiled,
+        .diagnostics => |resources_value| {
+            var resources = resources_value;
+            resources.deinit(allocator);
+            return error.TypeCheckError;
+        },
+    };
+}
+
+/// Compile one explicit evaluation root, preserving checked resources when
+/// the root has diagnostics so the caller can render those exact problems.
+pub fn compileProgramForTargetWithBuiltinAndContextReporting(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    target_usize: base.target.TargetUsize,
+    pre_published_builtin: PrePublishedBuiltin,
+    roc_ctx: ?CoreCtx,
+    specialization_strategy: base.SpecializationStrategy,
+) Error!CompileTargetOutcome {
     var resources = try parseAndCanonicalizeProgramWithRootMode(
         allocator,
         source_kind,
@@ -920,7 +962,7 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
     // table; diagnose the checked program before post-check lowering rather
     // than invoking a pipeline that requires at least one explicit root.
     if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
-        return error.TypeCheckError;
+        return .{ .diagnostics = resources };
     }
 
     const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, target_usize, .{
@@ -931,10 +973,10 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
         owned.deinit(allocator);
     }
 
-    return .{
+    return .{ .compiled = .{
         .resources = resources,
         .lowered = lowered,
-    };
+    } };
 }
 
 /// Compile a program with inspect wrapping so the main proc returns a Str.
