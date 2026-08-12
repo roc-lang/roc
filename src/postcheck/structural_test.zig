@@ -593,6 +593,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(target_request, "const no_new_callsite_arguments");
     try expectContains(target_request, "callsite.args,\n            no_new_callsite_arguments,");
     try expectContains(target_request, "callsite.args,\n            available,");
+    try expectContains(target_request, "const checked_target = try self.instNode(lookup.target.callable_ty)");
+    try expectContains(target_request, "checked_target,\n            callsite.ret,");
+    try expectNotContains(target_request, "methodTargetSignatureNode(lookup)");
 }
 
 test "checked calls share one interned shape and have no whole-value plans" {

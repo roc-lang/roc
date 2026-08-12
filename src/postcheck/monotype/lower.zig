@@ -35777,7 +35777,6 @@ const BodyContext = struct {
         // are not a second authority for the target's checked identity slots.
         const no_new_callsite_arguments = try self.graph.arena().alloc(bool, callsite.args.len);
         @memset(no_new_callsite_arguments, false);
-        const target_signature = try self.methodTargetSignatureNode(lookup);
         const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             lookup.target.callable_ty,
@@ -35785,7 +35784,7 @@ const BodyContext = struct {
             callsite.args,
             no_new_callsite_arguments,
             null,
-            target_signature,
+            checked_target,
             callsite.ret,
             include_result,
         );
