@@ -1503,6 +1503,43 @@ pub const InstGraph = struct {
         } });
     }
 
+    /// Construct one completed producer-owned record row. Checked row
+    /// extension topology is not runtime identity: consume the chain, sort
+    /// the fields, and intern only the exact immediate field nodes.
+    pub fn newProducedRecord(
+        self: *InstGraph,
+        initial_fields: []const InstField,
+        raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        var fields = std.ArrayList(InstField).empty;
+        defer fields.deinit(self.allocator);
+        try fields.appendSlice(self.allocator, initial_fields);
+
+        var ext = self.find(raw_ext);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (self.nodes.items[@intFromEnum(ext)] == .record) {
+            const entry = try seen.getOrPut(ext);
+            if (entry.found_existing) {
+                Common.invariant("completed produced record row contained an extension cycle");
+            }
+            const tail = self.nodes.items[@intFromEnum(ext)].record;
+            try fields.appendSlice(self.allocator, tail.fields);
+            ext = self.find(tail.ext);
+        }
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_record => {},
+            .redirect => unreachable,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("completed produced record row had a non-record extension"),
+            .record => unreachable,
+        }
+        std.mem.sort(InstField, fields.items, self.name_store, instFieldLessThan);
+        return try self.newNode(.{ .record = .{
+            .fields = try self.arena().dupe(InstField, fields.items),
+            .ext = ext,
+        } });
+    }
+
     fn nodeSpanShapeHash(self: *InstGraph, nodes: []const NodeId) u64 {
         var hasher = std.hash.Wyhash.init(0);
         var len = std.mem.nativeToLittle(u32, @intCast(nodes.len));
@@ -1681,7 +1718,7 @@ pub const InstGraph = struct {
             },
             .record => blk: {
                 const row = try self.flattenRecordRow(node);
-                break :blk try self.newNode(.{ .record = .{ .fields = row.fields, .ext = row.ext } });
+                break :blk try self.newProducedRecord(row.fields, row.ext);
             },
             .redirect => unreachable,
             .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
@@ -2445,10 +2482,7 @@ pub const InstGraph = struct {
             Common.invariant("instantiation record-remainder edge named an absent field");
         };
         if (retained.items.len == 0) return self.find(row.ext);
-        return try self.newNode(.{ .record = .{
-            .fields = try self.arena().dupe(InstField, retained.items),
-            .ext = row.ext,
-        } });
+        return try self.newProducedRecord(retained.items, row.ext);
     }
 
     /// Copy one record row while replacing exactly one named immediate field.
@@ -2475,7 +2509,7 @@ pub const InstGraph = struct {
             break;
         }
         if (!replaced) Common.invariant("record projection rebuild named an absent field");
-        return try self.newNode(.{ .record = .{ .fields = fields, .ext = row.ext } });
+        return try self.newProducedRecord(fields, row.ext);
     }
 
     /// Copy one record row while replacing its checker-declared remainder.
@@ -2514,10 +2548,7 @@ pub const InstGraph = struct {
             .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("record remainder rebuild received a non-record remainder"),
         };
         if (fields.items.len == 0) return remainder_ext;
-        return try self.newNode(.{ .record = .{
-            .fields = try self.arena().dupe(InstField, fields.items),
-            .ext = remainder_ext,
-        } });
+        return try self.newProducedRecord(fields.items, remainder_ext);
     }
 
     /// Project the semantic open-tag-row remainder after the checker-published
@@ -2555,10 +2586,7 @@ pub const InstGraph = struct {
             Common.invariant("instantiation tag-remainder edge named an absent tag");
         };
         if (retained.items.len == 0) return self.find(row.ext);
-        return try self.newNode(.{ .tag_union = .{
-            .tags = try self.arena().dupe(InstTag, retained.items),
-            .ext = row.ext,
-        } });
+        return try self.newProducedTagUnion(retained.items, row.ext);
     }
 
     /// Copy one tag row while replacing one checker-declared payload edge.
@@ -2588,7 +2616,7 @@ pub const InstGraph = struct {
             break;
         }
         if (!replaced) Common.invariant("tag payload rebuild named an absent tag");
-        return try self.newNode(.{ .tag_union = .{ .tags = tags, .ext = row.ext } });
+        return try self.newProducedTagUnion(tags, row.ext);
     }
 
     /// Copy one tag row while replacing its checker-declared remainder.
@@ -2625,10 +2653,7 @@ pub const InstGraph = struct {
             .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("tag remainder rebuild received a non-tag remainder"),
         };
         if (tags.items.len == 0) return remainder_ext;
-        return try self.newNode(.{ .tag_union = .{
-            .tags = try self.arena().dupe(InstTag, tags.items),
-            .ext = remainder_ext,
-        } });
+        return try self.newProducedTagUnion(tags.items, remainder_ext);
     }
 
     /// Select a private backing field for
@@ -4598,6 +4623,10 @@ fn instTagLessThan(name_store: *const names.NameStore, lhs: InstTag, rhs: InstTa
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
+fn instFieldLessThan(name_store: *const names.NameStore, lhs: InstField, rhs: InstField) bool {
+    return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
+}
+
 /// Orders record fields by label text for layout-stable sorting.
 pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, rhs: Type.Field) bool {
     return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
@@ -5648,6 +5677,52 @@ test "ordinary nominal reservation checks exact roots before normalizing row dec
         .existing => |existing| existing,
         .vacant => return error.TestUnexpectedResult,
     });
+}
+
+test "produced records erase checked row topology at their construction boundary" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const empty = try graph.newNode(.empty_record);
+    const a_name = try name_store.internRecordFieldLabel("a");
+    const b_name = try name_store.internRecordFieldLabel("b");
+    const a_node = try graph.newNode(.{ .primitive = .u8 });
+    const b_node = try graph.newNode(.{ .primitive = .u16 });
+    const tail = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = a_name,
+            .ty = a_node,
+            .default = null,
+        }}),
+        .ext = empty,
+    } });
+
+    const from_extension = try graph.newProducedRecord(&.{.{
+        .name = b_name,
+        .ty = b_node,
+        .default = null,
+    }}, tail);
+    const from_flat_fields = try graph.newProducedRecord(&.{
+        .{ .name = b_name, .ty = b_node, .default = null },
+        .{ .name = a_name, .ty = a_node, .default = null },
+    }, empty);
+
+    try std.testing.expectEqual(from_extension, from_flat_fields);
+    const produced = graph.content(from_extension).record;
+    try std.testing.expectEqual(empty, graph.rootNode(produced.ext));
+    try std.testing.expectEqual(@as(usize, 2), produced.fields.len);
+    try std.testing.expectEqual(a_name, produced.fields[0].name);
+    try std.testing.expectEqual(a_node, graph.rootNode(produced.fields[0].ty));
+    try std.testing.expectEqual(b_name, produced.fields[1].name);
+    try std.testing.expectEqual(b_node, graph.rootNode(produced.fields[1].ty));
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

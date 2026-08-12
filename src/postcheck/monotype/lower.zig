@@ -20565,10 +20565,10 @@ const BodyContext = struct {
                 .default = field.default,
             };
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graph.newProducedRecord(
+            fields,
+            try self.graph.newNode(.empty_record),
+        );
     }
 
     fn generatedIteratorStepFunctionNode(
@@ -20604,10 +20604,10 @@ const BodyContext = struct {
                 .payloads = payloads,
             };
         }
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
+        return try self.graph.newProducedTagUnion(
+            tags,
+            try self.graph.newNode(.empty_tag_union),
+        );
     }
 
     fn generatedIteratorStepPayloadNode(
@@ -20637,10 +20637,10 @@ const BodyContext = struct {
                 .default = field.default,
             };
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graph.newProducedRecord(
+            fields,
+            try self.graph.newNode(.empty_record),
+        );
     }
 
     /// Construct an independently scheduled body request from its immutable
@@ -29807,7 +29807,6 @@ const BodyContext = struct {
         );
 
         const produced_fields = try self.graph.arena().alloc(InstField, fields.len);
-        var changed = false;
         for (fields, ordered_request_fields, produced_fields) |field, request_field, *produced_field| {
             if (field.name != request_field.name) {
                 Common.invariant("restored ConstStore record field order differed from its request");
@@ -29820,16 +29819,12 @@ const BodyContext = struct {
                 .kind = request_field.kind,
                 .default = request_field.default,
             };
-            changed = changed or !self.graph.sameClass(request_field.ty, produced_ty);
         }
 
-        const structural_node = if (changed)
-            try self.graph.newNode(.{ .record = .{
-                .fields = produced_fields,
-                .ext = try self.graph.newNode(.empty_record),
-            } })
-        else
-            self.recordConstructionRootNode(request_node);
+        const structural_node = try self.graph.newProducedRecord(
+            produced_fields,
+            try self.graph.newNode(.empty_record),
+        );
         const produced_node = try self.producedConstructorNode(request_node, structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{ .record = fields_span });
     }
@@ -32415,10 +32410,10 @@ const BodyContext = struct {
         if (!found_list or !found_prev or expected_fields.len != 2) {
             Common.invariant("list_replace_unsafe result did not have list and prev fields");
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = produced_fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graph.newProducedRecord(
+            produced_fields,
+            try self.graph.newNode(.empty_record),
+        );
     }
 
     fn enclosingFunctionTypeSource(self: *BodyContext, index: usize) Allocator.Error!DraftExprId {
@@ -33989,10 +33984,10 @@ const BodyContext = struct {
                 } else Common.invariant("record update named a field absent from its exact base value");
             }
             self.completeProducedRecordFields(produced_fields);
-            const structural_node = try self.graph.newNode(.{ .record = .{
-                .fields = produced_fields,
-                .ext = try self.graph.newNode(.empty_record),
-            } });
+            const structural_node = try self.graph.newProducedRecord(
+                produced_fields,
+                try self.graph.newNode(.empty_record),
+            );
             const produced_node = try self.producedConstructorNode(record_node, structural_node);
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .record_update = .{
                 .base = base_expr,
@@ -34005,7 +34000,6 @@ const BodyContext = struct {
         defer self.allocator.free(lowered);
         const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
         defer self.allocator.free(produced_fields);
-        var requires_distinct_witness = false;
 
         const base_record = if (record.ext) |ext|
             self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
@@ -34050,9 +34044,6 @@ const BodyContext = struct {
                 }
                 const child_node = self.preLoweredChildNodeAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its field node");
-                if (!self.graph.sameClass(field.ty, child_node)) {
-                    requires_distinct_witness = true;
-                }
                 produced_fields[index] = .{
                     .name = field.name,
                     .ty = child_node,
@@ -34093,26 +34084,16 @@ const BodyContext = struct {
                 };
             };
             const produced_value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
-            if (!self.graph.sameClass(field.ty, produced_value_node)) {
-                requires_distinct_witness = true;
-            }
             produced_fields[index].ty = produced_value_node;
             produced_fields[index] = self.completedProducedRecordField(produced_fields[index]);
-            requires_distinct_witness = requires_distinct_witness or
-                !std.meta.eql(field.kind, produced_fields[index].kind) or
-                !std.meta.eql(field.default, produced_fields[index].default) or
-                field.value_ty != produced_fields[index].value_ty;
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
-        const produced_node = if (requires_distinct_witness) blk: {
-            const fields = try self.graph.arena().dupe(InstField, produced_fields);
-            const node = try self.graph.newNode(.{ .record = .{
-                .fields = fields,
-                .ext = try self.graph.newNode(.empty_record),
-            } });
-            break :blk try self.producedConstructorNode(record_node, node);
-        } else record_node;
+        const structural_node = try self.graph.newProducedRecord(
+            produced_fields,
+            try self.graph.newNode(.empty_record),
+        );
+        const produced_node = try self.producedConstructorNode(record_node, structural_node);
         var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
         var spread_index: usize = target_fields.len;
         while (spread_index > 0) {
@@ -34153,7 +34134,6 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_fields.len);
         defer self.allocator.free(lowered);
         const produced_fields = try self.graph.arena().alloc(InstField, target_fields.len);
-        var changed = false;
 
         for (target_fields, produced_fields, lowered) |field, *produced_field, *lowered_field| {
             produced_field.* = field;
@@ -34174,23 +34154,15 @@ const BodyContext = struct {
                 self,
                 try self.exprTypeCell(value).toGraphNode(self.graph),
             );
-            changed = changed or !self.graph.sameClass(field.ty, produced_value_node);
             produced_field.ty = produced_value_node;
             produced_field.* = self.completedProducedRecordField(produced_field.*);
-            changed = changed or
-                !std.meta.eql(field.kind, produced_field.kind) or
-                !std.meta.eql(field.default, produced_field.default) or
-                field.value_ty != produced_field.value_ty;
             lowered_field.* = .{ .name = field.name, .value = value };
         }
 
-        const produced_structural_node = if (changed)
-            try self.graph.newNode(.{ .record = .{
-                .fields = produced_fields,
-                .ext = try self.graph.newNode(.empty_record),
-            } })
-        else
-            self.recordConstructionRootNode(record_node);
+        const produced_structural_node = try self.graph.newProducedRecord(
+            produced_fields,
+            try self.graph.newNode(.empty_record),
+        );
         const produced_node = try self.producedConstructorNode(record_node, produced_structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{
             .record = try self.addFieldExprSpan(lowered),
@@ -34379,19 +34351,15 @@ const BodyContext = struct {
             };
         }
         const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
-        var changed = false;
-        for (lowered, item_nodes, produced_items) |item, request_item, *produced_item| {
+        for (lowered, produced_items) |item, *produced_item| {
             produced_item.* = try self.exprTypeCell(item).toGraphNode(self.graph);
-            changed = changed or !self.graph.sameClass(request_item, produced_item.*);
         }
-        const produced_node = if (changed) blk: {
-            const structural_node = try self.graph.newNode(.{ .tuple = produced_items });
-            // Tuple syntax can construct a nominal whose declaration backing
-            // is a tuple (notably generated `Iter`). Preserve that atomic
-            // nominal identity while replacing only its direct backing with
-            // the exact child nodes produced above.
-            break :blk try self.producedConstructorNode(tuple_node, structural_node);
-        } else tuple_node;
+        const structural_node = try self.graph.newNode(.{ .tuple = produced_items });
+        // Tuple syntax can construct a nominal whose declaration backing is a
+        // tuple (notably generated `Iter`). Preserve that atomic nominal
+        // identity while replacing only its direct backing with the exact
+        // child nodes produced above.
+        const produced_node = try self.producedConstructorNode(tuple_node, structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{ .tuple = try self.addExprSpan(lowered) });
     }
 
@@ -41497,17 +41465,17 @@ const BodyContext = struct {
             }
             outer_field.* = .{
                 .name = try self.generatedParseTagUnionSpecBackingRecordFieldName(record_index),
-                .ty = try self.graph.newNode(.{ .record = .{
-                    .fields = inner_fields,
-                    .ext = try self.graph.newNode(.empty_record),
-                } }),
+                .ty = try self.graph.newProducedRecord(
+                    inner_fields,
+                    try self.graph.newNode(.empty_record),
+                ),
                 .default = null,
             };
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = outer_fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graph.newProducedRecord(
+            outer_fields,
+            try self.graph.newNode(.empty_record),
+        );
     }
 
     fn cloneGraphNamedWithBackingAuthority(
@@ -41604,10 +41572,10 @@ const BodyContext = struct {
     }
 
     fn graphClosedRecord(self: *BodyContext, fields: []const InstField) Allocator.Error!NodeId {
-        return try self.graph.newNode(.{ .record = .{
-            .fields = try self.graph.arena().dupe(InstField, fields),
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graph.newProducedRecord(
+            fields,
+            try self.graph.newNode(.empty_record),
+        );
     }
 
     /// The `parse_record_field` event row at the checked-evidence boundary.
@@ -41641,10 +41609,10 @@ const BodyContext = struct {
                 .payloads = try self.graph.arena().dupe(NodeId, &.{payload}),
             };
         }
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
+        return try self.graph.newProducedTagUnion(
+            tags,
+            try self.graph.newNode(.empty_tag_union),
+        );
     }
 
     fn graphTryLike(
@@ -41655,13 +41623,13 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const ok_name = try self.builder.program.names.internTagLabel("Ok");
         const err_name = try self.builder.program.names.internTagLabel("Err");
-        const backing = try self.graph.newNode(.{ .tag_union = .{
-            .tags = try self.graph.arena().dupe(InstTag, &.{
+        const backing = try self.graph.newProducedTagUnion(
+            &.{
                 .{ .name = ok_name, .checked_name = ok_name, .payloads = try self.graph.arena().dupe(NodeId, &.{ok_node}) },
                 .{ .name = err_name, .checked_name = err_name, .payloads = try self.graph.arena().dupe(NodeId, &.{err_node}) },
-            }),
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
+            },
+            try self.graph.newNode(.empty_tag_union),
+        );
         return try self.cloneGraphNamedWithBackingAuthority(
             template_try,
             &.{ ok_node, err_node },
@@ -42849,10 +42817,10 @@ const BodyContext = struct {
             .checked_name = tag_name,
             .payloads = try self.graph.arena().dupe(NodeId, &.{str_node}),
         };
-        const produced_err = try self.graph.newNode(.{ .tag_union = .{
-            .tags = produced_tags,
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
+        const produced_err = try self.graph.newProducedTagUnion(
+            produced_tags,
+            try self.graph.newNode(.empty_tag_union),
+        );
         const produced_result = try self.graphParserResultLike(
             runtime.ret,
             outer_result.value,
@@ -45474,10 +45442,10 @@ const BodyContext = struct {
         const rest_node = if (remaining.items.len == 0)
             try self.graph.newNode(.empty_record)
         else
-            try self.graph.newNode(.{ .record = .{
-                .fields = try self.graph.arena().dupe(InstField, remaining.items),
-                .ext = try self.graph.newNode(.empty_record),
-            } });
+            try self.graph.newProducedRecord(
+                remaining.items,
+                try self.graph.newNode(.empty_record),
+            );
         try self.publishExactCheckedPatternAtCell(rest_pattern, DraftTypeCell.fromGraphNode(rest_node));
         return rest_node;
     }

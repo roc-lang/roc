@@ -721,7 +721,9 @@ test "record literals request and retain only immediate exact field nodes" {
     try expectContains(exact_record, "const produced_value_node = try self.exprTypeCell(value).toGraphNode(self.graph);");
     try expectContains(exact_record, "produced_fields[index].ty = produced_value_node;");
     try expectContains(exact_record, "optionalSlotPresentExprFromExactValue(pre)");
-    try expectContains(exact_record, "try self.producedConstructorNode(record_node, node)");
+    try expectContains(exact_record, "self.graph.newProducedRecord(");
+    try expectContains(exact_record, "try self.producedConstructorNode(record_node, structural_node)");
+    try expectNotContains(exact_record, "requires_distinct_witness");
     try expectNotContains(record_literal, "checkedRecordLiteralFieldType");
     try expectNotContains(lower_source, "instantiateCheckedTypeWithSelectionsAtAuthority");
     try expectNotContains(lower_source, "instantiateProducedOccurrenceWithSelections");
