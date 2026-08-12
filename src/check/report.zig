@@ -2547,6 +2547,25 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
+        if (data.grown_from_snapshot) |grown_from_snapshot| {
+            const grown_from_str = try report.addOwnedString(self.getFormattedString(grown_from_snapshot));
+            try D.renderSlice(&.{
+                D.bytes("Satisfying this dispatch re-enters"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("with a dispatch state that has grown—in its dispatcher or in the method type it requires—since an earlier step on the same chain, whose dispatcher was:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(grown_from_str);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("The dispatch state grows on every such step, so the chain can never terminate."),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+        }
+
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("Use a more specific result type, or add an associated function whose"),

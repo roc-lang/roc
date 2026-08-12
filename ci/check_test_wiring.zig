@@ -16,13 +16,17 @@
 //!    every host-runnable Zig test binary as a command-line argument. Each
 //!    binary is run with `--listen=-` and asked for its full test list via the
 //!    std.zig.Server `query_test_metadata` message (this only queries
-//!    metadata; no tests execute). Every named test decl found in src/ must
-//!    appear in at least one binary's list, otherwise it can never run and the
-//!    check fails.
+//!    metadata; no tests execute). Every test decl found in src/ must appear
+//!    in at least one binary's list, otherwise it can never run and the check
+//!    fails.
 //!
-//! Unnamed `test { ... }` blocks are aggregators (their bodies just
-//! `refAllDecls` other containers) and are reported by the default test runner
-//! as "<namespace>.test_N", so they are excluded from the semantic comparison.
+//! The semantic layer attributes each reported test to the file it was
+//! declared in rather than comparing bare names, so two files that declare the
+//! same test name cannot stand in for one another. A binary reports every test
+//! as "<namespace>.test.<name>", and the namespace identifies the file; see
+//! `namespaceBelongsToFile`. Unnamed `test { ... }` blocks carry no name at
+//! all (they are reported as "<namespace>.test_N"), so they are checked per
+//! file: a file holding one must show up under a namespace of its own.
 
 const std = @import("std");
 
@@ -71,6 +75,55 @@ const SourceTest = struct {
     };
 };
 
+/// Every namespace some binary reported one test name under.
+const NamespaceList = std.ArrayList([]const u8);
+
+/// Maps a test name to the namespaces it was reported under, which is what
+/// lets a source test be checked against the file it was declared in.
+const NameIndex = struct {
+    arena: Allocator,
+    map: std.StringHashMap(NamespaceList),
+
+    fn init(arena: Allocator) NameIndex {
+        return .{ .arena = arena, .map = std.StringHashMap(NamespaceList).init(arena) };
+    }
+
+    fn record(self: *NameIndex, name: []const u8, namespace: []const u8) !void {
+        const entry = try self.map.getOrPut(name);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        for (entry.value_ptr.items) |seen| {
+            if (std.mem.eql(u8, seen, namespace)) return;
+        }
+        try entry.value_ptr.append(self.arena, namespace);
+    }
+
+    /// Whether `name` runs under a namespace belonging to `file`.
+    fn runsInFile(self: NameIndex, name: []const u8, file: []const u8) bool {
+        const namespaces = self.map.get(name) orelse return false;
+        for (namespaces.items) |namespace| {
+            if (namespaceBelongsToFile(namespace, file)) return true;
+        }
+        return false;
+    }
+};
+
+/// Everything the walk over src/ gathers.
+const Collected = struct {
+    /// Files with test decls that the import-level layer must find wiring for.
+    /// Paths are owned by the general-purpose allocator.
+    test_files: PathList,
+    /// Aggregators whose imports count as wiring. Paths are owned by the
+    /// general-purpose allocator.
+    mod_files: PathList,
+    /// Named test decls; strings live in the arena.
+    source_tests: std.ArrayList(SourceTest),
+    /// Files declaring at least one unnamed `test { ... }` block; strings live
+    /// in the arena.
+    unnamed_test_files: std.ArrayList([]const u8),
+    /// How many files hold a test decl of any kind, aggregators included.
+    files_with_tests: usize,
+};
+
 const TermColor = struct {
     pub const red = "\x1b[0;31m";
     pub const green = "\x1b[0;32m";
@@ -103,18 +156,24 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
 
     try stdout.print("Step 1: Finding all test declarations in source files...\n", .{});
-    var test_files: PathList = .empty;
-    defer freePathList(&test_files, gpa);
+    var collected: Collected = .{
+        .test_files = .empty,
+        .mod_files = .empty,
+        .source_tests = .empty,
+        .unnamed_test_files = .empty,
+        .files_with_tests = 0,
+    };
+    defer freePathList(&collected.test_files, gpa);
+    defer freePathList(&collected.mod_files, gpa);
 
-    var mod_files: PathList = .empty;
-    defer freePathList(&mod_files, gpa);
-
-    var source_tests: std.ArrayList(SourceTest) = .empty;
-
-    try walkTree(gpa, arena, io, "src", &test_files, &mod_files, &source_tests);
+    try walkTree(gpa, arena, io, "src", &collected);
     try stdout.print(
-        "Found {d} named test decl(s) across {d} file(s)\n\n",
-        .{ source_tests.items.len, test_files.items.len },
+        "Found {d} named test decl(s) and {d} unnamed test block file(s) across {d} file(s)\n\n",
+        .{
+            collected.source_tests.items.len,
+            collected.unnamed_test_files.items.len,
+            collected.files_with_tests,
+        },
     );
 
     // Some tests are wired through build.zig rather than mod.zig files.
@@ -127,19 +186,19 @@ pub fn main(init: std.process.Init) !void {
     // - Treat src/cli/test/fx_platform_test.zig as an aggregator since it imports
     //   fx_test_specs.zig which contains shared test specifications.
     if (fileExists(io, "src/cli/main.zig")) {
-        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
+        try collected.mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
     }
     if (fileExists(io, "src/cli/test/fx_platform_test.zig")) {
-        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/fx_platform_test.zig"));
+        try collected.mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/fx_platform_test.zig"));
     }
     if (fileExists(io, "src/cli/test/test_runner.zig")) {
-        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/test_runner.zig"));
+        try collected.mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/test_runner.zig"));
     }
     if (fileExists(io, "src/cli/cli_error.zig")) {
-        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
+        try collected.mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
     }
     if (fileExists(io, "src/snapshot_tool/main.zig")) {
-        try mod_files.append(gpa, try gpa.dupe(u8, "src/snapshot_tool/main.zig"));
+        try collected.mod_files.append(gpa, try gpa.dupe(u8, "src/snapshot_tool/main.zig"));
     }
 
     try stdout.print("Step 2: Extracting test references from mod.zig files and build roots...\n", .{});
@@ -169,7 +228,7 @@ pub fn main(init: std.process.Init) !void {
         scanned.deinit();
     }
 
-    for (mod_files.items) |mod_path| {
+    for (collected.mod_files.items) |mod_path| {
         try enqueueForScan(gpa, &scanned, &scan_queue, mod_path);
     }
     // Also treat build-registered Zig roots (build.zig + src/build/modules.zig)
@@ -191,7 +250,7 @@ pub fn main(init: std.process.Init) !void {
     var unwired: PathList = .empty;
     defer freePathList(&unwired, gpa);
 
-    for (test_files.items) |test_path| {
+    for (collected.test_files.items) |test_path| {
         const key: []const u8 = test_path;
         if (!referenced.contains(key)) {
             try unwired.append(gpa, try gpa.dupe(u8, key));
@@ -227,7 +286,7 @@ pub fn main(init: std.process.Init) !void {
             .{ TermColor.yellow, TermColor.reset },
         );
     } else {
-        try runSemanticCheck(arena, io, stdout, test_binaries, source_tests.items, &failed);
+        try runSemanticCheck(arena, io, stdout, test_binaries, collected, &failed);
     }
 
     if (failed) {
@@ -248,30 +307,40 @@ pub fn main(init: std.process.Init) !void {
 }
 
 /// The semantic gate: enumerate the tests each supplied binary actually
-/// contains (via the std.zig.Server protocol) and require every named source
-/// test decl to appear in at least one binary.
+/// contains (via the std.zig.Server protocol) and require every source test
+/// decl to appear, under a namespace of its own file, in at least one binary.
 fn runSemanticCheck(
     arena: Allocator,
     io: std.Io,
     stdout: anytype,
     test_binaries: []const []const u8,
-    source_tests: []const SourceTest,
+    collected: Collected,
     failed: *bool,
 ) !void {
     try stdout.print(
         "Step 4: Enumerating tests from {d} test binaries...\n",
         .{test_binaries.len},
     );
-    // Keys are every "<name>" tail that follows a ".test." / ".decltest."
-    // component in some binary's fully-qualified test names, so a source test
-    // name can be looked up directly. A source test passes if it appears in
-    // ANY binary (the same file is often compiled into several binaries).
-    var named_set = std.StringHashMap(void).init(arena);
-    var doctest_set = std.StringHashMap(void).init(arena);
+    // Every "<name>" tail that follows a ".test." / ".decltest." component in
+    // some binary's fully-qualified test names, indexed against the namespaces
+    // it appeared under. A source test passes if some binary reports it under
+    // its own file's namespace (the same file is often compiled into several
+    // binaries, and each binary names it relative to that binary's own root).
+    var named = NameIndex.init(arena);
+    var doctests = NameIndex.init(arena);
+    // Namespaces that reported an unnamed `test { ... }` block.
+    var unnamed_namespaces = std.StringHashMap(void).init(arena);
 
     var enumerated_total: u64 = 0;
     for (test_binaries) |bin_path| {
-        const count = enumerateBinaryTests(arena, io, bin_path, &named_set, &doctest_set) catch |err| {
+        const count = enumerateBinaryTests(
+            arena,
+            io,
+            bin_path,
+            &named,
+            &doctests,
+            &unnamed_namespaces,
+        ) catch |err| {
             try stdout.print(
                 "{s}[ERR]{s} Failed to enumerate tests from {s}: {t}\n",
                 .{ TermColor.red, TermColor.reset, bin_path, err },
@@ -285,17 +354,26 @@ fn runSemanticCheck(
 
     try stdout.print("Step 5: Checking that every source test decl runs in some binary...\n\n", .{});
     var missing_count: usize = 0;
-    for (source_tests) |source_test| {
+    for (collected.source_tests.items) |source_test| {
         if (isSemanticallyExcluded(source_test.file)) continue;
-        const set = switch (source_test.kind) {
-            .named => &named_set,
-            .doctest => &doctest_set,
+        const index = switch (source_test.kind) {
+            .named => named,
+            .doctest => doctests,
         };
-        if (set.contains(source_test.name)) continue;
+        if (index.runsInFile(source_test.name, source_test.file)) continue;
         missing_count += 1;
         try stdout.print(
             "  {s}[NEVER RUNS]{s} {s}: test \"{s}\"\n",
             .{ TermColor.red, TermColor.reset, source_test.file, source_test.name },
+        );
+    }
+    for (collected.unnamed_test_files.items) |file| {
+        if (isSemanticallyExcluded(file)) continue;
+        if (namespaceSetCoversFile(unnamed_namespaces, file)) continue;
+        missing_count += 1;
+        try stdout.print(
+            "  {s}[NEVER RUNS]{s} {s}: unnamed test block\n",
+            .{ TermColor.red, TermColor.reset, file },
         );
     }
 
@@ -307,10 +385,19 @@ fn runSemanticCheck(
         );
     } else {
         try stdout.print(
-            "{s}[OK]{s} All {d} named source test decls run in at least one test binary\n\n",
-            .{ TermColor.green, TermColor.reset, source_tests.len },
+            "{s}[OK]{s} All {d} named source test decls, and every file's unnamed test blocks, run in at least one test binary\n\n",
+            .{ TermColor.green, TermColor.reset, collected.source_tests.items.len },
         );
     }
+}
+
+/// Whether any namespace in `set` belongs to `file`.
+fn namespaceSetCoversFile(set: std.StringHashMap(void), file: []const u8) bool {
+    var it = set.keyIterator();
+    while (it.next()) |namespace| {
+        if (namespaceBelongsToFile(namespace.*, file)) return true;
+    }
+    return false;
 }
 
 /// Runs one test binary with `--listen=-` and records every test name it
@@ -320,8 +407,9 @@ fn enumerateBinaryTests(
     arena: Allocator,
     io: std.Io,
     bin_path: []const u8,
-    named_set: *std.StringHashMap(void),
-    doctest_set: *std.StringHashMap(void),
+    named: *NameIndex,
+    doctests: *NameIndex,
+    unnamed_namespaces: *std.StringHashMap(void),
 ) !u32 {
     var child = try std.process.spawn(io, .{
         .argv = &.{ bin_path, "--listen=-" },
@@ -356,7 +444,7 @@ fn enumerateBinaryTests(
 
         for (name_offsets) |offset| {
             const name = std.mem.sliceTo(string_bytes[offset..], 0);
-            try registerBinaryTestName(name, named_set, doctest_set);
+            try registerBinaryTestName(name, named, doctests, unnamed_namespaces);
         }
         break metadata.tests_len;
     };
@@ -375,36 +463,105 @@ fn sendClientMessage(io: std.Io, file: std.Io.File, tag: std.zig.Client.Message.
     try file.writeStreamingAll(io, &message);
 }
 
-/// A fully-qualified test name looks like "<namespace path>.test.<name>"
-/// (or ".decltest.<decl name>" for doctests; unnamed aggregator blocks show
-/// up as "<namespace path>.test_N" and register nothing). Index the tail
-/// after every marker occurrence so lookups don't have to guess how deep the
-/// namespace path is.
+/// A fully-qualified test name looks like "<namespace>.test.<name>" (or
+/// ".decltest.<decl name>" for doctests; unnamed blocks show up as
+/// "<namespace>.test_N"). Index the tail after every marker occurrence, paired
+/// with the namespace preceding it, so lookups don't have to guess how deep
+/// the namespace path is: a test name can itself contain ".test.", and a
+/// directory named `test` puts that component in the namespace too.
 fn registerBinaryTestName(
     name: []const u8,
-    named_set: *std.StringHashMap(void),
-    doctest_set: *std.StringHashMap(void),
+    named: *NameIndex,
+    doctests: *NameIndex,
+    unnamed_namespaces: *std.StringHashMap(void),
 ) !void {
-    try insertMarkerTails(name, ".test.", named_set);
-    try insertMarkerTails(name, ".decltest.", doctest_set);
+    try recordMarkerTails(name, ".test.", named);
+    try recordMarkerTails(name, ".decltest.", doctests);
     if (std.mem.startsWith(u8, name, "test.")) {
-        try named_set.put(name["test.".len..], {});
+        try named.record(name["test.".len..], name[0..0]);
     }
     if (std.mem.startsWith(u8, name, "decltest.")) {
-        try doctest_set.put(name["decltest.".len..], {});
+        try doctests.record(name["decltest.".len..], name[0..0]);
+    }
+    if (unnamedTestNamespace(name)) |namespace| {
+        try unnamed_namespaces.put(namespace, {});
     }
 }
 
-fn insertMarkerTails(
+fn recordMarkerTails(
     name: []const u8,
     comptime marker: []const u8,
-    set: *std.StringHashMap(void),
+    index: *NameIndex,
 ) !void {
     var search_index: usize = 0;
     while (std.mem.findPos(u8, name, search_index, marker)) |pos| {
-        try set.put(name[pos + marker.len ..], {});
+        try index.record(name[pos + marker.len ..], name[0..pos]);
         search_index = pos + 1;
     }
+}
+
+/// The namespace of an unnamed `test { ... }` block, which the test runner
+/// reports as "<namespace>.test_N" where N counts the unnamed blocks in that
+/// container. Null when `name` has some other shape.
+fn unnamedTestNamespace(name: []const u8) ?[]const u8 {
+    const marker = ".test_";
+    if (std.mem.findLast(u8, name, marker)) |pos| {
+        if (!isDecimal(name[pos + marker.len ..])) return null;
+        return name[0..pos];
+    }
+    const bare_marker = "test_";
+    if (std.mem.startsWith(u8, name, bare_marker) and isDecimal(name[bare_marker.len..])) {
+        return name[0..0];
+    }
+    return null;
+}
+
+fn isDecimal(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |char| {
+        if (!std.ascii.isDigit(char)) return false;
+    }
+    return true;
+}
+
+/// Whether a namespace reported by a test binary names `file`.
+///
+/// Zig names a test's container by the source file's path relative to the
+/// directory holding the root source file of the binary it was compiled into,
+/// with separators turned into dots and the `.zig` suffix dropped, followed by
+/// the names of any containers the test is nested inside. Which part of a
+/// file's path that leaves depends on where each binary is rooted. The same
+/// src/types/store.zig is `store` in the types binary and `types.store` in one
+/// rooted a directory higher, so a namespace names the file when it starts
+/// with any trailing run of that file's own path components.
+fn namespaceBelongsToFile(namespace: []const u8, file: []const u8) bool {
+    // A namespace with nothing before the marker has no component to attribute
+    // at all, so accept it for any file rather than report a test as dead.
+    if (namespace.len == 0) return true;
+
+    const stem = if (std.mem.endsWith(u8, file, ".zig"))
+        file[0 .. file.len - ".zig".len]
+    else
+        file;
+
+    var tail_start: usize = 0;
+    while (true) {
+        if (namespaceStartsWithPath(namespace, stem[tail_start..])) return true;
+        const separator = std.mem.findScalarPos(u8, stem, tail_start, '/') orelse return false;
+        tail_start = separator + 1;
+    }
+}
+
+/// Whether every component of the path `tail` equals the namespace component
+/// in the same position, i.e. the namespace begins with that whole path.
+fn namespaceStartsWithPath(namespace: []const u8, tail: []const u8) bool {
+    var namespace_components = std.mem.splitScalar(u8, namespace, '.');
+    var tail_components = std.mem.splitScalar(u8, tail, '/');
+    while (tail_components.next()) |tail_component| {
+        const namespace_component = namespace_components.next() orelse return false;
+        if (!std.mem.eql(u8, namespace_component, tail_component)) return false;
+    }
+    return true;
 }
 
 /// Normalize path separators to forward slashes for consistent cross-platform comparison.
@@ -428,9 +585,7 @@ fn walkTree(
     arena: Allocator,
     io: std.Io,
     dir_path: []const u8,
-    test_files: *PathList,
-    mod_files: *PathList,
-    source_tests: *std.ArrayList(SourceTest),
+    collected: *Collected,
 ) !void {
     var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
@@ -444,9 +599,9 @@ fn walkTree(
 
         if (entry.kind == .directory) {
             defer allocator.free(next_path);
-            try walkTree(allocator, arena, io, next_path, test_files, mod_files, source_tests);
+            try walkTree(allocator, arena, io, next_path, collected);
         } else if (entry.kind == .file) {
-            try handleFile(allocator, arena, io, next_path, entry.name, test_files, mod_files, source_tests);
+            try handleFile(allocator, arena, io, next_path, entry.name, collected);
         } else {
             allocator.free(next_path);
         }
@@ -459,27 +614,32 @@ fn handleFile(
     std_io: std.Io,
     path: []u8,
     file_name: []const u8,
-    test_files: *PathList,
-    mod_files: *PathList,
-    source_tests: *std.ArrayList(SourceTest),
+    collected: *Collected,
 ) !void {
     if (!std.mem.endsWith(u8, file_name, ".zig")) {
         allocator.free(path);
         return;
     }
 
-    if (std.mem.eql(u8, file_name, "mod.zig")) {
-        try mod_files.append(allocator, path);
-        return;
-    }
-
-    if (shouldSkipTestFile(path)) {
+    // A mod.zig is an aggregator whose imports wire other files up, so it is
+    // never itself reported as unwired, but its own test decls still have to
+    // run somewhere, so they are collected like any other file's.
+    const is_aggregator = std.mem.eql(u8, file_name, "mod.zig");
+    if (is_aggregator) {
+        try collected.mod_files.append(allocator, path);
+    } else if (shouldSkipTestFile(path)) {
         allocator.free(path);
         return;
     }
 
-    if (try collectFileTests(allocator, arena, std_io, path, source_tests)) {
-        try test_files.append(allocator, path);
+    const has_test_decl = try collectFileTests(allocator, arena, std_io, path, collected);
+    if (has_test_decl) collected.files_with_tests += 1;
+
+    // mod_files owns an aggregator's path.
+    if (is_aggregator) return;
+
+    if (has_test_decl) {
+        try collected.test_files.append(allocator, path);
         return;
     }
 
@@ -500,15 +660,17 @@ fn isSemanticallyExcluded(path: []const u8) bool {
     return false;
 }
 
-/// Parses one source file, appending each named test decl to `source_tests`
-/// (allocated in `arena`, which must outlive the returned data). Returns
-/// whether the file contains any test decl at all, including unnamed ones.
+/// Parses one source file, appending each named test decl to
+/// `collected.source_tests` and, if the file has any unnamed `test { ... }`
+/// block, the file itself to `collected.unnamed_test_files` (both allocated in
+/// `arena`, which must outlive the returned data). Returns whether the file
+/// contains any test decl at all.
 fn collectFileTests(
     allocator: Allocator,
     arena: Allocator,
     std_io: std.Io,
     path: []const u8,
-    source_tests: *std.ArrayList(SourceTest),
+    collected: *Collected,
 ) !bool {
     const source = try readSourceFile(allocator, std_io, path);
     defer allocator.free(source);
@@ -517,15 +679,30 @@ fn collectFileTests(
 
     var file_copy: ?[]const u8 = null;
     var has_test_decl = false;
+    var has_unnamed_test = false;
     for (0..tree.nodes.len) |node_index| {
         const node: Ast.Node.Index = @enumFromInt(node_index);
         if (tree.nodeTag(node) != .test_decl) continue;
         has_test_decl = true;
 
+        const file = file_copy orelse blk: {
+            const copy = try arena.dupe(u8, path);
+            file_copy = copy;
+            break :blk copy;
+        };
+
         const opt_name_token, _ = tree.nodeData(node).opt_token_and_node;
-        // Unnamed `test { ... }` blocks are aggregators; they contain no test
-        // logic of their own, so the semantic check skips them.
-        const name_token = opt_name_token.unwrap() orelse continue;
+        // Unnamed `test { ... }` blocks have no name to look up, so the file
+        // that declares them is checked as a whole instead; one entry per file
+        // is enough, because a file's test decls are collected all together or
+        // not at all.
+        const name_token = opt_name_token.unwrap() orelse {
+            if (!has_unnamed_test) {
+                has_unnamed_test = true;
+                try collected.unnamed_test_files.append(arena, file);
+            }
+            continue;
+        };
 
         const token_slice = tree.tokenSlice(name_token);
         const name_tag = tree.tokenTag(name_token);
@@ -543,12 +720,7 @@ fn collectFileTests(
         else
             unreachable;
 
-        const file = file_copy orelse blk: {
-            const copy = try arena.dupe(u8, path);
-            file_copy = copy;
-            break :blk copy;
-        };
-        try source_tests.append(arena, .{ .file = file, .name = decoded, .kind = kind });
+        try collected.source_tests.append(arena, .{ .file = file, .name = decoded, .kind = kind });
     }
 
     return has_test_decl;

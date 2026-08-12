@@ -94,6 +94,58 @@ test "cross-module - check type - polymorphic function with multiple uses passes
     try test_env_b.assertLastDefType("U64");
 }
 
+test "cross-module - settled weak-receiver scheme remains polymorphic" {
+    const source_a =
+        \\top_str = "a,b,c"
+        \\main! = |g| top_str.split_on(",").map(g)
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertDefType("main!", "(Str -> b) -> List(b)");
+
+    // Module publication happens after A's weak receiver has settled. Its
+    // discharged root scheme must retain the same independent quantified
+    // result variable even though checker-local pending requirements are gone.
+    const source_b =
+        \\import A
+        \\lengths = A.main!(|s| s.count_utf8_bytes())
+        \\selves = A.main!(|s| s)
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertDefType("lengths", "List(U64)");
+    try test_env_b.assertDefType("selves", "List(Str)");
+}
+
+test "cross-module - nested capturing closure publishes its dispatch relation" {
+    const source_a =
+        \\main! : a -> a where [a.plus : a, Dec -> a]
+        \\main! = |x| {
+        \\  add_x = |y| x + y
+        \\  add_x(10)
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertDefType("main!", "a -> a where [a.plus : a, Dec -> a]");
+
+    const source_b =
+        \\import A
+        \\answer = A.main!(42)
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertDefType("answer", "Dec");
+
+    const source_c =
+        \\import A
+        \\bad = A.main!("not a number")
+    ;
+    var test_env_c = try TestEnv.initWithImport("C", source_c, "A", &test_env_a);
+    defer test_env_c.deinit();
+    try test_env_c.assertOneTypeError("Missing Method");
+}
+
 test "cross-module - optional record - one optional value shared by two exports unifies" {
     // `other = orig` shares `orig`'s type; both exports carry the same
     // structural `optional` field kind, so their imported copies unify

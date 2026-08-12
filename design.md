@@ -1716,7 +1716,18 @@ frame or a recursive group's shared frame, where no mid-body state is pending—
 the driver checks each target's group in its own nested frame (together
 with any unchecked topological prefix), re-runs dispatch, and interleaves
 boundary literal defaulting to a fixpoint before generalizing. Group checks
-nest only at such boundaries.
+nest only at such boundaries. Ownership of a waiting target constraint is
+decided by its pinned callable relation: every active frame's drain re-sees
+the waiting constraint, and only a frame whose boundary rank the relation's
+callable var still sits at records the target—a relation pinned by an
+enclosing frame is generalization-safe in every nested frame, and re-recording
+it there would check the target's topological prefix inside the nested frame,
+where a prefix group can name that frame's still in-flight def and merge with
+it monomorphically instead of instantiating its finished scheme. The outermost
+active frame owns every remaining waiting constraint. A group checked from inside
+another definition's boundary also runs with no active scheme owner, exactly
+like a driver-initiated check, so a def's recorded scheme contents never
+depend on which definition's boundary caused it to be checked.
 
 Group suspension and merge need no dedicated machinery: a suspended group's
 members are `.processed` with still-live, not-yet-generalized vars, so a
@@ -3978,6 +3989,253 @@ test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
 type mismatch without `CheckedModule` construction panicking).
 
+### Pending Dispatch Requirements In Type Schemes
+
+A generalized scheme is a pair: its root type and the unresolved static-dispatch
+requirements created while checking that definition. A requirement records its
+receiver and its callable relation. This representation is necessary when the
+receiver belongs to an enclosing scope: the callable relation can contain
+scheme-owned argument, result, and literal variables even though traversing the
+root type alone cannot reach them.
+
+Constraint creation records the innermost prospective scheme root as the exact
+owner. At that root's generalization boundary,
+`captureSchemeDispatchRequirements` moves each still-open relation on an
+outer-rank receiver into the scheme. This is explicit producer data; no later
+pass may recover ownership from reachability, creation order, rank shape, or
+source syntax. An explicit owner index lets each boundary consume only its own
+candidates instead of rescanning module-wide dispatch sites; the backing arena
+is cleared when the last active owner is consumed. Exact duplicate
+receiver/relation roots are stored once. A newly created relation needs the
+side table only when its receiver belongs to an outer rank. An attached
+constraint copied by instantiating a constrained scheme lives on its fresh
+receiver's descriptor exactly like a creation-site attached constraint and is
+indexed as a creation candidate under the same owner rule: it becomes an
+explicit requirement only when that fresh receiver unifies outward to an outer
+rank—the argument-routed transitive case—while a receiver that generalizes
+with the owner's root keeps the relation structurally. Literal-conversion
+constraints settle through the open-literal worklist and stay out of the
+candidate index. A relation copied
+from another scheme is already detached from the receiver descriptor, so it
+remains explicit even when the receiver happens to share the enclosing
+boundary's rank. Every copied candidate also retains the exact structurally
+attached creation relation from which it descends. An intervening
+instantiation maps that recorded origin only when it substitutes the origin
+receiver: the attached creation relation is copied exactly when its receiver
+is, so a substitution that leaves the receiver shared keeps the recorded
+origin fn var original rather than pointing it at the use's independent
+callable copy, which is never attached to the shared receiver. This carries
+requirements transitively through
+helper definitions without turning ordinary same-rank creation sites into
+schemes or reconstructing ownership from solved type shape.
+
+Owner keys are stable raw source vars. An annotation or expected type may
+introduce a separate solved var without changing the owner key passed to the
+boundary. Every boundary takes `BoundaryRoot { owner, interface }` values so
+the stable owner and solved interface cannot be swapped as parallel slices.
+A closure wrapper is explicitly registered as an alias of the inner lambda
+that owns its scheme. Active schemes are likewise indexed by their expression,
+pattern, definition, and predeclared-annotation source vars rather than by a
+union-find representative, since unification may replace that representative.
+For a recursive SCC, capture happens after its members were checked, so the
+group boundary registers the pattern and definition aliases immediately after
+capture. Annotated members use their predeclared schemes for polymorphic
+recursive references—by name or by method-syntax dispatch, including a
+dispatch into an already-checked member whose group has not reached that
+boundary—while checking, but their RHS types still generalize together at
+that shared SCC boundary; a source-forward member can therefore make
+body-inferred requirements available before any member freezes. An
+annotated predeclared scheme var is registered when the checked
+body's scheme becomes available. A lookup made before that body is checked
+uses the declared annotation immediately, but its group retains the exact use
+var and lexical attribution. Before that caller generalizes, the boundary
+checks the target body and replays the use against the complete body scheme;
+when body checking stored off-root dispatch requirements, the replay adds
+them under the caller's still-live substitution. The annotation pre-pass and
+body generation explicitly pair their annotation identity slots, including
+generation-internal open rows without CIR nodes; composing that pair table with
+the saved early-use substitution supplies the requirement copy without a
+second root unification or solved-type walk. Structurally attached
+requirements were already present in the declared annotation and need no
+replay. If the annotation already emitted a checked-evidence use record, the
+complete replay replaces that record instead of emitting two specialization
+edges for one lookup. An annotated in-flight recursive reference remains an
+internal edge through the declared scheme; the enclosing body's own
+requirements cover that implementation cycle, so it is not replayed as a new
+external use. Together these rules cover forward and polymorphically recursive
+lookup paths without making an annotation erase requirements inferred from its
+body.
+A receiver already at `Rank.generalized` is never captured as an outer-rank
+pending requirement. Generalization boundaries cannot run inside a commit
+probe; probes may append candidates, but rollback rewinds those candidates and
+can never leave a TypeScheme pointing into rolled-back store data. A
+speculatively validated method target that fails rolls back its store
+speculation together with the same candidate, ambiguity, derivation,
+deferred-constraint, and evidence tails, so neither records nor partial
+unifications from an implementation that failed compatibility can outlive the
+rejection or enter a later scheme.
+
+Instantiation copies the root type and every pending requirement under one
+substitution. The receiver follows ordinary rank behavior: an enclosing weak
+value stays shared, while a receiver quantified by an enclosing scheme is
+copied. The callable root is copied even though its outer receiver keeps that
+root below generalized rank; everything below the callable root follows
+ordinary rank behavior, so its generalized argument and result variables are
+fresh per use. Derived-shape validation is the one exception: it instantiates
+a method's scheme only to narrow the root copy against an expected callable
+shape, it is not a value use, and no definition boundary owns the validation
+site. A validation instantiation therefore keeps a requirement whose receiver
+it leaves shared on that receiver's original callable relation instead of
+minting a per-use copy—the original relation is already registered and its
+open literals stay protected by the scheme that owns it, while a copy's
+literals would default with no owning boundary before the shared receiver
+grounds. Each copied relation enters the instantiation ambiguity and
+compatibility worklists. A copy whose receiver is still flex stays on a
+dedicated pending index instead of the per-expression deferred queue. When a
+generalization boundary grounds such a receiver, the copied relation is
+enqueued and validated before its callable variables generalize; final
+compatibility does the same for copies grounded at module finalization. Copies
+are never merged merely because they share a receiver, while ambiguity
+candidates for the same raw receiver and owner event are judged only once. A
+duplicate ambiguity observation combines `requires_current_resolution` by
+logical OR, because a direct checked-body observation is stronger than an
+earlier delayed observation. Copied constraints preserve definition-site
+constraint provenance for evidence, while each scheme requirement separately
+records the use expression that created that copy; a failing use poisons that
+use, never the reusable definition that supplied it.
+
+Instantiated dispatch validation is a monotone worklist. A cursor gives each
+new entry one compatibility-validation transition, and a separate compact
+pending index revisits only scheme requirements whose receivers remain flex.
+When later unification grounds one, it receives its one deferred-queue
+transition. Processing an entry may append further entries, and validation
+continues until there is no new entry or newly grounded pending requirement.
+
+Dispatch-cycle termination is structural, with two rules. Target selection is
+rejected as recursive dispatch when it repeats an exact solver state along
+its own derivation lineage—the same alpha-normalized receiver plus callable
+digest with the same exact method binding—or when it re-enters an ancestor
+edge's exact binding with a settled receiver that strictly structurally
+contains that ancestor's settled receiver. Every child constraint minted by
+selecting a target records its parent edge, so the parent graph is
+lineage-complete and acyclic by construction: a child is provably fresh at
+record time. The dispatch worklists carry no numeric give-up bounds; they
+terminate because the two rules keep fresh edges finite while every latched
+fixpoint—deferred re-defers, pending scheme requirements, stored finalization
+relations—consumes a monotone resource, each relation grounding at most once
+and taking at most one enqueue. Graph instantiation runs on an explicit heap
+worklist whose cycles terminate through the substitution map, so it carries no
+depth bound and cannot exhaust the native stack at any depth. Rejection
+poisons only the cyclic relation and does not discard unrelated queued
+relations.
+
+A generalization boundary captures its owned
+requirements before literal defaulting, runs grounded copied requirements to
+that exact fixpoint, and then captures once more. The second capture consumes
+requirements created while selecting method targets in the worklist; capture
+itself creates no solver work, so returning from that sequence leaves the
+boundary owner quiescent rather than stranding post-capture candidates.
+If an outer receiver grounds only during module finalization, after its
+definition's group-local deferred queue is gone, the durable TypeScheme
+relation is explicitly re-enqueued and the ordinary plus instantiated dispatch
+worklists run to quiescence. Only their exact consumed/rejected record permits
+retirement; the receiver's concrete shape alone never does.
+
+Selected method-target instantiation explicitly records which parent dispatch
+edge produced each copied child constraint—literal-conversion children copied
+from the selected target's scheme included. Only pre-existing caller
+constraints that happen to become concrete during the same unification do not
+acquire that lineage. Before selecting a target for a derived child, the
+checker computes an alpha-normalized digest of the receiver plus callable
+relation and compares it with the child's ancestor chain. Reaching the same
+digest, method name, owner environment, and exact method binding is the same
+solver state and is rejected as recursive dispatch; a chain whose concrete
+type structure changes has a different digest and continues unless the
+growth rule catches it re-entering the same exact binding with a strictly
+grown settled receiver. Rejection settles only that cyclic relation and
+processing continues with unrelated queued relations. A repeated observation
+of the same raw edge reuses its recorded target; type traversal and digest
+construction occur only when selecting a target for a new derived edge, and
+an edge selected with no parent records no digest at all.
+
+Only roots actually promoted to generalized rank can instantiate a side-table
+scheme. A mixed recursive group can provisionally capture requirements for a
+value-restricted member before generalization; the checker removes that entry
+as soon as the generalizer leaves the root non-generalized. A requirement is
+retired only after static-dispatch checking actually consumes or rejects its
+exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
+receiver is not evidence of discharge. A creation relation whose generalized
+receiver is structurally reachable through the scheme root is represented
+durably by that receiver's own constraint list and no longer needs a duplicate
+side-table entry. A copied relation qualifies only when its explicit origin is
+still an exact constraint on the same generalized receiver reachable through
+the enclosing scheme; the checked scheme-use substitution is then the durable
+link from the structural relation to that copy. A nested scheme whose root is
+absent from the enclosing boundary's output interface is out of scope; its
+recorded capture identity—the binding group whose checking captured it plus the
+capture rank—rather than a reachability guess about ownership, proves that the
+closing boundary may retire it. Ranks alone cannot: they are a shared depth
+counter, so a boundary that resolves pending dispatch targets by checking a
+sibling module-level group in a nested frame sees that group's schemes one rank
+deeper, and only the explicit capture-group identity keeps those live
+module-level schemes out of the closing boundary's nested-frame retirement.
+The checked-module boundary rejects
+any remaining checker-local requirement and empties the scheme index, so no
+import can observe a root type after its requirement was silently discarded.
+
+Boundary literal defaulting protects variables in the callable relation but
+does not protect the receiver solely because it is the callable's first
+argument. A receiver owned by the current definition therefore defaults at that
+definition's boundary; a receiver owned by an enclosing scope remains outside
+the boundary's candidate universe. This keeps literal settlement with the scope
+that declared the literal while preventing a literal inside a pending relation
+from being guessed before that relation is discharged. Traversal treats the
+receiver root as opaque rather than traversing it and deleting it afterward;
+therefore unrelated sibling constraints on the receiver cannot accidentally
+protect their callable variables. The same receiver-blocked callable closure is
+part of the ambiguity judgment's external-pinnable interface, so variables that
+exist only in a side-table relation receive exactly the same ambiguity treatment
+as variables reachable from the root type. Receiver-blocked walks collect into
+their own overlay, merged into a pinnable or protection set only after every
+full-closure walk into that set has run: membership in those sets promises that
+a member's entire closure is present (the walks early-return on it), and a
+receiver-pruned entry planted mid-build would silently truncate a later full
+walk—which is a def-order dependence, since which walk reaches a shared
+variable first depends on definition order.
+
+When the receiver settles, ordinary static-dispatch checking discharges the
+original relation and every registered use copy independently. Normal
+unification is the only solved-graph mutation. An annotation can settle the
+receiver earlier, but cannot create a more reusable scheme: inferred and
+annotated receivers carry the same per-use relations, so the annotation only
+confirms or narrows the inferred program.
+
+Both sides are pinned in src/check/test/type_checking_integration.zig.
+Accepted pairs cover top-level and enclosing weak receivers, weak numerals,
+multi-hop and transitively copied chains, repeated transitive helper uses, and
+results carried through the definition's return type; every pair has two uses
+at different result item types and asserts identical inferred types. Recursive
+SCC and source-forward annotated recursive definitions have the same two-use
+principality pins.
+A retirement regression proves later uses do not replay a discharged missing
+method, and a shared pending requirement produces exactly one diagnostic
+across multiple uses. The generated principality test checks the complete
+product of small typed weak literals, transitive helpers, and result wrappers
+exactly once, then checks the receiver, helper, and result annotation sites plus
+the rejection direction using error severity rather than raw warning-inclusive
+problem counts. The literal-constrained lambda parameter regression proves two
+concrete instantiations remain independent. Static-dispatch termination is
+pinned on both sides: an 80-layer nested requirement chain succeeds, while a
+repeated self-nested state reports one recursive dispatch error without
+abandoning unrelated queue entries, and a strictly growing dispatch chain
+reports one recursive dispatch error through the growth rule rather than
+grinding on ever-larger receivers.
+The cross-module weak-receiver regression proves that, after the receiver has
+settled, checked module output preserves the discharged root scheme's
+polymorphism without checker-local requirement state.
+Rejected—"weak top-level literal rejects second use at different type"—proves
+the representation does not make the weak receiver itself polymorphic.
+
 ### Field Kinds (All-Dynamic Optional Fields)
 
 This section supersedes the earlier "Existential Presence (Sealed Optional
@@ -4641,7 +4899,29 @@ Other solved-graph mutations:
 —policy: literal defaulting as declared in Static Dispatch At The
   Checked Boundary (the `LITERAL DEFAULTED` warning) and the numeric
   default candidate order (`Dec` first); mutation happens only through
-  committed probes of ordinary unification.
+  committed probes of ordinary unification. When no candidate satisfies a
+  numeral's method constraints, the documented head default is still
+  committed so the dispatch pass reports the conflicts against it—but that
+  is a type the program never chose, so each failing validation against it
+  rewinds its own unification: the diagnostic is reported and the relation
+  rejected without retyping anything reachable through the relation's
+  argument graph.
+- `captureSchemeDispatchRequirements` /
+  `Instantiator.instantiateStaticDispatchConstraint(force_root_copy = true)`—policy: Pending Dispatch
+  Requirements In Type Schemes (above). Capturing records no solved-graph
+  mutation. Instantiation builds a fresh disjoint callable root, and every
+  copied requirement is discharged through ordinary unification in the
+  deferred static-dispatch worklist. Retirement reads the explicit structural
+  origin and checked scheme-use substitution produced by those operations;
+  there is no rank rewrite, structural ownership probe, or graph restamp.
+- `rejectRecursiveStaticDispatch`—policy: Pending Dispatch Requirements In
+  Type Schemes (above). Two triggers: the explicit derivation chain and
+  alpha-normalized receiver + callable digest prove that target selection has
+  returned to the same solver state and exact binding, or a settled receiver
+  strictly structurally contains the settled receiver of an ancestor edge
+  with the same exact binding. A shrinking or otherwise changing finite chain
+  is accepted. The 80-layer accepted chain, the self-nested rejected chain,
+  and the strictly growing rejected chain pin all sides of the rule.
 - `instantiate.zig` / `copy_import.zig` `dangerousSetVarDesc`—mechanism:
   instantiation and import copying build fresh disjoint graphs.
 
