@@ -5819,6 +5819,36 @@ test "check type - try flows error row between open output rows" {
     try checkTypesModule(source, .{ .pass = .{ .def = "outer" } }, "{} -> Try({}, [InnerErr, OuterErr])");
 }
 
+test "check type - implicitly opened local value annotation generalizes like top level" {
+    // An annotation whose generated type gains a variable from polarity
+    // opening denotes a scheme wherever it is written. The local binding `x`
+    // must therefore generalize exactly like the identical top-level
+    // annotation (or the explicit `[Bad, ..]` spelling): each use
+    // instantiates the row fresh, so two uses at incompatible closed
+    // argument rows both check.
+    const source =
+        \\f : Try(U8, [Bad, Worse]) -> U64
+        \\f = |t| match t {
+        \\    Ok(_) => 0,
+        \\    Err(_) => 1,
+        \\}
+        \\
+        \\g : Try(U8, [Bad, Other]) -> U64
+        \\g = |t| match t {
+        \\    Ok(_) => 0,
+        \\    Err(_) => 1,
+        \\}
+        \\
+        \\go : U64 -> U64
+        \\go = |n| {
+        \\    x : Try(U8, [Bad])
+        \\    x = if n > 100 Err(Bad) else Ok(1)
+        \\    f(x) + g(x)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "go" } }, "U64 -> U64");
+}
+
 // record extension in type annotations //
 
 test "check type - record extension - basic open record annotation" {

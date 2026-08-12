@@ -19175,23 +19175,34 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
 
-                // An annotated local function's scheme is pre-declared from
-                // its annotation so in-flight (recursive) references
-                // instantiate it—the same rule as top-level defs; the
-                // statement itself is checked on the ordinary path.
+                // An annotated local decl's scheme is pre-declared from its
+                // annotation—the same rule as top-level defs; the statement
+                // itself is checked on the ordinary path. For a function the
+                // pre-declared scheme also serves in-flight (recursive)
+                // references; for a value binding the pre-pass exists to
+                // record whether the generated type contains variables
+                // (`annotation_scheme_has_vars`), which the generalization
+                // decision consults before the body pass regenerates the
+                // annotation—implicit polarity opening can mint variables
+                // the source text never mentions.
                 // Conservatively limited to type-var-free annotations: a
                 // type-var-mentioning local annotation can reference the
                 // ENCLOSING def's rigids (`rigid_var_lookup`), and the
                 // pre-pass generation would merge this annotation's nodes
                 // into the enclosing generation's live classes before the
                 // reset severs them.
-                const decl_predeclared = decl_is_fn and decl_stmt.anno != null and
+                const decl_predeclared = decl_stmt.anno != null and
                     self.cir.store.getPattern(decl_stmt.pattern) == .assign and
                     !self.cir.store.getAnnotation(decl_stmt.anno.?).mentions_type_var and
                     !self.cir.store.getAnnotation(decl_stmt.anno.?).contains_underscore;
                 if (decl_predeclared) {
                     const scheme_var = try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
-                    try self.predeclared_local_scheme_vars.put(self.gpa, decl_stmt.pattern, scheme_var);
+                    // Only a function's scheme is looked up in flight: a
+                    // local value cannot reference itself, so its orphan
+                    // copy is not retained.
+                    if (decl_is_fn) {
+                        try self.predeclared_local_scheme_vars.put(self.gpa, decl_stmt.pattern, scheme_var);
+                    }
                 }
 
                 // A local function def is a binding group of one: its pattern
