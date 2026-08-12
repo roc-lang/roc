@@ -15420,6 +15420,10 @@ pub const SpecializationCallSlot = struct {
     /// item node. This removes any post-check probing or fallback between a
     /// selected identity, a compound substitution, and a concrete base.
     generated_argument_source: SpecializationGeneratedArgumentSource,
+    /// For `checked_substitution`, the exact child edge whose completed
+    /// subtree is the generated nominal's public argument. Checking publishes
+    /// the edge once; lowering never searches the call shape for it.
+    generated_argument_projection: u32 = no_specialization_projection_parent,
     occurrences: artifact_serialize.Span,
 };
 
@@ -18056,6 +18060,7 @@ fn finishSpecializationProjectionShape(
         else
             .producer;
         var generated_argument_source: SpecializationGeneratedArgumentSource = .exact_selection;
+        var generated_argument_projection: u32 = no_specialization_projection_parent;
         if (generated_source == .exact_arguments) {
             const nominal = checked_types.store.payload(build.checked).nominal;
             if (nominal.args.len != 1) {
@@ -18075,6 +18080,23 @@ fn finishSpecializationProjectionShape(
                 .err => checkedArtifactInvariant("generated iterator item source contained a diagnostic error", .{}),
                 .empty_record, .empty_tag_union => generated_argument_source = .concrete_checked,
             }
+            if (generated_argument_source == .checked_substitution) {
+                occurrence_loop: for (build.occurrences.items) |occurrence| {
+                    for (projections.items, 0..) |projection, projection_index| {
+                        if (projection.parent == occurrence.projection and
+                            projection.step == .nominal_argument and
+                            projection.index == 0 and
+                            projection.checked == nominal.args[0])
+                        {
+                            generated_argument_projection = @intCast(projection_index);
+                            break :occurrence_loop;
+                        }
+                    }
+                }
+                if (generated_argument_projection == no_specialization_projection_parent) {
+                    checkedArtifactInvariant("generated iterator compound item had no declared argument edge", .{});
+                }
+            }
         }
         try slots_out.append(allocator, .{
             .checked = build.checked,
@@ -18089,6 +18111,7 @@ fn finishSpecializationProjectionShape(
             // construction policy.
             .generated_source = generated_source,
             .generated_argument_source = generated_argument_source,
+            .generated_argument_projection = generated_argument_projection,
             .occurrences = .{
                 .start = occurrence_start,
                 .len = @intCast(build.occurrences.items.len),

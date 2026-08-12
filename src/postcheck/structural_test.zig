@@ -480,11 +480,14 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const generated_call_identity = sourceSliceBetween(
         lower_source,
         "fn generatedNominalFromSelectedArguments(",
-        "fn callExactSelectionForChecked(",
+        "fn exactSelectionForChecked(",
     );
     try expectContains(generated_call_identity, "slot.generated_argument_source");
-    try expectContains(generated_call_identity, ".exact_selection => self.callExactSelectionForChecked(");
-    try expectContains(generated_call_identity, ".checked_substitution => compound:");
+    try expectContains(generated_call_identity, ".exact_selection => self.exactSelectionForChecked(");
+    try expectContains(generated_call_identity, ".checked_substitution => try self.materializeCallProjectionSubtree(");
+    try expectContains(generated_call_identity, "slot.generated_argument_projection");
+    try expectNotContains(generated_call_identity, "for (plan.projections");
+    try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
     try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
     try expectContains(generated_call_identity, "generatedIteratorNodeFromPublicSource(");
@@ -564,6 +567,7 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_projection"));
 }
 
 test "unsubstituted checked bases are persistent and checked-node reservations are recursion-only" {

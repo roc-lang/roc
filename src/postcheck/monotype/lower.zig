@@ -25772,33 +25772,19 @@ const BodyContext = struct {
             .iterator => blk: {
                 if (nominal.args.len != 1) Common.invariant("generated iterator call slot had a non-unary public nominal");
                 const item_node = switch (slot.generated_argument_source) {
-                    .exact_selection => self.callExactSelectionForChecked(
-                        plan,
+                    .exact_selection => self.exactSelectionForChecked(
                         selections,
                         nominal.args[0],
-                        slot.checked,
                     ) orelse break :blk null,
-                    .checked_substitution => compound: {
-                        var argument_projection: ?u32 = null;
-                        occurrence_loop: for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                            for (plan.projections, 0..) |projection, projection_index| {
-                                if (projection.parent == occurrence.projection and
-                                    projection.step == .nominal_argument and
-                                    projection.index == 0 and
-                                    projection.checked == nominal.args[0])
-                                {
-                                    argument_projection = @intCast(projection_index);
-                                    break :occurrence_loop;
-                                }
-                            }
-                        }
-                        break :compound try self.materializeCallProjectionSubtree(
-                            plan,
-                            argument_projection orelse Common.invariant("generated iterator compound item had no checker-authored argument projection"),
-                            selections,
-                            .{ .checked = null },
-                        );
-                    },
+                    .checked_substitution => try self.materializeCallProjectionSubtree(
+                        plan,
+                        if (slot.generated_argument_projection != checked.no_specialization_projection_parent)
+                            slot.generated_argument_projection
+                        else
+                            Common.invariant("generated iterator compound item had no checker-authored argument edge"),
+                        selections,
+                        .{ .checked = null },
+                    ),
                     .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
                 };
                 if (!try self.graph.typeIsResolved(item_node)) {
@@ -25841,41 +25827,23 @@ const BodyContext = struct {
     /// Resolve one exact checked occurrence directly from the call's flat
     /// substitution span. This is a sparse span lookup; it does not expand the
     /// substitutions into a checked-id hash table or walk any type graph.
-    fn callExactSelectionForChecked(
+    fn exactSelectionForChecked(
         self: *BodyContext,
-        plan: checked.SpecializationProjectionPlanView,
         selections: []const solve.DirectRequestSelection,
         checked_ty: checked.CheckedTypeId,
-        excluded_slot: ?checked.CheckedTypeId,
     ) ?NodeId {
         const direct = directSelectionForSlot(selections, .{
             .module_bytes = self.view.key.bytes,
             .checked = checked_ty,
         });
-        var selected: ?NodeId = if (direct) |selection| selection.produced else null;
-        for (plan.slots) |slot| {
-            if (excluded_slot != null and slot.checked == excluded_slot.?) continue;
-            const base_id = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
-            };
-            const selection = directSelectionForSlot(selections, base_id) orelse continue;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.checked != checked_ty) continue;
-                if (selected) |existing| {
-                    if (!self.graph.sameClass(existing, selection.produced)) {
-                        Common.invariant("one checked occurrence selected two exact runtime nodes");
-                    }
-                } else selected = selection.produced;
-            }
-        }
-        if (selected == null) if (self.active_checked_selections) |active| {
-            selected = active.get(.{
+        if (direct) |selection| return selection.produced;
+        if (self.active_checked_selections) |active| {
+            return active.get(.{
                 .module_bytes = self.view.key.bytes,
                 .checked = checked_ty,
             });
-        };
-        return selected;
+        }
+        return null;
     }
 
     /// Build the exact, operand-local substitutions for one contextual value.

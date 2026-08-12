@@ -2810,12 +2810,13 @@ a fixed point or search a parent type for generated descendants.
 Each generated construction slot also records the exact operation that supplies
 each public argument: read a named exact-selection slot, rebuild that one
 compound argument from its explicit substitutions, or reuse a checker-proven
-concrete base. Lowering does not choose among these operations. If a named
-producer has not run at the current operand-scheduling point, the generated
-slot remains absent; the next refinement that publishes that producer executes
-the same checker-authored operation. This is scheduling, not a fallback: no
-alternative source is tried and no checked or produced graph is inspected to
-discover one.
+concrete base. For a compound argument the slot stores the exact child-edge ID;
+lowering does not search the shared shape for an edge with matching checked
+contents. Lowering does not choose among these operations. If a named producer
+has not run at the current operand-scheduling point, the generated slot remains
+absent; the next refinement that publishes that producer executes the same
+checker-authored operation. This is scheduling, not a fallback: no alternative
+source is tried and no checked or produced graph is inspected to discover one.
 
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
