@@ -24,8 +24,8 @@ number_operators = |a, b| {
 		gt: a > b,
 		gteq: a >= b,
 
-		# Not implemented yet:
-		# default: None ?? 0,
+		# `??` to provide a default value in case of `Err`.
+		default: I64.from_str("not a number") ?? 0,
 
 		# unary operators
 		neg: -a,
@@ -256,6 +256,23 @@ remove_record_field = |person| {
 	rest
 }
 
+# A record type field can have a default value (`field : Type ?? default`) or be
+# optional (`field ?: Type`). Both let you leave the field out when you build the record.
+# A defaulted field is always there when you read it, so you read it with plain `.field`.
+# An optional field may be missing, so you read it with `.?field`, which gives you a `Try`.
+ServerConfig : { host : Str, port : U16 ?? 8080, timeout_ms ?: U64 }
+
+describe_config : ServerConfig -> Str
+describe_config = |config| {
+	timeout_str = match config.?timeout_ms {
+		Ok(ms) => "${ms.to_str()}ms"
+		Err(MissingField) => "no timeout"
+	}
+
+	# `config.port` needs no unwrapping, it's the default when it wasn't provided
+	"${config.host}:${config.port.to_str()} (${timeout_str})"
+}
+
 number_literals = {
 	usage_based: 5, # defaults to Dec
 	explicit_u8: 5.U8, # Note that most of the time you will want to specify the type in the type signature instead.
@@ -416,6 +433,22 @@ main! = |_args| {
 	print!(record_update_2({ name: "Alice", age: 30 }))
 
 	print!(remove_record_field({ name: "Alice", age: 30, email: "alice@example.com" }))
+
+	# We only provide `host`, so `port` falls back to its default and `timeout_ms` is missing.
+	minimal_config : ServerConfig
+	minimal_config = { host: "localhost" }
+	print!(describe_config(minimal_config))
+
+	# Reading an optional field that was not provided gives `Err(MissingField)`.
+	print!(minimal_config.?timeout_ms)
+	expect minimal_config.?timeout_ms == Err(MissingField)
+	expect minimal_config.port == 8080
+
+	# Here we do provide all fields, so `.?timeout_ms` is an `Ok`.
+	full_config : ServerConfig
+	full_config = { host: "example.com", port: 80, timeout_ms: 5000 }
+	print!(describe_config(full_config))
+	expect full_config.?timeout_ms == Ok(5000)
 
 	print!(number_literals)
 
