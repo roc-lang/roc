@@ -508,19 +508,28 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const projection_application = sourceSliceBetween(
         lower_source,
-        "const SparseProjectionSelection = struct",
+        "fn materializeCallProjectionSubtree(",
         "fn checkedCallRootEdge(",
     );
-    try expectContains(projection_application, "fn sparseProjectionSelections(");
-    try expectContains(projection_application, "fn applySparseProjectionSelection(");
-    try expectContains(projection_application, "reverse_path");
-    try expectContains(projection_application, "sameClass(path_nodes[path_nodes.len - 1], rebuilt)");
-    try expectContains(projection_application, "rebuildSpecializationProjectionParent(");
-    try expectNotContains(projection_application, "subtree_end");
-    try expectNotContains(projection_application, "blocked_by_exact_parent");
-    try expectNotContains(projection_application, "selection_cells");
-    try expectNotContains(projection_application, "base_nodes");
-    try expectNotContains(projection_application, "checked-id hash table");
+    try expectContains(projection_application, "self.appendDirectSelectionMaterializationNodes(");
+    try expectContains(projection_application, "const scope = self.enterDirectSelectionInstantiation(");
+    try expectContains(projection_application, "try self.instNode(root.checked)");
+    try expectNotContains(lower_source, "SparseProjectionSelection");
+    try expectNotContains(lower_source, "applySparseProjectionSelection");
+    try expectNotContains(lower_source, "rebuildSpecializationProjectionParent");
+    try expectNotContains(projection_application, "projectSpecializationChild");
+    try expectNotContains(projection_application, "specializationSlotOccurrences");
+    try expectNotContains(projection_application, "for (plan.projections");
+    try expectContains(lower_source, "specializationSlotMaterializationNodes(slot)");
+
+    const nominal_backing = sourceSliceBetween(
+        lower_source,
+        "fn fillNominalDeclarationBackingNode(",
+        "fn fillNominalDeclarationBackingNodeInCurrentView(",
+    );
+    try expectContains(nominal_backing, "self.direct_checked_selections = &.{};");
+    try expectContains(nominal_backing, "self.direct_selection_slots = &.{};");
+    try expectContains(nominal_backing, "self.direct_materialization_nodes = &.{};");
 
     const generated_call_slots = sourceSliceBetween(
         lower_source,
@@ -605,6 +614,8 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallPlan, "shape"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "slots"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "projections"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "materialization_nodes"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "materializations"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "argument_roots"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "result_root"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "dispatcher_root"));
@@ -616,6 +627,7 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_root_edges"));
+    try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_materialization_nodes"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_projection"));
@@ -632,7 +644,24 @@ test "unsubstituted checked bases are persistent and checked-node reservations a
     const lower_source = @embedFile("monotype/lower.zig");
     try expectContains(lower_source, "persistent_checked_base_nodes: std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState)");
     try expectContains(lower_source, "fn usesPersistentCheckedBase(");
-    try expectContains(lower_source, "return self.instantiation.authority == .checked_base and self.active_checked_selections == null;");
+    const persistent_base = sourceSliceBetween(
+        lower_source,
+        "fn usesPersistentCheckedBase(",
+        "fn putScopedNodeState(",
+    );
+    try expectContains(persistent_base, "self.instantiation.authority == .checked_base");
+    try expectContains(persistent_base, "self.active_checked_selections == null");
+    try expectContains(persistent_base, "self.direct_checked_selections.len == 0");
+    try expectContains(persistent_base, "self.direct_selection_slots.len == 0");
+
+    const direct_scope = sourceSliceBetween(
+        lower_source,
+        "const DirectSelectionInstantiationScope = struct",
+        "fn typeOnlyCheckedNode(",
+    );
+    try expectContains(direct_scope, "direct_instantiation_scratch");
+    try expectContains(direct_scope, "std.mem.swap(");
+    try expectContains(direct_scope, "node_map.clearRetainingCapacity()");
 
     const inst_node = sourceSliceBetween(
         lower_source,
@@ -1123,12 +1152,13 @@ test "Monotype method type instantiation does not construct body contexts" {
         "fn methodTargetSignatureNode(",
         "const DispatchCrashReason",
     );
-    try expectContains(signature, "const checked_base = try self.persistentCheckedBaseNode(source.callable_ty)");
     try expectContains(signature, "for (plan.slots) |slot|");
     try expectContains(signature, "active.get(key) orelse continue");
-    try expectContains(signature, "self.materializeCallProjectionSubtree(");
+    try expectContains(signature, "self.appendDirectSelectionMaterializationNodes(");
+    try expectContains(signature, "const selected_scope = self.enterDirectSelectionInstantiation(");
+    try expectContains(signature, "const signature = try self.instNode(source.callable_ty)");
+    try expectNotContains(signature, "self.materializeCallProjectionSubtree(");
     try expectNotContains(signature, "self.typeOnlyCheckedNode(");
-    try expectNotContains(signature, "try self.instNode(");
     try expectNotContains(signature, "BodyContext.init");
 
     const template_request = sourceSliceBetween(

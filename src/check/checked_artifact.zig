@@ -15425,6 +15425,10 @@ pub const SpecializationCallSlot = struct {
     /// the edge once; lowering never searches the call shape for it.
     generated_argument_projection: u32 = no_specialization_projection_parent,
     occurrences: artifact_serialize.Span,
+    /// Exact ordinary ancestors whose output can change when this slot is
+    /// selected. The checker publishes this once; lowering reads it directly
+    /// from the slot without a shape scan or checked-ID lookup.
+    materialization_nodes: artifact_serialize.Span = .{},
 };
 
 pub const SpecializationCallShapeId = enum(u32) { _ };
@@ -18217,6 +18221,85 @@ fn finishSpecializationProjectionShape(
     };
 }
 
+const SpecializationMaterializationPair = struct {
+    selected: CheckedTypeId,
+    ancestor: CheckedTypeId,
+
+    fn lessThan(_: void, left: @This(), right: @This()) bool {
+        const left_selected = @intFromEnum(left.selected);
+        const right_selected = @intFromEnum(right.selected);
+        if (left_selected != right_selected) return left_selected < right_selected;
+        return @intFromEnum(left.ancestor) < @intFromEnum(right.ancestor);
+    }
+};
+
+/// Attach the precise affected ancestors directly to each selectable slot
+/// after every shared call shape has been interned. Monotype can then consume
+/// a slot without scanning the shape, looking up its checked ID, or walking a
+/// type graph.
+fn publishSpecializationSlotMaterializations(
+    allocator: Allocator,
+    shapes: []const SpecializationCallShape,
+    projections: []const SpecializationProjection,
+    slots: *std.ArrayList(SpecializationCallSlot),
+    materialization_nodes: *std.ArrayList(CheckedTypeId),
+) Allocator.Error!void {
+    var pairs = std.ArrayList(SpecializationMaterializationPair).empty;
+    defer pairs.deinit(allocator);
+
+    for (shapes) |shape| {
+        pairs.clearRetainingCapacity();
+        const shape_projections = projections[shape.projections.start .. shape.projections.start + shape.projections.len];
+        for (shape_projections, 0..) |candidate, raw_projection| {
+            var projection: u32 = @intCast(raw_projection);
+            while (true) {
+                try pairs.append(allocator, .{
+                    .selected = candidate.checked,
+                    .ancestor = shape_projections[projection].checked,
+                });
+                const parent = shape_projections[projection].parent;
+                if (parent == no_specialization_projection_parent) break;
+                if (parent >= projection) {
+                    checkedArtifactInvariant("specialization projection parent was not parent-first", .{});
+                }
+                projection = parent;
+            }
+        }
+        std.mem.sort(SpecializationMaterializationPair, pairs.items, {}, SpecializationMaterializationPair.lessThan);
+
+        const shape_slots = slots.items[shape.slots.start .. shape.slots.start + shape.slots.len];
+        for (shape_slots) |*slot| {
+            var low: usize = 0;
+            var high = pairs.items.len;
+            const target = @intFromEnum(slot.checked);
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (@intFromEnum(pairs.items[middle].selected) < target) {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            const node_start: u32 = @intCast(materialization_nodes.items.len);
+            var previous_ancestor: ?CheckedTypeId = null;
+            var pair_index = low;
+            while (pair_index < pairs.items.len and pairs.items[pair_index].selected == slot.checked) : (pair_index += 1) {
+                const ancestor = pairs.items[pair_index].ancestor;
+                if (previous_ancestor != null and previous_ancestor.? == ancestor) continue;
+                try materialization_nodes.append(allocator, ancestor);
+                previous_ancestor = ancestor;
+            }
+            if (previous_ancestor == null) {
+                checkedArtifactInvariant("specialization slot had no materialization path", .{});
+            }
+            slot.materialization_nodes = .{
+                .start = node_start,
+                .len = @intCast(materialization_nodes.items.len - node_start),
+            };
+        }
+    }
+}
+
 const SpecializationCallShapeKey = struct {
     callable: CheckedTypeId,
     dispatcher: ?CheckedTypeId,
@@ -19531,6 +19614,7 @@ fn publishSpecializationCallPlans(
         templates.specialization_call_slots.len != 0 or
         templates.specialization_call_occurrences.len != 0 or
         templates.specialization_call_projections.len != 0 or
+        templates.specialization_call_materialization_nodes.len != 0 or
         templates.specialization_call_root_edges.len != 0 or
         templates.specialization_call_operand_flows.len != 0 or
         templates.specialization_call_consumer_bindings.len != 0 or
@@ -19616,6 +19700,8 @@ fn publishSpecializationCallPlans(
     errdefer occurrences.deinit(allocator);
     var projections = std.ArrayList(SpecializationProjection).empty;
     errdefer projections.deinit(allocator);
+    var materialization_nodes = std.ArrayList(CheckedTypeId).empty;
+    errdefer materialization_nodes.deinit(allocator);
     var root_edges = std.ArrayList(u32).empty;
     errdefer root_edges.deinit(allocator);
     var operand_flows = std.ArrayList(SpecializationOperandFlow).empty;
@@ -20216,6 +20302,14 @@ fn publishSpecializationCallPlans(
         );
     }
 
+    try publishSpecializationSlotMaterializations(
+        allocator,
+        shapes.items,
+        projections.items,
+        &slots,
+        &materialization_nodes,
+    );
+
     templates.specialization_call_plans_by_expr = by_expr;
     templates.specialization_record_plans_by_expr = record_by_expr;
     templates.specialization_target_relations_by_type = target_relations.by_type;
@@ -20228,6 +20322,7 @@ fn publishSpecializationCallPlans(
     templates.specialization_call_slots = try slots.toOwnedSlice(allocator);
     templates.specialization_call_occurrences = try occurrences.toOwnedSlice(allocator);
     templates.specialization_call_projections = try projections.toOwnedSlice(allocator);
+    templates.specialization_call_materialization_nodes = try materialization_nodes.toOwnedSlice(allocator);
     templates.specialization_call_root_edges = try root_edges.toOwnedSlice(allocator);
     templates.specialization_call_operand_flows = try operand_flows.toOwnedSlice(allocator);
     templates.specialization_call_consumer_bindings = try consumer_bindings.toOwnedSlice(allocator);
@@ -21577,6 +21672,8 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_call_slots: []SpecializationCallSlot = &.{},
     specialization_call_occurrences: []SpecializationOccurrence = &.{},
     specialization_call_projections: []SpecializationProjection = &.{},
+    /// Flat affected-ancestor spans referenced directly by call slots.
+    specialization_call_materialization_nodes: []CheckedTypeId = &.{},
     /// Direct edge IDs for call/record roots, grouped by their shared shape.
     specialization_call_root_edges: []u32 = &.{},
     /// Flat pool backing each expression call plan's explicit operand flow.
@@ -21626,6 +21723,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_call_slots: SerializedSlice(SpecializationCallSlot) = .{},
         specialization_call_occurrences: SerializedSlice(SpecializationOccurrence) = .{},
         specialization_call_projections: SerializedSlice(SpecializationProjection) = .{},
+        specialization_call_materialization_nodes: SerializedSlice(CheckedTypeId) = .{},
         specialization_call_root_edges: SerializedSlice(u32) = .{},
         specialization_call_operand_flows: SerializedSlice(SpecializationOperandFlow) = .{},
         specialization_call_consumer_bindings: SerializedSlice(SpecializationCallConsumerBinding) = .{},
@@ -21889,6 +21987,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_call_slots);
         allocator.free(self.specialization_call_occurrences);
         allocator.free(self.specialization_call_projections);
+        allocator.free(self.specialization_call_materialization_nodes);
         allocator.free(self.specialization_call_root_edges);
         allocator.free(self.specialization_call_operand_flows);
         allocator.free(self.specialization_call_consumer_bindings);
@@ -22109,6 +22208,15 @@ pub const CheckedProcedureTemplateTable = struct {
         slot: SpecializationCallSlot,
     ) []const SpecializationOccurrence {
         return self.specialization_call_occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len];
+    }
+
+    /// Exact checker-published ancestors whose output can change when this
+    /// slot is present in a call's substitution span.
+    pub fn specializationSlotMaterializationNodes(
+        self: *const CheckedProcedureTemplateTable,
+        slot: SpecializationCallSlot,
+    ) []const CheckedTypeId {
+        return self.specialization_call_materialization_nodes[slot.materialization_nodes.start .. slot.materialization_nodes.start + slot.materialization_nodes.len];
     }
 
     /// The exact checked identities whose values cross recursive storage in
@@ -31642,7 +31750,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 229);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31792,7 +31900,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 67;
+    const serialized_layout_version: u32 = 68;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37841,8 +37949,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x62, 0xE7, 0x09, 0x0E, 0xE5, 0x1A, 0x8E, 0x40, 0xE9, 0x9C, 0x89, 0x8C, 0x52, 0x7C, 0x6E, 0xDC,
-        0x2E, 0x00, 0xE6, 0x55, 0x30, 0x48, 0xDC, 0x11, 0x60, 0x66, 0xD7, 0x9A, 0xEA, 0x93, 0xCE, 0x2F,
+        0x66, 0x34, 0xC7, 0xF9, 0x5F, 0x0E, 0x9C, 0x3C, 0xE3, 0x09, 0x05, 0x3D, 0x6A, 0x85, 0x70, 0x7D,
+        0xB6, 0x6D, 0x57, 0xBB, 0xBE, 0xB1, 0x9F, 0x88, 0x74, 0xEE, 0xB2, 0x3F, 0x48, 0xD9, 0x0B, 0xBC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

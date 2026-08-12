@@ -2790,11 +2790,11 @@ the result-row type of every source-order field as one producer root, the
 produced-or-requested direction of each field expression, and the direct
 formal-to-expression bindings for each requested field. Lowering first runs
 independent producers, appends only the projections rooted at the fields that
-just completed, and materializes a requested field by rebuilding only its
-changed projection paths. After a requested field returns, that exact node is
+just completed, and materializes a requested field once under that explicit
+flat substitution span. After a requested field returns, that exact node is
 itself a producer for later fields. Lowering never searches the record result
-row for a label and never instantiates a complete field type under an ambient
-substitution table.
+row for a label, applies a produced field graph to a checked graph, or reads an
+ambient substitution table not named by this record interface.
 
 Record syntax used as the private backing expression of a nominal does not own
 an independent structural interface. The nominal constructor is the explicit
@@ -2919,14 +2919,14 @@ caller's complete function graph with the target's complete checked function,
 and it does not reconstruct substitutions from either graph.
 
 The same rule constructs a selected method's callable signature. Monotype
-starts from the persistent immutable checked callable base and applies only the
-target slots present in the active checker-published substitution span, using
-their sparse projection paths. It does not instantiate the complete selected
-signature under an ambient substitution map, and request construction reuses
-that one materialized target signature instead of constructing it a second
-time. If a selected child already names the base child's graph class, applying
-that selection returns the existing root directly; it does not rebuild any
-unchanged ancestor on the projection path.
+enters one fresh type-only instantiation with only the target slots named by
+the active checker-published substitution span. At each checked node,
+instantiation returns the selected exact node immediately when the span names
+one; otherwise it constructs that ordinary compound once from its exact
+children. It does not start from a completed checked graph, project back into
+that graph, or rebuild ancestors after applying a selection. Request
+construction reuses that one exact target signature instead of constructing it
+a second time.
 
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the
@@ -2942,8 +2942,9 @@ replace an already selected private structural or nominal view. Repeated
 polymorphic occurrences therefore cannot disagree: specializing
 `List(a), a -> List(a)` with an exact `Iter` produces
 `List(Iter$identity), Iter$identity -> List(Iter$identity)` before the body is
-lowered. Ordinary compound nodes are rebuilt only along changed paths, and an
-exact generated nominal is an atomic replacement rather than a graph to scan.
+lowered. An ordinary compound is constructed once from those exact children,
+and an exact generated nominal is returned atomically rather than opened as a
+graph to scan.
 Two different exact values for the same checked slot must select the same exact
 type at that call boundary; they are never resolved by last-write-wins
 substitution or a later whole-type merge.
@@ -3018,18 +3019,43 @@ One function specialization owns an immutable checked interface and a small
 flat substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
 operands by following only the checker-published root-to-child paths whose
-producer edge has just completed. Lowering keeps a sparse list of only the
-immediate edges reached by those paths; it never allocates demand, result, or
-base columns sized to every descendant in the shared call shape, and it never
-walks a checked operand beside a produced operand. One call schedule owns and
-refines one mutable sparse list; completing an operand does not allocate and
-retain a replacement copy of the entire span. Only the completed request
-publishes an immutable span into the graph. Materialization rebuilds only the
-ancestors on changed paths. It treats a generated nominal as an
-atomic leaf and never enters its private backing. Any complete exact node
-selected at an ordinary compound edge is also a hard boundary for that
-occurrence: the producer already returned the whole runtime value, so
-materialization neither validates nor visits checked descendants below it.
+producer edge has just completed. Lowering keeps only that flat span; it never
+allocates demand, result, or base columns sized to every descendant in the
+shared call shape, and it never walks a checked operand beside a produced
+operand. One call schedule owns and refines one mutable sparse list; completing
+an operand does not allocate and retain a replacement copy of the entire span.
+Only the completed request publishes an immutable span into the graph.
+
+Materialization is an ordinary forward checked-type instantiation scoped to
+that immutable span. When instantiation encounters a checked id named by the
+span, it returns the exact produced node and stops at that node. Otherwise it
+constructs the ordinary tuple, record, tag union, list, box, function, alias,
+or nominal once from the exact nodes returned by its immediate children. It
+never constructs an unsubstituted compound first, scans a completed graph for
+selected descendants, applies a whole produced graph to a checked graph, or
+rebuilds ancestors along projection paths. A generated nominal is an atomic
+exact node, so encountering it performs only its content-identity lookup and
+never enters its private backing. Any complete exact node selected at an
+ordinary compound edge is likewise a hard boundary for that occurrence: the
+producer already returned the whole runtime value, so materialization neither
+validates nor visits checked descendants below it.
+
+While checking creates a shared call shape's parent-first projection paths, it
+attaches to every selectable slot the exact ordinary ancestor checked ids whose
+output can change under that selection. Monotype reads those spans directly
+from only the slots present in the call's explicit substitution span and reuses
+the persistent checked base for every child absent from them. There is no
+second checked-ID index or lookup, and Monotype never scans all projections,
+asks a transitive containment question, or propagates a property of generated
+nominals. The slot span describes the direct substitution operation, not the
+kinds of nodes it might eventually encounter.
+
+A nominal declaration backing is a separate producer operation. It receives
+only the nominal's already-exact formal argument nodes through the declaration
+scope and cannot read the caller's checked-id substitution span. Thus numeric
+checked ids reused inside the private recipe cannot accidentally capture a
+public call selection, and generated backing remains reachable only through
+the exact generated nominal that owns it.
 Every explicit argument, result, dispatcher, and selected-target root is
 retained in the shared shape even when it has no identity-bearing child. The
 shape stores direct root-edge IDs in arity order. Lowering indexes those IDs; it
@@ -4130,10 +4156,15 @@ Within one specialization graph, each `(checked module id, checked type id)` has
 one persistent immutable checked-base node. It is the unsubstituted source
 contract, not a fresh relation-production cell. A use site carries only its
 small explicit substitution span from checked identities to exact produced
-nodes. Looking up a checked occurrence first reads that span and otherwise
-reuses the persistent base. Compound materialization rebuilds only the parent
-paths changed by substitutions; an empty span performs no fresh checked-type
-construction at all.
+nodes. An empty span reuses the persistent base and performs no fresh
+checked-type construction. A nonempty span enters a fresh operation-local
+instantiation: looking up a checked occurrence first reads the span, and an
+unselected compound is constructed once from its immediate exact children.
+The persistent base is immutable provenance; it is never patched, paired with
+a produced graph, or used as a source for ancestor reconstruction. The
+operation-local dense-map storage is cleared and retained between direct
+instantiations; only allocation capacity is reused, never a checked identity or
+produced node from the preceding operation.
 
 The module id is explicit checked identity, not a structural digest, source
 name, runtime layout, object symbol, or generated procedure id. Entering another
