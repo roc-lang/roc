@@ -15193,20 +15193,13 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [14]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [7]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
         .{ .name = "Nodes created", .count = graph.nodes_created },
         .{ .name = "Unification requests", .count = graph.unify_requests },
         .{ .name = "Union classes joined", .count = graph.class_unions },
-        .{ .name = "Active type requests", .count = graph.active_type_requests },
-        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
-        .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
-        .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
-        .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
-        .{ .name = "Snapshot invalidation requests", .count = graph.active_snapshot_invalidations },
-        .{ .name = "Snapshot entries invalidated", .count = graph.active_snapshot_entries_invalidated },
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },

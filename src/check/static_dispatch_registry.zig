@@ -1008,14 +1008,34 @@ pub const StaticDispatchDispatcher = union(enum) {
 };
 
 /// Public `StaticDispatchOperand` declaration.
+pub const LiteralConversionResultTopology = struct {
+    ok_tag: canonical.TagLabelId,
+    err_tag: canonical.TagLabelId,
+};
+
+pub const GeneratedNumeralOperand = struct {
+    literal: ModuleEnv.NumeralLiteral,
+    literal_tag: canonical.TagLabelId,
+    is_negative_field: canonical.RecordFieldLabelId,
+    digits_before_pt_field: canonical.RecordFieldLabelId,
+    digits_after_pt_field: canonical.RecordFieldLabelId,
+    digits_after_pt_count_field: canonical.RecordFieldLabelId,
+    result: LiteralConversionResultTopology,
+};
+
+pub const GeneratedQuoteOperand = struct {
+    literal: CheckedStringLiteralId,
+    result: LiteralConversionResultTopology,
+};
+
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     /// Compiler-generated finite `Iter` for string interpolation. The checked
     /// expression owns the first segment and flat interpolation parts.
     generated_interpolation_iter: CheckedExprId,
-    generated_numeral: ModuleEnv.NumeralLiteral,
+    generated_numeral: GeneratedNumeralOperand,
     /// A string literal's post-escape contents, passed to `from_quote` as Str.
-    generated_quote: CheckedStringLiteralId,
+    generated_quote: GeneratedQuoteOperand,
 };
 
 /// Public `StructuralKind` declaration.
@@ -1613,7 +1633,20 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 unreachable;
             }
-            var args = [_]StaticDispatchOperand{.{ .generated_numeral = literal }};
+            const idents = module.commonIdents();
+            const result_topology = LiteralConversionResultTopology{
+                .ok_tag = try names.internTagIdent(module.identStoreConst(), idents.ok),
+                .err_tag = try names.internTagIdent(module.identStoreConst(), idents.err),
+            };
+            var args = [_]StaticDispatchOperand{.{ .generated_numeral = .{
+                .literal = literal,
+                .literal_tag = try names.internTagIdent(module.identStoreConst(), idents.numeral_literal),
+                .is_negative_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.is_negative),
+                .digits_before_pt_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_before_pt),
+                .digits_after_pt_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_after_pt),
+                .digits_after_pt_count_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_after_pt_count),
+                .result = result_topology,
+            } }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
@@ -1668,7 +1701,14 @@ pub const StaticDispatchPlanTable = struct {
                 unreachable;
             }
             const literal = checked_expr_data.str_from_quote.literal;
-            var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
+            const idents = module.commonIdents();
+            var args = [_]StaticDispatchOperand{.{ .generated_quote = .{
+                .literal = literal,
+                .result = .{
+                    .ok_tag = try names.internTagIdent(module.identStoreConst(), idents.ok),
+                    .err_tag = try names.internTagIdent(module.identStoreConst(), idents.err),
+                },
+            } }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));

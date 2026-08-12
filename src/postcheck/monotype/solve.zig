@@ -1,12 +1,12 @@
 //! Per-specialization type solver for Monotype lowering.
 //!
 //! Checked types instantiate into union-find nodes with explicit row
-//! extension links; constraints unify nodes order-independently; Monotypes
-//! use immutable read-only snapshots of fully resolved nodes when Type-shaped
-//! inspection is required. Cross-specialization edges import finished Monotypes as
-//! snapshots, so a specialization that needs more than its requested type is
-//! a unification conflict rather than a silent rewrite of another
-//! specialization's final type.
+//! extension links and constraints unify nodes order-independently. Producing
+//! graphs never expose TypeId views: lowering consumes exact nodes until one
+//! final materialization after relation freeze. Cross-specialization edges
+//! copy finished Monotypes into closed graph structure, so a specialization
+//! that needs more than its requested type conflicts instead of rewriting
+//! another specialization's final type.
 
 const std = @import("std");
 const check = @import("check");
@@ -199,13 +199,6 @@ pub const GraphDiagnostics = struct {
     nodes_created: u64 = 0,
     unify_requests: u64 = 0,
     class_unions: u64 = 0,
-    active_type_requests: u64 = 0,
-    active_type_imported_hits: u64 = 0,
-    active_snapshot_cache_hits: u64 = 0,
-    active_snapshot_cache_misses: u64 = 0,
-    active_snapshot_nodes_materialized: u64 = 0,
-    active_snapshot_invalidations: u64 = 0,
-    active_snapshot_entries_invalidated: u64 = 0,
     mono_import_requests: u64 = 0,
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
@@ -338,11 +331,10 @@ const RelationState = enum {
 
 /// Per-specialization type solver. Checked types instantiate into union-find
 /// nodes with explicit row extension links; constraints unify nodes
-/// order-independently. Type-shaped inspection receives immutable snapshots of
-/// resolved graph nodes, invalidated rather than rewritten when relations
-/// change. Cross-specialization edges import final Monotypes as closed
-/// structure, so a specialization that tries to exceed its requested type is a
-/// unification conflict, not a silent divergence.
+/// order-independently. Type-shaped inspection stays graph-native until final
+/// sealing. Cross-specialization edges import final Monotypes as closed
+/// structure, so a specialization that tries to exceed its requested type is
+/// a unification conflict, not a silent divergence.
 pub const InstGraph = struct {
     allocator: Allocator,
     relation_state: RelationState,
@@ -368,26 +360,10 @@ pub const InstGraph = struct {
     checked_base_construction_depth: usize,
     versions: std.ArrayList(u32),
     processed_relations: std.AutoHashMap(RelationStamp, void),
-    /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
-    /// retain their original provenance while `find` resolves that node to its
-    /// current class root; unions therefore never move or reindex snapshots.
-    node_snapshots: collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)),
-    /// Latest immutable snapshot for a root. Any relation mutation clears this
-    /// cache; a subsequent inspection materializes a fresh snapshot.
-    current_snapshots: collections.DenseMap(NodeId, Type.TypeId),
-    /// Relation mutations only mark the snapshot cache stale. The next read
-    /// performs one exact global invalidation, coalescing mutation bursts that
-    /// do not inspect an intermediate graph state.
-    current_snapshots_dirty: bool,
-    /// Reverse active-snapshot links, also the import memo: a Monotype already
-    /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
-    /// Exact immutable Monotype snapshot imported at each permanent node.
-    /// Unlike `node_snapshots`, these are producer-owned representation
-    /// witnesses. Keeping the direct node association lets consumers of an
-    /// imported request use the exact finished TypeId rather than reconstructing
-    /// an equivalent public shape.
-    imported_monos: collections.DenseMap(NodeId, Type.TypeId),
+    /// One-way memo for finished immutable Monotypes imported from outside
+    /// this graph. Graph evidence may relate the copied nodes, but can never
+    /// rewrite the source Monotype.
+    imported_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
@@ -464,11 +440,7 @@ pub const InstGraph = struct {
             .checked_base_construction_depth = 0,
             .versions = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
-            .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
-            .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .current_snapshots_dirty = false,
-            .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
-            .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
@@ -508,12 +480,6 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        var views = self.node_snapshots.valueIterator();
-        while (views.next()) |list| {
-            list.deinit(allocator);
-        }
-        self.node_snapshots.deinit();
-        self.current_snapshots.deinit();
         var parents = self.row_parents.valueIterator();
         while (parents.next()) |list| {
             list.deinit(allocator);
@@ -549,8 +515,7 @@ pub const InstGraph = struct {
         self.function_result_relations.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit(allocator);
-        self.imported_monos.deinit();
-        self.linked_type_nodes.deinit();
+        self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
         var produced_tag_buckets = self.produced_tag_unions.valueIterator();
         while (produced_tag_buckets.next()) |bucket| bucket.deinit(allocator);
@@ -1626,10 +1591,10 @@ pub const InstGraph = struct {
             .redirect, .unresolved, .func, .erased => null,
         };
         if (canonical) |node| {
-            try self.redirectRoot(node, root, false);
+            try self.redirectRoot(node, root);
             return;
         }
-        _ = try self.replaceContentWithoutSnapshotInvalidation(root, completed_content);
+        _ = try self.replaceRootContent(root, completed_content);
         switch (completed_content) {
             .primitive => |primitive| self.primitive_nodes[@intFromEnum(primitive)] = root,
             .empty_tag_union => self.empty_tag_union_node = root,
@@ -1816,11 +1781,9 @@ pub const InstGraph = struct {
             self.sameDirectRequestSelections(left, right);
     }
 
-    /// Whether a live graph type is already closed and can be snapshotted
-    /// without applying any unresolved-variable or row default. Draft
-    /// specialization lookup uses closed snapshots as its direct key; open
-    /// requests remain graph-local until explicit recursive-edge identity or
-    /// final body sealing resolves them.
+    /// Whether a live graph type is closed without applying any unresolved
+    /// variable or row default. Open requests remain graph-local until
+    /// explicit recursive-edge identity or final body sealing resolves them.
     pub fn typeIsResolved(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
@@ -1996,8 +1959,7 @@ pub const InstGraph = struct {
         return self.find(node_content.box);
     }
 
-    /// Project a primitive leaf through explicit inspectable backing edges,
-    /// without materializing an immutable Monotype snapshot.
+    /// Project a primitive leaf through explicit inspectable backing edges.
     pub fn primitiveAtNode(self: *InstGraph, node: NodeId) Allocator.Error!?Type.Primitive {
         return switch (self.content(try self.shapeRoot(node, "primitive", .inspectable))) {
             .primitive => |primitive| primitive,
@@ -2391,28 +2353,7 @@ pub const InstGraph = struct {
         Common.invariant("instantiation record constructor had a non-record runtime backing");
     }
 
-    /// A relation mutation invalidates every cached Type-shaped snapshot.
-    /// Snapshots may contain the changed node at any structural depth, so
-    /// global invalidation is the exact dependency rule. Mutation bursts are
-    /// coalesced: the next inspection clears the cache once before reading it.
-    /// Observed snapshots remain immutable and valid as historical values.
-    fn invalidateActiveSnapshots(self: *InstGraph, _: NodeId) void {
-        self.countDiagnostic("active_snapshot_invalidations");
-        if (!self.current_snapshots_dirty) {
-            self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
-            self.current_snapshots_dirty = true;
-        }
-    }
-
-    fn refreshActiveSnapshots(self: *InstGraph) void {
-        if (!self.current_snapshots_dirty) return;
-        self.current_snapshots.clearRetainingCapacity();
-        self.current_snapshots_dirty = false;
-    }
-
-    /// Redirect `loser` into `winner`, moving row back references and
-    /// invalidating the current snapshot cache. Immutable snapshot provenance
-    /// remains attached to permanent node ids and resolves through `find`.
+    /// Redirect `loser` into `winner`, moving row back references.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
@@ -2423,7 +2364,7 @@ pub const InstGraph = struct {
         {
             Common.invariant("exact lowering attempted to merge an immutable checked base node");
         }
-        try self.redirectRoot(winner, loser, true);
+        try self.redirectRoot(winner, loser);
     }
 
     /// Redirect one reserved or related root while preserving every exact row
@@ -2432,7 +2373,6 @@ pub const InstGraph = struct {
         self: *InstGraph,
         winner: NodeId,
         loser: NodeId,
-        invalidate_snapshots: bool,
     ) Allocator.Error!void {
         if (winner == loser) return;
         try self.unregisterRowParent(loser);
@@ -2448,7 +2388,6 @@ pub const InstGraph = struct {
             moved_list.deinit(self.allocator);
         }
         self.countDiagnostic("class_unions");
-        if (invalidate_snapshots) self.invalidateActiveSnapshots(winner);
     }
 
     /// Select a named exact type over an unresolved request cell without ever
@@ -2485,9 +2424,8 @@ pub const InstGraph = struct {
     }
 
     /// Replace a root's content with an observationally equivalent compressed
-    /// form without invalidating immutable Type-shaped snapshots. Returns
-    /// whether the stored graph content changed.
-    fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
+    /// form. Returns whether the stored graph content changed.
+    fn replaceRootContent(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
         self.nodes.items[@intFromEnum(root)] = new_content;
@@ -2496,7 +2434,7 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Replace a root's type content and invalidate every cached snapshot.
+    /// Replace a root's type content.
     fn setContent(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!void {
         const root = self.find(raw_root);
         if (self.checked_base_construction_depth == 0 and
@@ -2520,8 +2458,7 @@ pub const InstGraph = struct {
             if (self.primitive_nodes[@intFromEnum(primitive)]) |raw_existing| {
                 const existing = self.find(raw_existing);
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2530,8 +2467,7 @@ pub const InstGraph = struct {
         if (new_content == .list) {
             if (self.existingListElement(new_content.list)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2539,8 +2475,7 @@ pub const InstGraph = struct {
         if (new_content == .box) {
             if (self.existingBoxElement(new_content.box)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2548,8 +2483,7 @@ pub const InstGraph = struct {
         if (new_content == .tuple) {
             if (self.existingTupleShape(new_content.tuple)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2557,8 +2491,7 @@ pub const InstGraph = struct {
         if (new_content == .record) {
             if (self.existingRecordShape(new_content)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2566,8 +2499,7 @@ pub const InstGraph = struct {
         if (new_content == .tag_union) {
             if (self.existingTagUnionShape(new_content.tag_union)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
@@ -2576,13 +2508,12 @@ pub const InstGraph = struct {
             const named = new_content.named;
             if (self.existingNamedIdentity(named)) |existing| {
                 if (existing != root) {
-                    if (!try self.replaceContentWithoutSnapshotInvalidation(root, .{ .redirect = existing })) return;
-                    self.invalidateActiveSnapshots(root);
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
                     return;
                 }
             }
         }
-        if (!try self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
+        if (!try self.replaceRootContent(root, new_content)) return;
         switch (new_content) {
             .list => |element| try self.list_nodes_by_element.put(self.find(element), root),
             .box => |element| try self.box_nodes_by_element.put(self.find(element), root),
@@ -2592,7 +2523,6 @@ pub const InstGraph = struct {
             .named => |named| try self.registerNamedIdentity(root, named),
             .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => {},
         }
-        self.invalidateActiveSnapshots(root);
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
@@ -3543,7 +3473,7 @@ pub const InstGraph = struct {
         ty: Type.TypeId,
     ) Allocator.Error!NodeId {
         self.countDiagnostic("mono_import_requests");
-        if (self.linked_type_nodes.get(ty)) |existing| {
+        if (self.imported_type_nodes.get(ty)) |existing| {
             self.countDiagnostic("mono_import_hits");
             return self.find(existing);
         }
@@ -3561,7 +3491,7 @@ pub const InstGraph = struct {
         if (imported_generated_identity) |identity| {
             if (self.generated_nominal_intern.get(identity)) |existing| {
                 const node = self.find(existing);
-                try self.linked_type_nodes.put(ty, node);
+                try self.imported_type_nodes.put(ty, node);
                 self.countDiagnostic("mono_import_hits");
                 return node;
             }
@@ -3569,12 +3499,9 @@ pub const InstGraph = struct {
         self.countDiagnostic("mono_import_misses");
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
-        // graph (ids materialized here hit the memo above), so it enters as a
-        // snapshot. Registering a view would let this specialization's
-        // evidence rewrite another specialization's final type, destabilizing
-        // every digest taken from it.
-        try self.linked_type_nodes.put(ty, node);
-        try self.imported_monos.put(node, ty);
+        // graph. This specialization copies its exact structure into graph
+        // nodes and never exposes those mutable nodes as a TypeId view.
+        try self.imported_type_nodes.put(ty, node);
         if (imported_generated_identity) |identity| {
             const entry = try self.generated_nominal_intern.getOrPut(identity);
             if (entry.found_existing) {
@@ -3676,153 +3603,11 @@ pub const InstGraph = struct {
         return out;
     }
 
-    /// Materialize a read-only Monotype-shaped view of a fully resolved graph
-    /// node. Open rows and unresolved checked variables have no TypeId view:
-    /// callers must continue to use their graph nodes until explicit evidence
-    /// closes them. The returned TypeId is graph-owned scratch state and must
-    /// not be written to completed Monotype output.
-    pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        return try self.activeIdentityViewForNode(node) orelse
-            Common.invariant("active Monotype TypeId requested before generated identity inputs resolved");
-    }
-
-    /// Return an immutable Type-shaped identity only when the ordinary type
-    /// graph and every graph-owned generated representation input are resolved.
-    /// The generated inputs are checked while the sealer encounters their
-    /// exact roots; there is no preliminary containment scan.
-    pub fn activeIdentityViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!?Type.TypeId {
-        self.requireRelationProduction();
-        self.countDiagnostic("active_type_requests");
-        if (self.imported_monos.get(node)) |imported| {
-            self.countDiagnostic("active_type_imported_hits");
-            return imported;
-        }
-        if (!try self.typeIsResolved(node)) {
-            return null;
-        }
-        return try self.monoFor(node);
-    }
-
-    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!?Type.TypeId {
-        const root = self.find(node);
-        if (!try self.typeIsResolved(root)) {
-            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
-        }
-        self.refreshActiveSnapshots();
-        if (self.current_snapshots.get(root)) |current| {
-            self.countDiagnostic("active_snapshot_cache_hits");
-            return current;
-        }
-        self.countDiagnostic("active_snapshot_cache_misses");
-
-        var snapshot = GraphTypeFinals.initActiveSnapshot(self);
-        defer snapshot.deinit();
-        const ty = try snapshot.sealNode(root);
-        self.countDiagnosticBy("active_snapshot_nodes_materialized", snapshot.sealed.count());
-
-        var materialized = snapshot.sealed.iterator();
-        while (materialized.next()) |item| {
-            const snapshot_node = self.find(item.key_ptr.*);
-            const snapshot_ty = item.value_ptr.*;
-            const entry = try self.node_snapshots.getOrPut(snapshot_node);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(self.allocator, snapshot_ty);
-            try self.linked_type_nodes.put(snapshot_ty, snapshot_node);
-            try self.current_snapshots.put(snapshot_node, snapshot_ty);
-        }
-        return ty;
-    }
-
-    /// Materialize a graph node directly into a final TypeId without first
-    /// exposing or copying an active Type-shaped snapshot.
+    /// Materialize a frozen graph node directly into a final TypeId.
     pub fn sealNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         var sealer = GraphTypeFinals.init(self);
         defer sealer.deinit();
         return try sealer.sealNode(node);
-    }
-
-    /// Materialize a TypeId into a final copy. If the TypeId is an active
-    /// snapshot, seal its current solved node instead of reusing the snapshot.
-    pub fn sealType(self: *InstGraph, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        var sealer = GraphTypeFinals.init(self);
-        defer sealer.deinit();
-        return try sealer.sealType(ty);
-    }
-
-    pub fn assertTypeHasNoActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!void {
-        if (try self.typeHasActiveSnapshots(ty)) {
-            Common.invariant("Monotype body draft retained an active type snapshot after sealing");
-        }
-    }
-
-    pub fn typeHasActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.typeContainsActiveSnapshot(ty, &seen);
-    }
-
-    fn typeContainsActiveSnapshot(
-        self: *InstGraph,
-        ty: Type.TypeId,
-        seen: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        if (self.isActiveSnapshotType(ty)) return true;
-        const seen_entry = try seen.getOrPut(ty);
-        if (seen_entry.found_existing) return false;
-        return switch (self.types.get(ty)) {
-            .primitive, .erased, .zst => false,
-            .list => |elem| try self.typeContainsActiveSnapshot(elem, seen),
-            .box => |elem| try self.typeContainsActiveSnapshot(elem, seen),
-            .tuple => |items| try self.typeSpanContainsActiveSnapshot(items, seen),
-            .func => |func| blk: {
-                if (try self.typeSpanContainsActiveSnapshot(func.args, seen)) break :blk true;
-                break :blk try self.typeContainsActiveSnapshot(func.ret, seen);
-            },
-            .record => |fields| blk: {
-                const field_span = self.types.fieldSpan(fields);
-                for (0..field_span.len) |index| {
-                    const field = GuardedList.at(field_span, index);
-                    if (try self.typeContainsActiveSnapshot(field.ty, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tags| blk: {
-                const tag_span = self.types.tagSpan(tags);
-                for (0..tag_span.len) |index| {
-                    const tag = GuardedList.at(tag_span, index);
-                    if (try self.typeSpanContainsActiveSnapshot(tag.payloads, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .named => |named| blk: {
-                if (try self.typeSpanContainsActiveSnapshot(named.args, seen)) break :blk true;
-                if (named.backing) |backing| {
-                    if (try self.typeContainsActiveSnapshot(backing.ty, seen)) break :blk true;
-                }
-                const declared_fields = self.types.declaredFieldSpan(named.declared_order);
-                for (0..declared_fields.len) |index| {
-                    const field = GuardedList.at(declared_fields, index);
-                    switch (field) {
-                        .named => {},
-                        .padding => |padding| if (try self.typeContainsActiveSnapshot(padding, seen)) break :blk true,
-                    }
-                }
-                break :blk false;
-            },
-        };
-    }
-
-    fn typeSpanContainsActiveSnapshot(
-        self: *InstGraph,
-        span: Type.Span,
-        seen: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        const children = self.types.span(span);
-        for (0..children.len) |index| {
-            const child = GuardedList.at(children, index);
-            if (try self.typeContainsActiveSnapshot(child, seen)) return true;
-        }
-        return false;
     }
 
     fn isGeneratedPrivateRootContent(node_content: InstNode) bool {
@@ -3858,26 +3643,6 @@ pub const InstGraph = struct {
             public.builtin_owner == generated.builtin_owner and
             self.sameNamedArgs(public.args, generated.args);
     }
-
-    fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return false;
-        const views = self.node_snapshots.get(raw_node) orelse return false;
-        for (views.items) |view| {
-            if (view == ty) return true;
-        }
-        return false;
-    }
-
-    /// Return the current root node for a TypeId that is one of this graph's
-    /// immutable active snapshots. Closed imported TypeIds return null.
-    pub fn activeSnapshotNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return null;
-        const views = self.node_snapshots.get(raw_node) orelse return null;
-        for (views.items) |view| {
-            if (view == ty) return self.find(raw_node);
-        }
-        return null;
-    }
 };
 
 /// Shared finalization state for materializing graph nodes into immutable
@@ -3885,7 +3650,6 @@ pub const InstGraph = struct {
 pub const GraphTypeFinals = struct {
     graph: *InstGraph,
     sealed: collections.DenseMap(NodeId, Type.TypeId),
-    sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     generated_types_by_identity: ?*std.AutoHashMap(names.TypeDigest, Type.TypeId),
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
@@ -3903,35 +3667,16 @@ pub const GraphTypeFinals = struct {
         return finals;
     }
 
-    fn initActiveSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph);
-    }
-
     fn initUnchecked(graph: *InstGraph) GraphTypeFinals {
         return .{
             .graph = graph,
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
-            .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
             .generated_types_by_identity = null,
         };
     }
 
     pub fn deinit(self: *GraphTypeFinals) void {
-        self.sealed_types.deinit();
         self.sealed.deinit();
-    }
-
-    pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
-            if (self.graph.node_snapshots.get(raw_node)) |views| {
-                for (views.items) |view| {
-                    if (view == ty) return try self.sealNode(raw_node);
-                }
-            }
-        }
-        if (try self.typeHasActiveSnapshots(ty)) return try self.sealStoreType(ty);
-        return ty;
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
@@ -4029,57 +3774,6 @@ pub const GraphTypeFinals = struct {
         };
     }
 
-    fn typeHasActiveSnapshots(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = collections.DenseMap(Type.TypeId, void).init(self.graph.allocator);
-        defer seen.deinit();
-        return try self.graph.typeContainsActiveSnapshot(ty, &seen);
-    }
-
-    fn sealStoreType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.sealed_types.get(ty)) |existing| return existing;
-
-        const Context = struct {
-            sealer: *GraphTypeFinals,
-            ty: Type.TypeId,
-
-            fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                try context.sealer.sealed_types.put(context.ty, reserved);
-                return try context.sealer.sealStoreContent(context.ty);
-            }
-        };
-        return try self.graph.types.addRecursive(Context{ .sealer = self, .ty = ty }, Context.fill);
-    }
-
-    fn sealStoreContent(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.Content {
-        return switch (self.graph.types.get(ty)) {
-            .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.sealType(elem) },
-            .box => |elem| .{ .box = try self.sealType(elem) },
-            .tuple => |items| .{ .tuple = try self.sealTypeSpan(items) },
-            .func => |func| .{ .func = .{
-                .args = try self.sealTypeSpan(func.args),
-                .ret = try self.sealType(func.ret),
-            } },
-            .tag_union => |tags| .{ .tag_union = try self.sealStoredTagSpan(tags) },
-            .record => |fields| .{ .record = try self.sealStoredFieldSpan(fields) },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.sealTypeSpan(named.args),
-                .backing = if (named.backing) |backing| .{
-                    .ty = try self.sealType(backing.ty),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                } else null,
-                .declared_order = try self.sealStoredDeclaredFieldSpan(named.declared_order),
-            } },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-    }
-
     fn sealNodeSpan(self: *GraphTypeFinals, nodes: []const NodeId) Allocator.Error!Type.Span {
         if (nodes.len == 0) return .empty();
         const sealed_nodes = try self.graph.allocator.alloc(Type.TypeId, nodes.len);
@@ -4088,16 +3782,6 @@ pub const GraphTypeFinals = struct {
             sealed_nodes[index] = try self.sealNode(node);
         }
         return try self.graph.types.addSpan(sealed_nodes);
-    }
-
-    fn sealTypeSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const sealed = try GuardedList.dupe(self.graph.allocator, Type.TypeId, self.graph.types.span(span));
-        defer self.graph.allocator.free(sealed);
-        if (sealed.len == 0) return .empty();
-        for (sealed) |*ty| {
-            ty.* = try self.sealType(ty.*);
-        }
-        return try self.graph.types.addSpan(sealed);
     }
 
     fn sealRecordRow(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Span {
@@ -4110,16 +3794,6 @@ pub const GraphTypeFinals = struct {
                 .name = field.name,
                 .ty = try self.sealNode(field.ty),
             };
-        }
-        return try self.graph.types.addRecordFields(self.graph.name_store, fields);
-    }
-
-    fn sealStoredFieldSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const fields = try GuardedList.dupe(self.graph.allocator, Type.Field, self.graph.types.fieldSpan(span));
-        defer self.graph.allocator.free(fields);
-        if (fields.len == 0) return .empty();
-        for (fields) |*field| {
-            field.ty = try self.sealType(field.ty);
         }
         return try self.graph.types.addRecordFields(self.graph.name_store, fields);
     }
@@ -4139,16 +3813,6 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addTagVariants(self.graph.name_store, tags);
     }
 
-    fn sealStoredTagSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const tags = try GuardedList.dupe(self.graph.allocator, Type.Tag, self.graph.types.tagSpan(span));
-        defer self.graph.allocator.free(tags);
-        if (tags.len == 0) return .empty();
-        for (tags) |*tag| {
-            tag.payloads = try self.sealTypeSpan(tag.payloads);
-        }
-        return try self.graph.types.addTagVariants(self.graph.name_store, tags);
-    }
-
     fn sealDeclaredFieldSpan(self: *GraphTypeFinals, fields: []const InstDeclaredField) Allocator.Error!Type.Span {
         if (fields.len == 0) return .empty();
         const sealed = try self.graph.allocator.alloc(Type.DeclaredField, fields.len);
@@ -4158,19 +3822,6 @@ pub const GraphTypeFinals = struct {
                 .named => |name| .{ .named = name },
                 .padding => |node| .{ .padding = try self.sealNode(node) },
             };
-        }
-        return try self.graph.types.addDeclaredFields(sealed);
-    }
-
-    fn sealStoredDeclaredFieldSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const sealed = try GuardedList.dupe(self.graph.allocator, Type.DeclaredField, self.graph.types.declaredFieldSpan(span));
-        defer self.graph.allocator.free(sealed);
-        if (sealed.len == 0) return .empty();
-        for (sealed) |*field| {
-            switch (field.*) {
-                .named => {},
-                .padding => |ty| field.* = .{ .padding = try self.sealType(ty) },
-            }
         }
         return try self.graph.types.addDeclaredFields(sealed);
     }
@@ -4557,10 +4208,7 @@ test "graph diagnostics count authoritative operations" {
     var diagnostics: GraphDiagnostics = .{};
     graph.setDiagnostics(&diagnostics);
 
-    const boolean = try graph.newNode(.{ .primitive = .bool });
-    _ = try graph.activeTypeViewForNode(boolean);
-    _ = try graph.activeTypeViewForNode(boolean);
-
+    _ = try graph.newNode(.{ .primitive = .bool });
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const str = try graph.newNode(.{ .primitive = .str });
     try graph.unify(unresolved, str);
@@ -4568,12 +4216,6 @@ test "graph diagnostics count authoritative operations" {
     try std.testing.expectEqual(@as(u64, 3), diagnostics.nodes_created);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.class_unions);
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.active_type_requests);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_hits);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_misses);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_nodes_materialized);
-    try std.testing.expect(diagnostics.active_snapshot_invalidations >= 1);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_entries_invalidated);
 }
 
 test "completed monotype program view does not expose instantiation graph nodes" {
@@ -4717,30 +4359,6 @@ test "exact produced boundary pairs converge without structural relation work" {
     try graph.freezeRelations();
 
     try std.testing.expect(graph.sameClass(left, right));
-}
-
-test "active Monotype snapshots are immutable across graph mutations" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const node = try graph.newNode(.{ .primitive = .u64 });
-    const first = try graph.activeTypeViewForNode(node);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(first));
-
-    try graph.setContent(node, .{ .primitive = .str });
-    const second = try graph.activeTypeViewForNode(node);
-
-    try std.testing.expect(first != second);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(first));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(second));
 }
 
 test "record field node carries contextual row evidence into receiver" {
@@ -4916,60 +4534,6 @@ test "record field graph access distinguishes inspection from runtime constructi
     try std.testing.expect(graph.sameClass(field_ty, definition_private));
 }
 
-test "active Monotype snapshots keep different roots distinct" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const old_root = try graph.newNode(.{ .primitive = .u64 });
-    const new_root = try graph.newNode(.{ .primitive = .str });
-    const old_view = try graph.activeTypeViewForNode(old_root);
-    const new_view = try graph.activeTypeViewForNode(new_root);
-
-    try std.testing.expect(old_view != new_view);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(old_view));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(new_view));
-}
-
-test "union resolves immutable snapshot provenance without reindexing" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const winner = try graph.newNode(.{ .primitive = .u64 });
-    const snapshot_count = 128;
-    var snapshots: [snapshot_count]Type.TypeId = undefined;
-    var owners: [snapshot_count]NodeId = undefined;
-
-    for (&snapshots, &owners) |*snapshot, *owner| {
-        const node = try graph.newNode(.{ .primitive = .u64 });
-        snapshot.* = try graph.activeTypeViewForNode(node);
-        owner.* = graph.linked_type_nodes.get(snapshot.*).?;
-        try graph.union_(winner, node);
-    }
-
-    for (snapshots, owners) |snapshot, owner| {
-        // The reverse index remains stable instead of rewriting every prior
-        // snapshot on each union. Root resolution happens only when queried.
-        try std.testing.expectEqual(owner, graph.linked_type_nodes.get(snapshot).?);
-        try std.testing.expectEqual(winner, graph.activeSnapshotNode(snapshot).?);
-    }
-}
-
 test "alias unification does not make the alias its own backing" {
     const gpa = std.testing.allocator;
 
@@ -4995,7 +4559,8 @@ test "alias unification does not make the alias its own backing" {
     try graph.unify(alias, backing);
     try std.testing.expect(graph.find(alias) != graph.find(backing));
 
-    const alias_ty = try graph.activeTypeViewForNode(alias);
+    try graph.freezeRelations();
+    const alias_ty = try graph.sealNode(alias);
     const alias_content = type_store.get(alias_ty);
     if (alias_content != .named) return error.TestExpectedEqual;
     const named = alias_content.named;
@@ -5108,92 +4673,7 @@ test "equivalent nominal wrapper unification preserves the structural backing" {
     try std.testing.expectEqual(structural, graph.find(retained_backing.node));
 }
 
-test "final sealing does not mutate an earlier active snapshot" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const a_name = try name_store.internRecordFieldLabel("a");
-    const a_ty = try graph.newNode(.{ .primitive = .u64 });
-
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty };
-    const row = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = try graph.newNode(.empty_record),
-    } });
-
-    const snapshot = try graph.activeTypeViewForNode(row);
-    const snapshot_field = GuardedList.at(type_store.fieldSpan(type_store.get(snapshot).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(snapshot_field.ty));
-
-    try graph.setContent(a_ty, .{ .primitive = .str });
-
-    try graph.freezeRelations();
-    var finals = GraphTypeFinals.init(graph);
-    defer finals.deinit();
-    const sealed = try finals.sealType(snapshot);
-
-    try std.testing.expect(sealed != snapshot);
-    const still_snapshot_field = GuardedList.at(type_store.fieldSpan(type_store.get(snapshot).record), 0);
-    const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(still_snapshot_field.ty));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.ty));
-}
-
-test "final graph function recursively replaces active snapshots" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const a_name = try name_store.internRecordFieldLabel("a");
-    const a_ty = try graph.newNode(.{ .primitive = .u64 });
-
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty };
-    const row = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = try graph.newNode(.empty_record),
-    } });
-
-    const args = try graph.arena().alloc(NodeId, 1);
-    args[0] = row;
-    const fn_node = try graph.newNode(.{ .func = .{
-        .args = args,
-        .ret = row,
-    } });
-    const draft_fn = try graph.activeTypeViewForNode(fn_node);
-    try graph.setContent(a_ty, .{ .primitive = .str });
-
-    try graph.freezeRelations();
-    var finals = GraphTypeFinals.init(graph);
-    defer finals.deinit();
-    const sealed_fn = try finals.sealType(draft_fn);
-    try std.testing.expect(sealed_fn != draft_fn);
-    const sealed_arg = GuardedList.at(type_store.span(type_store.get(sealed_fn).func.args), 0);
-
-    const draft_arg = GuardedList.at(type_store.span(type_store.get(draft_fn).func.args), 0);
-    const draft_field = GuardedList.at(type_store.fieldSpan(type_store.get(draft_arg).record), 0);
-    const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed_arg).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(draft_field.ty));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.ty));
-}
-
-test "final sealed graph node does not allocate an active snapshot" {
+test "final sealed graph node materializes directly" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5218,11 +4698,10 @@ test "final sealed graph node does not allocate an active snapshot" {
 
     try graph.freezeRelations();
     const sealed = try graph.sealNode(row);
-    try std.testing.expectEqual(@as(usize, 0), graph.node_snapshots.count());
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
 }
 
-test "active view of an imported recursive type preserves its exact immutable representation" {
+test "imported recursive type preserves its exact immutable representation" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5257,7 +4736,14 @@ test "active view of an imported recursive type preserves its exact immutable re
     defer graph.destroy();
 
     const imported = try graph.importMono(exact);
-    try std.testing.expectEqual(exact, try graph.activeTypeViewForNode(imported));
+    try std.testing.expectEqual(imported, try graph.importMono(exact));
+    try graph.freezeRelations();
+    const sealed = try graph.sealNode(imported);
+    const tags = type_store.tagSpan(type_store.get(sealed).tag_union);
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    const payloads = type_store.span(GuardedList.at(tags, 0).payloads);
+    try std.testing.expectEqual(@as(usize, 1), payloads.len);
+    try std.testing.expectEqual(sealed, GuardedList.at(payloads, 0));
 }
 
 test "unresolved row graph node seals to closed empty tag union only at finalization" {
@@ -5280,7 +4766,7 @@ test "unresolved row graph node seals to closed empty tag union only at finaliza
     try std.testing.expectEqual(Type.Span.empty(), content.tag_union);
 }
 
-test "relation mutation invalidates active snapshots before freezing" {
+test "relation mutation remains available only before freezing" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5293,18 +4779,11 @@ test "relation mutation invalidates active snapshots before freezing" {
     defer graph.destroy();
 
     const resolved = try graph.newNode(.{ .primitive = .u64 });
-    const before_mutation = try graph.activeTypeViewForNode(resolved);
-    try std.testing.expect(graph.current_snapshots.count() != 0);
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
     try std.testing.expect(graph.acceptsRelationMutation());
-    try std.testing.expect(graph.current_snapshots_dirty);
-
-    const after_mutation = try graph.activeTypeViewForNode(resolved);
-    try std.testing.expect(!graph.current_snapshots_dirty);
-    try std.testing.expect(graph.current_snapshots.count() != 0);
-    try std.testing.expect(before_mutation != after_mutation);
+    try std.testing.expect(graph.sameClass(resolved, unresolved));
 
     try graph.freezeRelations();
 
