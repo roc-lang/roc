@@ -76,8 +76,9 @@ EndOfFile,
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "bag"))
-							(e-ident (raw "run"))))
+							(receiver
+								(e-ident (raw "bag")))
+							(segment (mode "required") (field "run"))))
 					(e-list
 						(e-int (raw "1"))
 						(e-int (raw "2"))
@@ -85,8 +86,9 @@ EndOfFile,
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "bag"))
-							(e-ident (raw "run"))))
+							(receiver
+								(e-ident (raw "bag")))
+							(segment (mode "required") (field "run"))))
 					(e-list
 						(e-string
 							(e-string-part (raw "a")))
@@ -112,7 +114,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 238)
+			(e-dispatch-call (method "len") (constraint-fn-var 240)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -133,21 +135,25 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 276)
-					(e-field-access (field "run")
+				(e-call (constraint-fn-var 279)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "bag")))))
+								(p-assign (ident "bag"))))
+						(segments
+							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
 							(e-num (value "1"))
 							(e-num (value "2"))
 							(e-num (value "3")))))
-				(e-call (constraint-fn-var 296)
-					(e-field-access (field "run")
+				(e-call (constraint-fn-var 299)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "bag")))))
+								(p-assign (ident "bag"))))
+						(segments
+							(segment (name "run") (mode "required"))))
 					(e-list
 						(elems
 							(e-runtime-error (tag "erroneous_value_expr"))

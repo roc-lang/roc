@@ -93,10 +93,20 @@ pub const SnapshotRecord = struct {
     ext: SnapshotContentIdx,
 };
 
+/// The resolved kind of a snapshotted record field. The field's value type is
+/// stored separately in `SnapshotRecordField.content`.
+pub const SnapshotFieldPresence = union(enum) {
+    required,
+    optional,
+    defaulted: types.DefaultId,
+    unknown,
+};
+
 /// A single field in a snapshotted record type.
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx,
+    presence: SnapshotFieldPresence,
 
     const Self = @This();
 
@@ -496,6 +506,7 @@ pub const Store = struct {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
                 .alias => |alias| alias.ident.ident_idx,
+                .field_presence => null,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
                     // Other structures can appear as backing vars for nominal types.
@@ -563,6 +574,12 @@ pub const Store = struct {
                     .args = store.sliceAliasArgs(alias),
                 } });
                 return false;
+            },
+            // Presence facts are represented on their owning record field in
+            // snapshots, never as standalone reportable types.
+            .field_presence => {
+                try self.finishFrame(type_writer, fill, SnapshotContent.err);
+                return true;
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {
@@ -887,6 +904,20 @@ pub const Store = struct {
         return store.record_fields.get(@enumFromInt(@intFromEnum(range.start) + idx));
     }
 
+    fn snapshotFieldPresence(store: *const TypesStore, presence: types.RecordField.Presence) SnapshotFieldPresence {
+        return switch (presence.decode()) {
+            .required => .required,
+            .unknown => |unknown| switch (store.resolveVar(unknown.presence).desc.content) {
+                .field_presence => |resolved| switch (resolved) {
+                    .required => .required,
+                    .optional => .optional,
+                    .defaulted => |id| .{ .defaulted = id },
+                },
+                .flex, .rigid, .alias, .structure, .err => .unknown,
+            },
+        };
+    }
+
     fn stepRecord(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *RecordFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
@@ -894,7 +925,7 @@ pub const Store = struct {
                     if (frame.idx < frame.source_fields.count) {
                         frame.stage = .await_field;
                         const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.var_)) return false;
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
                         continue;
                     }
                     // The field run is committed before the extension is
@@ -913,6 +944,7 @@ pub const Store = struct {
                     try self.scratch_record_fields.append(.{
                         .name = field.name,
                         .content = self.pending_values.pop().?,
+                        .presence = snapshotFieldPresence(store, field.presence),
                     });
                     frame.idx += 1;
                     frame.stage = .fields;
@@ -935,7 +967,7 @@ pub const Store = struct {
                     if (frame.idx < frame.source_fields.count) {
                         frame.stage = .await_field;
                         const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.var_)) return false;
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
                         continue;
                     }
                     const fields_range = try self.record_fields.appendSlice(
@@ -953,6 +985,7 @@ pub const Store = struct {
                     try self.scratch_record_fields.append(.{
                         .name = field.name,
                         .content = self.pending_values.pop().?,
+                        .presence = snapshotFieldPresence(store, field.presence),
                     });
                     frame.idx += 1;
                     frame.stage = .fields;
@@ -1107,8 +1140,8 @@ pub const Store = struct {
 
                     const fields_out_top: u32 = @intCast(fields_out.items.len);
                     const slice = self.sliceRecordFields(fields);
-                    for (slice.items(.name), slice.items(.content)) |name, content| {
-                        _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+                    for (slice.items(.name), slice.items(.content), slice.items(.presence)) |name, content, presence| {
+                        _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
                     }
                     const fields_out_range = fields_out.rangeToEnd(fields_out_top);
                     return RecordFieldSnapshot{ .record = fields_out_range };
@@ -1141,8 +1174,8 @@ pub const Store = struct {
 
         // Add immediate fields
         const record_fields = self.sliceRecordFields(record.fields);
-        for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
-            _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+        for (record_fields.items(.name), record_fields.items(.content), record_fields.items(.presence)) |name, content, presence| {
+            _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
         }
 
         // Follow extension chain
@@ -1153,15 +1186,15 @@ pub const Store = struct {
                 .structure => |flat| switch (flat) {
                     .record => |rec| {
                         const ext_fields = self.sliceRecordFields(rec.fields);
-                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         ext_idx = rec.ext;
                     },
                     .record_unbound => |fields_range| {
                         const ext_fields = self.sliceRecordFields(fields_range);
-                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         break;
                     },
@@ -1190,6 +1223,85 @@ pub const Store = struct {
         return tag.formatted;
     }
 };
+
+test "snapshot record field presence survives deep copy and gather" {
+    const gpa = std.testing.allocator;
+
+    var type_store = try TypesStore.initCapacity(gpa, 16, 8);
+    defer type_store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const top_name = try idents.insert(gpa, Ident.for_text("top"));
+    const middle_name = try idents.insert(gpa, Ident.for_text("middle"));
+    const tail_name = try idents.insert(gpa, Ident.for_text("tail"));
+    const field_var = try type_store.freshFromContent(.{ .structure = .empty_record });
+    const presence_var = try type_store.fresh();
+
+    const tail_fields = try type_store.appendRecordFields(&.{.{
+        .name = tail_name,
+        .presence = .unknown(presence_var, field_var),
+    }});
+    const tail_var = try type_store.freshFromContent(.{ .structure = .{ .record_unbound = tail_fields } });
+
+    const middle_fields = try type_store.appendRecordFields(&.{.{
+        .name = middle_name,
+        .presence = .unknown(presence_var, field_var),
+    }});
+    const middle_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = middle_fields,
+        .ext = tail_var,
+    } } });
+
+    const top_fields = try type_store.appendRecordFields(&.{.{
+        .name = top_name,
+        .presence = .required(field_var),
+    }});
+    const top_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = top_fields,
+        .ext = middle_var,
+    } } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &type_store, &idents, null);
+    defer type_writer.deinit();
+    var snapshots = try Store.initCapacity(gpa, 16);
+    defer snapshots.deinit();
+
+    const top_snapshot_idx = try snapshots.snapshotVarForError(&type_store, &type_writer, top_var);
+    const top_content = snapshots.getContent(top_snapshot_idx);
+    if (top_content != .structure or top_content.structure != .record) unreachable;
+    const top_snapshot = top_content.structure.record;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.required,
+        snapshots.sliceRecordFields(top_snapshot.fields).items(.presence)[0],
+    );
+
+    const middle_content = snapshots.getContent(top_snapshot.ext);
+    if (middle_content != .structure or middle_content.structure != .record) unreachable;
+    const middle_snapshot = middle_content.structure.record;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.unknown,
+        snapshots.sliceRecordFields(middle_snapshot.fields).items(.presence)[0],
+    );
+
+    const tail_content = snapshots.getContent(middle_snapshot.ext);
+    if (tail_content != .structure or tail_content.structure != .record_unbound) unreachable;
+    const tail_snapshot_fields = tail_content.structure.record_unbound;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.unknown,
+        snapshots.sliceRecordFields(tail_snapshot_fields).items(.presence)[0],
+    );
+
+    var gathered_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 4);
+    defer gathered_fields.deinit(gpa);
+    const gathered = try snapshots.gatherRecordFields(top_snapshot_idx, gpa, &gathered_fields);
+    if (gathered != .record) unreachable;
+    try std.testing.expectEqualSlices(
+        SnapshotFieldPresence,
+        &.{ .required, .unknown, .unknown },
+        gathered_fields.sliceRange(gathered.record).items(.presence),
+    );
+}
 
 // Depth pin for the snapshot walk. Any of the ~29 `snapshotVarForError` call
 // sites can be handed a type as deep as the instantiator can build, so this

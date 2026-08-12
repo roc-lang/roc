@@ -323,7 +323,16 @@ pub const Union = struct {
     pub fn dupe(self: Union, allocator: std.mem.Allocator) error{OutOfMemory}!Union {
         return .{
             .alternatives = try allocator.dupe(CtorInfo, self.alternatives),
-            .render_as = self.render_as,
+            .render_as = switch (self.render_as) {
+                .record => |record| .{ .record = .{
+                    .names = try allocator.dupe(Ident.Idx, record.names),
+                    .types = try allocator.dupe(Var, record.types),
+                } },
+                .tag => .tag,
+                .opaque_type => .opaque_type,
+                .tuple => .tuple,
+                .guard => .guard,
+            },
             .has_flex_extension = self.has_flex_extension,
         };
     }
@@ -348,12 +357,21 @@ pub const RenderAs = union(enum) {
     tag,
     /// Opaque type
     opaque_type,
-    /// Record with field names in order
-    record: []const Ident.Idx,
+    /// Record fields in specialization order, paired with the exact types the
+    /// checker judged for their nested sub-patterns. For an optional field,
+    /// this is the binder's `Try(payload, [MissingField])`, not the raw payload
+    /// stored on the scrutinee row.
+    record: RecordColumns,
     /// Tuple
     tuple,
     /// Guard synthetic constructor
     guard,
+};
+
+/// Parallel record-column metadata used while specializing nested patterns.
+pub const RecordColumns = struct {
+    names: []const Ident.Idx,
+    types: []const Var,
 };
 
 /// The arity of a list pattern
@@ -664,11 +682,13 @@ pub fn convertPattern(
             const destructs = store.sliceRecordDestructs(p.destructs);
             const args = try allocator.alloc(UnresolvedPattern, destructs.len);
             const field_names = try allocator.alloc(Ident.Idx, destructs.len);
+            const field_types = try allocator.alloc(Var, destructs.len);
 
             for (destructs, 0..) |destruct_idx, i| {
                 const destruct = store.getRecordDestruct(destruct_idx);
                 field_names[i] = destruct.label;
                 const sub_pattern_idx = destruct.kind.toPatternIdx();
+                field_types[i] = Can.ModuleEnv.varFrom(sub_pattern_idx);
                 args[i] = try convertPattern(allocator, store, numeral_keys, sub_pattern_idx);
             }
 
@@ -682,7 +702,7 @@ pub fn convertPattern(
             return .{ .known_ctor = .{
                 .union_info = .{
                     .alternatives = alternatives,
-                    .render_as = .{ .record = field_names },
+                    .render_as = .{ .record = .{ .names = field_names, .types = field_types } },
                 },
                 .tag_id = .only,
                 .args = args,
@@ -978,7 +998,7 @@ fn getUnionFromType(
                 => return .not_a_union,
             }
         },
-        .err => {},
+        .field_presence, .err => {},
     }
 
     // Not a tag union
@@ -1085,7 +1105,7 @@ fn buildUnionFromTagUnion(
                 current_ext = type_store.getAliasBackingVar(alias);
                 // Don't break - continue with the resolved alias
             },
-            .err => {
+            .field_presence, .err => {
                 // Other content types = treat as closed
                 is_open = false;
                 has_flex = false;
@@ -1218,6 +1238,9 @@ fn isTypeInhabitedWithKnownEmpty(
     var results: std.ArrayList(bool) = .empty;
     defer results.deinit(gpa);
 
+    var record_field_vars: std.ArrayList(Var) = .empty;
+    defer record_field_vars.deinit(gpa);
+
     // Start with the initial type
     try work_list.append(gpa, .{ .check_type = type_var });
 
@@ -1243,8 +1266,10 @@ fn isTypeInhabitedWithKnownEmpty(
                 }
 
                 switch (content) {
-                    // Flex and rigid variables are unconstrained - assume inhabited
-                    .flex, .rigid => try results.append(gpa, true),
+                    // Flex and rigid variables are unconstrained - assume
+                    // inhabited. A presence fact is atomic and never a value
+                    // type reached here; treat it as inhabited for safety.
+                    .flex, .rigid, .field_presence => try results.append(gpa, true),
 
                     // Error types are treated as inhabited (we don't want to cascade errors)
                     .err => try results.append(gpa, true),
@@ -1298,15 +1323,13 @@ fn isTypeInhabitedWithKnownEmpty(
 
                         // Records - all fields must be inhabited (AND semantics)
                         .record => |record| {
-                            const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                            const field_vars = fields_slice.items(.var_);
-                            try pushAndWork(gpa, &work_list, field_vars);
+                            const presences = type_store.getRecordFieldsSlice(record.fields).items(.presence);
+                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
                         },
 
                         .record_unbound => |fields| {
-                            const fields_slice = type_store.getRecordFieldsSlice(fields);
-                            const field_vars = fields_slice.items(.var_);
-                            try pushAndWork(gpa, &work_list, field_vars);
+                            const presences = type_store.getRecordFieldsSlice(fields).items(.presence);
+                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
                         },
 
                         // Tuples - all elements must be inhabited (AND semantics)
@@ -1415,7 +1438,7 @@ fn isCtorPayloadTypeInhabitedHelp(
     switch (content) {
         .flex => |flex| return !isUnresolvedUnboundFlex(flex),
         .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-        .err => return true,
+        .field_presence, .err => return true,
         .alias, .structure => {},
     }
 
@@ -1423,7 +1446,7 @@ fn isCtorPayloadTypeInhabitedHelp(
     if (gop.found_existing) return true;
 
     return switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| blk: {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
                 break :blk true;
@@ -1458,7 +1481,9 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1467,7 +1492,9 @@ fn isCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
                         break :blk false;
                     }
@@ -1540,7 +1567,7 @@ fn isCtorPayloadTagUnionInhabited(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return false,
+            .field_presence, .err => return false,
         }
     }
 }
@@ -1580,7 +1607,7 @@ fn collectCtorPayloadBlockersHelp(
             }
             return;
         },
-        .err => return,
+        .field_presence, .err => return,
         .alias, .structure => {},
     }
 
@@ -1588,7 +1615,7 @@ fn collectCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectCtorPayloadBlockersHelp(
@@ -1621,7 +1648,9 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1629,7 +1658,9 @@ fn collectCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
                         try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1718,7 +1749,7 @@ fn collectCtorPayloadTagUnionBlockers(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return,
+            .field_presence, .err => return,
         }
     }
 }
@@ -1748,7 +1779,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
     switch (content) {
         .flex => return false,
         .rigid => |rigid| return !rigid.name.attributes.ignored,
-        .err => return true,
+        .field_presence, .err => return true,
         .alias, .structure => {},
     }
 
@@ -1756,7 +1787,7 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
     if (gop.found_existing) return true;
 
     return switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| blk: {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) break :blk true;
             break :blk try isKnownAbsentCtorPayloadTypeInhabitedHelp(
@@ -1804,7 +1835,9 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record => |record| blk: {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1819,7 +1852,9 @@ fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
             },
             .record_unbound => |fields| blk: {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
                         allocator,
                         type_store,
@@ -1887,7 +1922,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             }
             return;
         },
-        .err => return,
+        .field_presence, .err => return,
         .alias, .structure => {},
     }
 
@@ -1895,7 +1930,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable,
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectKnownAbsentCtorPayloadBlockersHelp(
@@ -1961,7 +1996,9 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record => |record| {
                 for (0..record.fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(record.fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -1969,7 +2006,9 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
             },
             .record_unbound => |fields| {
                 for (0..fields.count) |offset| {
-                    const field_var = type_store.getRecordFieldAt(fields, @intCast(offset)).var_;
+                    const field_presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
+                    const field_var = field_presence.typeVar();
                     if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
                         try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
                     }
@@ -2003,6 +2042,40 @@ fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars
             try work_list.append(gpa, .{ .check_type = v });
         }
     }
+}
+
+/// An optional field may be absent, so the record is inhabited no matter what
+/// that field's payload type is: only fields that are always present join the
+/// AND. A defaulted field is always present (its default is materialized at
+/// every omission site), and a presence that has not resolved to a concrete
+/// kind is treated as present so inhabitedness stays conservative.
+fn fieldIsAlwaysPresent(type_store: *TypeStore, presence: types.RecordField.Presence) bool {
+    return switch (presence.decode()) {
+        .required => true,
+        .unknown => |unknown| switch (type_store.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |kind| switch (kind) {
+                .optional => false,
+                .required, .defaulted => true,
+            },
+            .flex, .rigid, .alias, .structure, .err => true,
+        },
+    };
+}
+
+fn pushRecordAndWork(
+    gpa: std.mem.Allocator,
+    type_store: *TypeStore,
+    work_list: *std.ArrayList(WorkItem),
+    field_vars: *std.ArrayList(Var),
+    presences: []const types.RecordField.Presence,
+) Allocator.Error!void {
+    field_vars.clearRetainingCapacity();
+    try field_vars.ensureTotalCapacity(gpa, presences.len);
+    for (presences) |presence| {
+        if (!fieldIsAlwaysPresent(type_store, presence)) continue;
+        field_vars.appendAssumeCapacity(presence.typeVar());
+    }
+    try pushAndWork(gpa, work_list, field_vars.items);
 }
 
 /// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
@@ -2074,7 +2147,7 @@ fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *
                 // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => break,
+            .field_presence, .err => break,
         }
     }
 
@@ -2152,7 +2225,7 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .err => return false,
+            .field_presence, .err => return false,
         }
     }
 }
@@ -2290,7 +2363,8 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
             const backing = type_store.getAliasBackingVar(alias);
             return isOpenExtension(type_store, backing);
         },
-        .err => false,
+        // A presence variable can never be a tag-union extension tail.
+        .field_presence, .err => false,
     };
 }
 
@@ -2385,7 +2459,7 @@ const CtorArgTypes = union(enum) {
     fn get(self: CtorArgTypes, type_store: *TypeStore, offset: usize) Var {
         return switch (self) {
             .vars => |range| type_store.getVarAt(range, @intCast(offset)),
-            .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).var_,
+            .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).presence.typeVar(),
             .none => unreachable,
         };
     }
@@ -2447,7 +2521,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                 .alias => |alias| {
                     current_ext = type_store.getAliasBackingVar(alias);
                 },
-                .flex, .rigid, .err => break,
+                .flex, .rigid, .field_presence, .err => break,
             }
         }
     }
@@ -2488,79 +2562,10 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             .empty_tag_union,
             => {},
         },
-        .flex, .rigid, .err => {},
+        .flex, .rigid, .field_presence, .err => {},
     }
 
     return .none;
-}
-
-/// Look up a record field's type by its name.
-/// Returns null if the field doesn't exist in the record type.
-/// Handles record, record_unbound, and follows aliases/recursion vars.
-/// Uses iterative approach to avoid stack overflow on deeply nested types.
-fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name: Ident.Idx) std.mem.Allocator.Error!?Var {
-    var current_type = record_type;
-
-    // Track seen variables to detect cycles in recursive types
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-
-    while (true) {
-        const resolved = type_store.resolveVar(current_type);
-        const resolved_var = resolved.var_;
-        const content = resolved.desc.content;
-
-        // Cycle detection: if we've seen this resolved variable before, stop
-        const gop = try seen.getOrPut(type_store.gpa, resolved_var);
-        if (gop.found_existing) {
-            return null; // Cycle detected - field not found
-        }
-
-        switch (content) {
-            .structure => |flat_type| switch (flat_type) {
-                .record => |record| {
-                    const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                    const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
-
-                    for (field_names, field_vars) |name, var_| {
-                        if (name.eql(field_name)) {
-                            return var_;
-                        }
-                    }
-                    // Field not found in this record - check extension
-                    current_type = record.ext;
-                    continue;
-                },
-                .record_unbound => |fields| {
-                    const fields_slice = type_store.getRecordFieldsSlice(fields);
-                    const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
-
-                    for (field_names, field_vars) |name, var_| {
-                        if (name.eql(field_name)) {
-                            return var_;
-                        }
-                    }
-                    return null;
-                },
-                .empty_record => return null,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .tag_union,
-                .empty_tag_union,
-                => return null,
-            },
-            .alias => |alias| {
-                current_type = type_store.getAliasBackingVar(alias);
-                continue;
-            },
-            .flex, .rigid, .err => return null,
-        }
-    }
 }
 
 /// Get the element type from a List type.
@@ -2582,7 +2587,7 @@ fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
             const backing_var = type_store.getAliasBackingVar(alias);
             return getListElemType(type_store, backing_var);
         },
-        .flex, .rigid, .structure, .err => {},
+        .flex, .rigid, .field_presence, .structure, .err => {},
     }
 
     return null;
@@ -2663,23 +2668,19 @@ pub const ColumnTypes = struct {
     pub fn specializeByRecordPattern(
         self: ColumnTypes,
         allocator: std.mem.Allocator,
-        field_names: []const Ident.Idx,
-    ) error{ OutOfMemory, TypeError }!ColumnTypes {
+        record: RecordColumns,
+    ) error{OutOfMemory}!ColumnTypes {
         std.debug.assert(self.types.len > 0);
+        std.debug.assert(record.names.len == record.types.len);
 
-        const record_type = self.types[0];
-        const field_types = try allocator.alloc(Var, field_names.len);
-
-        for (field_names, 0..) |name, i| {
-            field_types[i] = try getRecordFieldTypeByName(self.type_store, record_type, name) orelse
-                return error.TypeError;
-        }
-
-        // New types: [field_types..., self.types[1...]...]
-        const new_types = try allocator.alloc(Var, field_types.len + self.types.len - 1);
-        @memcpy(new_types[0..field_types.len], field_types);
+        // The checker already judged each record field's sub-pattern against
+        // its binder type. Consume that exact type here: optional destructures
+        // bind `Try(payload, [MissingField])`, which cannot be reconstructed
+        // from the scrutinee row's raw payload type.
+        const new_types = try allocator.alloc(Var, record.types.len + self.types.len - 1);
+        @memcpy(new_types[0..record.types.len], record.types);
         if (self.types.len > 1) {
-            @memcpy(new_types[field_types.len..], self.types[1..]);
+            @memcpy(new_types[record.types.len..], self.types[1..]);
         }
 
         return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
@@ -2857,6 +2858,7 @@ fn collectCtorsSketched(
 
     // For records, collect all unique field names from all patterns
     var all_record_fields: std.ArrayList(Ident.Idx) = .empty;
+    var all_record_types: std.ArrayList(Var) = .empty;
     var is_record = false;
 
     for (first_col) |pat| {
@@ -2882,9 +2884,9 @@ fn collectCtorsSketched(
                 }
                 // Collect record fields
                 switch (kc.union_info.render_as) {
-                    .record => |fields| {
+                    .record => |record| {
                         is_record = true;
-                        for (fields) |field| {
+                        for (record.names, record.types) |field, field_type| {
                             // Add if not already present
                             var already_present = false;
                             for (all_record_fields.items) |existing| {
@@ -2895,6 +2897,7 @@ fn collectCtorsSketched(
                             }
                             if (!already_present) {
                                 try all_record_fields.append(allocator, field);
+                                try all_record_types.append(allocator, field_type);
                             }
                         }
                     },
@@ -2939,7 +2942,8 @@ fn collectCtorsSketched(
         var result_union_info = union_info.?;
         if (is_record and all_record_fields.items.len > 0) {
             const all_fields = try all_record_fields.toOwnedSlice(allocator);
-            result_union_info.render_as = .{ .record = all_fields };
+            const all_types = try all_record_types.toOwnedSlice(allocator);
+            result_union_info.render_as = .{ .record = .{ .names = all_fields, .types = all_types } };
             // Update the alternative's arity to match total fields
             if (result_union_info.alternatives.len == 1) {
                 const new_alts = try allocator.alloc(CtorInfo, 1);
@@ -3005,7 +3009,7 @@ fn specializeByConstructorSketched(
 
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
-        .record => |fields| fields,
+        .record => |record| record.names,
         .tag, .opaque_type, .tuple, .guard => null,
     };
 
@@ -3032,7 +3036,7 @@ fn specializeByConstructorSketched(
                     if (target_fields) |targets| {
                         // Get this pattern's field names
                         const pat_fields: []const Ident.Idx = switch (kc.union_info.render_as) {
-                            .record => |fields| fields,
+                            .record => |record| record.names,
                             .tag, .opaque_type, .tuple, .guard => &[_]Ident.Idx{}, // Shouldn't happen for records
                         };
 
@@ -3187,7 +3191,7 @@ fn collectFlexExtVars(
             .alias => |alias| {
                 current_ext = type_store.getAliasBackingVar(alias);
             },
-            .rigid, .err => break,
+            .rigid, .field_presence, .err => break,
         }
     }
 }
@@ -3224,7 +3228,7 @@ fn recurseIntoAllCtors(
 
         // Use field-name-based lookup for records, positional for everything else
         const specialized_types = switch (union_info.render_as) {
-            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+            .record => |record| try column_types.specializeByRecordPattern(allocator, record),
             .guard => try column_types.specializeByGuard(allocator),
             .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
         };
@@ -3413,7 +3417,7 @@ pub fn checkExhaustiveSketched(
 
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
-                            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .record => |record| try column_types.specializeByRecordPattern(allocator, record),
                             .guard => try column_types.specializeByGuard(allocator),
                             .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
@@ -3582,13 +3586,15 @@ pub fn isUsefulSketched(
             // For records, we need to merge field sets from matrix + current pattern
             var merged_union_info = kc.union_info;
             switch (kc.union_info.render_as) {
-                .record => |current_fields| {
+                .record => |current_record| {
                     // Collect all unique fields from matrix patterns + current pattern
                     var all_fields: std.ArrayList(Ident.Idx) = .empty;
+                    var all_types: std.ArrayList(Var) = .empty;
 
                     // Add current pattern's fields
-                    for (current_fields) |field| {
+                    for (current_record.names, current_record.types) |field, field_type| {
                         try all_fields.append(allocator, field);
+                        try all_types.append(allocator, field_type);
                     }
 
                     // Add fields from matrix patterns
@@ -3597,8 +3603,8 @@ pub fn isUsefulSketched(
                         switch (pat) {
                             .known_ctor => |mat_kc| {
                                 switch (mat_kc.union_info.render_as) {
-                                    .record => |mat_fields| {
-                                        for (mat_fields) |field| {
+                                    .record => |mat_record| {
+                                        for (mat_record.names, mat_record.types) |field, field_type| {
                                             var already_present = false;
                                             for (all_fields.items) |existing| {
                                                 if (existing.eql(field)) {
@@ -3608,6 +3614,7 @@ pub fn isUsefulSketched(
                                             }
                                             if (!already_present) {
                                                 try all_fields.append(allocator, field);
+                                                try all_types.append(allocator, field_type);
                                             }
                                         }
                                     },
@@ -3620,7 +3627,8 @@ pub fn isUsefulSketched(
 
                     // Update union_info with all fields
                     const all_fields_slice = try all_fields.toOwnedSlice(allocator);
-                    merged_union_info.render_as = .{ .record = all_fields_slice };
+                    const all_types_slice = try all_types.toOwnedSlice(allocator);
+                    merged_union_info.render_as = .{ .record = .{ .names = all_fields_slice, .types = all_types_slice } };
                     if (merged_union_info.alternatives.len == 1) {
                         const new_alts = try allocator.alloc(CtorInfo, 1);
                         new_alts[0] = .{
@@ -3649,22 +3657,22 @@ pub fn isUsefulSketched(
 
             // Use field-name-based lookup for records, positional for everything else
             const specialized_types = switch (merged_union_info.render_as) {
-                .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                .record => |record| try column_types.specializeByRecordPattern(allocator, record),
                 .guard => try column_types.specializeByGuard(allocator),
                 .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
             };
 
             // Expand current pattern's args to match merged field set
             const extended_row = switch (merged_union_info.render_as) {
-                .record => |merged_fields| blk: {
+                .record => |merged_record| blk: {
                     const row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
                     const current_fields = switch (kc.union_info.render_as) {
-                        .record => |f| f,
+                        .record => |record| record.names,
                         .tag, .opaque_type, .tuple, .guard => &[_]Ident.Idx{},
                     };
 
                     // Map current pattern's args to merged field positions
-                    for (merged_fields, 0..) |merged_field, i| {
+                    for (merged_record.names, 0..) |merged_field, i| {
                         var found = false;
                         for (current_fields, 0..) |cur_field, j| {
                             if (cur_field.eql(merged_field)) {
@@ -3777,7 +3785,7 @@ pub fn isUsefulSketched(
 
                         // Use field-name-based lookup for records, positional for everything else
                         const specialized_types = switch (ctor_info.union_info.render_as) {
-                            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            .record => |record| try column_types.specializeByRecordPattern(allocator, record),
                             .guard => try column_types.specializeByGuard(allocator),
                             .tag, .opaque_type, .tuple => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
@@ -4077,6 +4085,13 @@ pub const CheckResult = struct {
                 }
                 allocator.free(c.args);
                 allocator.free(c.union_info.alternatives);
+                switch (c.union_info.render_as) {
+                    .record => |record| {
+                        allocator.free(record.names);
+                        allocator.free(record.types);
+                    },
+                    .tag, .opaque_type, .tuple, .guard => {},
+                }
             },
             .list => |l| {
                 for (l.elements) |elem| {
@@ -4405,12 +4420,12 @@ fn formatPatternInto(
                     }
                 },
 
-                .record => |field_names| {
+                .record => |record| {
                     try writer.writeAll("{ ");
                     for (c.args, 0..) |arg, i| {
                         if (i > 0) try writer.writeAll(", ");
-                        if (i < field_names.len) {
-                            try writer.writeAll(ident_store.getText(field_names[i]));
+                        if (i < record.names.len) {
+                            try writer.writeAll(ident_store.getText(record.names[i]));
                         } else {
                             try writer.writeAll("_");
                         }
@@ -4489,4 +4504,32 @@ fn formatPatternInto(
             try writer.writeAll("]");
         },
     }
+}
+
+test "record inhabitedness retains its field-var scratch buffer" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counting.allocator();
+    const presences = [_]types.RecordField.Presence{
+        .required(@enumFromInt(1)),
+        .required(@enumFromInt(2)),
+    };
+    var work_list: std.ArrayList(WorkItem) = .empty;
+    defer work_list.deinit(gpa);
+    var scratch: std.ArrayList(Var) = .empty;
+    defer scratch.deinit(gpa);
+
+    // Built on the testing allocator so it stays out of `counting`'s tallies.
+    var type_store = try TypeStore.initCapacity(std.testing.allocator, 4, 0);
+    defer type_store.deinit();
+
+    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
+    try std.testing.expect(scratch.capacity >= presences.len);
+
+    work_list.clearRetainingCapacity();
+    const allocations = counting.allocations;
+    const resizes = counting.resize_index;
+    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
+
+    try std.testing.expectEqual(allocations, counting.allocations);
+    try std.testing.expectEqual(resizes, counting.resize_index);
 }

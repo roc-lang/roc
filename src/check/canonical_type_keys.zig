@@ -155,7 +155,7 @@ pub fn containsError(
 
 const RecordFieldForKey = struct {
     name: Ident.Idx,
-    var_: Var,
+    presence: types.RecordField.Presence,
 };
 
 const TagForKey = struct {
@@ -211,7 +211,7 @@ const RecordFrame = struct {
     fields_count: u32,
     idx: u32 = 0,
     tail: ?Var,
-    stage: enum { fields, tail, done } = .fields,
+    stage: enum { field_head, presence_var, type_var, tail, done } = .field_head,
 };
 
 /// A normalized tag-union row, holding both the position within the row and
@@ -447,6 +447,18 @@ const Builder = struct {
                 }
                 invariantViolation("canonical type key reached an unsolved rigid without its root identity");
             },
+            .field_presence => |field_presence| {
+                switch (field_presence) {
+                    .required => self.writeTag("presence_required"),
+                    .optional => self.writeTag("presence_optional"),
+                    .defaulted => |id| {
+                        self.writeTag("presence_defaulted");
+                        self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                        self.writeU32(id.expr_node);
+                    },
+                }
+                return false;
+            },
             .alias => |alias| {
                 self.writeTag("alias");
                 self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
@@ -646,11 +658,11 @@ const Builder = struct {
     ) Allocator.Error!void {
         const slice = self.store.getRecordFieldsSlice(range);
         const names = slice.items(.name);
-        const vars = slice.items(.var_);
-        for (names, vars) |name, var_| {
+        const presences = slice.items(.presence);
+        for (names, presences) |name, presence| {
             try self.pending_fields.append(self.allocator, .{
                 .name = name,
-                .var_ = var_,
+                .presence = presence,
             });
         }
     }
@@ -742,7 +754,7 @@ const Builder = struct {
     fn stepRecord(self: *Builder, frame: *RecordFrame) Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
-                .fields => {
+                .field_head => {
                     if (frame.idx < frame.fields_count) {
                         const index = frame.fields_base + frame.idx;
                         const field = self.pending_fields.items[index];
@@ -750,12 +762,54 @@ const Builder = struct {
                             invariantViolation("canonical type key row normalization found duplicate record fields");
                         }
                         self.writeIdent(field.name);
-                        frame.idx += 1;
-                        if (!try self.request(field.var_)) return false;
+                        const type_var = switch (field.presence.decode()) {
+                            .required => |var_| blk: {
+                                self.writeBool(false);
+                                break :blk var_;
+                            },
+                            .unknown => |unknown| blk: {
+                                switch (self.store.resolveVar(unknown.presence).desc.content) {
+                                    .field_presence => |presence| switch (presence) {
+                                        .required => self.writeBool(false),
+                                        .defaulted => |id| {
+                                            self.writeTag("field_default");
+                                            self.writeBytes(self.env.moduleIdentityHash(id.origin_module));
+                                            self.writeU32(id.expr_node);
+                                        },
+                                        .optional => self.writeTag("presence_optional_field"),
+                                    },
+                                    .flex => {
+                                        self.writeTag("presence_variable");
+                                        frame.stage = .presence_var;
+                                        if (!try self.request(unknown.presence)) return false;
+                                    },
+                                    .err => {
+                                        if (self.detect_errors) self.contains_error = true;
+                                        self.writeTag("err");
+                                    },
+                                    .rigid, .alias, .structure => invariantViolation("canonical type key reached a field presence variable holding non-presence content"),
+                                }
+                                break :blk unknown.var_;
+                            },
+                        };
+                        // A flex presence first writes its identity above; all
+                        // other kinds proceed directly to the value type.
+                        if (frame.stage == .presence_var) continue;
+                        frame.stage = .type_var;
+                        if (!try self.request(type_var)) return false;
                         continue;
                     }
                     self.pending_fields.items.len = frame.fields_base;
                     frame.stage = .tail;
+                },
+                .presence_var => {
+                    const field = self.pending_fields.items[frame.fields_base + frame.idx];
+                    frame.stage = .type_var;
+                    if (!try self.request(field.presence.typeVar())) return false;
+                },
+                .type_var => {
+                    frame.idx += 1;
+                    frame.stage = .field_head;
                 },
                 .tail => {
                     frame.stage = .done;
@@ -1100,6 +1154,91 @@ test "source type keys normalize closed empty records to empty record" {
     const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
+}
+
+test "record field presence participates in canonical type keys" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const field_name = try env.insertIdent(Ident.for_text("field"));
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const field_var = try store.freshFromContent(.{ .structure = .empty_record });
+    const empty_ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    const required_fields = try store.appendRecordFields(&.{.{
+        .name = field_name,
+        .presence = .required(field_var),
+    }});
+    const optional_fields = try store.appendRecordFields(&.{.{
+        .name = field_name,
+        .presence = .unknown(optional_presence, field_var),
+    }});
+    const required_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = required_fields,
+        .ext = empty_ext,
+    } } });
+    const optional_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = optional_fields,
+        .ext = empty_ext,
+    } } });
+    const required_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = required_fields } });
+    const optional_unbound = try store.freshFromContent(.{ .structure = .{ .record_unbound = optional_fields } });
+
+    const required_key = try fromVar(allocator, &store, &env, required_record);
+    const optional_key = try fromVar(allocator, &store, &env, optional_record);
+    const required_unbound_key = try fromVar(allocator, &store, &env, required_unbound);
+    const optional_unbound_key = try fromVar(allocator, &store, &env, optional_unbound);
+    try std.testing.expect(!std.meta.eql(required_key, optional_key));
+    try std.testing.expect(!std.meta.eql(required_unbound_key, optional_unbound_key));
+}
+
+test "record field presence is stable across normalized row extensions" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const first_name = try env.insertIdent(Ident.for_text("first"));
+    const second_name = try env.insertIdent(Ident.for_text("second"));
+
+    var store = try TypeStore.initCapacity(allocator, 32, 16);
+    defer store.deinit();
+
+    const field_var = try store.freshFromContent(.{ .structure = .empty_record });
+    const empty_ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    const flat_fields = try store.appendRecordFields(&.{
+        .{ .name = first_name, .presence = .required(field_var) },
+        .{ .name = second_name, .presence = .unknown(optional_presence, field_var) },
+    });
+    const flat_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = flat_fields,
+        .ext = empty_ext,
+    } } });
+
+    const tail_fields = try store.appendRecordFields(&.{.{
+        .name = second_name,
+        .presence = .unknown(optional_presence, field_var),
+    }});
+    const tail_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = tail_fields,
+        .ext = empty_ext,
+    } } });
+    const head_fields = try store.appendRecordFields(&.{.{
+        .name = first_name,
+        .presence = .required(field_var),
+    }});
+    const extended_record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = head_fields,
+        .ext = tail_record,
+    } } });
+
+    const flat_key = try fromVar(allocator, &store, &env, flat_record);
+    const extended_key = try fromVar(allocator, &store, &env, extended_record);
+    try std.testing.expectEqualSlices(u8, flat_key.bytes[0..], extended_key.bytes[0..]);
 }
 
 test "source type keys normalize closed empty tag unions to empty tag union" {

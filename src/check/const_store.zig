@@ -181,10 +181,21 @@ pub const TypeNamedKind = enum {
     alias,
 };
 
+/// `??` default identity carried on stored record type evidence, mirroring
+/// Monotype `Type.FieldDefault`: rows disagreeing about defaults are
+/// distinct monotypes, so restored evidence must reproduce the default to
+/// reproduce the type.
+pub const TypeFieldDefault = struct {
+    module: names.ModuleIdentityId,
+    expr_node: u32,
+};
+
 /// Record field entry for stored monomorphic type evidence.
 pub const TypeField = struct {
     name: names.RecordFieldNameId,
     ty: ConstTypeId,
+    value_ty: ?ConstTypeId = null,
+    default: ?TypeFieldDefault,
 };
 
 /// Tag-union variant entry for stored monomorphic type evidence.
@@ -555,6 +566,11 @@ pub const ConstTypeStore = struct {
                     cloned_fields[i] = .{
                         .name = try translateRecordFieldName(name_translation, field.name),
                         .ty = try self.cloneTypeFromInner(source, name_translation, field.ty, map),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.cloneTypeFromInner(source, name_translation, value_ty, map)
+                        else
+                            null,
+                        .default = try translateFieldDefault(name_translation, field.default),
                     };
                 }
                 break :blk ConstType{ .record = try self.appendFieldSpan(cloned_fields) };
@@ -619,6 +635,15 @@ pub const ConstTypeStore = struct {
     fn translateTagName(name_translation: ?NameTranslation, id: names.TagNameId) Allocator.Error!names.TagNameId {
         const translation = name_translation orelse return id;
         return translation.target.internTagLabel(translation.source.tagLabelText(id));
+    }
+
+    fn translateFieldDefault(name_translation: ?NameTranslation, default: ?TypeFieldDefault) Allocator.Error!?TypeFieldDefault {
+        const field_default = default orelse return null;
+        const translation = name_translation orelse return field_default;
+        return .{
+            .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
     }
 
     fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {

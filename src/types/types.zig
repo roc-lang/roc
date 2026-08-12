@@ -93,36 +93,6 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// TypeScope represents nested type scopes for resolving polymorphic type variables.
-/// Each HashMap in the list represents a scope level, mapping polymorphic type variables
-/// to their resolved monomorphic equivalents.
-pub const TypeScope = struct {
-    scopes: std.array_list.Managed(VarMap),
-
-    pub fn init(allocator: std.mem.Allocator) TypeScope {
-        return .{
-            .scopes = std.array_list.Managed(VarMap).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *TypeScope) void {
-        for (self.scopes.items) |*scope| {
-            scope.deinit();
-        }
-        self.scopes.deinit();
-    }
-
-    /// Look up a type variable in all nested scopes, returning the mapped variable if found
-    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
-        for (self.scopes.items) |*scope| {
-            if (scope.get(var_to_find)) |mapped_var| {
-                return mapped_var;
-            }
-        }
-        return null;
-    }
-};
-
 /// Checker decisions a descriptor carries alongside its content. Descriptors
 /// live in a struct-of-arrays keyed by every union-find resolve, so these share
 /// one byte-wide column instead of one column each.
@@ -203,6 +173,7 @@ pub const Content = union(enum(u8)) {
     flex: Flex,
     rigid: Rigid,
     alias: Alias,
+    field_presence: FieldPresence,
     structure: FlatType,
     err,
 
@@ -228,7 +199,7 @@ pub const Content = union(enum(u8)) {
                     => return null,
                 }
             },
-            .flex, .rigid, .alias, .err => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -252,7 +223,7 @@ pub const Content = union(enum(u8)) {
                     => return null,
                 }
             },
-            .flex, .rigid, .alias, .err => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -276,7 +247,7 @@ pub const Content = union(enum(u8)) {
                     => return null,
                 }
             },
-            .flex, .rigid, .alias, .err => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -298,7 +269,7 @@ pub const Content = union(enum(u8)) {
                     => return null,
                 }
             },
-            .flex, .rigid, .alias, .err => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -320,7 +291,7 @@ pub const Content = union(enum(u8)) {
                     => return null,
                 }
             },
-            .flex, .rigid, .alias, .err => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 };
@@ -511,6 +482,51 @@ const NominalSource = packed struct(u32) {
 
     pub fn originIsBuiltin(self: NominalSource) bool {
         return self.builtin_origin;
+    }
+};
+
+// field presence //
+
+/// The solved KIND of a record field's presence axis (design.md "Field Kinds
+/// (All-Dynamic Optional Fields)" and "Defaulted Fields").
+///
+/// `present` is a required field: always there, plain inline slot, read with
+/// `.field`. `optional` is an optional field: may be missing AT RUNTIME,
+/// tagged slot, read with `.?field`. `defaulted` is a required field whose
+/// CONSTRUCTION may be omitted (the slot is materialized from the default):
+/// inline slot, read with `.field`. In an ordinary value relation,
+/// `required ~ defaulted` merges to `required`: a shared field is already
+/// supplied, so the default identity is irrelevant to that value. The
+/// checker's explicit required-access relation preserves a defaulted
+/// declaration while accepting its inline slot. `required ~ optional` and
+/// `optional ~ defaulted` are mismatches (one value has one layout), and two
+/// defaulted kinds unify exactly when their default identities are equal.
+///
+pub const FieldPresence = union(enum) {
+    required,
+    optional,
+    defaulted: DefaultId,
+};
+
+/// Stable identity of a defaulted field's default value (design.md
+/// "Defaulted Fields"). The default expression itself never lives in the
+/// type graph: the kind carries only this key—the declaring module's deep
+/// content identity plus the canonical (CIR) node index of the default
+/// expression in that module. Like `Alias.origin_module`, crossing a store
+/// boundary rebases the origin half. Two defaulted kinds unify exactly when
+/// their identities are equal: one written default is one default, and two
+/// separately written defaults never merge (even if textually identical).
+pub const DefaultId = struct {
+    /// Env-local index of the declaring module's deep content identity in
+    /// the owning store's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
+    /// The CIR expression node index of the default value in the declaring
+    /// module—stable, deterministic, and directly resolvable to the
+    /// expression for construction-site lowering.
+    expr_node: u32,
+
+    pub fn eql(a: DefaultId, b: DefaultId) bool {
+        return a.origin_module == b.origin_module and a.expr_node == b.expr_node;
     }
 };
 
@@ -736,8 +752,8 @@ pub const RecordField = struct {
 
     /// The name of the field
     name: Ident.Idx,
-    /// The type of the field's value
-    var_: Var,
+    /// Whether the field is required or optional, and it's type
+    presence: Presence,
 
     /// A function to be passed into std.mem.sort to sort fields by name
     pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
@@ -750,6 +766,65 @@ pub const RecordField = struct {
         const b_text = store.getText(b.name);
         return std.mem.order(u8, a_text, b_text);
     }
+
+    /// Whether a record field's kind is concretely required or still carried
+    /// on a presence var (design.md "Field Kinds (All-Dynamic Optional
+    /// Fields)").
+    pub const Presence = struct {
+        /// Every field has a value type variable.
+        var_: Var,
+        /// A field-kind variable, or `no_presence_var` for a required field.
+        presence_var: Var,
+
+        const no_presence_var: Var = @enumFromInt(std.math.maxInt(u32));
+
+        pub const Decoded = union(enum) {
+            required: Var,
+            unknown: struct {
+                presence: Var,
+                var_: Var,
+            },
+        };
+
+        /// Construct a required field with no kind variable.
+        pub fn required(var_: Var) @This() {
+            return .{ .var_ = var_, .presence_var = no_presence_var };
+        }
+
+        /// Construct a field whose kind is carried by `presence`.
+        pub fn unknown(presence: Var, var_: Var) @This() {
+            std.debug.assert(presence != no_presence_var);
+            return .{ .var_ = var_, .presence_var = presence };
+        }
+
+        /// Recover the semantic field-kind representation.
+        pub fn decode(self: @This()) Decoded {
+            if (self.presence_var == no_presence_var) {
+                return .{ .required = self.var_ };
+            }
+
+            return .{ .unknown = .{ .presence = self.presence_var, .var_ = self.var_ } };
+        }
+
+        /// The field's value type variable. Every field carries one (unknown
+        /// fields on the second axis, independent of the solved kind). Graph
+        /// walks that only care about the type axis (rank adjustment, layout,
+        /// most consumers) use this; walks that must visit every reachable
+        /// variable also visit `presenceVar`.
+        pub fn typeVar(self: @This()) Var {
+            return self.var_;
+        }
+
+        /// The presence-axis variable of a kind-carrying field.
+        ///
+        /// Only fields with a dynamic kind carry one; a concrete `required`
+        /// field has no presence variable. This variable resolves to a
+        /// `Content.field_presence` (or stays flex) exactly like a type
+        /// variable resolves to a structure.
+        pub fn presenceVar(self: @This()) ?Var {
+            return if (self.presence_var == no_presence_var) null else self.presence_var;
+        }
+    };
 
     /// A safe multi list of record fields
     pub const SafeMultiList = MkSafeMultiList(Self);
@@ -769,6 +844,11 @@ pub const TwoRecordFields = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+test "record fields avoid tagged presence padding" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(RecordField.Presence));
+    try std.testing.expectEqual(@as(usize, 12), @sizeOf(RecordField));
+}
 
 // tag unions //
 
@@ -1187,15 +1267,4 @@ pub const TwoStaticDispatchConstraints = struct {
 
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
-};
-
-/// Polarity of a type, or roughly, what side of an arrow it appears on.
-pub const Polarity = enum {
-    /// A type that appears in negative/input position
-    neg,
-    /// A type that appears in positive/output position
-    pos,
-
-    pub const lhs = Polarity.neg;
-    pub const rhs = Polarity.pos;
 };

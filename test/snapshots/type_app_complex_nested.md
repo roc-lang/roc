@@ -247,10 +247,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (can-ir
 	(d-let
 		(p-assign (ident "processComplex"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
@@ -263,14 +260,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "deepNested"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(e-run-low-level (op "crash")
-					(args
-						(e-string
-							(e-literal (string "not implemented")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -280,7 +270,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 361)
+			(e-call (constraint-fn-var 362)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args

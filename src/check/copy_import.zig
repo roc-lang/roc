@@ -122,6 +122,7 @@ const Fill = struct {
 const IdentityResult = enum { flex, rigid };
 
 const FuncKind = enum { pure, effectful, unbound };
+const FieldAxis = enum { type_var, presence_var };
 
 /// One suspended step of the cross-module copy. Every frame that mints a
 /// placeholder has already registered it in `var_mapping`, so a child that
@@ -234,6 +235,7 @@ const RecordFrame = struct {
     source_fields: RecordField.SafeMultiList.Range,
     ext: Var,
     idx: u32 = 0,
+    axis: FieldAxis = .type_var,
     fields_base: u32,
     values_base: u32,
     fields_range: RecordField.SafeMultiList.Range = undefined,
@@ -244,6 +246,7 @@ const RecordUnboundFrame = struct {
     fill: Fill,
     source_fields: RecordField.SafeMultiList.Range,
     idx: u32 = 0,
+    axis: FieldAxis = .type_var,
     fields_base: u32,
     values_base: u32,
 };
@@ -421,6 +424,17 @@ fn pushContent(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
                 .values_base = @intCast(machine.values.items.len),
             } });
             return false;
+        },
+        .field_presence => |field_presence| {
+            const copied_presence = switch (field_presence) {
+                .required, .optional => field_presence,
+                .defaulted => |id| types_mod.FieldPresence{ .defaulted = .{
+                    .origin_module = try ctx.copyOriginModule(id.origin_module),
+                    .expr_node = id.expr_node,
+                } },
+            };
+            try finishFrame(ctx, fill, .{ .field_presence = copied_presence });
+            return true;
         },
         .structure => |flat_type| switch (flat_type) {
             .empty_record => {
@@ -821,14 +835,22 @@ fn stepFunc(ctx: *CopyContext, frame: *FuncFrame) std.mem.Allocator.Error!bool {
 /// append the finished run to the destination store.
 fn finishRecordFields(
     ctx: *CopyContext,
+    source_fields: RecordField.SafeMultiList.Range,
     fields_base: u32,
     values_base: u32,
 ) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
     const machine = &ctx.scratch;
     const fields = machine.pending_fields.items[fields_base..];
-    const values = machine.values.items[values_base..];
-    for (fields, values) |*field, dest_var| {
-        field.var_ = dest_var;
+    var value_idx: usize = values_base;
+    for (fields, 0..) |*field, i| {
+        const source_field = ctx.source_store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
+        const dest_type = machine.values.items[value_idx];
+        value_idx += 1;
+        field.presence = if (source_field.presence.presenceVar()) |_| blk: {
+            const dest_presence = machine.values.items[value_idx];
+            value_idx += 1;
+            break :blk .unknown(dest_presence, dest_type);
+        } else .required(dest_type);
     }
     const range = try ctx.dest_store.appendRecordFields(fields);
     machine.pending_fields.items.len = fields_base;
@@ -842,15 +864,29 @@ fn requestRecordField(
     ctx: *CopyContext,
     source_fields: RecordField.SafeMultiList.Range,
     idx: *u32,
+    axis: *FieldAxis,
 ) std.mem.Allocator.Error!bool {
     const machine = &ctx.scratch;
     // Indexing through the run's start only happens when the record has
     // fields; start may be undefined when count is 0.
     const field = ctx.source_store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + idx.*));
-    const translated_name = try ctx.copyIdent(field.name);
-    try machine.pending_fields.append(ctx.allocator, .{ .name = translated_name, .var_ = undefined });
-    idx.* += 1;
-    return try request(ctx, field.var_);
+    return switch (axis.*) {
+        .type_var => blk: {
+            const translated_name = try ctx.copyIdent(field.name);
+            try machine.pending_fields.append(ctx.allocator, .{ .name = translated_name, .presence = undefined });
+            if (field.presence.presenceVar() != null) {
+                axis.* = .presence_var;
+            } else {
+                idx.* += 1;
+            }
+            break :blk try request(ctx, field.presence.typeVar());
+        },
+        .presence_var => blk: {
+            idx.* += 1;
+            axis.* = .type_var;
+            break :blk try request(ctx, field.presence.presenceVar().?);
+        },
+    };
 }
 
 fn stepRecord(ctx: *CopyContext, frame: *RecordFrame) std.mem.Allocator.Error!bool {
@@ -859,10 +895,10 @@ fn stepRecord(ctx: *CopyContext, frame: *RecordFrame) std.mem.Allocator.Error!bo
         switch (frame.stage) {
             .fields => {
                 if (frame.idx < frame.source_fields.count) {
-                    if (!try requestRecordField(ctx, frame.source_fields, &frame.idx)) return false;
+                    if (!try requestRecordField(ctx, frame.source_fields, &frame.idx, &frame.axis)) return false;
                     continue;
                 }
-                frame.fields_range = try finishRecordFields(ctx, frame.fields_base, frame.values_base);
+                frame.fields_range = try finishRecordFields(ctx, frame.source_fields, frame.fields_base, frame.values_base);
                 frame.stage = .await_ext;
                 if (!try request(ctx, frame.ext)) return false;
             },
@@ -881,10 +917,10 @@ fn stepRecord(ctx: *CopyContext, frame: *RecordFrame) std.mem.Allocator.Error!bo
 fn stepRecordUnbound(ctx: *CopyContext, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
     while (true) {
         if (frame.idx < frame.source_fields.count) {
-            if (!try requestRecordField(ctx, frame.source_fields, &frame.idx)) return false;
+            if (!try requestRecordField(ctx, frame.source_fields, &frame.idx, &frame.axis)) return false;
             continue;
         }
-        const fields_range = try finishRecordFields(ctx, frame.fields_base, frame.values_base);
+        const fields_range = try finishRecordFields(ctx, frame.source_fields, frame.fields_base, frame.values_base);
         try finishFrame(ctx, frame.fill, Content{ .structure = FlatType{ .record_unbound = fields_range } });
         return true;
     }

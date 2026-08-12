@@ -480,6 +480,10 @@ pub const CanonicalNameStore = struct {
         return lookupId(MethodNameId, &self.method_names, text);
     }
 
+    pub fn lookupTagLabel(self: *const CanonicalNameStore, text: []const u8) ?TagLabelId {
+        return lookupId(TagLabelId, &self.tag_labels, text);
+    }
+
     pub fn lookupExportName(self: *const CanonicalNameStore, text: []const u8) ?ExportNameId {
         return lookupId(ExportNameId, &self.export_names, text);
     }

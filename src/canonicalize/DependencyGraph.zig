@@ -1005,7 +1005,7 @@ pub fn getConstantsInDependencyOrder(
 /// dependencies during inference and resolves them at group boundaries.
 ///
 /// The walk is an explicit worklist (zero-recursion policy).
-fn collectNameReferences(
+pub fn collectNameReferences(
     cir: *const ModuleEnv,
     pattern_to_def: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
     root_expr: CIR.Expr.Idx,

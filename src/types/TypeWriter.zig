@@ -82,8 +82,20 @@ scratch_tags: std.array_list.Managed(types_mod.Tag),
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
 import_mapping: ?*const import_mapping_mod.ImportMapping,
+/// Optional resolver for rendering a defaulted field's source expression.
+mb_default_source: ?DefaultSourceFn = null,
+default_source_ctx: *const anyopaque = undefined,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
+
+/// Resolves a defaulted field identity to source text for display.
+pub const DefaultSourceFn = *const fn (ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8;
+
+/// Install the source resolver used when rendering defaulted record fields.
+pub fn setDefaultSourceResolver(self: *TypeWriter, ctx: *const anyopaque, resolver: DefaultSourceFn) void {
+    self.default_source_ctx = ctx;
+    self.mb_default_source = resolver;
+}
 
 const ByteWrite = std.Io.Writer;
 
@@ -202,7 +214,7 @@ const RecordFrame = struct {
     flex_ext_occurrences: usize,
     unbound_ext_occurrences: usize,
     idx: u32 = 0,
-    stage: enum { fields, ext } = .fields,
+    stage: enum { fields, after_field, ext } = .fields,
 };
 
 /// An unbound record: its own fields, then the `..` tail, which names the
@@ -212,6 +224,7 @@ const RecordUnboundFrame = struct {
     record_unbound_var: Var,
     unbound_ext_occurrences: usize,
     idx: u32 = 0,
+    stage: enum { fields, after_field, ext } = .fields,
 };
 
 /// A normalized tag-union row, holding the position within the row. Its tags
@@ -273,6 +286,8 @@ pub fn initFromParts(
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .scratch_tags = try std.array_list.Managed(types_mod.Tag).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
+        .mb_default_source = null,
+        .default_source_ctx = undefined,
         .gpa = gpa,
     };
 }
@@ -670,6 +685,14 @@ fn writeContentHead(
             return false;
         },
         .alias => |alias| return try self.startAlias(writer, alias),
+        .field_presence => |field_presence| {
+            try writer.writeAll(switch (field_presence) {
+                .required => "present",
+                .optional => "optional",
+                .defaulted => "defaulted",
+            });
+            return false;
+        },
         .structure => |flat_type| {
             const should_wrap_in_parens = ((context == .FunctionArgument or context == .FunctionReturn) and (flat_type == .fn_effectful or flat_type == .fn_pure or flat_type == .fn_unbound));
             if (should_wrap_in_parens) {
@@ -947,6 +970,41 @@ fn stepFunc(self: *TypeWriter, writer: *ByteWrite, frame: *FuncFrame, root_var: 
     }
 }
 
+fn writeRecordFieldSeparator(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
+    try writer.writeAll(switch (presence.decode()) {
+        .required => ": ",
+        .unknown => |unknown| switch (self.types.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |resolved| switch (resolved) {
+                .required, .defaulted => ": ",
+                .optional => " ?: ",
+            },
+            .flex, .rigid, .alias, .structure, .err => ": ",
+        },
+    });
+}
+
+fn writeFieldDefaultSuffix(self: *TypeWriter, writer: *ByteWrite, presence: RecordField.Presence) error{WriteFailed}!void {
+    const unknown = switch (presence.decode()) {
+        .required => return,
+        .unknown => |value| value,
+    };
+    const id = switch (self.types.resolveVar(unknown.presence).desc.content) {
+        .field_presence => |resolved| switch (resolved) {
+            .defaulted => |id| id,
+            .required, .optional => return,
+        },
+        .flex, .rigid, .alias, .structure, .err => return,
+    };
+    try writer.writeAll(" ?? ");
+    if (self.mb_default_source) |resolve| {
+        if (resolve(self.default_source_ctx, id)) |snippet| {
+            try writer.writeAll(snippet);
+            return;
+        }
+    }
+    try writer.writeAll("…");
+}
+
 fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
     while (true) {
         switch (frame.stage) {
@@ -959,13 +1017,19 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
                     // across iterations.
                     const field = self.scratch_record_fields.items[frame.fields_base + frame.idx];
                     try writer.writeAll(self.getIdent(field.name));
-                    try writer.writeAll(": ");
-                    frame.idx += 1;
-                    if (!try self.requestVar(writer, field.var_, .RecordFieldContent, root_var)) return false;
+                    try self.writeRecordFieldSeparator(writer, field.presence);
+                    frame.stage = .after_field;
+                    if (!try self.requestVar(writer, field.presence.typeVar(), .RecordFieldContent, root_var)) return false;
                     continue;
                 }
                 self.scratch_record_fields.shrinkRetainingCapacity(frame.fields_base);
                 frame.stage = .ext;
+            },
+            .after_field => {
+                const field = self.scratch_record_fields.items[frame.fields_base + frame.idx];
+                try self.writeFieldDefaultSuffix(writer, field.presence);
+                frame.idx += 1;
+                frame.stage = .fields;
             },
             .ext => {
                 switch (frame.ext) {
@@ -1029,27 +1093,37 @@ fn stepRecordUnbound(self: *TypeWriter, writer: *ByteWrite, frame: *RecordUnboun
     const fields_slice = self.types.getRecordFieldsSlice(frame.fields);
     const num_fields = fields_slice.len;
     while (true) {
-        if (frame.idx < num_fields) {
-            if (frame.idx > 0) try writer.writeAll(", ");
-            const name = fields_slice.items(.name)[frame.idx];
-            const field_var = fields_slice.items(.var_)[frame.idx];
-            try writer.writeAll(self.getIdent(name));
-            try writer.writeAll(": ");
-            frame.idx += 1;
-            if (!try self.requestVar(writer, field_var, .RecordFieldContent, root_var)) return false;
-            continue;
+        switch (frame.stage) {
+            .fields => {
+                if (frame.idx < num_fields) {
+                    if (frame.idx > 0) try writer.writeAll(", ");
+                    const name = fields_slice.items(.name)[frame.idx];
+                    const presence = fields_slice.items(.presence)[frame.idx];
+                    try writer.writeAll(self.getIdent(name));
+                    try self.writeRecordFieldSeparator(writer, presence);
+                    frame.stage = .after_field;
+                    if (!try self.requestVar(writer, presence.typeVar(), .RecordFieldContent, root_var)) return false;
+                    continue;
+                }
+                frame.stage = .ext;
+            },
+            .after_field => {
+                const presence = fields_slice.items(.presence)[frame.idx];
+                try self.writeFieldDefaultSuffix(writer, presence);
+                frame.idx += 1;
+                frame.stage = .fields;
+            },
+            .ext => {
+                if (num_fields > 0) try writer.writeAll(", ");
+                try writer.writeAll("..");
+                if (frame.unbound_ext_occurrences > 1) {
+                    try self.writeFlexVarName(writer, frame.record_unbound_var, .RecordExtension, root_var);
+                }
+                try writer.writeAll(" }");
+                self.popSeen();
+                return true;
+            },
         }
-
-        if (num_fields > 0) try writer.writeAll(", ");
-
-        try writer.writeAll("..");
-        if (frame.unbound_ext_occurrences > 1) {
-            try self.writeFlexVarName(writer, frame.record_unbound_var, .RecordExtension, root_var);
-        }
-
-        try writer.writeAll(" }");
-        self.popSeen();
-        return true;
     }
 }
 
@@ -1149,8 +1223,8 @@ fn gatherRecordFields(
 ) std.mem.Allocator.Error!RecordExt {
     const slice = self.types.getRecordFieldsSlice(fields);
     try self.scratch_record_fields.ensureUnusedCapacity(fields.len());
-    for (slice.items(.name), slice.items(.var_)) |name, var_| {
-        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+    for (slice.items(.name), slice.items(.presence)) |name, presence| {
+        self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
     }
 
     var ext = initial_ext;
@@ -1181,16 +1255,16 @@ fn gatherRecordFields(
                     .record => |ext_record| {
                         const ext_slice = self.types.getRecordFieldsSlice(ext_record.fields);
                         try self.scratch_record_fields.ensureUnusedCapacity(ext_record.fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
                         }
                         ext = ext_record.ext;
                     },
                     .record_unbound => |ext_fields| {
                         const ext_slice = self.types.getRecordFieldsSlice(ext_fields);
                         try self.scratch_record_fields.ensureUnusedCapacity(ext_fields.len());
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, var_| {
-                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .var_ = var_ });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            self.scratch_record_fields.appendAssumeCapacity(.{ .name = name, .presence = presence });
                         }
                         return .{ .unbound = resolved.var_ };
                     },
@@ -1205,6 +1279,7 @@ fn gatherRecordFields(
                     => return .invalid,
                 }
             },
+            .field_presence => return .invalid,
             .err => return .invalid,
         }
     }
@@ -1268,6 +1343,7 @@ fn gatherTags(
                     => return .invalid,
                 }
             },
+            .field_presence => return .invalid,
             .err => return .err,
         }
     }
@@ -1481,6 +1557,7 @@ fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.E
         .structure => |flat_type| {
             try self.collectCountChildrenInFlatType(flat_type);
         },
+        .field_presence => {},
         .err => {},
     }
 }
@@ -1503,12 +1580,18 @@ fn collectCountChildrenInFlatType(self: *TypeWriter, flat_type: FlatType) std.me
         },
         .record => |record| {
             const fields = self.types.getRecordFieldsSlice(record.fields);
-            try self.count_pending.appendSlice(fields.items(.var_));
+            for (fields.items(.presence)) |presence| {
+                try self.count_pending.append(presence.typeVar());
+                if (presence.presenceVar()) |presence_var| try self.count_pending.append(presence_var);
+            }
             try self.count_pending.append(record.ext);
         },
         .record_unbound => |fields| {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
-            try self.count_pending.appendSlice(fields_slice.items(.var_));
+            for (fields_slice.items(.presence)) |presence| {
+                try self.count_pending.append(presence.typeVar());
+                if (presence.presenceVar()) |presence_var| try self.count_pending.append(presence_var);
+            }
         },
         .tag_union => |tag_union| {
             // Bounds check the tags range before iterating
@@ -1712,6 +1795,61 @@ const TestEnv = struct {
 
 const TestEnvError = Allocator.Error || error{ WriteFailed, TestExpectedEqual };
 
+fn testRecordFields(
+    gpa: Allocator,
+    store: *TypesStore,
+    idents: *Ident.Store,
+) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
+    const required_name = try idents.insert(gpa, Ident.for_text("a_required"));
+    const optional_name = try idents.insert(gpa, Ident.for_text("b_optional"));
+    const value_var = try store.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try store.freshFromContent(.{ .field_presence = .optional });
+    return store.appendRecordFields(&.{
+        .{ .name = required_name, .presence = .required(value_var) },
+        .{ .name = optional_name, .presence = .unknown(optional_presence, value_var) },
+    });
+}
+
+test "TypeWriter renders required and optional fields in closed records" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 8, 4);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const fields = try testRecordFields(gpa, &store, &idents);
+    const ext = try store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = ext,
+    } } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer type_writer.deinit();
+    try std.testing.expectEqualStrings(
+        "{ a_required: {}, b_optional ?: {} }",
+        try type_writer.writeGet(record_var, .one_line),
+    );
+}
+
+test "TypeWriter renders required and optional fields in unbound records" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 8, 4);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const fields = try testRecordFields(gpa, &store, &idents);
+    const record_var = try store.freshFromContent(.{ .structure = .{ .record_unbound = fields } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer type_writer.deinit();
+    try std.testing.expectEqualStrings(
+        "{ a_required: {}, b_optional ?: {}, .. }",
+        try type_writer.writeGet(record_var, .one_line),
+    );
+}
+
 test "TypeWriter renders every shape the walk descends through" {
     var env = try TestEnv.init(testing.allocator, 128);
     defer env.deinit();
@@ -1732,21 +1870,21 @@ test "TypeWriter renders every shape the walk descends through" {
     const b_field = try env.ident("b");
     const a_field = try env.ident("a");
     const closed = try env.record(&.{
-        .{ .name = b_field, .var_ = empty_tag_union },
-        .{ .name = a_field, .var_ = empty_record },
+        .{ .name = b_field, .presence = .required(empty_tag_union) },
+        .{ .name = a_field, .presence = .required(empty_record) },
     }, empty_record);
     try env.expectRender(closed, "{ a: {}, b: [] }");
 
-    const tail = try env.record(&.{.{ .name = a_field, .var_ = empty_record }}, empty_record);
-    const chained = try env.record(&.{.{ .name = b_field, .var_ = empty_tag_union }}, tail);
+    const tail = try env.record(&.{.{ .name = a_field, .presence = .required(empty_record) }}, empty_record);
+    const chained = try env.record(&.{.{ .name = b_field, .presence = .required(empty_tag_union) }}, tail);
     try env.expectRender(chained, "{ a: {}, b: [] }");
 
     const rigid_name = try env.ident("row");
     const rigid_ext = try env.types.freshFromContent(.{ .rigid = types_mod.Rigid.init(rigid_name) });
-    const open = try env.record(&.{.{ .name = a_field, .var_ = empty_record }}, rigid_ext);
+    const open = try env.record(&.{.{ .name = a_field, .presence = .required(empty_record) }}, rigid_ext);
     try env.expectRender(open, "{ a: {}, ..row }");
 
-    const unbound_fields = try env.types.appendRecordFields(&.{.{ .name = a_field, .var_ = empty_record }});
+    const unbound_fields = try env.types.appendRecordFields(&.{.{ .name = a_field, .presence = .required(empty_record) }});
     const unbound = try env.types.freshFromContent(.{ .structure = .{ .record_unbound = unbound_fields } });
     try env.expectRender(unbound, "{ a: {}, .. }");
 
@@ -1851,12 +1989,12 @@ test "TypeWriter terminates on a record row whose extension chain cycles" {
 
     // outer = { g: {} } ..inner, inner = { f: {} } ..outer
     const outer = try env.types.fresh();
-    const inner_fields = try env.types.appendRecordFields(&.{.{ .name = f, .var_ = empty_record }});
+    const inner_fields = try env.types.appendRecordFields(&.{.{ .name = f, .presence = .required(empty_record) }});
     const inner = try env.types.freshFromContent(.{ .structure = .{ .record = .{
         .fields = inner_fields,
         .ext = outer,
     } } });
-    const outer_fields = try env.types.appendRecordFields(&.{.{ .name = g, .var_ = empty_record }});
+    const outer_fields = try env.types.appendRecordFields(&.{.{ .name = g, .presence = .required(empty_record) }});
     try env.types.setVarContent(outer, .{ .structure = .{ .record = .{
         .fields = outer_fields,
         .ext = inner,
@@ -1907,7 +2045,7 @@ test "TypeWriter terminates on a row whose extension is the row itself" {
     const empty_record = try env.types.freshFromContent(.{ .structure = .empty_record });
 
     const self_record = try env.types.fresh();
-    const self_fields = try env.types.appendRecordFields(&.{.{ .name = f, .var_ = empty_record }});
+    const self_fields = try env.types.appendRecordFields(&.{.{ .name = f, .presence = .required(empty_record) }});
     try env.types.setVarContent(self_record, .{ .structure = .{ .record = .{
         .fields = self_fields,
         .ext = self_record,
@@ -1963,7 +2101,7 @@ test "TypeWriter renders a record spine deeper than any native-stack budget" {
     var current = try env.types.freshFromContent(.{ .flex = types_mod.Flex.init() });
     for (0..depth) |_| {
         const ext = try env.types.freshFromContent(.{ .structure = .empty_record });
-        current = try env.record(&.{.{ .name = field, .var_ = current }}, ext);
+        current = try env.record(&.{.{ .name = field, .presence = .required(current) }}, ext);
     }
 
     const rendered = try env.writer.writeGet(current, .wrap);

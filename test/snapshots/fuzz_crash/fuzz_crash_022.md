@@ -335,7 +335,7 @@ getUser = |id| if
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let

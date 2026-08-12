@@ -54,6 +54,7 @@ const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
 const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
+const RecordField = @import("types.zig").RecordField;
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -99,20 +100,22 @@ const FuncFrame = struct {
 
 const RecordFrame = struct {
     fill: RankFill,
-    field_vars: []const Var,
+    fields: []const RecordField.Presence,
     ext: Var,
     idx: u32 = 0,
     acc: Rank = Rank.generalized,
     awaiting: bool = false,
+    field_axis: enum { type_var, presence_var } = .type_var,
     stage: enum { ext, await_ext, fields } = .ext,
 };
 
 const RecordUnboundFrame = struct {
     fill: RankFill,
-    field_vars: []const Var,
+    fields: []const RecordField.Presence,
     idx: u32 = 0,
     acc: Rank,
     awaiting: bool = false,
+    field_axis: enum { type_var, presence_var } = .type_var,
 };
 
 const TagUnionFrame = struct {
@@ -426,6 +429,13 @@ pub const Generalizer = struct {
                 try self.settleRank(fill.desc_idx, group_rank);
                 return true;
             },
+            .field_presence => {
+                // A settled presence marker is ground. An unresolved presence
+                // is represented by an ordinary flex/rigid var and reaches the
+                // corresponding arm above.
+                try self.settleRank(fill.desc_idx, .outermost);
+                return true;
+            },
             .err => {
                 try self.settleRank(fill.desc_idx, group_rank);
                 return true;
@@ -463,7 +473,7 @@ pub const Generalizer = struct {
                 .record => |record| {
                     try self.rank_frames.append(self.gpa, .{ .record = .{
                         .fill = fill,
-                        .field_vars = self.store.getRecordFieldsSlice(record.fields).items(.var_),
+                        .fields = self.store.getRecordFieldsSlice(record.fields).items(.presence),
                         .ext = record.ext,
                     } });
                     return false;
@@ -474,7 +484,7 @@ pub const Generalizer = struct {
                     // reduce to group_rank, so that seeds the max directly.
                     try self.rank_frames.append(self.gpa, .{ .record_unbound = .{
                         .fill = fill,
-                        .field_vars = self.store.getRecordFieldsSlice(record_fields).items(.var_),
+                        .fields = self.store.getRecordFieldsSlice(record_fields).items(.presence),
                         .acc = group_rank,
                     } });
                     return false;
@@ -592,13 +602,23 @@ pub const Generalizer = struct {
                 .fields => {
                     if (frame.awaiting) {
                         frame.acc = frame.acc.max(self.pending_ranks.pop().?);
-                        frame.idx += 1;
                         frame.awaiting = false;
+                        if (frame.field_axis == .type_var and frame.fields[frame.idx].presenceVar() != null) {
+                            frame.field_axis = .presence_var;
+                        } else {
+                            frame.idx += 1;
+                            frame.field_axis = .type_var;
+                        }
                         continue;
                     }
-                    if (frame.idx < frame.field_vars.len) {
+                    if (frame.idx < frame.fields.len) {
+                        const presence = frame.fields[frame.idx];
+                        const child = switch (frame.field_axis) {
+                            .type_var => presence.typeVar(),
+                            .presence_var => presence.presenceVar().?,
+                        };
                         frame.awaiting = true;
-                        if (!try self.requestRank(frame.field_vars[frame.idx], group_rank)) return false;
+                        if (!try self.requestRank(child, group_rank)) return false;
                         continue;
                     }
                     try self.settleRank(frame.fill.desc_idx, frame.acc);
@@ -612,13 +632,23 @@ pub const Generalizer = struct {
         while (true) {
             if (frame.awaiting) {
                 frame.acc = frame.acc.max(self.pending_ranks.pop().?);
-                frame.idx += 1;
                 frame.awaiting = false;
+                if (frame.field_axis == .type_var and frame.fields[frame.idx].presenceVar() != null) {
+                    frame.field_axis = .presence_var;
+                } else {
+                    frame.idx += 1;
+                    frame.field_axis = .type_var;
+                }
                 continue;
             }
-            if (frame.idx < frame.field_vars.len) {
+            if (frame.idx < frame.fields.len) {
+                const presence = frame.fields[frame.idx];
+                const child = switch (frame.field_axis) {
+                    .type_var => presence.typeVar(),
+                    .presence_var => presence.presenceVar().?,
+                };
                 frame.awaiting = true;
-                if (!try self.requestRank(frame.field_vars[frame.idx], group_rank)) return false;
+                if (!try self.requestRank(child, group_rank)) return false;
                 continue;
             }
             try self.settleRank(frame.fill.desc_idx, frame.acc);

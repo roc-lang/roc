@@ -82,8 +82,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-nominal (nominal "T")
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "T") (local))))
 	(s-nominal-decl

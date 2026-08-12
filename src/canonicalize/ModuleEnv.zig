@@ -226,6 +226,12 @@ pub const CommonIdents = extern struct {
     question_err: Ident.Idx,
     // Synthetic identifier for .. implicit rigids in open tag unions or records
     open_ext: Ident.Idx,
+    // Synthetic identifier naming the rigid presence variable minted when
+    // checking a definition's body against its own `?:` optional-field signature.
+    optional_presence: Ident.Idx,
+    // Error tag produced by optional field access (`r.?x`) when the field is
+    // absent: the Err side of `Try(field_type, [MissingField])`.
+    missing_field: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -352,6 +358,10 @@ pub const CommonIdents = extern struct {
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
+            // Error tag for optional field access on an absent field
+            .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
         };
     }
 
@@ -481,6 +491,10 @@ pub const CommonIdents = extern struct {
             .question_err = common.findIdent("#err") orelse unreachable,
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = common.findIdent("#others") orelse unreachable,
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = common.findIdent("#optional") orelse unreachable,
+            // Error tag for optional field access on an absent field
+            .missing_field = common.findIdent("MissingField") orelse unreachable,
         };
     }
 };
@@ -800,6 +814,19 @@ pub const NumericSuffixTarget = extern struct {
     }
 };
 
+/// Checker-produced construction evidence for one field omitted by a record
+/// literal through defaulted-field width absorption. The field's default is
+/// construction-site data; it must survive even when later value unification
+/// normalizes the shared runtime row to `required`.
+pub const RecordOmittedDefault = extern struct {
+    expr: CIR.Expr.Idx,
+    field_name: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
+    default_expr_node: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -932,6 +959,8 @@ generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
+/// Exact default identities selected at record-literal omission sites.
+record_omitted_defaults: RecordOmittedDefault.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1051,6 +1080,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
+    self.record_omitted_defaults.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1148,6 +1178,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
+        .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -1177,6 +1208,7 @@ pub fn deinit(self: *Self) void {
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1278,6 +1310,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2843,6 +2876,80 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .record_default_not_literal => |data| blk: {
+            const field_name = self.getIdent(data.field_name);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            const owned_field_name = try report.addOwnedString(field_name);
+            try report.headline.addReflowingText("The default value for the ");
+            try report.headline.addRecordField(owned_field_name);
+            try report.headline.addReflowingText(" field is not a literal.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("A field default (");
+            try report.document.addInlineCode("??");
+            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+
+            break :blk report;
+        },
+        .optional_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Optional Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("A field cannot be both optional (");
+            try report.headline.addInlineCode("?:");
+            try report.headline.addReflowingText(") and defaulted (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText("): a default fills the field whenever construction omits it, so the field can never be missing. Use ");
+            try report.headline.addInlineCode(":");
+            try report.headline.addReflowingText(" with ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" instead.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .unnamed_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Unnamed Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("Unnamed fields (");
+            try report.headline.addInlineCode("_");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("_name");
+            try report.headline.addReflowingText(") reserve padding in a nominal record layout, so they cannot have a ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .unnamed_field_not_allowed_in_structural_record => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3573,6 +3680,7 @@ pub const Serialized = extern struct {
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
+    record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3684,6 +3792,7 @@ pub const Serialized = extern struct {
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
+        try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3750,6 +3859,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
         return env;
@@ -3816,6 +3926,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
     }
 
@@ -3884,6 +3995,7 @@ pub const Serialized = extern struct {
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -4340,6 +4452,36 @@ pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Er
     const expr_idx = try self.store.addExpr(expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
+}
+
+/// Reserve one contiguous field-access path plus its enclosing expression.
+pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
+    return self.store.startFieldAccessPath(segment_count);
+}
+
+/// Append one source-ordered field-access segment to a reserved path.
+pub fn appendFieldAccessPathSegmentAssumeCapacity(
+    self: *Self,
+    builder: NodeStore.FieldAccessPathBuilder,
+    segment: CIR.Expr.FieldAccessSegment,
+    region: Region,
+) CIR.Expr.FieldAccessSegment.Idx {
+    const segment_idx = self.store.appendFieldAccessPathSegmentAssumeCapacity(builder, segment, region);
+    self.debugAssertArraysInSync();
+    return segment_idx;
+}
+
+/// Finish a fully populated field-access path.
+pub fn finishFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) CIR.Expr.FieldAccessSegment.Span {
+    const span = self.store.finishFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
+    return span;
+}
+
+/// Roll back a field-access path whose construction did not finish.
+pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) void {
+    self.store.rollbackFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
 }
 
 /// Add a new capture to the node store.
@@ -4850,7 +4992,26 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    var type_writer = try TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    type_writer.setDefaultSourceResolver(self, typeWriterDefaultSource);
+    return type_writer;
+}
+
+/// Resolve a defaulted field's identity to its default's source snippet for
+/// type rendering (design.md "Defaulted Fields"): renderable exactly when
+/// the default was declared in THIS module and its source text is a short
+/// single line; a foreign or unwieldy default renders as `?? …`.
+pub fn typeWriterDefaultSource(ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8 {
+    const env: *const Self = @ptrCast(@alignCast(ctx));
+    if (id.origin_module != env.selfModuleIdentity()) return null;
+    const region = env.store.getExprRegion(@as(CIR.Expr.Idx, @enumFromInt(id.expr_node)));
+    const source = env.getSourceAll();
+    if (region.start.offset > region.end.offset or region.end.offset > source.len) return null;
+    const snippet = source[region.start.offset..region.end.offset];
+    // Keep type strings readable: long or multi-line defaults render `…`.
+    if (snippet.len == 0 or snippet.len > 40) return null;
+    if (std.mem.findScalar(u8, snippet, '\n') != null) return null;
+    return snippet;
 }
 
 /// Inserts an identifier into the common environment and returns its index.

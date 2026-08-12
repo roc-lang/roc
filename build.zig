@@ -662,10 +662,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2147, .end = 2147 },
+        .{ .file = "inspected.zig", .start = 2212, .end = 2212 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 2936, .end = 2940 },
+        .{ .file = "inspected.zig", .start = 3001, .end = 3005 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },

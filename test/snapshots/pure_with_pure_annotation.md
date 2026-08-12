@@ -58,12 +58,13 @@ EndOfFile,
 					(p-ident (raw "x"))
 					(p-ident (raw "y")))
 				(e-field-access
-					(e-record
-						(field (field "x")
-							(e-ident (raw "x")))
-						(field (field "y")
-							(e-ident (raw "y"))))
-					(e-ident (raw "x")))))
+					(receiver
+						(e-record
+							(field (field "x")
+								(e-ident (raw "x")))
+							(field (field "y")
+								(e-ident (raw "y")))))
+					(segment (mode "required") (field "x")))))
 		(s-type-anno (name "double")
 			(ty-fn
 				(ty (name "I32"))
@@ -97,7 +98,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-field-access (field "x")
+			(e-field-access
 				(receiver
 					(e-record
 						(fields
@@ -106,7 +107,9 @@ NO CHANGE
 									(p-assign (ident "x"))))
 							(field (name "y")
 								(e-lookup-local
-									(p-assign (ident "y")))))))))
+									(p-assign (ident "y")))))))
+				(segments
+					(segment (name "x") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I32") (builtin))
@@ -117,7 +120,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 245)
+			(e-call (constraint-fn-var 248)
 				(e-lookup-local
 					(p-assign (ident "add")))
 				(e-lookup-local
@@ -130,7 +133,7 @@ NO CHANGE
 				(ty-lookup (name "I32") (builtin)))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 260)
+		(e-call (constraint-fn-var 263)
 			(e-lookup-local
 				(p-assign (ident "add")))
 			(e-num (value "1"))

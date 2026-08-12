@@ -115,12 +115,7 @@ AnotherType : SomeMod.MissingType
 (can-ir
 	(d-let
 		(p-assign (ident "processValue"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-block
-				(e-string
-					(e-literal (string "processed")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

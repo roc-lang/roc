@@ -38,7 +38,7 @@ const expected_string_literal_store_size = 24;
 const expected_node_payload_size = 16;
 const expected_node_payload_align = 4;
 const expected_node_size = 20;
-const expected_moduleenv_size = 2336; // Platform-independent size
+const expected_moduleenv_size = 2368; // Platform-independent size
 const expected_nodestore_size = 528; // Platform-independent size
 
 // Compile-time assertions - build will fail if sizes don't match expected values

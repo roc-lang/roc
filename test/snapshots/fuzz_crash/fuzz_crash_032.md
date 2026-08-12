@@ -329,10 +329,7 @@ olor = |color| {
 (can-ir
 	(d-let
 		(p-assign (ident "olor"))
-		(e-lambda
-			(args
-				(p-assign (ident "color")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

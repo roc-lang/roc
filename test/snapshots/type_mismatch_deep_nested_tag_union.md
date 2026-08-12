@@ -132,10 +132,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "collide"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-runtime-error (tag "erroneous_value_use")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-tag-union

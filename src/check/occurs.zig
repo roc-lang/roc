@@ -228,11 +228,15 @@ const CheckOccurs = struct {
                                     .record => |record| {
                                         try self.pushVarToProcess(record.ext, Edge.none);
                                         const fields = self.types_store.getRecordFieldsSlice(record.fields);
-                                        try self.pushVarsToProcess(fields.items(.var_), Edge.recursion);
+                                        for (fields.items(.presence)) |presence| {
+                                            try self.pushFieldPresenceToProcess(presence);
+                                        }
                                     },
                                     .record_unbound => |fields| {
                                         const fields_slice = self.types_store.getRecordFieldsSlice(fields);
-                                        try self.pushVarsToProcess(fields_slice.items(.var_), Edge.recursion);
+                                        for (fields_slice.items(.presence)) |presence| {
+                                            try self.pushFieldPresenceToProcess(presence);
+                                        }
                                     },
                                     .tag_union => |tag_union| {
                                         try self.pushVarToProcess(tag_union.ext, Edge.none);
@@ -260,6 +264,12 @@ const CheckOccurs = struct {
                                 // self-referential constraints. Only structural content is checked.
                             },
                             .rigid => {},
+                            .field_presence => {
+                                // A resolved field kind is a leaf: the field's
+                                // type lives on the field slot, not here, so
+                                // there is nothing to recurse into for cycle
+                                // detection.
+                            },
                             .err => {},
                         }
                     }
@@ -312,6 +322,22 @@ const CheckOccurs = struct {
             .var_ = sub_var,
             .edge = edge,
         } });
+    }
+
+    /// Push a record field's reachable variables onto the work stack.
+    ///
+    /// Both axes of a field live in a recursion-allowed position (the field
+    /// slot): the value type may legitimately close a recursive cycle through
+    /// the record, and the presence variable rides the same slot. Absent fields
+    /// and resolved presence facts contribute no variables.
+    fn pushFieldPresenceToProcess(self: *Self, presence: types.RecordField.Presence) std.mem.Allocator.Error!void {
+        {
+            const type_var = presence.typeVar();
+            try self.pushVarToProcess(type_var, Edge.recursion);
+        }
+        if (presence.presenceVar()) |presence_var| {
+            try self.pushVarToProcess(presence_var, Edge.recursion);
+        }
     }
 
     /// Push a slice of sub vars onto the work stack to be processed later.

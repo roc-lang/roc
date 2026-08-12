@@ -45,8 +45,9 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-int (raw "0"))
-					(e-ident (raw ".e")))))))
+					(receiver
+						(e-int (raw "0")))
+					(segment (mode "required") (field "e")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -57,9 +58,11 @@ a = ((0).e)
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "e")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+				(e-runtime-error (tag "erroneous_value_expr")))
+			(segments
+				(segment (name "e") (mode "required"))))))
 ~~~
 # TYPES
 ~~~clojure

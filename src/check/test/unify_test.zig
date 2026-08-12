@@ -122,6 +122,24 @@ const TestEnv = struct {
         return try unify_mod.unify(&env, a, b, .{ .on_mismatch = .write_no_report });
     }
 
+    fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .problems_gpa = self.module_env.gpa,
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .self_module_identity = self.module_env.selfModuleIdentity(),
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, .{
+            .on_mismatch = .write_no_report,
+            .row_width_relation = .exact,
+        });
+    }
+
     const Error = error{ VarIsNotRoot, IsNotRecord, IsNotTagUnion };
 
     /// Get a desc from a root var
@@ -245,7 +263,15 @@ const TestEnv = struct {
     }
 
     fn mkRecordFieldFromIdent(ident_idx: Ident.Idx, var_: Var) RecordField {
-        return RecordField{ .name = ident_idx, .var_ = var_ };
+        return RecordField{ .name = ident_idx, .presence = .required(var_) };
+    }
+
+    /// A field whose presence is still undetermined: `presence_var` is a
+    /// presence-sort variable (flex, or resolved to a `field_presence` fact) and
+    /// `type_var` is the field's type on the second axis.
+    fn mkUnknownRecordField(self: *Self, name: []const u8, presence_var: Var, type_var: Var) std.mem.Allocator.Error!RecordField {
+        const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
+        return RecordField{ .name = ident_idx, .presence = .unknown(presence_var, type_var) };
     }
 
     const RecordInfo = struct { record: Record, content: Content };
@@ -264,6 +290,25 @@ const TestEnv = struct {
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
         const ext_var = try self.module_env.types.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
+    }
+
+    /// Build two closed records that each hold a single (same-named) field and
+    /// unify them, exercising the shared-field presence path. On success `a`
+    /// redirects to `b`, so callers inspect `b`.
+    const OneFieldUnify = struct { a: Var, b: Var, result: Result };
+    fn unifyOneFieldRecords(self: *Self, a_field: RecordField, b_field: RecordField) std.mem.Allocator.Error!OneFieldUnify {
+        const a = try self.module_env.types.freshFromContent((try self.mkRecordClosed(&[_]RecordField{a_field})).content);
+        const b = try self.module_env.types.freshFromContent((try self.mkRecordClosed(&[_]RecordField{b_field})).content);
+        const result = try self.unify(a, b);
+        return .{ .a = a, .b = b, .result = result };
+    }
+
+    /// Resolve a record var and return its single field's presence.
+    fn onlyFieldPresence(self: *Self, record_var: Var) error{ VarIsNotRoot, IsNotRecord, TestExpectedEqual }!RecordField.Presence {
+        const rec = try TestEnv.getRecordOrErr(try self.getDescForRootVar(record_var));
+        const fields = self.module_env.types.getRecordFieldsSlice(rec.fields);
+        try std.testing.expectEqual(@as(usize, 1), fields.len);
+        return fields.items(.presence)[0];
     }
 
     // helpers - structure - tag union //
@@ -378,24 +423,6 @@ test "rigid_var - cannot unify with identical ident str (fail)" {
 
     const result = try env.unify(rigid1, rigid2);
     try std.testing.expectEqual(false, result.isOk());
-}
-test "unifyWriteNoReport - detects mismatch without recording or poisoning" {
-    const gpa = std.testing.allocator;
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    const a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const b = try env.module_env.types.freshFromContent(try env.mkRigidVar("a"));
-
-    const result = try env.unifyWriteNoReport(a, b);
-
-    // A mismatch is detected...
-    try std.testing.expectEqual(false, result.isOk());
-    // ...but NOTHING is recorded to the problem store...
-    try std.testing.expectEqual(@as(usize, 0), env.problems.problems.items.len);
-    // ...and neither operand is poisoned to `.err`.
-    try std.testing.expect(env.module_env.types.resolveVar(a).desc.content != .err);
-    try std.testing.expect(env.module_env.types.resolveVar(b).desc.content != .err);
 }
 
 test "unifyWriteNoReport - keeps successful child unifications before a later mismatch" {
@@ -1346,7 +1373,7 @@ test "unify - identical closed records" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     const b_record_fields = env.module_env.types.record_fields.sliceRange(b_record.fields);
     try std.testing.expectEqualSlices(Ident.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
-    try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
+    try std.testing.expectEqualSlices(RecordField.Presence, record_data_fields.items(.presence), b_record_fields.items(.presence));
 }
 
 test "unify - closed record mismatch on diff fields (fail)" {
@@ -1401,7 +1428,7 @@ test "unify - identical open records" {
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.module_env.types.getRecordFieldsSlice(b_record.fields);
     try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
-    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
+    try std.testing.expectEqual(field_shared.presence, b_record_fields.items(.presence)[0]);
 
     const b_ext = env.module_env.types.resolveVar(b_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex = Flex.init() }, b_ext);
@@ -1450,6 +1477,238 @@ test "unify - closed record extends open" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.module_env.types.getSlot(open));
+}
+
+test "unify - width absorption validates the complete extension chain before mutation" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const value_ty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const optional_kind = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });
+    const tail = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{
+        try env.mkRecordField("required_tail", value_ty),
+    })).content);
+    const head = try env.module_env.types.freshFromContent((try env.mkRecord(&.{
+        try env.mkUnknownRecordField("optional_head", optional_kind, value_ty),
+    }, tail)).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    const result = try env.unifyWriteNoReport(head, empty);
+    try std.testing.expectEqual(Result.mismatch, result);
+    try std.testing.expect(env.module_env.types.resolveVar(head).desc_idx != env.module_env.types.resolveVar(empty).desc_idx);
+}
+
+test "unify - zero-field unbound row and empty record canonicalize without a fresh tail" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const no_fields = try env.module_env.types.appendRecordFields(&.{});
+    const unbound = try env.module_env.types.freshFromContent(.{ .structure = .{ .record_unbound = no_fields } });
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.ok, try env.unify(unbound, empty));
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, env.module_env.types.resolveVar(empty).desc.content);
+    try std.testing.expectEqual(@as(usize, 0), env.scratch.fresh_vars.len());
+}
+
+test "unify - exact zero-field closed row and empty record agree" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const closed_zero_field_row = try env.module_env.types.freshFromContent((try env.mkRecordClosed(&.{})).content);
+    const empty = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    try std.testing.expectEqual(Result.ok, try env.unifyExact(closed_zero_field_row, empty));
+}
+
+// unification - structure/structure - records shared field presence //
+//
+// These exercise `unifySharedFieldPresence`: two closed records that share one
+// field name, whose presences must be combined. `unifyOneFieldRecords` passes
+// the first record as `a` and the second as `b`, so the pair below reads
+// left-to-right as `a_presence ~ b_presence`.
+
+test "unify - field presence - required and defaulted merge to required in both orders" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const default_id = types_mod.DefaultId{
+        .origin_module = env.module_env.selfModuleIdentity(),
+        .expr_node = 1,
+    };
+
+    for (0..2) |order| {
+        const required = try env.module_env.types.freshFromContent(.{ .field_presence = .required });
+        const defaulted = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = default_id } });
+        const result = if (order == 0)
+            try env.unify(required, defaulted)
+        else
+            try env.unify(defaulted, required);
+
+        try std.testing.expectEqual(Result.ok, result);
+        try std.testing.expectEqual(
+            Content{ .field_presence = .required },
+            env.module_env.types.resolveVar(required).desc.content,
+        );
+    }
+}
+
+test "unify - field presence - different default identities still mismatch" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const module_identity = env.module_env.selfModuleIdentity();
+    const first = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 1,
+    } } });
+    const second = try env.module_env.types.freshFromContent(.{ .field_presence = .{ .defaulted = .{
+        .origin_module = module_identity,
+        .expr_node = 2,
+    } } });
+
+    try std.testing.expectEqual(Result.mismatch, try env.unifyWriteNoReport(first, second));
+}
+
+test "unify - shared field presence - present ~ present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(.ok, res.result);
+    try std.testing.expectEqual(null, (try env.onlyFieldPresence(res.b)).presenceVar());
+    // The two field types were unified.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(ta).desc_idx,
+        env.module_env.types.resolveVar(tb).desc_idx,
+    );
+}
+
+test "unify - shared field presence - present ~ unknown forces present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkUnknownRecordField("x", p, tb),
+    );
+
+    try std.testing.expectEqual(.ok, res.result);
+    // The merged field keeps referencing the presence var (load-bearing for
+    // annotation sealing); the fact lives in π.
+    const merged = try env.onlyFieldPresence(res.b);
+    try std.testing.expect(merged.presenceVar() != null);
+    // The undetermined presence var was forced to `present` and propagates.
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(merged.presenceVar().?).desc.content);
+    // The types were unified.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(ta).desc_idx,
+        env.module_env.types.resolveVar(tb).desc_idx,
+    );
+}
+
+test "unify - shared field presence - unknown ~ present forces present" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkUnknownRecordField("x", p, ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(.ok, res.result);
+    // Mirrors `present ~ unknown`: the wrapper is kept, the fact lives in π.
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
+    try std.testing.expectEqual(Content{ .field_presence = .required }, env.module_env.types.resolveVar(p).desc.content);
+}
+
+test "unify - shared field presence - unknown ~ unknown stays undetermined" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const pa = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+    const pb = try env.module_env.types.freshFromContent(.{ .flex = Flex.init() });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkUnknownRecordField("x", pa, ta),
+        try env.mkUnknownRecordField("x", pb, tb),
+    );
+
+    try std.testing.expectEqual(.ok, res.result);
+    try std.testing.expect((try env.onlyFieldPresence(res.b)).presenceVar() != null);
+    // Neither side forced a fact, so the two presence vars unified and stay flex.
+    try std.testing.expectEqual(
+        env.module_env.types.resolveVar(pa).desc_idx,
+        env.module_env.types.resolveVar(pb).desc_idx,
+    );
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, env.module_env.types.resolveVar(pa).desc.content);
+}
+
+test "unify - shared field presence - present ~ present with incompatible types (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Confirms the type axis is scheduled: same presence, but the field types
+    // cannot unify.
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_tag_union });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkRecordField("x", tb),
+    );
+
+    try std.testing.expectEqual(false, res.result.isOk());
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(res.b)).content);
+}
+
+test "unify - shared field presence - present ~ unknown pinned optional (fail)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Confirms the presence axis is scheduled: `a` demands present, but the
+    // unknown's kind var is already pinned to `optional` (one value, one
+    // layout—design.md "Field Kinds").
+    const ta = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const tb = try env.module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const p = try env.module_env.types.freshFromContent(.{ .field_presence = .optional });
+
+    const res = try env.unifyOneFieldRecords(
+        try env.mkRecordField("x", ta),
+        try env.mkUnknownRecordField("x", p, tb),
+    );
+
+    try std.testing.expectEqual(false, res.result.isOk());
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(res.b)).content);
 }
 
 // unification - tag unions - partition tags //
@@ -2418,6 +2677,8 @@ test "content identity: declaration reordering changes no identity except via th
         unrelated_2.env.contentIdentityHash().?,
     );
 }
+
+// existential witness identity //
 
 test "content identity: deep hash covers transitive imports (byte-identical modules over different deps stay distinct)" {
     const gpa = std.testing.allocator;

@@ -69,7 +69,7 @@ pub fn instantiateNominalBacking(
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
-            .flex, .alias, .structure, .err => {},
+            .flex, .alias, .field_presence, .structure, .err => {},
         }
     }
 
@@ -199,6 +199,8 @@ const RecordFrame = struct {
     source_fields: RecordField.SafeMultiList.Range,
     ext: Var,
     vars_base: u32,
+    field_idx: u32 = 0,
+    field_axis: enum { type_var, presence_var } = .type_var,
     fields_range: RecordField.SafeMultiList.Range = undefined,
     stage: enum { fields, await_ext } = .fields,
 };
@@ -207,6 +209,8 @@ const RecordUnboundFrame = struct {
     common: FillCommon,
     source_fields: RecordField.SafeMultiList.Range,
     vars_base: u32,
+    field_idx: u32 = 0,
+    field_axis: enum { type_var, presence_var } = .type_var,
 };
 
 const TagUnionFrame = struct {
@@ -498,6 +502,16 @@ pub const Instantiator = struct {
                     .vars_base = @intCast(machine.value_stack.items.len),
                 } });
                 return false;
+            },
+            .field_presence => |field_presence| {
+                // A resolved presence fact carries no inner variables. It is
+                // still copied to a fresh var so an instantiated field-kind
+                // axis has the same identity semantics as every other axis.
+                const fresh_var = try self.store.fresh();
+                try self.var_map.put(resolved_var, fresh_var);
+                try self.fillPlaceholder(fresh_var, .{ .field_presence = field_presence }, empty_tag_union_is_default);
+                try machine.value_stack.append(self.store.gpa, fresh_var);
+                return true;
             },
             .structure => |flat_type| {
                 const fresh_var = try self.store.fresh();
@@ -863,13 +877,27 @@ pub const Instantiator = struct {
         while (true) {
             switch (frame.stage) {
                 .fields => {
-                    const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-                    if (arrived < frame.source_fields.count) {
+                    if (frame.field_idx < frame.source_fields.count) {
                         // Indexing through the run's start only happens when
                         // the record has fields; start may be undefined when
                         // count is 0.
-                        const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + arrived));
-                        if (!try self.requestVar(field.var_, false)) return false;
+                        const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
+                        const child_var = switch (frame.field_axis) {
+                            .type_var => blk: {
+                                if (field.presence.presenceVar() != null) {
+                                    frame.field_axis = .presence_var;
+                                } else {
+                                    frame.field_idx += 1;
+                                }
+                                break :blk field.presence.typeVar();
+                            },
+                            .presence_var => blk: {
+                                frame.field_idx += 1;
+                                frame.field_axis = .type_var;
+                                break :blk field.presence.presenceVar().?;
+                            },
+                        };
+                        if (!try self.requestVar(child_var, false)) return false;
                         continue;
                     }
                     frame.fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
@@ -892,12 +920,26 @@ pub const Instantiator = struct {
     fn stepRecordUnbound(self: *Self, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
         while (true) {
-            const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-            if (arrived < frame.source_fields.count) {
+            if (frame.field_idx < frame.source_fields.count) {
                 // Indexing through the run's start only happens when the
                 // record has fields; start may be undefined when count is 0.
-                const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + arrived));
-                if (!try self.requestVar(field.var_, false)) return false;
+                const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
+                const child_var = switch (frame.field_axis) {
+                    .type_var => blk: {
+                        if (field.presence.presenceVar() != null) {
+                            frame.field_axis = .presence_var;
+                        } else {
+                            frame.field_idx += 1;
+                        }
+                        break :blk field.presence.typeVar();
+                    },
+                    .presence_var => blk: {
+                        frame.field_idx += 1;
+                        frame.field_axis = .type_var;
+                        break :blk field.presence.presenceVar().?;
+                    },
+                };
+                if (!try self.requestVar(child_var, false)) return false;
                 continue;
             }
             const fresh_fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
@@ -907,8 +949,8 @@ pub const Instantiator = struct {
         }
     }
 
-    /// Pair each copied field var on the value stack with its re-fetched
-    /// source field name and append the run to the store.
+    /// Pair each copied field axis on the value stack with its re-fetched
+    /// source field and append the run to the store.
     fn appendFreshRecordFields(
         self: *Self,
         source_fields: RecordField.SafeMultiList.Range,
@@ -916,13 +958,21 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
         const machine = self.scratch();
         const pending_base = machine.pending_fields.items.len;
+        var vars_idx: usize = vars_base;
         for (0..source_fields.count) |i| {
             // The loop body runs only for a non-empty run, so reading the
             // run's start here never reads an empty range's undefined start.
             const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
+            const fresh_type_var = machine.value_stack.items[vars_idx];
+            vars_idx += 1;
+            const fresh_presence = if (field.presence.presenceVar()) |_| blk: {
+                const fresh_presence_var = machine.value_stack.items[vars_idx];
+                vars_idx += 1;
+                break :blk RecordField.Presence.unknown(fresh_presence_var, fresh_type_var);
+            } else RecordField.Presence.required(fresh_type_var);
             try machine.pending_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
-                .var_ = machine.value_stack.items[vars_base + i],
+                .presence = fresh_presence,
             });
         }
         const fresh_fields_range = try self.store.appendRecordFields(machine.pending_fields.items[pending_base..]);

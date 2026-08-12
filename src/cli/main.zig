@@ -17318,6 +17318,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                     const origin = bump.extract.OriginMap.Origin{
                         .kind = origin_kind,
                         .module_name = if (is_platform_root) "" else mod_env.module_name,
+                        .artifact = module_state.checkedArtifact(),
                     };
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
