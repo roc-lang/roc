@@ -84,10 +84,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "issue_10195_nominal_record_update_rewrapped.Wrap.inc_a"))
-		(e-lambda
-			(args
-				(p-assign (ident "wrap")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Wrap") (local))

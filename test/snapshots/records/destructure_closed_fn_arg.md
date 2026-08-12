@@ -71,23 +71,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "get_sum"))
-		(e-lambda
-			(args
-				(p-record-destructure
-					(destructs
-						(record-destruct (label "x") (ident "x")
-							(required
-								(p-assign (ident "x"))))
-						(record-destruct (label "y") (ident "y")
-							(required
-								(p-assign (ident "y")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 236)
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "x"))))
-				(args
-					(e-lookup-local
-						(p-assign (ident "y"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

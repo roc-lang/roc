@@ -61,16 +61,19 @@ EndOfFile,
 			(p-ident (raw "sum"))
 			(e-binop (op "+")
 				(e-field-access
-					(e-ident (raw "record"))
-					(e-ident (raw "alpha")))
+					(receiver
+						(e-ident (raw "record")))
+					(segment (mode "required") (field "alpha")))
 				(e-field-access
-					(e-ident (raw "record"))
-					(e-ident (raw "beta")))))
+					(receiver
+						(e-ident (raw "record")))
+					(segment (mode "required") (field "beta")))))
 		(s-decl
 			(p-ident (raw "missing"))
 			(e-field-access
-				(e-ident (raw "record"))
-				(e-ident (raw "gamma"))))))
+				(receiver
+					(e-ident (raw "record")))
+				(segment (mode "required") (field "gamma"))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -95,17 +98,21 @@ NO CHANGE
 					(ty-lookup (name "U64") (builtin))))))
 	(d-let
 		(p-assign (ident "sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 248)
+		(e-dispatch-call (method "plus") (constraint-fn-var 255)
 			(receiver
-				(e-field-access (field "alpha")
+				(e-field-access
 					(receiver
 						(e-lookup-local
-							(p-assign (ident "record"))))))
+							(p-assign (ident "record"))))
+					(segments
+						(segment (name "alpha") (mode "required")))))
 			(args
-				(e-field-access (field "beta")
+				(e-field-access
 					(receiver
 						(e-lookup-local
-							(p-assign (ident "record"))))))))
+							(p-assign (ident "record"))))
+					(segments
+						(segment (name "beta") (mode "required")))))))
 	(d-let
 		(p-assign (ident "missing"))
 		(e-runtime-error (tag "erroneous_value_expr"))))

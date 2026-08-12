@@ -207,11 +207,7 @@ data = .encode("hello")
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "process"))
-		(e-lambda
-			(args
-				(p-assign (ident "encoder")))
-			(e-string
-				(e-literal (string "processing"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

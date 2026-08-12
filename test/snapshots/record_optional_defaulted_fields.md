@@ -144,14 +144,7 @@ NO CHANGE
 				(ty-lookup (name "Config") (local)))))
 	(d-let
 		(p-assign (ident "bad_direct_access"))
-		(e-lambda
-			(args
-				(p-assign (ident "c")))
-			(e-field-access
-				(receiver
-					(e-runtime-error (tag "erroneous_value_use")))
-				(segments
-					(segment (name "port") (mode "required")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Config") (local))

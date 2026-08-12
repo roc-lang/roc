@@ -139,7 +139,7 @@ main! = |_| {
 						(e-lookup-local
 							(p-assign (ident "thunk")))))
 				(s-expr
-					(e-call (constraint-fn-var 260)
+					(e-call (constraint-fn-var 259)
 						(e-lookup-local
 							(p-assign (ident "topThunk")))))
 				(e-tag (name "Ok")

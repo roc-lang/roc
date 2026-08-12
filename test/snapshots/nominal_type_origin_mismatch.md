@@ -91,11 +91,7 @@ main =
 (can-ir
 	(d-let
 		(p-assign (ident "expectsPerson"))
-		(e-lambda
-			(args
-				(p-assign (ident "p")))
-			(e-string
-				(e-literal (string "Got a person"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

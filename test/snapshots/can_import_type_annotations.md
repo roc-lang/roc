@@ -484,30 +484,21 @@ combineTrys = |result1, result2|
 (can-ir
 	(d-let
 		(p-assign (ident "processRequest"))
-		(e-lambda
-			(args
-				(p-assign (ident "req")))
-			(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "parseJson"))
-		(e-lambda
-			(args
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleApi"))
-		(e-lambda
-			(args
-				(p-assign (ident "request")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -521,11 +512,7 @@ combineTrys = |result1, result2|
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "advancedParser"))
-		(e-lambda
-			(args
-				(p-assign (ident "parserConfig"))
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
