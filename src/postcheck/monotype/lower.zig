@@ -24903,8 +24903,16 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
         base_id: solve.CheckedBaseKey,
     ) ?solve.DirectRequestSelection {
-        for (selections) |selection| {
-            if (directRequestBaseEql(selection.base, base_id)) return selection;
+        const index = directSelectionIndexForSlot(selections, base_id) orelse return null;
+        return selections[index];
+    }
+
+    fn directSelectionIndexForSlot(
+        selections: []const solve.DirectRequestSelection,
+        base_id: solve.CheckedBaseKey,
+    ) ?usize {
+        for (selections, 0..) |selection, index| {
+            if (directRequestBaseEql(selection.base, base_id)) return index;
         }
         return null;
     }
@@ -25458,7 +25466,7 @@ const BodyContext = struct {
         include_result: bool,
     ) Allocator.Error!void {
         self.builder.countBodyDiagnosticBy("call_selection_slot_visits", plan.slots.len *
-            (3 + @as(usize, if (self.active_checked_selections != null) 1 else 0)));
+            (2 + @as(usize, if (self.active_checked_selections != null) 1 else 0)));
         // A call shape's slot ID is itself the explicit self-edge into the
         // current checked scope. Consume that exact value directly even for
         // shape-only synthetic calls that have no expression binding delta.
@@ -25500,28 +25508,6 @@ const BodyContext = struct {
             try self.graph.functionNodes(node)
         else
             null;
-        for (plan.slots) |slot| {
-            const base_id = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
-            };
-            if (slot.kind == .generated_nominal) {
-                for (selections.items, 0..) |selection, index| {
-                    if (!directRequestBaseEql(selection.base, base_id)) continue;
-                    if (!self.graph.nodeIsGeneratedNominal(selection.produced)) {
-                        _ = selections.orderedRemove(index);
-                    }
-                    break;
-                }
-            }
-            // An exact substitution already carried by the request or
-            // published by a completed value edge is authoritative. The
-            // checked base remains immutable; its unmaterialized consumer
-            // projections are not competing runtime producers.
-            if (directSelectionForSlot(selections.items, base_id)) |direct| {
-                if (self.graph.content(direct.produced) != .unresolved) continue;
-            }
-        }
         var evaluated = std.ArrayList(EvaluatedCallEdge).empty;
         defer evaluated.deinit(self.allocator);
         var reverse_path = std.ArrayList(u32).empty;
@@ -25531,7 +25517,17 @@ const BodyContext = struct {
                 .module_bytes = self.view.key.bytes,
                 .checked = slot.checked,
             };
-            var selected = directSelectionForSlot(selections.items, base_id);
+            var selected_index = directSelectionIndexForSlot(selections.items, base_id);
+            var selected = if (selected_index) |index| selections.items[index] else null;
+            if (slot.kind == .generated_nominal) {
+                if (selected) |existing| {
+                    if (!self.graph.nodeIsGeneratedNominal(existing.produced)) {
+                        _ = selections.orderedRemove(selected_index.?);
+                        selected_index = null;
+                        selected = null;
+                    }
+                }
+            }
             if (selected == null or self.graph.content(selected.?.produced) == .unresolved) for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
                 if (!callOccurrenceSuppliesExactSelection(
                     occurrence,
@@ -25583,14 +25579,10 @@ const BodyContext = struct {
                 }
             };
             const next = selected orelse continue;
-            var replaced = false;
-            for (selections.items) |*existing| {
-                if (!directRequestBaseEql(existing.base, base_id)) continue;
-                existing.* = next;
-                replaced = true;
-                break;
-            }
-            if (!replaced) try selections.append(self.allocator, next);
+            if (selected_index) |index|
+                selections.items[index] = next
+            else
+                try selections.append(self.allocator, next);
         }
         try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, selections, false);
         // Checking stores generated slots after every generated dependency.
