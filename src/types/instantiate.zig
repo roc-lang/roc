@@ -191,10 +191,12 @@ const FuncFrame = struct {
     vars_base: u32,
 };
 
+/// Source runs are held as whole ranges, never as an unpacked start index:
+/// `SafeRange.empty()` leaves `start` undefined, so `start` may only be read
+/// under a `count` guard, which the step functions below apply.
 const RecordFrame = struct {
     common: FillCommon,
-    fields_start: u32,
-    fields_count: u32,
+    source_fields: RecordField.SafeMultiList.Range,
     ext: Var,
     vars_base: u32,
     fields_range: RecordField.SafeMultiList.Range = undefined,
@@ -203,15 +205,13 @@ const RecordFrame = struct {
 
 const RecordUnboundFrame = struct {
     common: FillCommon,
-    fields_start: u32,
-    fields_count: u32,
+    source_fields: RecordField.SafeMultiList.Range,
     vars_base: u32,
 };
 
 const TagUnionFrame = struct {
     common: FillCommon,
-    tags_start: u32,
-    tags_count: u32,
+    source_tags: Tag.SafeMultiList.Range,
     ext: Var,
     tag_idx: u32 = 0,
     /// Base of the current tag's copied payload vars in `Scratch.value_stack`.
@@ -303,6 +303,25 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const frames_base = machine.frames.items.len;
         const values_base = machine.value_stack.items.len;
+        // A completed walk drains every buffer back to its entry length:
+        // frames as each one finishes, the value stack as each frame consumes
+        // its children, and every pending run as the step that collected it
+        // appends the run to the store. An allocation failure mid-copy can
+        // leave entries behind on buffers the `TypesStore` keeps for the next
+        // instantiation, so unwind them here and preserve `Scratch`'s
+        // entry-length invariant on both exit paths.
+        const tags_base = machine.pending_tags.items.len;
+        const fields_base = machine.pending_fields.items.len;
+        const constraints_base = machine.pending_constraints.items.len;
+        const parts_base = machine.pending_parts.items.len;
+        errdefer {
+            machine.frames.items.len = frames_base;
+            machine.value_stack.items.len = values_base;
+            machine.pending_tags.items.len = tags_base;
+            machine.pending_fields.items.len = fields_base;
+            machine.pending_constraints.items.len = constraints_base;
+            machine.pending_parts.items.len = parts_base;
+        }
 
         if (!try self.requestVar(initial_var, force_root_copy)) {
             while (machine.frames.items.len > frames_base) {
@@ -568,8 +587,7 @@ pub const Instantiator = struct {
                                 .fresh_var = fresh_var,
                                 .empty_tag_union_is_default = empty_tag_union_is_default,
                             },
-                            .fields_start = @intFromEnum(record.fields.start),
-                            .fields_count = record.fields.count,
+                            .source_fields = record.fields,
                             .ext = record.ext,
                             .vars_base = @intCast(machine.value_stack.items.len),
                         } });
@@ -581,8 +599,7 @@ pub const Instantiator = struct {
                                 .fresh_var = fresh_var,
                                 .empty_tag_union_is_default = empty_tag_union_is_default,
                             },
-                            .fields_start = @intFromEnum(fields.start),
-                            .fields_count = fields.count,
+                            .source_fields = fields,
                             .vars_base = @intCast(machine.value_stack.items.len),
                         } });
                         return false;
@@ -593,8 +610,7 @@ pub const Instantiator = struct {
                                 .fresh_var = fresh_var,
                                 .empty_tag_union_is_default = empty_tag_union_is_default,
                             },
-                            .tags_start = @intFromEnum(tag_union.tags.start),
-                            .tags_count = tag_union.tags.count,
+                            .source_tags = tag_union.tags,
                             .ext = tag_union.ext,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .tags_base = @intCast(machine.pending_tags.items.len),
@@ -848,12 +864,15 @@ pub const Instantiator = struct {
             switch (frame.stage) {
                 .fields => {
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-                    if (arrived < frame.fields_count) {
-                        const field = self.store.record_fields.get(@enumFromInt(frame.fields_start + arrived));
+                    if (arrived < frame.source_fields.count) {
+                        // Indexing through the run's start only happens when
+                        // the record has fields; start may be undefined when
+                        // count is 0.
+                        const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + arrived));
                         if (!try self.requestVar(field.var_, false)) return false;
                         continue;
                     }
-                    frame.fields_range = try self.appendFreshRecordFields(frame.fields_start, frame.fields_count, frame.vars_base);
+                    frame.fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
                     machine.value_stack.items.len = frame.vars_base;
                     frame.stage = .await_ext;
                     if (!try self.requestVar(frame.ext, false)) return false;
@@ -874,12 +893,14 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
-            if (arrived < frame.fields_count) {
-                const field = self.store.record_fields.get(@enumFromInt(frame.fields_start + arrived));
+            if (arrived < frame.source_fields.count) {
+                // Indexing through the run's start only happens when the
+                // record has fields; start may be undefined when count is 0.
+                const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + arrived));
                 if (!try self.requestVar(field.var_, false)) return false;
                 continue;
             }
-            const fresh_fields_range = try self.appendFreshRecordFields(frame.fields_start, frame.fields_count, frame.vars_base);
+            const fresh_fields_range = try self.appendFreshRecordFields(frame.source_fields, frame.vars_base);
             machine.value_stack.items.len = frame.vars_base;
             try self.finishFrame(frame.common, Content{ .structure = FlatType{ .record_unbound = fresh_fields_range } });
             return true;
@@ -890,14 +911,15 @@ pub const Instantiator = struct {
     /// source field name and append the run to the store.
     fn appendFreshRecordFields(
         self: *Self,
-        fields_start: u32,
-        fields_count: u32,
+        source_fields: RecordField.SafeMultiList.Range,
         vars_base: u32,
     ) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
         const machine = self.scratch();
         const pending_base = machine.pending_fields.items.len;
-        for (0..fields_count) |i| {
-            const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
+        for (0..source_fields.count) |i| {
+            // The loop body runs only for a non-empty run, so reading the
+            // run's start here never reads an empty range's undefined start.
+            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
             try machine.pending_fields.append(self.store.gpa, RecordField{
                 .name = field.name,
                 .var_ = machine.value_stack.items[vars_base + i],
@@ -913,7 +935,7 @@ pub const Instantiator = struct {
         while (true) {
             switch (frame.stage) {
                 .tags => {
-                    if (frame.tag_idx == frame.tags_count) {
+                    if (frame.tag_idx == frame.source_tags.count) {
                         // Sort the fresh tags alphabetically by name before appending.
                         // This ensures tag discriminants are consistent after instantiation.
                         std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], @as(*const Self, self), struct {
@@ -927,7 +949,9 @@ pub const Instantiator = struct {
                         if (!try self.requestVar(frame.ext, false)) return false;
                         continue;
                     }
-                    const tag = self.store.tags.get(@enumFromInt(frame.tags_start + frame.tag_idx));
+                    // Indexing through the run's start only happens when the
+                    // union has tags; start may be undefined when count is 0.
+                    const tag = self.store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
@@ -986,6 +1010,9 @@ pub const Instantiator = struct {
         const machine = self.scratch();
         const parts_len = metadata.interpolated_parts.len();
         const parts_base = machine.pending_parts.items.len;
+        // The store-owned buffer outlives this call, so a failure part-way
+        // through the run must not leave the collected parts on it.
+        errdefer machine.pending_parts.items.len = parts_base;
         for (0..parts_len) |i| {
             const part = self.store.getInterpolationPartAt(metadata.interpolated_parts, @intCast(i));
             const fresh_part_var = try self.instantiateVarHelp(part.var_, false);

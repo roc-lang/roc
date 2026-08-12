@@ -8098,7 +8098,7 @@ test "check type - principality - inferred argument-routed transitive scheme req
 // instantiation-sourced candidate would mean `use_it`'s scheme captured
 // `mid`'s relation over `n`—a receiver `use_it` does not own—and replayed it
 // at each use of `use_it`.
-fn expectNoInstantiatedSchemeRequirements(source: []const u8) !void {
+fn expectNoInstantiatedSchemeRequirements(source: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
@@ -8242,14 +8242,14 @@ test "check type - dispatch - strictly growing dispatch chain reports recursive 
 // a chain the checker would otherwise re-derive forever, so these tests
 // double as termination witnesses.
 
-fn expectRecursiveDispatchReported(test_env: *TestEnv) !void {
+fn expectRecursiveDispatchReported(test_env: *TestEnv) TestEnv.TestEnvError!void {
     for (test_env.checker.problems.problems.items) |problem| {
         if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) return;
     }
     return error.TestUnexpectedResult;
 }
 
-fn expectNoRecursiveDispatchReported(test_env: *TestEnv) !void {
+fn expectNoRecursiveDispatchReported(test_env: *TestEnv) TestEnv.TestEnvError!void {
     for (test_env.checker.problems.problems.items) |problem| {
         if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) {
             return error.TestUnexpectedResult;
@@ -8633,7 +8633,7 @@ test "check type - mutually recursive static dispatch - annotated dispatch-only 
 // replaces `weak`'s own body with a runtime error and lands the Missing
 // Method on `make({})`—a definition site that has nothing wrong with it.
 
-fn expectResidualDispatchReportShape(test_env: *TestEnv, expected_dispatch_text: []const u8) !void {
+fn expectResidualDispatchReportShape(test_env: *TestEnv, expected_dispatch_text: []const u8) TestEnv.TestEnvError!void {
     var polymorphic_value_count: usize = 0;
     var unresolved_dispatcher_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
@@ -8698,7 +8698,7 @@ test "check type - def order independence - residual dispatch report with interf
 // for a Missing Method claiming `wobble` is missing on a type the program
 // never chose.
 
-fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) !void {
+fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) TestEnv.TestEnvError!void {
     var type_mismatch_count: usize = 0;
     var polymorphic_value_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
