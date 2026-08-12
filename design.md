@@ -3271,9 +3271,13 @@ const IteratorKind = enum(u8) {
     none,
     custom,
     list,
+    list_rev,
+    str,
     single,
     range_exclusive,
     range_inclusive,
+    numeric_until,
+    numeric_to,
     map,
     keep_if,
     drop_if,
@@ -3292,6 +3296,11 @@ const TypeDef = struct {
     iterator_depth: u8 = 0,
 };
 ```
+
+`IteratorKind` is one checked-boundary identity owned by the static-dispatch
+registry and reused directly by Monotype and ConstStore. Crossing the constant
+storage boundary never reinterprets the ordinal of a separately maintained
+enum.
 
 The fields have these meanings:
 
@@ -3443,12 +3452,13 @@ its checked result variable remains unconstrained, no result relation is
 created, and the expression carries the enclosing continuation's declared cell.
 An unobservable continuation type is not representation evidence.
 
-Record constructors preserve that distinction structurally. If a field is a
-finished generated-private witness, the constructor emits a distinct record
-witness that references the field directly and relates that record to the
-checked-public container. It never merges the child into the public field cell
-or asks a later consumer to recover the child's runtime representation from the
-public container shape.
+Structural constructors preserve that distinction recursively. If a record
+field, tag payload, tuple item, list item, or nominal backing is a finished
+generated-private witness, the constructor emits an exact container witness
+that references the child directly and relates matching structure through the
+producer-aware value relation. It never merges the child into the corresponding
+public slot or asks a later consumer to recover the child's runtime
+representation from the public container shape.
 
 Each generated-private request also retains its exact checked-source function
 node. That source node can itself contain upstream private arguments, so a

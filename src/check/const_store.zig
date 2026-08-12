@@ -137,23 +137,7 @@ pub const IteratorRepresentation = enum(u8) {
 };
 
 /// Producer or adapter that minted a stored iterator representation.
-pub const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    str,
-    single,
-    range_exclusive,
-    range_inclusive,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    forced_dynamic,
-};
+pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// How much of a stored named type's backing type later stages may inspect.
 pub const TypeBackingUse = enum {

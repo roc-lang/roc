@@ -28786,7 +28786,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 62 publishes exact record-construction omission defaults.
     // Version 63 lets a field-default root own its literal conversion instead
     // of publishing a second root for the same checked expression.
-    const serialized_layout_version: u32 = 63;
+    // Version 64 publishes iterator producer identities for `List.iter_rev`,
+    // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
+    const serialized_layout_version: u32 = 64;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34875,8 +34877,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x8E, 0xDD, 0xB0, 0x38, 0x79, 0x96, 0x42, 0xBD, 0x32, 0x90, 0xD6, 0x89, 0x6D, 0xB4, 0x56, 0x40,
-        0xE0, 0xCC, 0x41, 0x8A, 0xAB, 0xAB, 0xC1, 0x05, 0xE7, 0xE0, 0xCA, 0x31, 0x50, 0x66, 0x6F, 0x93,
+        0xEB, 0x44, 0x4E, 0x79, 0x79, 0x45, 0x88, 0xD2, 0x12, 0xDE, 0xFE, 0x4E, 0x3A, 0x65, 0x4D, 0xFD,
+        0x2D, 0x96, 0x1C, 0xDE, 0x40, 0x1C, 0x15, 0x9A, 0xCC, 0x90, 0xA1, 0x3C, 0x48, 0x6B, 0x1D, 0x66,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

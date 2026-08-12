@@ -93,30 +93,10 @@ pub const TypeDef = struct {
 };
 
 /// Explicit representation tier assigned when an iterator nominal is created.
-pub const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
+pub const IteratorRepresentation = check.ConstStore.IteratorRepresentation;
 
-/// Producer-owned identity of an internal iterator representation.
-pub const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    str,
-    single,
-    range_exclusive,
-    range_inclusive,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    forced_dynamic,
-};
+/// Producer-owned identity shared across checked and Monotype storage.
+pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// Exceptional relation between two named iterator types. Equal identities
 /// and unrelated named types use ordinary named-type unification.
@@ -320,6 +300,16 @@ pub const Store = struct {
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
     constructing: StoreList(bool, "constructing"),
+    /// Cached immutable answer for whether a finished type contains an Iter or
+    /// Stream interface at any structural depth.
+    iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
+    /// Reusable exact walk state. Type ids are dense, so epochs provide cycle
+    /// detection without allocating a dense map sized to the largest type id
+    /// on every closed direct call.
+    iterator_interface_pending: std.ArrayList(TypeId),
+    iterator_interface_visited: std.ArrayList(TypeId),
+    iterator_interface_visit_epochs: StoreList(u32, "iterator_interface_visit_epochs"),
+    iterator_interface_visit_epoch: u32,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -333,6 +323,11 @@ pub const Store = struct {
             .type_digests = .empty,
             .specialization_digests = .empty,
             .constructing = .empty,
+            .iterator_interface_cache = .empty,
+            .iterator_interface_pending = .empty,
+            .iterator_interface_visited = .empty,
+            .iterator_interface_visit_epochs = .empty,
+            .iterator_interface_visit_epoch = 0,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -346,6 +341,10 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.iterator_interface_visit_epochs.deinit(self.allocator);
+        self.iterator_interface_visited.deinit(self.allocator);
+        self.iterator_interface_pending.deinit(self.allocator);
+        self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
@@ -417,6 +416,10 @@ pub const Store = struct {
         try self.specialization_digests.append(self.allocator, null);
         errdefer _ = self.specialization_digests.pop();
         try self.constructing.append(self.allocator, false);
+        errdefer _ = self.constructing.pop();
+        try self.iterator_interface_cache.append(self.allocator, null);
+        errdefer _ = self.iterator_interface_cache.pop();
+        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -451,10 +454,117 @@ pub const Store = struct {
         }
         self.types.set(index, content);
         self.constructing.set(index, false);
+        self.iterator_interface_cache.set(index, null);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
         return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
+    }
+
+    /// Whether an immutable Monotype contains the public iterator interface at
+    /// any structural depth. Closed-call lowering uses this directly so an
+    /// ordinary return type never has to be imported into a live graph merely
+    /// to answer an ownership question.
+    ///
+    /// `InstGraph.containsIteratorInterface` answers the same question for the
+    /// live graph. The two walk different representations, so they cannot
+    /// share code, but they must agree for every pair of corresponding types:
+    /// this walk gates skipping graph construction entirely, so a structural
+    /// position it declines to descend into would drop a producer's minted
+    /// representation while the graph walk still claims to protect it. The
+    /// test "iterator-interface containment agrees between Monotype and graph"
+    /// in `solve.zig` pins the two together position by position.
+    pub fn containsIteratorInterface(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
+        self.requireConstructed(root);
+        const root_index = @intFromEnum(root);
+        if (self.iterator_interface_cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
+
+        self.iterator_interface_pending.clearRetainingCapacity();
+        self.iterator_interface_visited.clearRetainingCapacity();
+        defer self.iterator_interface_pending.clearRetainingCapacity();
+        defer self.iterator_interface_visited.clearRetainingCapacity();
+        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.iterator_interface_visit_epochs.unsafeRawItemsMutForStore(), 0);
+            self.iterator_interface_visit_epoch = 1;
+        } else {
+            self.iterator_interface_visit_epoch += 1;
+        }
+        const visit_epoch = self.iterator_interface_visit_epoch;
+        try self.iterator_interface_pending.append(self.allocator, root);
+        while (self.iterator_interface_pending.pop()) |ty| {
+            const ty_index = @intFromEnum(ty);
+            if (self.iterator_interface_visit_epochs.unsafeRawItemsForView()[ty_index] == visit_epoch) continue;
+            self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
+            try self.iterator_interface_visited.append(self.allocator, ty);
+            self.requireConstructed(ty);
+            if (ty != root) {
+                if (self.iterator_interface_cache.unsafeRawItemsForView()[ty_index]) |cached| {
+                    if (cached) {
+                        self.iterator_interface_cache.set(root_index, true);
+                        return true;
+                    }
+                    continue;
+                }
+            }
+            switch (self.get(ty)) {
+                .primitive, .erased, .zst => {},
+                .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
+                .tuple => |items| {
+                    const item_types = self.span(items);
+                    for (0..GuardedList.borrowLen(item_types)) |index| {
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(item_types, index));
+                    }
+                },
+                .func => |function| {
+                    const arg_types = self.span(function.args);
+                    for (0..GuardedList.borrowLen(arg_types)) |index| {
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(arg_types, index));
+                    }
+                    try self.iterator_interface_pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |tags| {
+                    const variants = self.tagSpan(tags);
+                    for (0..GuardedList.borrowLen(variants)) |variant_index| {
+                        const tag = GuardedList.at(variants, variant_index);
+                        const payloads = self.span(tag.payloads);
+                        for (0..GuardedList.borrowLen(payloads)) |payload_index| {
+                            try self.iterator_interface_pending.append(self.allocator, GuardedList.at(payloads, payload_index));
+                        }
+                    }
+                },
+                .record => |fields| {
+                    const record_fields = self.fieldSpan(fields);
+                    for (0..GuardedList.borrowLen(record_fields)) |index| {
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(record_fields, index).ty);
+                    }
+                },
+                .named => |named| {
+                    if (named.builtin_owner) |owner| {
+                        if (static_dispatch.isIteratorOwner(owner)) {
+                            self.iterator_interface_cache.set(ty_index, true);
+                            self.iterator_interface_cache.set(root_index, true);
+                            return true;
+                        }
+                    }
+                    const args = self.span(named.args);
+                    for (0..GuardedList.borrowLen(args)) |index| {
+                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(args, index));
+                    }
+                    if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.ty);
+                    const declared_fields = self.declaredFieldSpan(named.declared_order);
+                    for (0..GuardedList.borrowLen(declared_fields)) |index| {
+                        switch (GuardedList.at(declared_fields, index)) {
+                            .named => {},
+                            .padding => |padding| try self.iterator_interface_pending.append(self.allocator, padding),
+                        }
+                    }
+                },
+            }
+        }
+        for (self.iterator_interface_visited.items) |visited| {
+            self.iterator_interface_cache.set(@intFromEnum(visited), false);
+        }
+        return false;
     }
 
     pub fn span(self: *const Store, span_: Span) StoreSpanBorrow(TypeId, "spans") {
@@ -486,6 +596,8 @@ pub const Store = struct {
         type_digests_len: usize,
         specialization_digests_len: usize,
         constructing_len: usize,
+        iterator_interface_cache_len: usize,
+        iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -498,6 +610,8 @@ pub const Store = struct {
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
             .constructing_len = self.constructing.len(),
+            .iterator_interface_cache_len = self.iterator_interface_cache.len(),
+            .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -511,6 +625,12 @@ pub const Store = struct {
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
+        self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
+        // A surviving reserved slot may have been filled after the mark with
+        // children that are now truncated and whose ids can be reused. Clear
+        // every retained containment answer so those new children are walked.
+        @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+        self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -3076,6 +3196,33 @@ test "monotype cached digest survives completion of an unrelated reserved slot" 
     try std.testing.expectEqual(@as(u64, 1), after_fill_stats.cache_hits);
     try std.testing.expectEqual(@as(u64, 0), after_fill_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 0), after_fill_stats.nodes_visited);
+}
+
+test "monotype iterator containment cache is invalidated by rollback" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const survivor = try store.reserveSlot();
+    const mark_ = store.mark();
+    const transient = try store.add(.{ .primitive = .u64 });
+    store.fillReservedSlot(survivor, .{ .box = transient });
+    try std.testing.expect(!try store.containsIteratorInterface(survivor));
+
+    store.restore(mark_);
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const replacement = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .builtin_owner = .iter,
+        .args = Span.empty(),
+    } });
+    try std.testing.expectEqual(transient, replacement);
+    try std.testing.expect(try store.containsIteratorInterface(survivor));
 }
 
 test "monotype cached digest stays stable across multiple edges into one recursive group" {
