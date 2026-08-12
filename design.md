@@ -3040,6 +3040,12 @@ occurrences instead of copying the function graph. The body stores the exact
 recursive specialization reserves one result cell before lowering and
 redirects that cell to the stored exact identity when the body completes.
 
+Finalizing several functions from one body draft indexes their sealed
+specialization identities by the same stable lookup address used by the durable
+specialization store. Digest equality selects a small collision bucket; exact
+type and evidence equality remain authoritative inside it. Finalization never
+compares a new identity with every earlier draft function.
+
 Contextual operands start only when every non-concrete consumer binding named
 by checking has an exact source node. Lowering performs direct slot-occurrence
 lookups for those sources; it does not build a selection table by traversing a

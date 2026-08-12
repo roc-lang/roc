@@ -358,6 +358,9 @@ pub const BodyDiagnostics = struct {
     deferred_template_bodies_lowered: u64 = 0,
     lowered_template_bodies_discarded: u64 = 0,
     lowered_nested_bodies_discarded: u64 = 0,
+    discarded_with_lexical_owner: u64 = 0,
+    discarded_as_draft_duplicate: u64 = 0,
+    discarded_as_committed_duplicate: u64 = 0,
     expr_relation_requests: u64 = 0,
     argument_spans_prepared: u64 = 0,
     arguments_prepared: u64 = 0,
@@ -6318,15 +6321,25 @@ const Builder = struct {
         errdefer self.allocator.free(emit_defs);
         const emit_nested_defs = try self.allocator.alloc(bool, body_draft.nested_defs.items.len);
         errdefer self.allocator.free(emit_nested_defs);
-        const identities = try self.allocator.alloc(?Ast.SpecIdentity, body_draft.fns.items.len);
-        defer self.allocator.free(identities);
-        @memset(identities, null);
         const allow_imported = try self.allocator.alloc(bool, body_draft.fns.items.len);
         defer self.allocator.free(allow_imported);
         @memset(allow_imported, false);
         const allow_identity_merge = try self.allocator.alloc(bool, body_draft.fns.items.len);
         defer self.allocator.free(allow_identity_merge);
         @memset(allow_identity_merge, true);
+        const DraftIdentityEntry = struct {
+            raw_index: usize,
+            identity: Ast.SpecIdentity,
+        };
+        var draft_identity_buckets = std.AutoHashMap(
+            specialize.SpecLookupAddress,
+            std.ArrayList(DraftIdentityEntry),
+        ).init(self.allocator);
+        defer {
+            var buckets = draft_identity_buckets.valueIterator();
+            while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+            draft_identity_buckets.deinit();
+        }
 
         for (body_draft.nested_specs.items) |*spec| {
             spec.capture_abi_digest = try self.sealedCaptureAbiDigest(sealer, spec.capture_entry_guards);
@@ -6385,8 +6398,6 @@ const Builder = struct {
                     }
                 }
             }
-            identities[raw_index] = identity;
-
             if (lexical_owner) |owner| switch (owner) {
                 .root, .reserved_fn => {},
                 .draft_fn => |parent| {
@@ -6396,6 +6407,7 @@ const Builder = struct {
                     }
                     if (!emit_fns[parent_raw]) {
                         emit_fns[raw_index] = false;
+                        self.countBodyDiagnostic("discarded_with_lexical_owner");
                         if (template_spec != null) {
                             self.countBodyDiagnostic("lowered_template_bodies_discarded");
                         } else {
@@ -6407,30 +6419,34 @@ const Builder = struct {
             };
 
             if (identity) |wanted| {
-                var prior: usize = 0;
-                while (prior < raw_index) : (prior += 1) {
-                    if (fn_slots[prior] == null) continue;
-                    if (!allow_identity_merge[raw_index] or !allow_identity_merge[prior]) continue;
-                    if (identities[prior]) |existing| {
-                        if (try self.draftSpecIdentityEql(existing, wanted)) {
-                            const prior_template = body_draft.fns.items[prior].source;
-                            const prior_evidence = StoredConstFnEvidence{
-                                .nodes = self.program.constFnEvidence(prior_template.const_evidence),
-                                .frames = self.program.constFnEvidenceFrames(prior_template.const_evidence_frames),
-                                .head = prior_template.const_evidence_frame_head,
-                            };
-                            if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
-                            fn_slots[raw_index] = fn_slots[prior];
-                            emit_fns[raw_index] = false;
-                            if (template_spec != null) {
-                                self.countBodyDiagnostic("lowered_template_bodies_discarded");
-                            } else {
-                                self.countBodyDiagnostic("lowered_nested_bodies_discarded");
-                            }
-                            break;
+                const address = specialize.SpecLookupAddress.fromIdentity(wanted);
+                var matched_prior = false;
+                if (draft_identity_buckets.getPtr(address)) |priors| {
+                    for (priors.items) |prior_entry| {
+                        const prior = prior_entry.raw_index;
+                        if (!allow_identity_merge[raw_index] or !allow_identity_merge[prior]) continue;
+                        const prior_template = body_draft.fns.items[prior].source;
+                        const prior_evidence = StoredConstFnEvidence{
+                            .nodes = self.program.constFnEvidence(prior_template.const_evidence),
+                            .frames = self.program.constFnEvidenceFrames(prior_template.const_evidence_frames),
+                            .head = prior_template.const_evidence_frame_head,
+                        };
+                        if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
+                        if (!try self.draftSpecIdentityEql(prior_entry.identity, wanted)) continue;
+                        fn_slots[raw_index] = fn_slots[prior] orelse
+                            Common.invariant("draft specialization bucket contained a function without a target");
+                        emit_fns[raw_index] = false;
+                        matched_prior = true;
+                        self.countBodyDiagnostic("discarded_as_draft_duplicate");
+                        if (template_spec != null) {
+                            self.countBodyDiagnostic("lowered_template_bodies_discarded");
+                        } else {
+                            self.countBodyDiagnostic("lowered_nested_bodies_discarded");
                         }
+                        break;
                     }
-                } else {
+                }
+                if (!matched_prior) {
                     const committed: ?specialize.LookupResult = if (!allow_identity_merge[raw_index])
                         null
                     else if (allow_imported[raw_index])
@@ -6449,6 +6465,7 @@ const Builder = struct {
                         }
                         fn_slots[raw_index] = hit.target();
                         emit_fns[raw_index] = false;
+                        self.countBodyDiagnostic("discarded_as_committed_duplicate");
                         if (template_spec != null) {
                             self.countBodyDiagnostic("lowered_template_bodies_discarded");
                         } else {
@@ -6460,6 +6477,12 @@ const Builder = struct {
                         emit_fns[raw_index] = true;
                     }
                 }
+                const bucket = try draft_identity_buckets.getOrPut(address);
+                if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+                try bucket.value_ptr.append(self.allocator, .{
+                    .raw_index = raw_index,
+                    .identity = wanted,
+                });
             } else {
                 fn_slots[raw_index] = .{ .local = @enumFromInt(next_fn) };
                 next_fn += 1;

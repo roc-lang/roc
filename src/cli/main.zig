@@ -15221,7 +15221,7 @@ fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnosti
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [30]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15237,8 +15237,9 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [30]p
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
-        .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
-        .{ .name = "Lowered nested bodies discarded", .count = body.lowered_nested_bodies_discarded },
+        .{ .name = "Discarded with lexical owner", .count = body.discarded_with_lexical_owner },
+        .{ .name = "Discarded as draft duplicate", .count = body.discarded_as_draft_duplicate },
+        .{ .name = "Discarded as committed duplicate", .count = body.discarded_as_committed_duplicate },
         .{ .name = "Expression relations", .count = body.expr_relation_requests },
         .{ .name = "Argument spans prepared", .count = body.argument_spans_prepared },
         .{ .name = "Arguments prepared", .count = body.arguments_prepared },

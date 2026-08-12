@@ -1853,6 +1853,15 @@ test "Monotype draft compaction preserves shared source files and procedure debu
     try expectContains(lower_source, "draft.proc_debug_names.append");
 }
 
+test "Monotype draft specialization compaction uses digest buckets" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const commit = sourceSliceBetween(lower_source, "fn buildDraftCommitMap(", "fn sealActiveBodyDraft(");
+    try expectContains(commit, "draft_identity_buckets.getPtr(address)");
+    try expectContains(commit, "draftSpecIdentityEql(prior_entry.identity, wanted)");
+    try expectContains(commit, "draft_identity_buckets.getOrPut(address)");
+    try expectNotContains(commit, "while (prior < raw_index)");
+}
+
 test "Postcheck does not synthesize runtime crash for uninhabited lambda arguments" {
     const lower_source = @embedFile("monotype/lower.zig");
     try expectNotContains(lower_source, "called function with an uninhabited argument");
