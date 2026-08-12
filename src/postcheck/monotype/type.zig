@@ -647,10 +647,12 @@ pub const Store = struct {
     /// Exact structural equality for closed Monotype types.
     ///
     /// This mirrors the intentional identity rules used by `typeDigest`:
-    /// aliases with backing compare as their backing, non-alias named types
-    /// compare by named identity and arguments, and structural rows compare by
-    /// label text and ordered children. Unlike the digest, this is authoritative
-    /// and must be checked before one specialization can reuse another.
+    /// aliases with backing compare as their backing, content-addressed
+    /// generated nominals compare by their atomic generated identity, ordinary
+    /// non-alias named types compare by named identity and arguments, and
+    /// structural rows compare by label text and ordered children. Unlike the
+    /// digest, this is authoritative and must be checked before one
+    /// specialization can reuse another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -910,6 +912,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
                 if (named.kind == .alias) {
                     const backing = named.backing orelse {
                         writeBytes(hasher, "alias-without-backing");
@@ -1043,6 +1046,7 @@ pub const Store = struct {
         hasher: anytype,
         named: NamedContent,
     ) void {
+        if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
         hasher.update(&named.named_type.module.bytes);
         writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
         writeOptionalU32(hasher, named.def.source_decl);
@@ -1092,6 +1096,9 @@ pub const Store = struct {
         rhs_head: [32]u8,
         named_mode: NamedDigestMode,
     ) bool {
+        if (lhs.def.generated != null or rhs.def.generated != null) {
+            return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+        }
         const lhs_args = self.span(lhs.args);
         const rhs_args = self.span(rhs.args);
         if (lhs_args.len != rhs_args.len) return false;
@@ -1182,6 +1189,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
                 // Aliases are transparent: their digest is their backing's.
                 if (named.kind == .alias) {
                     const backing = named.backing orelse {
@@ -1417,6 +1425,9 @@ fn namedTypeViewEql(
     visited: *std.AutoHashMap(u64, void),
     mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
+    if (lhs.def.generated != null or rhs.def.generated != null) {
+        return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+    }
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
     if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
@@ -1719,6 +1730,9 @@ fn namedTypeEqlAcrossStores(
     rhs: NamedContent,
     visited: *std.AutoHashMap(u64, void),
 ) std.mem.Allocator.Error!bool {
+    if (lhs.def.generated != null or rhs.def.generated != null) {
+        return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+    }
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
     if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
@@ -2323,6 +2337,17 @@ fn writeOptionalDigest(hasher: anytype, value: ?names.TypeDigest) void {
     } else {
         writeBytes(hasher, "no-digest");
     }
+}
+
+/// A producer-assigned generated digest is the complete identity of a
+/// generated nominal. Its arguments, public/private view, iterator metadata,
+/// declared order, and private backing are implementation details already
+/// committed by that digest and must remain behind this atomic boundary.
+fn writeGeneratedNominalIdentity(hasher: anytype, generated: ?names.TypeDigest) bool {
+    const digest = generated orelse return false;
+    writeBytes(hasher, "generated-nominal");
+    hasher.update(&digest.bytes);
+    return true;
 }
 
 fn writeIteratorTopology(
@@ -3145,6 +3170,116 @@ test "monotype type equality rejects digest-equal aliases without backing" {
     const second_digest = store.typeDigest(&name_store, second);
     try std.testing.expect(std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     try std.testing.expect(!try store.typeEql(&name_store, first, second));
+}
+
+test "monotype generated nominal identity is atomic" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const first_module = try name_store.internModuleIdentity(&([_]u8{0xA1} ** 32));
+    const second_module = try name_store.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const first_name = try name_store.internTypeName("FirstGenerated");
+    const second_name = try name_store.internTypeName("SecondGenerated");
+    const field_name = try name_store.internRecordFieldLabel("field");
+    const generated = names.TypeDigest{ .bytes = [_]u8{0xC3} ** 32 };
+    const different_generated = names.TypeDigest{ .bytes = [_]u8{0xD4} ** 32 };
+
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+    const first_args = try store.addSpan(&.{i64_ty});
+    const second_args = try store.addSpan(&.{str_ty});
+    const second_order = try store.addDeclaredFields(&.{
+        .{ .named = field_name },
+        .{ .padding = str_ty },
+    });
+
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .ty = @enumFromInt(1) },
+        .def = .{
+            .module = first_module,
+            .type_name = first_name,
+            .source_decl = 1,
+            .generated = generated,
+        },
+        .kind = .nominal,
+        .args = first_args,
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const same_identity = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x22} ** 32 }, .ty = @enumFromInt(2) },
+        .def = .{
+            .module = second_module,
+            .type_name = second_name,
+            .source_decl = 2,
+            .generated = generated,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = second_args,
+        .backing = .{ .ty = str_ty, .use = .runtime_layout_only, .authority = .generated_private },
+        .declared_order = second_order,
+    } });
+    var different_content = store.get(same_identity).named;
+    different_content.def.generated = different_generated;
+    const different_identity = try store.add(.{ .named = different_content });
+
+    const first_digest = store.typeDigest(&name_store, first);
+    const same_digest = store.typeDigest(&name_store, same_identity);
+    const different_digest = store.typeDigest(&name_store, different_identity);
+    try std.testing.expectEqualSlices(u8, first_digest.bytes[0..], same_digest.bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], different_digest.bytes[0..]));
+
+    const first_specialization = store.specializationDigest(&name_store, first);
+    const same_specialization = store.specializationDigest(&name_store, same_identity);
+    const different_specialization = store.specializationDigest(&name_store, different_identity);
+    try std.testing.expectEqualSlices(u8, first_specialization.bytes[0..], same_specialization.bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, first_specialization.bytes[0..], different_specialization.bytes[0..]));
+
+    try std.testing.expect(try store.typeEql(&name_store, first, same_identity));
+    try std.testing.expect(!try store.typeEql(&name_store, first, different_identity));
+    try std.testing.expect(try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        first,
+        store.view(),
+        same_identity,
+    ));
+
+    var full_stats: Store.DigestStats = .{};
+    _ = store.typeDigestCached(&name_store, first, &full_stats);
+    try std.testing.expectEqual(@as(u64, 1), full_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), full_stats.nodes_visited);
+
+    var specialization_stats: Store.DigestStats = .{};
+    _ = store.specializationLookupDigestCached(&name_store, first, &specialization_stats);
+    try std.testing.expectEqual(@as(u64, 1), specialization_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), specialization_stats.nodes_visited);
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+    const interned_i64 = try interner.internPrimitive(.i64);
+    const interned_str = try interner.internPrimitive(.str);
+    const interned_first = try interner.internNamed(.{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .ty = @enumFromInt(1) },
+        .def = .{ .module = first_module, .type_name = first_name, .generated = generated },
+        .kind = .nominal,
+        .args = &.{interned_i64},
+        .backing = .{ .ty = interned_i64, .use = .inspectable },
+    });
+    const interned_same = try interner.internNamed(.{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x22} ** 32 }, .ty = @enumFromInt(2) },
+        .def = .{ .module = second_module, .type_name = second_name, .generated = generated },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = &.{interned_str},
+        .backing = .{ .ty = interned_str, .use = .runtime_layout_only, .authority = .generated_private },
+        .declared_order = &.{.{ .padding = interned_str }},
+    });
+    try std.testing.expectEqual(interned_first, interned_same);
 }
 
 test "monotype named type digest includes backing" {

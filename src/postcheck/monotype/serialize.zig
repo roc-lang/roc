@@ -28,6 +28,8 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 14: content-addressed generated nominals are atomic in durable type
+/// identity; their private representation is not part of the stored digest.
 /// Version 13: generated iterator types have one content-addressed identity and no
 /// representation tier, producer kind, or chain-depth metadata.
 /// Version 11: low-level nodes may carry an explicit produced-type source.
@@ -36,7 +38,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 13;
+pub const FORMAT_VERSION: u32 = 14;
 
 const SECTION_COUNT = 42;
 

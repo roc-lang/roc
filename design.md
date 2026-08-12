@@ -3063,6 +3063,15 @@ ordinary compound edge is likewise a hard boundary for that occurrence: the
 producer already returned the whole runtime value, so materialization neither
 validates nor visits checked descendants below it.
 
+That atomic boundary survives sealing. A content-addressed generated nominal's
+producer-assigned digest is its complete durable type identity for exact
+equality, specialization lookup, interning, and serialization. Those operations
+read the digest and stop: they do not compare or hash the nominal's checked
+arguments, public/private view, iterator metadata, declared layout order, or
+private backing. Generated-private evidence that has no producer-assigned
+digest remains backing-sensitive, because in that older representation the
+backing itself is still the explicit identity-bearing data.
+
 While checking creates a shared call shape's parent-first projection paths, it
 attaches to every selectable slot the exact ordinary ancestor checked ids whose
 output can change under that selection. Monotype reads those spans directly
