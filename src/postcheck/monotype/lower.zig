@@ -5277,6 +5277,18 @@ const Builder = struct {
                 .deferred, .resolved => Common.invariant("a hosted specialization owned a live Roc result node"),
             }
         }
+        if (body_ctx.draft.deferred_const_result_producers.get(result_node)) |boundary_index| {
+            switch (body_ctx.draft.deferred_const_uses.items[boundary_index].preparation_state) {
+                .queued => {
+                    try self.finalizeDraftConstUse(body_ctx.draft, body_ctx.graph, boundary_index);
+                    return body_ctx.graph.rootNode(raw_node);
+                },
+                // A recursive use observes the constant's one stable forward
+                // result cell. The active restoration owns its completion.
+                .preparing => return result_node,
+                .prepared => return body_ctx.graph.rootNode(raw_node),
+            }
+        }
         if (body_ctx.draft.structural_serialization_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_structural_serializations.items[boundary_index].preparation_state) {
                 .queued => {
@@ -5407,9 +5419,13 @@ const Builder = struct {
         graph: *InstGraph,
         boundary_index: usize,
     ) Allocator.Error!void {
+        switch (body_draft.deferred_const_uses.items[boundary_index].preparation_state) {
+            .queued => body_draft.deferred_const_uses.items[boundary_index].preparation_state = .preparing,
+            .preparing, .prepared => return,
+        }
         const boundary = body_draft.deferred_const_uses.items[boundary_index];
         if (boundary.restored_source != null) {
-            Common.invariant("deferred const reservation was expanded more than once");
+            Common.invariant("queued deferred const reservation already had a restored source");
         }
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
@@ -5437,30 +5453,35 @@ const Builder = struct {
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         const restored = switch (boundary.provenance) {
-            .declared => try ctx.restoreConstUseAtNode(
+            .declared => try ctx.restoreConstUseAtNodes(
                 boundary.const_use,
                 boundary.request_node,
+                boundary.witness_node,
+                boundary.destination_relation,
                 boundary.use_evidence,
             ),
             .hoisted => |entry| blk: {
                 const previous_restore_evidence = ctx.restore_evidence;
                 defer ctx.restore_evidence = previous_restore_evidence;
                 ctx.restore_evidence = rootEvidence(ctx.owner_template, boundary.use_evidence);
-                break :blk try ctx.restoredHoistedConstAtNode(entry, boundary.witness_node);
+                break :blk try ctx.restoredHoistedConstAtNodes(
+                    entry,
+                    boundary.request_node,
+                    boundary.witness_node,
+                    boundary.destination_relation,
+                );
             },
         };
         const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
         if (!graph.sameClass(boundary.witness_node, restored_node)) {
-            if (graph.content(boundary.witness_node) != .unresolved) {
-                Common.invariant("deferred const produced a different exact node from its completed witness");
-            }
-            try graph.completeProducedSelection(boundary.witness_node, restored_node);
+            Common.invariant("deferred const did not return its explicit exact result node");
         }
         const restored_proof = body_draft.expr_impossibility_proofs.items[@intFromEnum(restored)];
         body_draft.impossibility_proofs.items[@intFromEnum(boundary.proof_reservation)] =
             if (restored_proof) |proof| .{ .forward = proof } else .never;
         body_draft.deferred_const_uses.items[boundary_index].restored_source = restored;
+        body_draft.deferred_const_uses.items[boundary_index].preparation_state = .prepared;
     }
 
     const DraftReservationState = enum { unseen, visiting, resolved };
@@ -9689,6 +9710,12 @@ const DraftConstUseProvenance = union(enum) {
     hoisted: checked.HoistedConstEntry,
 };
 
+const DraftDeferredConstPreparationState = enum {
+    queued,
+    preparing,
+    prepared,
+};
+
 const DraftDeferredConstUse = struct {
     view: ModuleView,
     /// Checked module whose ordered registry scope governs generated method
@@ -9701,6 +9728,9 @@ const DraftDeferredConstUse = struct {
     request_node: NodeId,
     /// Exact producer-owned runtime representation stored with the const.
     witness_node: NodeId,
+    /// Whether the witness is an already-complete stored representation or a
+    /// producer-owned forward cell that the evaluation body must complete.
+    destination_relation: ControlFlowDestinationRelation,
     const_use: checked.ConstUseTemplate,
     /// Explicit checker-owned origin for selecting the restoration path.
     provenance: DraftConstUseProvenance,
@@ -9715,6 +9745,7 @@ const DraftDeferredConstUse = struct {
     /// Stable proof node stored with the reservation expression. Parents
     /// may reference it before const restoration expands this boundary.
     proof_reservation: RuntimeImpossibilityProofId,
+    preparation_state: DraftDeferredConstPreparationState = .queued,
     /// Explicit expression produced by expansion. Reservation data is copied
     /// only after the complete deferred-const dependency graph is known.
     restored_source: ?DraftExprId = null,
@@ -10383,6 +10414,10 @@ const BodyDraftStore = struct {
     /// Node IDs are dense within one live graph, so shape-demand scheduling is
     /// a direct column lookup rather than a hash lookup or graph search.
     template_result_producers: collections.DenseMap(NodeId, u32),
+    /// Exact forward result node to the deferred constant that produces it.
+    /// Only evaluation templates own entries; stored constants are already
+    /// complete and therefore require no scheduling edge.
+    deferred_const_result_producers: collections.DenseMap(NodeId, u32),
     /// Exact forward result node to a deferred structural codec producer.
     structural_serialization_result_producers: collections.DenseMap(NodeId, u32),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
@@ -10483,6 +10518,7 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
+            .deferred_const_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
             .structural_serialization_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .active_callable_eval_bindings = .empty,
@@ -10596,6 +10632,7 @@ const BodyDraftStore = struct {
         while (template_lookup_lists.next()) |list| list.deinit(self.allocator);
         self.template_spec_lookup.deinit();
         self.structural_serialization_result_producers.deinit();
+        self.deferred_const_result_producers.deinit();
         self.template_result_producers.deinit();
         self.template_spec_by_fn.deinit();
         var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
@@ -17907,16 +17944,24 @@ const BodyContext = struct {
         };
     }
 
-    fn restoredHoistedConstAtNode(
+    fn restoredHoistedConstAtNodes(
         self: *BodyContext,
         entry: checked.HoistedConstEntry,
         request_node: NodeId,
+        result_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const template = self.view.const_templates.get(entry.const_ref);
         const source_region = self.hoistedConstSourceRegion(entry);
+        try self.publishExactCheckedTypeAtCell(
+            entry.checked_type,
+            DraftTypeCell.fromGraphNode(request_node),
+        );
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
+                if (destination_relation != .exact_request) {
+                    Common.invariant("stored hoisted const did not receive its completed exact result");
+                }
                 const saved_loc = self.builder.program.current_loc;
                 defer self.builder.program.current_loc = saved_loc;
                 const saved_region = self.builder.program.current_region;
@@ -17927,28 +17972,39 @@ const BodyContext = struct {
                     self.view,
                     self.view,
                     stored.node,
-                    stored_node,
+                    result_node,
                     entry.const_ref,
                     entry.checked_type,
                     .disallow,
                 );
             },
             .eval_template => |eval| blk: {
-                try self.publishExactCheckedTypeAtCell(
-                    entry.checked_type,
-                    DraftTypeCell.fromGraphNode(request_node),
-                );
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
                     eval,
                     entry.const_ref,
                     request_node,
+                    result_node,
+                    destination_relation,
                     source_region,
                     .{ .module = self.view.key, .root = entry.root },
                 );
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
+    }
+
+    fn restoredHoistedConstAtNode(
+        self: *BodyContext,
+        entry: checked.HoistedConstEntry,
+        request_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        return try self.restoredHoistedConstAtNodes(
+            entry,
+            request_node,
+            request_node,
+            .exact_request,
+        );
     }
 
     fn hoistedConstSourceRegion(self: *const BodyContext, entry: checked.HoistedConstEntry) base.Region {
@@ -26817,7 +26873,7 @@ const BodyContext = struct {
                 if (self.graph.functionResultRelation(source_request) == .exact_destination)
                     .{ .exact = source.ret }
                 else
-                    .{ .checked = source.ret },
+                    .{ .checked = null },
             );
         };
         const request = try self.graphFunctionNode(args, ret);
@@ -26849,12 +26905,13 @@ const BodyContext = struct {
         if (produced_args.len != checked_fn.args.len or available.len != produced_args.len) {
             Common.invariant("completed call edges had a different arity from the checked callable");
         }
-        // `request_ret` is always the checker-authored result recipe for this
-        // occurrence. A produced result may replace descendants while lowering
-        // the callee, but it must not discard substitutions that appear only in
-        // the call expression's result. Authority controls how the recipe is
-        // consumed below; it does not select a different recipe.
+        // `request_ret` is an exact runtime edge only when an enclosing
+        // destination owns it. A produced result has no destination yet: its
+        // immutable checked result plus the flat substitution span is the
+        // complete construction recipe, and the callee will later complete
+        // its separate forward result cell.
         const result_base = self.graph.rootNode(produced_ret orelse request_ret);
+        const include_result = produced_ret != null or result_relation == .exact_destination;
         const no_new_arguments = try self.graph.arena().alloc(bool, produced_args.len);
         @memset(no_new_arguments, false);
         const completed_selections = try self.directCallSelectionsFromPublishedPlan(
@@ -26866,7 +26923,7 @@ const BodyContext = struct {
             null,
             null,
             result_base,
-            true,
+            include_result,
         );
         const args = try self.graph.arena().alloc(NodeId, checked_fn.args.len);
         for (args, checked_fn.args, 0..) |*out, checked_arg, index| {
@@ -26886,10 +26943,10 @@ const BodyContext = struct {
             plan,
             self.callResultRootEdge(plan, checked_fn.ret),
             completed_selections,
-            if (produced_ret != null or result_relation == .exact_destination)
+            if (include_result)
                 .{ .exact = result_base }
             else
-                .{ .checked = result_base },
+                .{ .checked = null },
         );
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
@@ -28547,15 +28604,24 @@ const BodyContext = struct {
             Common.invariant("deferred const use had no requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
-        const DeferredConstNodes = struct { request: NodeId, witness: NodeId };
+        const DeferredConstNodes = struct {
+            request: NodeId,
+            witness: NodeId,
+            destination_relation: ControlFlowDestinationRelation,
+        };
         const nodes: DeferredConstNodes = switch (template.state) {
             .stored_const => |stored| blk: {
                 const exact = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
-                break :blk .{ .request = exact, .witness = exact };
+                break :blk .{
+                    .request = exact,
+                    .witness = exact,
+                    .destination_relation = .exact_request,
+                };
             },
             .eval_template => .{
                 .request = try self.producedOccurrenceNode(requested_ty),
                 .witness = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
+                .destination_relation = .exact_producer,
             },
             .reserved => Common.invariant("reserved checked const template reached deferred Monotype lowering"),
         };
@@ -28572,6 +28638,7 @@ const BodyContext = struct {
             self.allocator.free(lexical.binders);
             self.allocator.free(lexical.local_procs);
         }
+        const boundary_index: u32 = @intCast(self.draft.deferred_const_uses.items.len);
         try self.draft.deferred_const_uses.append(self.allocator, .{
             .view = self.view,
             .method_scope = self.method_scope,
@@ -28580,6 +28647,7 @@ const BodyContext = struct {
             .expr = expr,
             .request_node = nodes.request,
             .witness_node = nodes.witness,
+            .destination_relation = nodes.destination_relation,
             .const_use = const_use,
             .provenance = provenance,
             .context_evidence = self.evidence,
@@ -28589,6 +28657,9 @@ const BodyContext = struct {
             .lexical = lexical,
             .proof_reservation = proof_reservation,
         });
+        if (nodes.destination_relation == .exact_producer) {
+            try self.draft.deferred_const_result_producers.put(nodes.witness, boundary_index);
+        }
         return expr;
     }
 
@@ -28805,10 +28876,12 @@ const BodyContext = struct {
         return requested_node;
     }
 
-    fn restoreConstUseAtNode(
+    fn restoreConstUseAtNodes(
         self: *BodyContext,
         const_use: checked.ConstUseTemplate,
         request_node: NodeId,
+        result_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
         use_evidence: []const SpecEvidence,
     ) Allocator.Error!DraftExprId {
         const requested_ty = const_use.requested_source_ty_payload orelse
@@ -28819,15 +28892,20 @@ const BodyContext = struct {
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
+        try self.publishExactCheckedTypeAtCell(
+            requested_ty,
+            DraftTypeCell.fromGraphNode(request_node),
+        );
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
-                const interface_node = try self.instNode(requested_ty);
+                if (destination_relation != .exact_request) {
+                    Common.invariant("stored declared const did not receive its completed exact result");
+                }
                 var active_const_scope: ActiveConstBindingScope = .{};
                 const has_active_const_binding = try self.enterActiveConstBindingAtCell(
                     store_view,
                     const_use.const_ref,
-                    DraftTypeCell.fromGraphNode(interface_node),
+                    DraftTypeCell.fromGraphNode(result_node),
                     &active_const_scope,
                 );
                 defer self.leaveActiveConstBinding(&active_const_scope);
@@ -28835,7 +28913,7 @@ const BodyContext = struct {
                     store_view,
                     self.view,
                     stored.node,
-                    stored_node,
+                    result_node,
                     const_use.const_ref,
                     requested_ty,
                     .disallow,
@@ -28845,12 +28923,13 @@ const BodyContext = struct {
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
-                try self.publishExactCheckedTypeAtCell(requested_ty, DraftTypeCell.fromGraphNode(request_node));
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     store_view,
                     eval,
                     const_use.const_ref,
                     request_node,
+                    result_node,
+                    destination_relation,
                     null,
                     null,
                 );
@@ -28943,11 +29022,14 @@ const BodyContext = struct {
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
+        const exact_node = try self.activeNodeFromType(ty);
         return try self.lowerConstEvalTemplateUseAtNode(
             store_view,
             eval,
             const_use,
-            try self.activeNodeFromType(ty),
+            exact_node,
+            exact_node,
+            .exact_request,
             source_region_override,
             current_entry_root,
         );
@@ -28959,6 +29041,8 @@ const BodyContext = struct {
         eval: checked.ConstEvalTemplate,
         const_use: checked.ConstLocator,
         request_node: NodeId,
+        result_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
@@ -28995,7 +29079,7 @@ const BodyContext = struct {
         const has_active_const_binding = try body_ctx.enterActiveConstBindingAtCell(
             store_view,
             const_use,
-            DraftTypeCell.fromGraphNode(request_node),
+            DraftTypeCell.fromGraphNode(result_node),
             &active_const_scope,
         );
         defer body_ctx.leaveActiveConstBinding(&active_const_scope);
@@ -29008,9 +29092,15 @@ const BodyContext = struct {
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
+        const raw_wrapper_fn_node = try body_ctx.graphFunctionNode(&.{}, request_node);
+        body_ctx.graph.registerFunctionResultRelation(raw_wrapper_fn_node, switch (destination_relation) {
+            .exact_request => .exact_destination,
+            .exact_producer => .produced,
+            .checked_mapping => Common.invariant("const evaluation received a checked-only result relation"),
+        });
         const wrapper_fn_node = try body_ctx.scopedExactFunctionRequest(
             entry_template.checked_fn_root,
-            try body_ctx.graphFunctionNode(&.{}, request_node),
+            raw_wrapper_fn_node,
         );
         body_ctx.active_checked_selections = try body_ctx.procedureBodyCheckedSelections(
             entry_template,
@@ -29019,11 +29109,26 @@ const BodyContext = struct {
 
         const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
-            DraftTypeCell.fromGraphNode(request_node),
-            .exact_producer,
+            DraftTypeCell.fromGraphNode(result_node),
+            destination_relation,
         );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        const restored_node = try body_ctx.exprTypeCell(restored).toGraphNode(body_ctx.graph);
+        switch (destination_relation) {
+            .exact_request => {},
+            .exact_producer => if (!body_ctx.graph.sameClass(result_node, restored_node)) {
+                try body_ctx.graph.completeProducedSelection(result_node, restored_node);
+            },
+            .checked_mapping => unreachable,
+        }
+        const completed = if (has_active_const_binding)
+            try body_ctx.finishActiveConstBinding(active_const_scope.active, restored)
+        else
+            restored;
+        const completed_node = try body_ctx.exprTypeCell(completed).toGraphNode(body_ctx.graph);
+        if (!body_ctx.graph.sameClass(result_node, completed_node)) {
+            Common.invariant("const evaluation did not return its explicit exact result node");
+        }
+        return completed;
     }
 
     fn restoreConstNode(

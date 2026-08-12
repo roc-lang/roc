@@ -16928,7 +16928,6 @@ fn sealCheckedProcedureTemplateRefs(
             const seen = try seen_local_uses.getOrPut(ref_id);
             if (seen.found_existing) continue;
             const record = resolved_value_refs.records[@intFromEnum(ref_id)];
-            if (checked_bodies.exprContainsDiagnosticError(record.expr)) continue;
             try collector.appendBidirectionalSpecializationIdentityRelations(
                 record.checked_ty,
                 checked_bodies.expr(record.expr).ty,
@@ -19195,11 +19194,11 @@ fn collectSpecializationIdentitySlots(
     visited: *collections.DenseMap(CheckedTypeId, void),
     slots: *std.ArrayList(SpecializationIdentitySlot),
 ) Allocator.Error!void {
-    const function = checkedFunctionPayload(
+    const function = checkedFunctionPayloadOrDiagnostic(
         &checked_types.store,
         root,
         "procedure specialization identity slots",
-    );
+    ) orelse return;
     for (function.args) |arg| {
         try collectSpecializationIdentitySlotsInner(
             allocator,
@@ -19998,7 +19997,11 @@ fn publishSpecializationCallShapeForCallable(
                 .callable = callable,
                 .dispatcher = null,
                 .target_signature_source = false,
-                .target_source_roots = false,
+                // A callable value can be specialized later without an
+                // enclosing direct-call expression. Publish the exact source
+                // identities needed to rebase that value onto its selected
+                // declaration here as well as on call-specific shapes.
+                .target_source_roots = true,
             },
             by_key,
             shapes,
@@ -21674,6 +21677,11 @@ fn publishSpecializationCallPlans(
     // body lowering never has to reconstruct substitutions from a pair of
     // complete function graphs.
     for (templates.templates) |template| {
+        if (checkedFunctionPayloadOrDiagnostic(
+            &checked_types.store,
+            template.checked_fn_root,
+            "procedure specialization call shape",
+        ) == null) continue;
         _ = try publishSpecializationCallShapeForCallable(
             allocator,
             checked_types,
@@ -21691,21 +21699,27 @@ fn publishSpecializationCallPlans(
         );
     }
     for (templates.specialization_interface_relations) |relation| switch (relation.data) {
-        .procedure => |procedure| _ = try publishSpecializationCallShapeForCallable(
-            allocator,
-            checked_types,
-            &concrete_sources,
-            &target_relations,
+        .procedure => |procedure| if (checkedFunctionPayloadOrDiagnostic(
+            &checked_types.store,
             procedure.fn_ty,
-            by_type,
-            &shape_by_key,
-            &shapes,
-            &target_source_roots,
-            &slots,
-            &occurrences,
-            &projections,
-            &root_edges,
-        ),
+            "procedure relation specialization call shape",
+        ) != null) {
+            _ = try publishSpecializationCallShapeForCallable(
+                allocator,
+                checked_types,
+                &concrete_sources,
+                &target_relations,
+                procedure.fn_ty,
+                by_type,
+                &shape_by_key,
+                &shapes,
+                &target_source_roots,
+                &slots,
+                &occurrences,
+                &projections,
+                &root_edges,
+            );
+        },
         .type_equality, .call, .local_proc_use => {},
     };
     for (static_dispatch_plans.evidence_nodes) |node| switch (node.instantiation) {
@@ -21849,6 +21863,11 @@ fn publishSpecializationCallPlans(
     for (target_relations.by_type, 0..) |entries, raw_callable| {
         if (entries.len == 0) continue;
         const callable: CheckedTypeId = @enumFromInt(@as(u32, @intCast(raw_callable)));
+        if (checkedFunctionPayloadOrDiagnostic(
+            &checked_types.store,
+            callable,
+            "target relation specialization call shape",
+        ) == null) continue;
         by_type[raw_callable] = try publishSpecializationCallShape(
             allocator,
             checked_types,
@@ -22286,14 +22305,17 @@ const CheckedTemplateRefCollector = struct {
         body_ret_ty: CheckedTypeId,
         owns_scope: bool,
     ) Allocator.Error!void {
-        if (self.checked_bodies.exprContainsDiagnosticError(expr_id)) return;
-        const function = checkedFunctionPayload(
+        const function = checkedFunctionPayloadOrDiagnostic(
             &self.checked_types.store,
             fn_ty,
             "checked procedure specialization relation",
         );
         const relation_start: u32 = @intCast(self.specialization_identity_relations.items.len);
-        try self.appendBidirectionalSpecializationIdentityRelations(function.ret, body_ret_ty);
+        if (function) |valid_function| {
+            try self.appendBidirectionalSpecializationIdentityRelations(valid_function.ret, body_ret_ty);
+        } else if (!self.checked_bodies.exprContainsDiagnosticError(expr_id)) {
+            checkedArtifactInvariant("non-diagnostic checked procedure had an error callable type", .{});
+        }
         const procedure_data = switch (self.checked_bodies.expr(expr_id).data) {
             .lambda => |lambda| lambda,
             .closure => |closure| blk: {
@@ -22307,14 +22329,20 @@ const CheckedTemplateRefCollector = struct {
             else => null,
         };
         if (procedure_data) |lambda| {
-            if (function.args.len != lambda.args.len) {
-                checkedArtifactInvariant("checked procedure relation had a different argument arity", .{});
-            }
-            for (function.args, lambda.args) |formal, pattern| {
-                try self.appendBidirectionalSpecializationIdentityRelations(
-                    formal,
-                    self.checked_bodies.pattern(pattern).ty,
-                );
+            if (function) |valid_function| {
+                if (valid_function.args.len != lambda.args.len) {
+                    checkedArtifactInvariant("checked procedure relation had a different argument arity", .{});
+                }
+                for (valid_function.args, lambda.args) |formal, pattern| {
+                    try self.appendBidirectionalSpecializationIdentityRelations(
+                        formal,
+                        self.checked_bodies.pattern(pattern).ty,
+                    );
+                }
+            } else {
+                // The explicit checked `.err` root above is the complete
+                // diagnostic procedure interface: it has no runtime identity
+                // edges, while the body remains available for reporting.
             }
         }
         const identity_relations = artifact_serialize.Span{
@@ -25915,6 +25943,35 @@ fn checkedFunctionPayload(
             current = payload.alias.backing;
         } else if (payload == .function) {
             return payload.function;
+        } else {
+            checkedArtifactInvariant(context ++ " was not a function", .{});
+        }
+        if (remaining == 0) {
+            checkedArtifactInvariant(context ++ " alias chain was cyclic", .{});
+        }
+        remaining -= 1;
+    }
+}
+
+/// Return no callable shape only when checking explicitly published an error
+/// root. Diagnostic procedures remain in the checked body so reporting can
+/// preserve their source structure, but they have no runtime identity slots
+/// to publish. Every non-error root is still required to be a function.
+fn checkedFunctionPayloadOrDiagnostic(
+    store: *const CheckedTypeStore,
+    root: CheckedTypeId,
+    comptime context: []const u8,
+) ?CheckedFunctionType {
+    var current = root;
+    var remaining = store.payloads.items.len;
+    while (true) {
+        const payload = store.payload(current);
+        if (payload == .alias) {
+            current = payload.alias.backing;
+        } else if (payload == .function) {
+            return payload.function;
+        } else if (payload == .err) {
+            return null;
         } else {
             checkedArtifactInvariant(context ++ " was not a function", .{});
         }

@@ -1345,8 +1345,13 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "hoisted const use reached a declared deferred boundary");
     try expectContains(lower_source, "declared const use reached a hoisted deferred boundary");
     try expectContains(lower_source, "deferred hoisted const provenance referenced a different const template");
-    try expectContains(lower_source, "ctx.restoredHoistedConstAtNode(entry, boundary.witness_node)");
-    try expectContains(lower_source, "graph.completeProducedSelection(boundary.witness_node, restored_node)");
+    try expectContains(lower_source, "ctx.restoredHoistedConstAtNodes(");
+    try expectContains(lower_source, "boundary.request_node,");
+    try expectContains(lower_source, "boundary.witness_node,");
+    try expectContains(lower_source, "boundary.destination_relation,");
+    try expectContains(lower_source, "body_ctx.graph.completeProducedSelection(result_node, restored_node)");
+    try expectContains(lower_source, "deferred_const_result_producers: collections.DenseMap(NodeId, u32)");
+    try expectContains(lower_source, "try self.finalizeDraftConstUse(body_ctx.draft, body_ctx.graph, boundary_index)");
     try expectNotContains(lower_source, "graph.unify(boundary.witness_node, restored_node)");
     try expectNotContains(lower_source, "body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node)");
     try expectNotContains(lower_source, "runtimeResultProducerForDraftCallee");
