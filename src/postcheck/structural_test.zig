@@ -479,6 +479,14 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_iterator_producer, "existing_identity");
     try expectContains(generated_iterator_producer, "def.generated = ctx.identity");
     try expectContains(generated_iterator_producer, "generatedIteratorBackingNode(");
+    const generated_iterator_builder = sourceSliceBetween(
+        lower_source,
+        "fn generatedIteratorNodeFromPublicSource(",
+        "fn existingGeneratedIteratorNode(",
+    );
+    try expectContains(generated_iterator_builder, "addRecursiveGeneratedIterator(lookup.digest");
+    try expectNotContains(generated_iterator_builder, "addRecursiveNode(");
+    try expectNotContains(generated_iterator_builder, "registerGeneratedIteratorAtDigest(");
 
     const generated_call_identity = sourceSliceBetween(
         lower_source,

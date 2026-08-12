@@ -19459,14 +19459,12 @@ const BodyContext = struct {
                 } };
             }
         };
-        const generated = try self.graph.addRecursiveNode(Context{
+        return try self.graph.addRecursiveGeneratedIterator(lookup.digest, Context{
             .body = self,
             .public_source = public_source,
             .item_node = item_node,
             .identity = lookup.digest,
         }, Context.fill);
-        try self.graph.registerGeneratedIteratorAtDigest(generated, lookup.digest);
-        return generated;
     }
 
     /// Reuse an equal completed generated nominal before constructing its
