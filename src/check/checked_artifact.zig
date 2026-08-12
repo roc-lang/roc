@@ -1811,13 +1811,13 @@ test "compile-time roots reject undetermined record field kinds" {
     var store = CheckedTypeStore{};
     defer store.deinit(allocator);
 
-    const leaf: CheckedTypeId = @enumFromInt(0);
+    const leaf: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
     try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
 
-    const root: CheckedTypeId = @enumFromInt(1);
+    const root: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
     const fields = try allocator.alloc(CheckedRecordField, 1);
     fields[0] = .{
-        .name = @enumFromInt(0),
+        .name = testIndexId(canonical.RecordFieldLabelId, 7),
         .ty = leaf,
         .kind = .undetermined(leaf),
     };
@@ -34691,16 +34691,19 @@ test "compile-time scheduler precollects only requested field-default roots" {
     const root_2: ComptimeRootId = @enumFromInt(2);
     const checked_expr = testIndexId(CheckedExprId, 0);
     const checked_type = testIndexId(CheckedTypeId, 0);
+    const source_0 = testIndexId(CIR.Expr.Idx, 10);
+    const source_1 = testIndexId(CIR.Expr.Idx, 11);
+    const source_2 = testIndexId(CIR.Expr.Idx, 12);
 
     var roots = [_]CompileTimeRoot{
-        .{ .id = root_0, .module_idx = 0, .kind = .constant, .source = .{ .expr = @enumFromInt(0) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
-        .{ .id = root_1, .module_idx = 0, .kind = .field_default, .source = .{ .expr = @enumFromInt(1) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
-        .{ .id = root_2, .module_idx = 0, .kind = .field_default, .source = .{ .expr = @enumFromInt(2) }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+        .{ .id = root_0, .module_idx = 0, .kind = .constant, .source = .{ .expr = source_0 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+        .{ .id = root_1, .module_idx = 0, .kind = .field_default, .source = .{ .expr = source_1 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
+        .{ .id = root_2, .module_idx = 0, .kind = .field_default, .source = .{ .expr = source_2 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
     };
     const root_table = CompileTimeRootTable{ .roots = &roots };
     const entries = [_]CompileTimeRequestScheduleEntry{
-        .{ .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = @enumFromInt(2) }, .compile_time_root = root_2, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_2, .original_order = 0 },
-        .{ .request = .{ .order = 1, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = @enumFromInt(0) }, .compile_time_root = root_0, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_0, .original_order = 1 },
+        .{ .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = source_2 }, .compile_time_root = root_2, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_2, .original_order = 0 },
+        .{ .request = .{ .order = 1, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = source_0 }, .compile_time_root = root_0, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_0, .original_order = 1 },
     };
 
     const field_defaults = try collectScheduledFieldDefaultRoots(std.testing.allocator, &root_table, &entries);
