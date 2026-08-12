@@ -25453,6 +25453,9 @@ const BodyContext = struct {
         try self.applyCallProjectionSelection(&exact, &base_node, true, &authoritative);
         var rebuilt = exact orelse base_node orelse
             Common.invariant("sparse call substitution had no selected child");
+        if (self.graph.sameClass(path_nodes[path_nodes.len - 1], rebuilt)) {
+            return .{ .root = self.graph.rootNode(raw_root), .authoritative = authoritative };
+        }
         var rebuild_index = reverse_path.items.len;
         while (rebuild_index > 0) {
             rebuild_index -= 1;

@@ -514,6 +514,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(projection_application, "fn sparseProjectionSelections(");
     try expectContains(projection_application, "fn applySparseProjectionSelection(");
     try expectContains(projection_application, "reverse_path");
+    try expectContains(projection_application, "sameClass(path_nodes[path_nodes.len - 1], rebuilt)");
     try expectContains(projection_application, "rebuildSpecializationProjectionParent(");
     try expectNotContains(projection_application, "subtree_end");
     try expectNotContains(projection_application, "blocked_by_exact_parent");

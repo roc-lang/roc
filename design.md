@@ -2924,7 +2924,9 @@ target slots present in the active checker-published substitution span, using
 their sparse projection paths. It does not instantiate the complete selected
 signature under an ambient substitution map, and request construction reuses
 that one materialized target signature instead of constructing it a second
-time.
+time. If a selected child already names the base child's graph class, applying
+that selection returns the existing root directly; it does not rebuild any
+unchanged ancestor on the projection path.
 
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the
