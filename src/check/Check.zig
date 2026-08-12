@@ -162,11 +162,18 @@ return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
-/// Explicit visit stack shared by the heap-worklist type-graph walks
-/// (`validateAliasRowsHelp`'s node descent, `varContainsError`). Entries are
-/// base-relative: each entry point operates only on the slots it pushed and
-/// drains back to its entry length, so the walks may nest freely.
+/// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
+/// walk. Entries are base-relative: each entry point operates only on the
+/// slots it pushed and drains back to its entry length, so the walk may nest
+/// freely.
 type_visit_stack: std.ArrayListUnmanaged(Var),
+/// Explicit worklist for alias row validation, carrying both pending nodes and
+/// in-flight row frames so the whole walk—spines and rows alike—descends on
+/// the heap rather than the native stack. Base-relative, like the stack above.
+alias_row_frames: std.ArrayListUnmanaged(AliasRowFrame),
+/// Row field/tag names collected by the row frames in flight, one contiguous
+/// run per frame.
+alias_row_names: std.ArrayListUnmanaged(Ident.Idx),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Header rigid vars for the currently-processed type declaration.
@@ -2140,6 +2147,8 @@ fn initAssumePrepared(
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .type_visit_stack = .empty,
+        .alias_row_frames = .empty,
+        .alias_row_names = .empty,
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
@@ -2307,6 +2316,8 @@ pub fn deinit(self: *Self) void {
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
     self.type_visit_stack.deinit(self.gpa);
+    self.alias_row_frames.deinit(self.gpa);
+    self.alias_row_names.deinit(self.gpa);
     self.rigid_var_substitutions.deinit(self.gpa);
     self.type_decl_rigid_vars.deinit(self.gpa);
     self.type_decl_generation_states.deinit(self.gpa);
@@ -12923,6 +12934,66 @@ fn validateAliasRows(self: *Self, var_: Var, env: *Env, region: Region) Allocato
     return self.validateAliasRowsHelp(var_, env, region, &self.var_set);
 }
 
+/// Which kind of row a bad-row diagnostic is about.
+const AliasRowKind = enum { record, tag_union };
+
+/// What a row frame's step decided: it asked for a child subtree and must be
+/// resumed, it exhausted the row, or it reported a bad row and the whole walk
+/// is over.
+const RowStep = enum { suspended, finished, failed };
+
+/// One suspended step of alias row validation.
+///
+/// A `node` is a var whose content still has to be inspected; a row frame is a
+/// record or tag-union row partway through its own fields, interleaving each
+/// field's duplicate-name check with a full walk of that field's type exactly
+/// as the row's diagnostics require. Everything a frame pushes sits above it,
+/// so a frame resumes only once the subtree it asked for has drained—which is
+/// what makes "check name, then walk that field completely, then check the
+/// next name" hold without a native frame per level.
+const AliasRowFrame = union(enum) {
+    node: Var,
+    record_row: RecordRowFrame,
+    tag_row: TagRowFrame,
+};
+
+/// A record row: its head fields, then everything its extension chain
+/// contributes. Field names collected so far live in a run of
+/// `alias_row_names` starting at `names_base`.
+const RecordRowFrame = struct {
+    names_base: u32,
+    fields: types_mod.RecordField.SafeMultiList.Range,
+    idx: u32 = 0,
+    /// The var whose duplicate fields report against it while walking the
+    /// extension chain; unused while the head fields are being checked, which
+    /// report against the offending field itself.
+    ext_source_var: Var = undefined,
+    /// Where the extension chain resumes once the current run is exhausted.
+    ext: Var,
+    /// Whether the current run is the last one this row contributes.
+    ext_terminates: bool = false,
+    guard: types_mod.debug.IterationGuard,
+    stage: enum { head_fields, ext_chain, ext_fields } = .head_fields,
+};
+
+/// A tag-union row: its head tags, then everything its extension chain
+/// contributes. Tag names collected so far live in a run of `alias_row_names`
+/// starting at `names_base`.
+const TagRowFrame = struct {
+    names_base: u32,
+    tags: types_mod.Tag.SafeMultiList.Range,
+    idx: u32 = 0,
+    arg_idx: u32 = 0,
+    /// The var duplicate tags report against. Head tags report against the
+    /// row's own extension var, extension tags against the extension record
+    /// they came from.
+    report_var: Var,
+    ext: Var,
+    ext_terminates: bool = false,
+    guard: types_mod.debug.IterationGuard,
+    stage: enum { head_tags, head_args, ext_chain, ext_tags, ext_args } = .head_tags,
+};
+
 fn validateAliasRowsHelp(
     self: *Self,
     root_var: Var,
@@ -12930,269 +13001,302 @@ fn validateAliasRowsHelp(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    // Node descent runs on an explicit heap stack so pure constructor spines
-    // of any depth cannot exhaust the native stack. Children are pushed in
-    // reverse, so pops replay the recursion's exact preorder: a node's first
-    // child's whole subtree drains before its next sibling. Row validators
-    // stay recursive for their interleaved duplicate-name checks and re-enter
-    // this walk per payload; every entry operates base-relative on the shared
-    // stack, and a false result abandons the walk wholesale.
-    const stack = &self.type_visit_stack;
-    const stack_base = stack.items.len;
-    defer stack.items.len = stack_base;
-    try stack.append(self.gpa, root_var);
+    // The whole walk—constructor spines and row payloads alike—runs on an
+    // explicit heap stack, so a type of any depth can be validated without a
+    // native frame per level. Spine children are pushed in reverse, so pops
+    // replay the recursion's exact preorder: a node's first child's whole
+    // subtree drains before its next sibling. Rows suspend on a frame instead
+    // of re-entering the walk, which keeps their interleaved duplicate-name
+    // checks in the order their diagnostics are pinned to.
+    const frames = &self.alias_row_frames;
+    const frames_base = frames.items.len;
+    const names_base = self.alias_row_names.items.len;
+    defer {
+        frames.items.len = frames_base;
+        self.alias_row_names.items.len = names_base;
+    }
+    try frames.append(self.gpa, .{ .node = root_var });
 
-    while (stack.items.len > stack_base) {
-        const var_ = stack.pop().?;
-        const resolved = self.types.resolveVar(var_);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
-
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                try self.pushAliasRowVarsReversed(self.types.sliceAliasArgs(alias));
-                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+    while (frames.items.len > frames_base) {
+        const top = &frames.items[frames.items.len - 1];
+        switch (top.*) {
+            .node => |var_| {
+                frames.items.len -= 1;
+                try self.stepAliasRowNode(var_, visited);
             },
-            .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try self.pushAliasRowVarsReversed(self.types.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try self.pushAliasRowVarsReversed(self.types.sliceNominalArgs(nominal)),
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try stack.append(self.gpa, func.ret);
-                    try self.pushAliasRowVarsReversed(self.types.sliceVars(func.args));
-                },
-                .record => |record| {
-                    if (!try self.validateRecordRow(record.fields, record.ext, env, region, visited)) return false;
-                },
-                .record_unbound => |fields| {
-                    if (!try self.validateRecordFields(fields, env, region, visited)) return false;
-                },
-                .tag_union => |tag_union| {
-                    if (!try self.validateTagUnionRow(tag_union.tags, tag_union.ext, env, region, visited)) return false;
-                },
-                .empty_record, .empty_tag_union => {},
+            .record_row => |*frame| switch (try self.stepRecordRow(frame, env, region)) {
+                .suspended => {},
+                .finished => frames.items.len -= 1,
+                .failed => return false,
             },
-            .flex, .rigid, .err => {},
+            .tag_row => |*frame| switch (try self.stepTagRow(frame, env, region)) {
+                .suspended => {},
+                .finished => frames.items.len -= 1,
+                .failed => return false,
+            },
         }
     }
     return true;
 }
 
-/// Push a child run onto the type visit stack in reverse, so the stack pops
-/// the children in their declared order.
+/// Inspect one node: descend constructor spines by pushing their children, and
+/// hand rows to a frame that owns their duplicate-name state.
+fn stepAliasRowNode(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return;
+    try visited.put(resolved.var_, {});
+
+    switch (resolved.desc.content) {
+        .alias => |alias| {
+            try self.pushAliasRowVarsReversed(self.types.sliceAliasArgs(alias));
+            try self.alias_row_frames.append(self.gpa, .{ .node = self.types.getAliasBackingVar(alias) });
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .tuple => |tuple| try self.pushAliasRowVarsReversed(self.types.sliceVars(tuple.elems)),
+            .nominal_type => |nominal| try self.pushAliasRowVarsReversed(self.types.sliceNominalArgs(nominal)),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try self.alias_row_frames.append(self.gpa, .{ .node = func.ret });
+                try self.pushAliasRowVarsReversed(self.types.sliceVars(func.args));
+            },
+            .record => |record| {
+                try self.alias_row_frames.append(self.gpa, .{ .record_row = .{
+                    .names_base = @intCast(self.alias_row_names.items.len),
+                    .fields = record.fields,
+                    .ext = record.ext,
+                    .guard = types_mod.debug.IterationGuard.init("validateRecordExt"),
+                } });
+            },
+            .record_unbound => |fields| {
+                // An unbound record has no extension and no duplicate-name
+                // check of its own, so its fields are ordinary spine children.
+                const field_slice = self.types.getRecordFieldsSlice(fields);
+                try self.pushAliasRowVarsReversed(field_slice.items(.var_));
+            },
+            .tag_union => |tag_union| {
+                try self.alias_row_frames.append(self.gpa, .{ .tag_row = .{
+                    .names_base = @intCast(self.alias_row_names.items.len),
+                    .tags = tag_union.tags,
+                    .report_var = tag_union.ext,
+                    .ext = tag_union.ext,
+                    .guard = types_mod.debug.IterationGuard.init("validateTagUnionExt"),
+                } });
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .flex, .rigid, .err => {},
+    }
+}
+
+/// Push a child run onto the alias row visit stack in reverse, so the stack
+/// pops the children in their declared order.
 fn pushAliasRowVarsReversed(self: *Self, vars: []const Var) Allocator.Error!void {
     var i = vars.len;
     while (i > 0) {
         i -= 1;
-        try self.type_visit_stack.append(self.gpa, vars[i]);
+        try self.alias_row_frames.append(self.gpa, .{ .node = vars[i] });
     }
 }
 
-fn validateAliasRowVars(
-    self: *Self,
-    vars: []const Var,
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    for (vars) |var_| {
-        if (!try self.validateAliasRowsHelp(var_, env, region, visited)) return false;
+/// Whether `name` already appears in the row run that starts at `names_base`,
+/// recording it when it does not. Names compare by identifier index, exactly
+/// as the row's duplicate map keyed them.
+fn aliasRowNameIsDuplicate(self: *Self, names_base: u32, name: Ident.Idx) Allocator.Error!bool {
+    for (self.alias_row_names.items[names_base..]) |seen| {
+        if (seen == name) return true;
     }
-    return true;
+    try self.alias_row_names.append(self.gpa, name);
+    return false;
 }
 
-fn validateRecordFields(
+fn failAliasRow(
     self: *Self,
-    fields: types_mod.RecordField.SafeMultiList.Range,
+    comptime row_kind: AliasRowKind,
+    actual_var: Var,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.var_)) |field_var| {
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
-    }
-    return true;
+) Allocator.Error!RowStep {
+    try self.reportInvalidAliasRow(row_kind, actual_var, env, region);
+    return .failed;
 }
 
-fn validateRecordRow(
-    self: *Self,
-    fields: types_mod.RecordField.SafeMultiList.Range,
-    ext_var: Var,
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
-    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
-    defer names.deinit();
-
-    const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
-        const entry = try names.getOrPut(name);
-        if (entry.found_existing) {
-            try self.reportInvalidAliasRow(.record, field_var, env, region);
-            return false;
-        }
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
-    }
-
-    return try self.validateRecordExt(ext_var, &names, env, region, visited);
+/// Read the source field at `idx` within `range`. Indexing through the run's
+/// start only happens when the record has fields; start may be undefined when
+/// count is 0.
+fn aliasRowField(self: *Self, range: types_mod.RecordField.SafeMultiList.Range, idx: u32) types_mod.RecordField {
+    return self.types.record_fields.get(@enumFromInt(@intFromEnum(range.start) + idx));
 }
 
-fn validateRecordExt(
-    self: *Self,
-    ext_var: Var,
-    names: *std.AutoHashMap(Ident.Idx, void),
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    var current = ext_var;
-    var guard = types_mod.debug.IterationGuard.init("validateRecordExt");
+fn stepRecordRow(self: *Self, frame: *RecordRowFrame, env: *Env, region: Region) Allocator.Error!RowStep {
     while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
+        switch (frame.stage) {
+            .head_fields => {
+                if (frame.idx < frame.fields.count) {
+                    const field = self.aliasRowField(frame.fields, frame.idx);
+                    if (try self.aliasRowNameIsDuplicate(frame.names_base, field.name)) {
+                        return try self.failAliasRow(.record, field.var_, env, region);
+                    }
+                    frame.idx += 1;
+                    try self.alias_row_frames.append(self.gpa, .{ .node = field.var_ });
+                    return .suspended;
+                }
+                frame.stage = .ext_chain;
             },
-            .structure => |flat_type| switch (flat_type) {
-                .record => |record| {
-                    if (!try self.validateRecordExtFields(record.fields, current, names, env, region, visited)) return false;
-                    current = record.ext;
-                },
-                .record_unbound => |fields| {
-                    return try self.validateRecordExtFields(fields, current, names, env, region, visited);
-                },
-                .empty_record => return true,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .tag_union,
-                .empty_tag_union,
-                => {
-                    try self.reportInvalidAliasRow(.record, current, env, region);
-                    return false;
-                },
+            .ext_chain => {
+                var current = frame.ext;
+                while (true) {
+                    frame.guard.tick();
+                    const resolved = self.types.resolveVar(current);
+                    switch (resolved.desc.content) {
+                        .alias => |alias| {
+                            current = self.types.getAliasBackingVar(alias);
+                        },
+                        .structure => |flat_type| switch (flat_type) {
+                            .record => |record| {
+                                frame.fields = record.fields;
+                                frame.idx = 0;
+                                frame.ext_source_var = current;
+                                frame.ext = record.ext;
+                                frame.ext_terminates = false;
+                                frame.stage = .ext_fields;
+                                break;
+                            },
+                            .record_unbound => |fields| {
+                                frame.fields = fields;
+                                frame.idx = 0;
+                                frame.ext_source_var = current;
+                                frame.ext_terminates = true;
+                                frame.stage = .ext_fields;
+                                break;
+                            },
+                            .empty_record => return .finished,
+                            .tuple,
+                            .nominal_type,
+                            .fn_pure,
+                            .fn_effectful,
+                            .fn_unbound,
+                            .tag_union,
+                            .empty_tag_union,
+                            => {
+                                return try self.failAliasRow(.record, current, env, region);
+                            },
+                        },
+                        .flex, .rigid, .err => return .finished,
+                    }
+                }
             },
-            .flex, .rigid, .err => return true,
+            .ext_fields => {
+                if (frame.idx < frame.fields.count) {
+                    const field = self.aliasRowField(frame.fields, frame.idx);
+                    if (try self.aliasRowNameIsDuplicate(frame.names_base, field.name)) {
+                        return try self.failAliasRow(.record, frame.ext_source_var, env, region);
+                    }
+                    frame.idx += 1;
+                    try self.alias_row_frames.append(self.gpa, .{ .node = field.var_ });
+                    return .suspended;
+                }
+                if (frame.ext_terminates) return .finished;
+                frame.stage = .ext_chain;
+            },
         }
     }
 }
 
-fn validateRecordExtFields(
-    self: *Self,
-    fields: types_mod.RecordField.SafeMultiList.Range,
-    ext_source_var: Var,
-    names: *std.AutoHashMap(Ident.Idx, void),
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
-        const entry = try names.getOrPut(name);
-        if (entry.found_existing) {
-            try self.reportInvalidAliasRow(.record, ext_source_var, env, region);
-            return false;
-        }
-        if (!try self.validateAliasRowsHelp(field_var, env, region, visited)) return false;
-    }
-    return true;
+/// Read the source tag at `idx` within `range`. Indexing through the run's
+/// start only happens when the tag union has tags; start may be undefined when
+/// count is 0.
+fn aliasRowTag(self: *Self, range: types_mod.Tag.SafeMultiList.Range, idx: u32) types_mod.Tag {
+    return self.types.tags.get(@enumFromInt(@intFromEnum(range.start) + idx));
 }
 
-fn validateTagUnionRow(
-    self: *Self,
-    tags: types_mod.Tag.SafeMultiList.Range,
-    ext_var: Var,
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
-    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
-    defer names.deinit();
-
-    const tag_slice = self.types.getTagsSlice(tags);
-    for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
-        const entry = try names.getOrPut(name);
-        if (entry.found_existing) {
-            try self.reportInvalidAliasRow(.tag_union, ext_var, env, region);
-            return false;
-        }
-        if (!try self.validateAliasRowVars(self.types.sliceVars(args), env, region, visited)) return false;
-    }
-
-    return try self.validateTagUnionExt(ext_var, &names, env, region, visited);
-}
-
-fn validateTagUnionExt(
-    self: *Self,
-    ext_var: Var,
-    names: *std.AutoHashMap(Ident.Idx, void),
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    var current = ext_var;
-    var guard = types_mod.debug.IterationGuard.init("validateTagUnionExt");
+fn stepTagRow(self: *Self, frame: *TagRowFrame, env: *Env, region: Region) Allocator.Error!RowStep {
     while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
+        switch (frame.stage) {
+            .head_tags => {
+                if (frame.idx < frame.tags.count) {
+                    const tag = self.aliasRowTag(frame.tags, frame.idx);
+                    if (try self.aliasRowNameIsDuplicate(frame.names_base, tag.name)) {
+                        return try self.failAliasRow(.tag_union, frame.report_var, env, region);
+                    }
+                    frame.arg_idx = 0;
+                    frame.stage = .head_args;
+                    continue;
+                }
+                frame.stage = .ext_chain;
             },
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |tag_union| {
-                    if (!try self.validateTagUnionExtTags(tag_union.tags, current, names, env, region, visited)) return false;
-                    current = tag_union.ext;
-                },
-                .empty_tag_union => return true,
-                .record,
-                .record_unbound,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => {
-                    try self.reportInvalidAliasRow(.tag_union, current, env, region);
-                    return false;
-                },
+            .head_args, .ext_args => {
+                const tag = self.aliasRowTag(frame.tags, frame.idx);
+                const args = self.types.sliceVars(tag.args);
+                if (frame.arg_idx < args.len) {
+                    const arg_var = args[frame.arg_idx];
+                    frame.arg_idx += 1;
+                    try self.alias_row_frames.append(self.gpa, .{ .node = arg_var });
+                    return .suspended;
+                }
+                frame.idx += 1;
+                frame.stage = switch (frame.stage) {
+                    .head_args => .head_tags,
+                    .ext_args => .ext_tags,
+                    .head_tags, .ext_chain, .ext_tags => unreachable,
+                };
             },
-            .flex, .rigid, .err => return true,
+            .ext_chain => {
+                var current = frame.ext;
+                while (true) {
+                    frame.guard.tick();
+                    const resolved = self.types.resolveVar(current);
+                    switch (resolved.desc.content) {
+                        .alias => |alias| {
+                            current = self.types.getAliasBackingVar(alias);
+                        },
+                        .structure => |flat_type| switch (flat_type) {
+                            .tag_union => |tag_union| {
+                                frame.tags = tag_union.tags;
+                                frame.idx = 0;
+                                frame.report_var = current;
+                                frame.ext = tag_union.ext;
+                                frame.stage = .ext_tags;
+                                break;
+                            },
+                            .empty_tag_union => return .finished,
+                            .record,
+                            .record_unbound,
+                            .tuple,
+                            .nominal_type,
+                            .fn_pure,
+                            .fn_effectful,
+                            .fn_unbound,
+                            .empty_record,
+                            => {
+                                return try self.failAliasRow(.tag_union, current, env, region);
+                            },
+                        },
+                        .flex, .rigid, .err => return .finished,
+                    }
+                }
+            },
+            .ext_tags => {
+                if (frame.idx < frame.tags.count) {
+                    const tag = self.aliasRowTag(frame.tags, frame.idx);
+                    if (try self.aliasRowNameIsDuplicate(frame.names_base, tag.name)) {
+                        return try self.failAliasRow(.tag_union, frame.report_var, env, region);
+                    }
+                    frame.arg_idx = 0;
+                    frame.stage = .ext_args;
+                    continue;
+                }
+                frame.stage = .ext_chain;
+            },
         }
     }
-}
-
-fn validateTagUnionExtTags(
-    self: *Self,
-    tags: types_mod.Tag.SafeMultiList.Range,
-    ext_source_var: Var,
-    names: *std.AutoHashMap(Ident.Idx, void),
-    env: *Env,
-    region: Region,
-    visited: *std.AutoHashMap(Var, void),
-) Allocator.Error!bool {
-    const tag_slice = self.types.getTagsSlice(tags);
-    for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
-        const entry = try names.getOrPut(name);
-        if (entry.found_existing) {
-            try self.reportInvalidAliasRow(.tag_union, ext_source_var, env, region);
-            return false;
-        }
-        if (!try self.validateAliasRowVars(self.types.sliceVars(args), env, region, visited)) return false;
-    }
-    return true;
 }
 
 fn reportInvalidAliasRow(
     self: *Self,
-    comptime row_kind: enum { record, tag_union },
+    comptime row_kind: AliasRowKind,
     actual_var: Var,
     env: *Env,
     region: Region,

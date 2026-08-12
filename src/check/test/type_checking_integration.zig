@@ -9072,3 +9072,145 @@ test "instantiation - alias-chain spine deeper than any native-stack budget chec
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+// Reachability pin for the canonical-key digest walk
+// (src/check/canonical_type_keys.zig). Every new dispatch edge digests its
+// receiver and its callable, so the digest sees whatever type the receiver
+// carries—here an alias-chain spine thousands of nodes deep, materialized
+// inline as the nominal receiver's argument. A digest walk that descends on
+// the native stack fails this program by crashing rather than by resolving
+// the method.
+test "check type - dispatch on a deeply nested receiver digests its state key" {
+    const allocator = testing.allocator;
+    const decls = 3;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "A0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "A{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "List(");
+        try source.print(allocator, "A{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, ")");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\Wrap(a) := [W(a)].{{
+        \\  unwrap = |w| w
+        \\}}
+        \\
+        \\deep : Wrap(A{d}({{}})) -> Wrap(A{d}({{}}))
+        \\deep = |w| w.unwrap()
+        \\
+    , .{ decls, decls });
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Reachability pin for the cross-module graph copy
+// (src/check/copy_import.zig). Importing a value pulls its whole type into the
+// importing module's store, so the copy sees an alias-chain spine thousands of
+// nodes deep. A copy that descends on the native stack fails this program by
+// crashing rather than by checking the import.
+test "check type - importing a deeply nested value copies its type across modules" {
+    const allocator = testing.allocator;
+    const decls = 3;
+    const layers = 1024;
+
+    var source_a = std.ArrayList(u8).empty;
+    defer source_a.deinit(allocator);
+    try source_a.appendSlice(allocator, "T0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source_a.print(allocator, "T{d}(a) : ", .{k});
+        for (0..layers) |_| try source_a.appendSlice(allocator, "List(");
+        try source_a.print(allocator, "T{d}(a)", .{k - 1});
+        for (0..layers) |_| try source_a.appendSlice(allocator, ")");
+        try source_a.appendSlice(allocator, "\n");
+    }
+    try source_a.print(allocator,
+        \\
+        \\A := [A].{{
+        \\  deep : T{d}({{}})
+        \\  deep = []
+        \\}}
+        \\
+    , .{decls});
+
+    var env_a = try TestEnv.init("A", source_a.items);
+    defer env_a.deinit();
+    try env_a.assertNoErrors();
+
+    var env_b = try TestEnv.initWithImport("B", "import A\n\nuse = A.deep\n", "A", &env_a);
+    defer env_b.deinit();
+    try env_b.assertNoErrors();
+}
+
+// Reachability pin for rank adjustment (src/types/generalize.zig). Rank
+// adjustment descends record fields and extensions, so a deeply nested record
+// annotation drives it as deep as the annotation nests. A walk that descends
+// on the native stack fails this program by crashing rather than by
+// generalizing the definition.
+test "check type - generalizing a deeply nested record annotation adjusts every rank" {
+    const allocator = testing.allocator;
+    const decls = 1;
+    const layers = 2000;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "R0(a) : { f : a }\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "R{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+        try source.print(allocator, "R{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, " }");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : R{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Depth pin for alias row validation (`validateAliasRowsHelp` and the row
+// frames in src/check/Check.zig). Record payloads re-enter the walk per field,
+// so a record-shaped alias chain drives it as deep as instantiation goes:
+// layers * decls = 9216 nested rows, past the depth bound the checker used to
+// carry. Validation runs on a heap worklist covering both the constructor
+// spine and the rows, so this program must check cleanly; a walk that exits
+// through a natively recursive row validator fails it by crashing.
+test "check type - record alias-chain rows validate deeper than the old depth bound" {
+    const allocator = testing.allocator;
+    const decls = 9;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "R0(a) : { f : a }\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "R{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+        try source.print(allocator, "R{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, " }");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : R{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

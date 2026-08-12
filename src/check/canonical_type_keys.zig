@@ -153,6 +153,87 @@ pub fn containsError(
     return builder.contains_error;
 }
 
+const RecordFieldForKey = struct {
+    name: Ident.Idx,
+    var_: Var,
+};
+
+const TagForKey = struct {
+    name: Ident.Idx,
+    args: Var.SafeList.Range,
+};
+
+/// One suspended step of the digest walk. A frame is created only after its
+/// node's leading bytes are already in the hasher, so byte order is the
+/// recursion's: the frame then dispatches children one at a time and emits
+/// whatever trailing bytes follow them. Child runs are held as slices into the
+/// type store, which the digest never writes to, so a run stays valid across
+/// the children that suspend the frame holding it.
+const Frame = union(enum) {
+    alias: AliasFrame,
+    vars: VarsFrame,
+    func: FuncFrame,
+    record: RecordFrame,
+    tag_union: TagUnionFrame,
+    constraints: ConstraintsFrame,
+};
+
+/// An alias digests its backing structure first, then its argument count, then
+/// the arguments—the count follows the backing subtree, so it cannot be
+/// written when the frame is created.
+const AliasFrame = struct {
+    backing: Var,
+    args: []const Var,
+    idx: u32 = 0,
+    stage: enum { backing, args_count, args } = .backing,
+};
+
+/// A run of child vars whose count is already written: tuple elements and
+/// nominal arguments.
+const VarsFrame = struct {
+    vars: []const Var,
+    idx: u32 = 0,
+};
+
+const FuncFrame = struct {
+    args: []const Var,
+    ret: Var,
+    idx: u32 = 0,
+    stage: enum { args, ret, done } = .args,
+};
+
+/// A normalized record row. The row's fields are collected and sorted into
+/// `Builder.pending_fields` before the frame exists, so the frame carries the
+/// base of its own run and re-reads entries by index: a nested row appends
+/// above this run and truncates back to its own base when it finishes.
+const RecordFrame = struct {
+    fields_base: u32,
+    fields_count: u32,
+    idx: u32 = 0,
+    tail: ?Var,
+    stage: enum { fields, tail, done } = .fields,
+};
+
+/// A normalized tag-union row, holding both the position within the row and
+/// the position within the current tag's payload run.
+const TagUnionFrame = struct {
+    tags_base: u32,
+    tags_count: u32,
+    tag_idx: u32 = 0,
+    args: []const Var = &.{},
+    arg_idx: u32 = 0,
+    tail: ?Var,
+    stage: enum { tag_head, tag_args, tail, done } = .tag_head,
+};
+
+/// A static-dispatch constraint list. Each constraint writes its name, then
+/// its function type as a child, then the origin bytes that follow it.
+const ConstraintsFrame = struct {
+    constraints: []const types.StaticDispatchConstraint,
+    idx: u32 = 0,
+    stage: enum { head, origin } = .head,
+};
+
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
@@ -161,6 +242,18 @@ const Builder = struct {
     hasher: std.crypto.hash.sha2.Sha256,
     active: std.ArrayList(Var),
     identity_variables: std.ArrayList(Var),
+    /// Suspended steps of the walk, innermost last. The walk descends on this
+    /// heap stack rather than the native one, so digest depth is bounded only
+    /// by available memory.
+    frames: std.ArrayList(Frame),
+    /// Collected row fields, one contiguous run per record frame in flight.
+    pending_fields: std.ArrayList(RecordFieldForKey),
+    /// Collected row tags, one contiguous run per tag-union frame in flight.
+    pending_tags: std.ArrayList(TagForKey),
+    /// Extension vars already reached by the row collection currently running.
+    /// Collection runs to completion without dispatching children, so one
+    /// buffer serves every row node.
+    ext_seen: std.ArrayList(Var),
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
     detect_errors: bool = false,
@@ -178,35 +271,86 @@ const Builder = struct {
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
             .active = .empty,
             .identity_variables = .empty,
+            .frames = .empty,
+            .pending_fields = .empty,
+            .pending_tags = .empty,
+            .ext_seen = .empty,
         };
     }
 
     fn deinit(self: *Builder) void {
+        self.ext_seen.deinit(self.allocator);
+        self.pending_tags.deinit(self.allocator);
+        self.pending_fields.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
         self.identity_variables.deinit(self.allocator);
         self.active.deinit(self.allocator);
     }
 
+    /// Digest the type reachable from `var_`, driving the walk to completion on
+    /// the frame stack.
     fn writeVar(self: *Builder, var_: Var) Allocator.Error!void {
+        const frames_base = self.frames.items.len;
+        const active_base = self.active.items.len;
+        const fields_base = self.pending_fields.items.len;
+        const tags_base = self.pending_tags.items.len;
+        // A completed walk drains every buffer back to its entry length. An
+        // allocation failure mid-walk can leave entries behind, so unwind them
+        // here and keep the builder's buffers consistent on both exit paths.
+        errdefer {
+            self.frames.items.len = frames_base;
+            self.active.items.len = active_base;
+            self.pending_fields.items.len = fields_base;
+            self.pending_tags.items.len = tags_base;
+        }
+
+        if (!try self.request(var_)) {
+            while (self.frames.items.len > frames_base) {
+                const top = &self.frames.items[self.frames.items.len - 1];
+                // A step either suspends after requesting exactly one child
+                // (having already written its own resume state), or finishes
+                // without requesting anything—so popping on finish always
+                // removes the frame the step ran for.
+                const finished = switch (top.*) {
+                    .alias => |*frame| try self.stepAlias(frame),
+                    .vars => |*frame| try self.stepVars(frame),
+                    .func => |*frame| try self.stepFunc(frame),
+                    .record => |*frame| try self.stepRecord(frame),
+                    .tag_union => |*frame| try self.stepTagUnion(frame),
+                    .constraints => |*frame| try self.stepConstraints(frame),
+                };
+                if (finished) {
+                    self.frames.items.len -= 1;
+                }
+            }
+        }
+
+        std.debug.assert(self.active.items.len == active_base);
+    }
+
+    /// Digest one var's head: write every byte that precedes its children and
+    /// either finish it outright (returning true) or push the frame that will
+    /// dispatch its children (returning false).
+    fn request(self: *Builder, var_: Var) Allocator.Error!bool {
         const resolved = self.store.resolveVar(var_);
         const root = resolved.var_;
 
         if (self.err_by_var and resolved.desc.content == .err) {
             self.writeTag("err_var");
             self.writeU32(@intFromEnum(root));
-            return;
+            return true;
         }
 
         // The checker explicitly records when it closes an otherwise
         // unresolved identity to `[]`. Encode the surviving union-find root so
         // every reference to that identity shares one checked type digest.
         if (resolved.desc.flags.empty_tag_union_is_default) {
-            try self.writeIdentityVariable(
+            return try self.writeIdentityVariable(
                 root,
                 "defaulted_empty_tag_union",
                 null,
                 types.StaticDispatchConstraint.SafeList.Range.empty(),
             );
-            return;
         }
 
         const content_tag = std.meta.activeTag(resolved.desc.content);
@@ -215,46 +359,46 @@ const Builder = struct {
             if (self.require_concrete) {
                 if (self.flexLiteralDefaultKind(flex)) |kind| {
                     self.writeLiteralDefault(kind);
-                    return;
+                    return true;
                 }
                 invariantViolation("concrete canonical type key requested for unsolved flex type variable");
             }
-            try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
-            return;
+            return try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
         }
         if (content_tag == .rigid) {
             const rigid = resolved.desc.content.rigid;
             if (self.require_concrete) {
                 invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
             }
-            try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
-            return;
+            return try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
         }
 
         if (varSlot(self.active.items, root)) |slot| {
             self.writeTag("cycle");
             self.writeU32(slot);
-            return;
+            return true;
         }
 
         try self.active.append(self.allocator, root);
-        errdefer _ = self.active.pop();
-        try self.writeContent(resolved.desc.content);
+        if (try self.writeContent(resolved.desc.content)) return false;
         _ = self.active.pop();
+        return true;
     }
 
+    /// Whether `writeIdentityVariable` finished the identity outright: an
+    /// identity with constraints suspends on the constraint list instead.
     fn writeIdentityVariable(
         self: *Builder,
         root: Var,
         comptime tag: []const u8,
         name: ?Ident.Idx,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         self.contains_identity_variables = true;
         if (varSlot(self.identity_variables.items, root)) |slot| {
             self.writeTag("identity_var_ref");
             self.writeU32(slot);
-            return;
+            return true;
         }
 
         const slot: u32 = @intCast(self.identity_variables.items.len);
@@ -262,7 +406,12 @@ const Builder = struct {
         self.writeTag(tag);
         self.writeU32(slot);
         try self.writeOptionalIdent(name);
-        try self.writeConstraints(constraints);
+
+        const items = self.store.sliceStaticDispatchConstraints(constraints);
+        self.writeU32(@intCast(items.len));
+        if (items.len == 0) return true;
+        try self.frames.append(self.allocator, .{ .constraints = .{ .constraints = items } });
+        return false;
     }
 
     fn varSlot(vars: []const Var, var_: Var) ?u32 {
@@ -272,17 +421,21 @@ const Builder = struct {
         return null;
     }
 
-    fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
+    /// Write `content`'s leading bytes with its root already on `active`.
+    /// Returns true when a frame was pushed to dispatch children, false when
+    /// the content had none and the caller must pop `active` itself.
+    fn writeContent(self: *Builder, content: types.Content) Allocator.Error!bool {
         switch (content) {
             .err => {
                 if (self.detect_errors) self.contains_error = true;
                 self.writeTag("err");
+                return false;
             },
             .flex => |flex| {
                 if (self.require_concrete) {
                     if (self.flexLiteralDefaultKind(flex)) |kind| {
                         self.writeLiteralDefault(kind);
-                        return;
+                        return false;
                     }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
@@ -297,14 +450,13 @@ const Builder = struct {
             .alias => |alias| {
                 self.writeTag("alias");
                 self.writeNamedSourceIdentity(alias.origin_module, alias.ident.ident_idx, alias.source_decl.toOptional());
-                try self.writeVar(self.store.getAliasBackingVar(alias));
-                const args = self.store.sliceAliasArgs(alias);
-                self.writeU32(@intCast(args.len));
-                for (args) |arg| {
-                    try self.writeVar(arg);
-                }
+                try self.frames.append(self.allocator, .{ .alias = .{
+                    .backing = self.store.getAliasBackingVar(alias),
+                    .args = self.store.sliceAliasArgs(alias),
+                } });
+                return true;
             },
-            .structure => |flat| try self.writeFlat(flat),
+            .structure => |flat| return try self.writeFlat(flat),
         }
     }
 
@@ -361,18 +513,25 @@ const Builder = struct {
         self.writeU32(0);
     }
 
-    fn writeFlat(self: *Builder, flat: types.FlatType) Allocator.Error!void {
+    /// Write `flat`'s leading bytes, returning true when a frame was pushed.
+    fn writeFlat(self: *Builder, flat: types.FlatType) Allocator.Error!bool {
         switch (flat) {
-            .empty_record => self.writeTag("empty_record"),
-            .empty_tag_union => self.writeTag("[]"),
+            .empty_record => {
+                self.writeTag("empty_record");
+                return false;
+            },
+            .empty_tag_union => {
+                self.writeTag("[]");
+                return false;
+            },
             .record_unbound => |fields| {
                 self.writeTag("record_unbound");
-                try self.writeNormalizedRecordFields(fields, null);
+                return try self.writeNormalizedRecordFields(fields);
             },
-            .record => |record| try self.writeNormalizedRecordPayload(record.fields, record.ext),
+            .record => |record| return try self.writeNormalizedRecordPayload(record.fields, record.ext),
             .tuple => |tuple| {
                 self.writeTag("tuple");
-                try self.writeVarRange(tuple.elems);
+                return try self.pushVarRange(tuple.elems);
             },
             .nominal_type => |nominal| {
                 if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
@@ -383,79 +542,137 @@ const Builder = struct {
                 self.writeBool(nominal.isOpaque());
                 const args = self.store.sliceNominalArgs(nominal);
                 self.writeU32(@intCast(args.len));
-                for (args) |arg| {
-                    try self.writeVar(arg);
-                }
+                return try self.pushVars(args);
             },
             .fn_pure, .fn_unbound => |func| {
                 self.writeTag("fn_pure");
-                try self.writeFunc(func);
+                return try self.pushFunc(func);
             },
             .fn_effectful => |func| {
                 self.writeTag("fn_effectful");
-                try self.writeFunc(func);
+                return try self.pushFunc(func);
             },
-            .tag_union => |tag_union| try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
+            .tag_union => |tag_union| return try self.writeNormalizedTagUnionPayload(tag_union.tags, tag_union.ext),
         }
     }
 
-    fn writeFunc(self: *Builder, func: types.Func) Allocator.Error!void {
-        try self.writeVarRange(func.args);
-        try self.writeVar(func.ret);
+    /// A function digests its argument count, then its arguments, then its
+    /// return type.
+    fn pushFunc(self: *Builder, func: types.Func) Allocator.Error!bool {
+        const args = self.store.sliceVars(func.args);
+        self.writeU32(@intCast(args.len));
+        try self.frames.append(self.allocator, .{ .func = .{ .args = args, .ret = func.ret } });
+        return true;
     }
 
-    fn writeVarRange(self: *Builder, range: Var.SafeList.Range) Allocator.Error!void {
+    fn pushVarRange(self: *Builder, range: Var.SafeList.Range) Allocator.Error!bool {
         const vars = self.store.sliceVars(range);
         self.writeU32(@intCast(vars.len));
-        for (vars) |var_| {
-            try self.writeVar(var_);
+        return try self.pushVars(vars);
+    }
+
+    /// An empty run has no children to dispatch, so it needs no frame at all.
+    fn pushVars(self: *Builder, vars: []const Var) Allocator.Error!bool {
+        if (vars.len == 0) return false;
+        try self.frames.append(self.allocator, .{ .vars = .{ .vars = vars } });
+        return true;
+    }
+
+    fn stepAlias(self: *Builder, frame: *AliasFrame) Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .backing => {
+                    frame.stage = .args_count;
+                    if (!try self.request(frame.backing)) return false;
+                },
+                .args_count => {
+                    self.writeU32(@intCast(frame.args.len));
+                    frame.stage = .args;
+                },
+                .args => {
+                    if (frame.idx < frame.args.len) {
+                        const arg = frame.args[frame.idx];
+                        frame.idx += 1;
+                        if (!try self.request(arg)) return false;
+                        continue;
+                    }
+                    _ = self.active.pop();
+                    return true;
+                },
+            }
         }
     }
 
-    const RecordFieldForKey = struct {
-        name: Ident.Idx,
-        var_: Var,
-    };
+    fn stepVars(self: *Builder, frame: *VarsFrame) Allocator.Error!bool {
+        while (true) {
+            if (frame.idx < frame.vars.len) {
+                const child = frame.vars[frame.idx];
+                frame.idx += 1;
+                if (!try self.request(child)) return false;
+                continue;
+            }
+            _ = self.active.pop();
+            return true;
+        }
+    }
 
-    const TagForKey = struct {
-        name: Ident.Idx,
-        args: Var.SafeList.Range,
-    };
+    fn stepFunc(self: *Builder, frame: *FuncFrame) Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .args => {
+                    if (frame.idx < frame.args.len) {
+                        const arg = frame.args[frame.idx];
+                        frame.idx += 1;
+                        if (!try self.request(arg)) return false;
+                        continue;
+                    }
+                    frame.stage = .ret;
+                },
+                .ret => {
+                    frame.stage = .done;
+                    if (!try self.request(frame.ret)) return false;
+                },
+                .done => {
+                    _ = self.active.pop();
+                    return true;
+                },
+            }
+        }
+    }
 
     fn appendRecordFieldsForKey(
         self: *Builder,
-        fields: *std.ArrayList(RecordFieldForKey),
         range: types.RecordField.SafeMultiList.Range,
     ) Allocator.Error!void {
         const slice = self.store.getRecordFieldsSlice(range);
         const names = slice.items(.name);
         const vars = slice.items(.var_);
         for (names, vars) |name, var_| {
-            try fields.append(self.allocator, .{
+            try self.pending_fields.append(self.allocator, .{
                 .name = name,
                 .var_ = var_,
             });
         }
     }
 
-    fn writeNormalizedRecordFields(
+    /// Collect a record row's fields—the head run plus everything its
+    /// extension chain contributes—into a fresh run on `pending_fields`, and
+    /// report the extension var the row ends on, if any.
+    fn collectRecordRow(
         self: *Builder,
         head: types.RecordField.SafeMultiList.Range,
         ext: ?Var,
-    ) Allocator.Error!void {
-        var fields = std.ArrayList(RecordFieldForKey).empty;
-        defer fields.deinit(self.allocator);
-        try self.appendRecordFieldsForKey(&fields, head);
+    ) Allocator.Error!?Var {
+        try self.appendRecordFieldsForKey(head);
 
         var tail = ext;
-        var seen = std.ArrayList(Var).empty;
-        defer seen.deinit(self.allocator);
+        self.ext_seen.clearRetainingCapacity();
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
             if (varSlot(self.active.items, root) != null) break;
-            if (varSlot(seen.items, root) != null) break;
-            try seen.append(self.allocator, root);
+            if (varSlot(self.ext_seen.items, root) != null) break;
+            try self.ext_seen.append(self.allocator, root);
             const content = resolved.desc.content;
             if (std.meta.activeTag(content) != .structure) break;
             const flat = content.structure;
@@ -465,103 +682,106 @@ const Builder = struct {
                 break;
             }
             if (flat_tag == .record) {
-                try self.appendRecordFieldsForKey(&fields, flat.record.fields);
+                try self.appendRecordFieldsForKey(flat.record.fields);
                 tail = flat.record.ext;
                 continue;
             }
             if (flat_tag == .record_unbound) {
-                try self.appendRecordFieldsForKey(&fields, flat.record_unbound);
+                try self.appendRecordFieldsForKey(flat.record_unbound);
                 tail = null;
             }
             break;
         }
+        return tail;
+    }
 
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
-        self.writeU32(@intCast(fields.items.len));
-        for (fields.items, 0..) |field, index| {
-            if (index > 0 and self.idents.idxTextEql(fields.items[index - 1].name, field.name)) {
-                invariantViolation("canonical type key row normalization found duplicate record fields");
-            }
-            self.writeIdent(field.name);
-            try self.writeVar(field.var_);
-        }
-        if (tail) |tail_var| {
-            try self.writeVar(tail_var);
-        } else {
-            self.writeTag("empty_record");
-        }
+    fn writeNormalizedRecordFields(
+        self: *Builder,
+        head: types.RecordField.SafeMultiList.Range,
+    ) Allocator.Error!bool {
+        const fields_base: u32 = @intCast(self.pending_fields.items.len);
+        const tail = try self.collectRecordRow(head, null);
+
+        const fields = self.pending_fields.items[fields_base..];
+        std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        self.writeU32(@intCast(fields.len));
+        try self.frames.append(self.allocator, .{ .record = .{
+            .fields_base = fields_base,
+            .fields_count = @intCast(fields.len),
+            .tail = tail,
+        } });
+        return true;
     }
 
     fn writeNormalizedRecordPayload(
         self: *Builder,
         head: types.RecordField.SafeMultiList.Range,
         ext: Var,
-    ) Allocator.Error!void {
-        var fields = std.ArrayList(RecordFieldForKey).empty;
-        defer fields.deinit(self.allocator);
-        try self.appendRecordFieldsForKey(&fields, head);
+    ) Allocator.Error!bool {
+        const fields_base: u32 = @intCast(self.pending_fields.items.len);
+        const tail = try self.collectRecordRow(head, ext);
 
-        var tail: ?Var = ext;
-        var seen = std.ArrayList(Var).empty;
-        defer seen.deinit(self.allocator);
-        while (tail) |tail_var| {
-            const resolved = self.store.resolveVar(tail_var);
-            const root = resolved.var_;
-            if (varSlot(self.active.items, root) != null) break;
-            if (varSlot(seen.items, root) != null) break;
-            try seen.append(self.allocator, root);
-            const content = resolved.desc.content;
-            if (std.meta.activeTag(content) != .structure) break;
-            const flat = content.structure;
-            const flat_tag = std.meta.activeTag(flat);
-            if (flat_tag == .empty_record) {
-                tail = null;
-                break;
-            }
-            if (flat_tag == .record) {
-                try self.appendRecordFieldsForKey(&fields, flat.record.fields);
-                tail = flat.record.ext;
-                continue;
-            }
-            if (flat_tag == .record_unbound) {
-                try self.appendRecordFieldsForKey(&fields, flat.record_unbound);
-                tail = null;
-            }
-            break;
-        }
-
-        std.mem.sort(RecordFieldForKey, fields.items, self, recordFieldForKeyLessThan);
-        if (tail == null and fields.items.len == 0) {
+        const fields = self.pending_fields.items[fields_base..];
+        std.mem.sort(RecordFieldForKey, fields, self, recordFieldForKeyLessThan);
+        if (tail == null and fields.len == 0) {
+            self.pending_fields.items.len = fields_base;
             self.writeTag("empty_record");
-            return;
+            return false;
         }
 
         self.writeTag("record");
-        self.writeU32(@intCast(fields.items.len));
-        for (fields.items, 0..) |field, index| {
-            if (index > 0 and self.idents.idxTextEql(fields.items[index - 1].name, field.name)) {
-                invariantViolation("canonical type key row normalization found duplicate record fields");
+        self.writeU32(@intCast(fields.len));
+        try self.frames.append(self.allocator, .{ .record = .{
+            .fields_base = fields_base,
+            .fields_count = @intCast(fields.len),
+            .tail = tail,
+        } });
+        return true;
+    }
+
+    fn stepRecord(self: *Builder, frame: *RecordFrame) Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .fields => {
+                    if (frame.idx < frame.fields_count) {
+                        const index = frame.fields_base + frame.idx;
+                        const field = self.pending_fields.items[index];
+                        if (frame.idx > 0 and self.idents.idxTextEql(self.pending_fields.items[index - 1].name, field.name)) {
+                            invariantViolation("canonical type key row normalization found duplicate record fields");
+                        }
+                        self.writeIdent(field.name);
+                        frame.idx += 1;
+                        if (!try self.request(field.var_)) return false;
+                        continue;
+                    }
+                    self.pending_fields.items.len = frame.fields_base;
+                    frame.stage = .tail;
+                },
+                .tail => {
+                    frame.stage = .done;
+                    if (frame.tail) |tail_var| {
+                        if (!try self.request(tail_var)) return false;
+                    } else {
+                        self.writeTag("empty_record");
+                    }
+                },
+                .done => {
+                    _ = self.active.pop();
+                    return true;
+                },
             }
-            self.writeIdent(field.name);
-            try self.writeVar(field.var_);
-        }
-        if (tail) |tail_var| {
-            try self.writeVar(tail_var);
-        } else {
-            self.writeTag("empty_record");
         }
     }
 
     fn appendTagsForKey(
         self: *Builder,
-        tags: *std.ArrayList(TagForKey),
         range: types.Tag.SafeMultiList.Range,
     ) Allocator.Error!void {
         const slice = self.store.getTagsSlice(range);
         const names = slice.items(.name);
         const args = slice.items(.args);
         for (names, args) |name, arg_range| {
-            try tags.append(self.allocator, .{
+            try self.pending_tags.append(self.allocator, .{
                 .name = name,
                 .args = arg_range,
             });
@@ -572,20 +792,18 @@ const Builder = struct {
         self: *Builder,
         head: types.Tag.SafeMultiList.Range,
         ext: Var,
-    ) Allocator.Error!void {
-        var tags = std.ArrayList(TagForKey).empty;
-        defer tags.deinit(self.allocator);
-        try self.appendTagsForKey(&tags, head);
+    ) Allocator.Error!bool {
+        const tags_base: u32 = @intCast(self.pending_tags.items.len);
+        try self.appendTagsForKey(head);
 
         var tail: ?Var = ext;
-        var seen = std.ArrayList(Var).empty;
-        defer seen.deinit(self.allocator);
+        self.ext_seen.clearRetainingCapacity();
         while (tail) |tail_var| {
             const resolved = self.store.resolveVar(tail_var);
             const root = resolved.var_;
             if (varSlot(self.active.items, root) != null) break;
-            if (varSlot(seen.items, root) != null) break;
-            try seen.append(self.allocator, root);
+            if (varSlot(self.ext_seen.items, root) != null) break;
+            try self.ext_seen.append(self.allocator, root);
             const content = resolved.desc.content;
             if (std.meta.activeTag(content) != .structure) break;
             const flat = content.structure;
@@ -595,32 +813,74 @@ const Builder = struct {
                 break;
             }
             if (flat_tag == .tag_union) {
-                try self.appendTagsForKey(&tags, flat.tag_union.tags);
+                try self.appendTagsForKey(flat.tag_union.tags);
                 tail = flat.tag_union.ext;
                 continue;
             }
             break;
         }
 
-        std.mem.sort(TagForKey, tags.items, self, tagForKeyLessThan);
-        if (tail == null and tags.items.len == 0) {
+        const tags = self.pending_tags.items[tags_base..];
+        std.mem.sort(TagForKey, tags, self, tagForKeyLessThan);
+        if (tail == null and tags.len == 0) {
+            self.pending_tags.items.len = tags_base;
             self.writeTag("[]");
-            return;
+            return false;
         }
 
         self.writeTag("tag_union");
-        self.writeU32(@intCast(tags.items.len));
-        for (tags.items, 0..) |tag, index| {
-            if (index > 0 and self.idents.idxTextEql(tags.items[index - 1].name, tag.name)) {
-                invariantViolation("canonical type key row normalization found duplicate tags");
+        self.writeU32(@intCast(tags.len));
+        try self.frames.append(self.allocator, .{ .tag_union = .{
+            .tags_base = tags_base,
+            .tags_count = @intCast(tags.len),
+            .tail = tail,
+        } });
+        return true;
+    }
+
+    fn stepTagUnion(self: *Builder, frame: *TagUnionFrame) Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .tag_head => {
+                    if (frame.tag_idx >= frame.tags_count) {
+                        self.pending_tags.items.len = frame.tags_base;
+                        frame.stage = .tail;
+                        continue;
+                    }
+                    const index = frame.tags_base + frame.tag_idx;
+                    const tag = self.pending_tags.items[index];
+                    if (frame.tag_idx > 0 and self.idents.idxTextEql(self.pending_tags.items[index - 1].name, tag.name)) {
+                        invariantViolation("canonical type key row normalization found duplicate tags");
+                    }
+                    self.writeIdent(tag.name);
+                    frame.args = self.store.sliceVars(tag.args);
+                    self.writeU32(@intCast(frame.args.len));
+                    frame.arg_idx = 0;
+                    frame.stage = .tag_args;
+                },
+                .tag_args => {
+                    if (frame.arg_idx < frame.args.len) {
+                        const arg = frame.args[frame.arg_idx];
+                        frame.arg_idx += 1;
+                        if (!try self.request(arg)) return false;
+                        continue;
+                    }
+                    frame.tag_idx += 1;
+                    frame.stage = .tag_head;
+                },
+                .tail => {
+                    frame.stage = .done;
+                    if (frame.tail) |tail_var| {
+                        if (!try self.request(tail_var)) return false;
+                    } else {
+                        self.writeTag("[]");
+                    }
+                },
+                .done => {
+                    _ = self.active.pop();
+                    return true;
+                },
             }
-            self.writeIdent(tag.name);
-            try self.writeVarRange(tag.args);
-        }
-        if (tail) |tail_var| {
-            try self.writeVar(tail_var);
-        } else {
-            self.writeTag("[]");
         }
     }
 
@@ -632,18 +892,28 @@ const Builder = struct {
         return self.idents.idxTextLessThan(lhs.name, rhs.name);
     }
 
-    fn writeConstraints(self: *Builder, range: types.StaticDispatchConstraint.SafeList.Range) Allocator.Error!void {
-        const constraints = self.store.sliceStaticDispatchConstraints(range);
-        self.writeU32(@intCast(constraints.len));
-        for (constraints) |constraint| {
-            self.writeIdent(constraint.fn_name);
-            try self.writeVar(constraint.fn_var);
-            self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.origin.binopNegated());
-            const maybe_num_literal = constraint.origin.numeralInfo();
-            self.writeBool(maybe_num_literal != null);
-            if (maybe_num_literal) |num_literal| {
-                self.hasher.update(&num_literal.keyBytes());
+    fn stepConstraints(self: *Builder, frame: *ConstraintsFrame) Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .head => {
+                    if (frame.idx >= frame.constraints.len) return true;
+                    const constraint = frame.constraints[frame.idx];
+                    self.writeIdent(constraint.fn_name);
+                    frame.stage = .origin;
+                    if (!try self.request(constraint.fn_var)) return false;
+                },
+                .origin => {
+                    const constraint = frame.constraints[frame.idx];
+                    self.writeTag(@tagName(constraint.origin));
+                    self.writeBool(constraint.origin.binopNegated());
+                    const maybe_num_literal = constraint.origin.numeralInfo();
+                    self.writeBool(maybe_num_literal != null);
+                    if (maybe_num_literal) |num_literal| {
+                        self.hasher.update(&num_literal.keyBytes());
+                    }
+                    frame.idx += 1;
+                    frame.stage = .head;
+                },
             }
         }
     }
@@ -918,4 +1188,34 @@ test "canonical error detection traverses alias arguments" {
     ));
 
     try std.testing.expect(try containsError(allocator, &store, &env, alias));
+}
+
+// Depth pin for the digest walk. The type instantiator builds graphs whose
+// depth is bounded only by heap, and every new dispatch edge digests its
+// receiver and its callable, so the digest must survive whatever the copier
+// can produce. A 40,000-node spine is past what a per-node native frame can
+// hold on any ordinary 8 MiB stack: the recursive walk this replaced
+// segfaulted on exactly this chain, while it survived 20,000.
+test "canonical type key digests a spine deeper than any native-stack budget" {
+    const allocator = std.testing.allocator;
+    const depth: u32 = 40000;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+
+    var store = try TypeStore.initCapacity(allocator, depth + 8, 8);
+    defer store.deinit();
+
+    var current = try store.freshFromContent(.{ .structure = .empty_record });
+    for (0..depth) |_| {
+        const elems = try store.appendVars(&.{current});
+        current = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems } } });
+    }
+
+    // Digesting the same spine twice must agree: the frame machine's cycle
+    // slots and identity slots are assigned by walk order, so a walk that
+    // drifted would key the same type two different ways.
+    const first = try fromVar(allocator, &store, &env, current);
+    const second = try fromVar(allocator, &store, &env, current);
+    try std.testing.expectEqualSlices(u8, first.bytes[0..], second.bytes[0..]);
 }
