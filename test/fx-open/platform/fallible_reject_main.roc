@@ -1,5 +1,5 @@
 platform ""
-    requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
+    requires {} { main! : List(Str) => Try({}, [Exit(I32)]) }
     exposes [FallibleReject]
     packages {}
     provides { "roc_main": main_for_host! }

@@ -21,8 +21,7 @@ MISSING METHOD - not_tag.md:1:1:1:8
 
     The value's type, which does not have a method named `not`, is:
 
-        [C(a), ..] where [a.from_numeral : Numeral -> Try(a,
-        [InvalidNumeral(Str)])]
+        [C(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig
@@ -47,5 +46,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[C(Dec), ..]"))
+(expr (type "[C(Dec)]"))
 ~~~

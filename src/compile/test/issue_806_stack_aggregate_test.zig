@@ -103,7 +103,7 @@ const issue806CallArgumentDefinitions =
 ;
 
 const issue806MainPrefix =
-    \\main! : List(Str) => Try({}, [Exit(I8), ..])
+    \\main! : List(Str) => Try({}, [Exit(I8)])
     \\main! = |_args| {
 ;
 

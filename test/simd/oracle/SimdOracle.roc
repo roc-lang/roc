@@ -35,7 +35,7 @@ SimdOracle := [].{
 
 		## Build a [U8x16] from exactly 16 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 16.
-		from_list : List(U8) -> Try(U8x16, [WrongLength, ..])
+		from_list : List(U8) -> Try(U8x16, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 16 {
 				Err(WrongLength)
@@ -613,7 +613,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(U8x16, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(U8x16, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -632,7 +632,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -699,7 +699,7 @@ SimdOracle := [].{
 
 		## Build an [I8x16] from exactly 16 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 16.
-		from_list : List(I8) -> Try(I8x16, [WrongLength, ..])
+		from_list : List(I8) -> Try(I8x16, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 16 {
 				Err(WrongLength)
@@ -1200,7 +1200,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(I8x16, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(I8x16, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -1219,7 +1219,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -1266,7 +1266,7 @@ SimdOracle := [].{
 
 		## Build a [U16x8] from exactly 8 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 8.
-		from_list : List(U16) -> Try(U16x8, [WrongLength, ..])
+		from_list : List(U16) -> Try(U16x8, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 8 {
 				Err(WrongLength)
@@ -1804,7 +1804,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(U16x8, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(U16x8, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -1823,7 +1823,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -1871,7 +1871,7 @@ SimdOracle := [].{
 
 		## Build an [I16x8] from exactly 8 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 8.
-		from_list : List(I16) -> Try(I16x8, [WrongLength, ..])
+		from_list : List(I16) -> Try(I16x8, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 8 {
 				Err(WrongLength)
@@ -2479,7 +2479,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(I16x8, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(I16x8, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -2498,7 +2498,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -2545,7 +2545,7 @@ SimdOracle := [].{
 
 		## Build a [U32x4] from exactly 4 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 4.
-		from_list : List(U32) -> Try(U32x4, [WrongLength, ..])
+		from_list : List(U32) -> Try(U32x4, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 4 {
 				Err(WrongLength)
@@ -3013,7 +3013,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(U32x4, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(U32x4, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -3032,7 +3032,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -3079,7 +3079,7 @@ SimdOracle := [].{
 
 		## Build an [I32x4] from exactly 4 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 4.
-		from_list : List(I32) -> Try(I32x4, [WrongLength, ..])
+		from_list : List(I32) -> Try(I32x4, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 4 {
 				Err(WrongLength)
@@ -3586,7 +3586,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(I32x4, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(I32x4, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -3605,7 +3605,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -3651,7 +3651,7 @@ SimdOracle := [].{
 
 		## Build a [U64x2] from exactly 2 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 2.
-		from_list : List(U64) -> Try(U64x2, [WrongLength, ..])
+		from_list : List(U64) -> Try(U64x2, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 2 {
 				Err(WrongLength)
@@ -4009,7 +4009,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(U64x2, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(U64x2, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -4028,7 +4028,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -4074,7 +4074,7 @@ SimdOracle := [].{
 
 		## Build an [I64x2] from exactly 2 lane values, lane 0 first.
 		## Returns `Err(WrongLength)` if the list's length is not 2.
-		from_list : List(I64) -> Try(I64x2, [WrongLength, ..])
+		from_list : List(I64) -> Try(I64x2, [WrongLength])
 		from_list = |lanes|
 			if List.len(lanes) != 2 {
 				Err(WrongLength)
@@ -4404,7 +4404,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
 		## and `v128.load` on wasm.
-		load : List(U8), U64 -> Try(I64x2, [OutOfBounds, ..])
+		load : List(U8), U64 -> Try(I64x2, [OutOfBounds])
 		load = |bytes, index| {
 			len = List.len(bytes)
 			if index > len {
@@ -4423,7 +4423,7 @@ SimdOracle := [].{
 		##
 		## Lowers to `movdqu` (store form) on x86-64, `str` (Q register)
 		## on AArch64, and `v128.store` on wasm.
-		store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])
+		store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 		store = |vector, bytes, index| {
 			len = List.len(bytes)
 			if index > len {

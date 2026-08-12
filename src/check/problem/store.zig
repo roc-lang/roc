@@ -230,6 +230,7 @@ pub const Store = struct {
                     .recursive_default_value,
                     .literal_defaulted,
                     .redundant_pattern,
+                    .redundant_open_tag_union,
                     .unmatchable_pattern,
                     .unreachable_code,
                     .comptime_unused_branch,

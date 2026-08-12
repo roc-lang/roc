@@ -125,7 +125,7 @@ test "transitive URL dependency compiles through the orchestration core from a w
         .sub_path = "app/pf/main.roc",
         .data =
         \\platform ""
-        \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+        \\    requires {} { main! : List(Str) => Try(_, [Exit(I8)]) }
         \\    exposes []
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }

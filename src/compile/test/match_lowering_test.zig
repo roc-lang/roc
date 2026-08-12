@@ -30,7 +30,7 @@ const six_tag_match_app =
     \\    Orange => 6
     \\}
     \\
-    \\main! : List(Str) => Try({}, [Exit(I8), ..])
+    \\main! : List(Str) => Try({}, [Exit(I8)])
     \\main! = |args| {
     \\    # Depend on args so the match stays runtime code instead of being
     \\    # hoisted as a compile-time constant.
@@ -119,7 +119,7 @@ fn listMatchApp(comptime branch_count: usize) []const u8 {
             \\    _ => 0
             \\}
             \\
-            \\main! : List(Str) => Try({}, [Exit(I8), ..])
+            \\main! : List(Str) => Try({}, [Exit(I8)])
             \\main! = |args| {
             \\    # Runtime-derived list so the match is not constant-folded.
             \\    xs = List.map(args, Str.count_utf8_bytes)
@@ -181,7 +181,7 @@ test "guard, string, list, and as-pattern matches pass ARC certification" {
         \\    Err(_) => fallback
         \\}
         \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! : List(Str) => Try({}, [Exit(I8)])
         \\main! = |_args| {
         \\    echo!(describe(Ok(7), True))
         \\    echo!(describe(Err("pretty"), False))
@@ -202,7 +202,7 @@ test "nominal record match with declared order differing from backing order lowe
         \\    P.({ y, x }) => x + U8.to_u64(y)
         \\}
         \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! : List(Str) => Try({}, [Exit(I8)])
         \\main! = |_args| {
         \\    a : P
         \\    a = { y: 1, x: 77 }
@@ -223,7 +223,7 @@ test "match lowering is deterministic" {
         \\    Err(_) => -2
         \\}
         \\
-        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! : List(Str) => Try({}, [Exit(I8)])
         \\main! = |_args| {
         \\    echo!(Str.inspect(f(Ok(3))))
         \\    Ok({})

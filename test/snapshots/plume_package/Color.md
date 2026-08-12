@@ -1141,9 +1141,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1276)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1280)
 					(receiver
-						(e-call (constraint-fn-var 1275)
+						(e-call (constraint-fn-var 1279)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

@@ -1008,7 +1008,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     The value's type, which does not have a method named `from_quote`, is:
 
-        [Blue, ..]
+        [Blue]
 
 
 ┌───────────────┐
@@ -1046,7 +1046,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     But the expression between the `match` parenthesis has the type:
 
-        [Blue, ..]
+        [Blue]
 
     These can never match! Either the pattern or expression has a problem.
 
@@ -1104,7 +1104,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     It has the type:
 
-        (f, j, Error, [O, ..], (Error, Error), List(l))
+        (f, j, Error, [O], (Error, Error), List(l))
           where [
             f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
             j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),

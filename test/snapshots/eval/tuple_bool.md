@@ -24,7 +24,7 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 
     The value's type, which does not have a method named `not`, is:
 
-        [True, ..]
+        [True]
 
 
 ┌────────────────┐
@@ -37,7 +37,7 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 
     The value's type, which does not have a method named `not`, is:
 
-        [False, ..]
+        [False]
 
 
 ┌────────────────┐
@@ -50,7 +50,7 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 
     The value's type, which does not have a method named `not`, is:
 
-        [True, ..]
+        [True]
 
 
 ┌────────────────┐
@@ -63,7 +63,7 @@ MISSING METHOD - tuple_bool.md:1:78:1:83
 
     The value's type, which does not have a method named `not`, is:
 
-        [True, ..]
+        [True]
 
 # TOKENS
 ~~~zig
@@ -129,5 +129,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, ..], [False, ..], Bool, Bool, [True, ..], [False, ..], Bool, Bool)"))
+(expr (type "([True], [False], Bool, Bool, [True], [False], Bool, Bool)"))
 ~~~

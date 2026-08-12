@@ -232,6 +232,9 @@ pub const CommonIdents = extern struct {
     // Error tag produced by optional field access (`r.?x`) when the field is
     // absent: the Err side of `Try(field_type, [MissingField])`.
     missing_field: Ident.Idx,
+    // Synthetic identifier for polarity-deferred tag union extensions in alias
+    // declaration bodies (see types.polarity_var_text)
+    polarity_var: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -362,6 +365,8 @@ pub const CommonIdents = extern struct {
             .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
             // Error tag for optional field access on an absent field
             .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = try common.insertIdent(gpa, Ident.for_text(types_mod.polarity_var_text)),
         };
     }
 
@@ -495,6 +500,8 @@ pub const CommonIdents = extern struct {
             .optional_presence = common.findIdent("#optional") orelse unreachable,
             // Error tag for optional field access on an absent field
             .missing_field = common.findIdent("MissingField") orelse unreachable,
+            // Synthetic identifier for polarity-deferred tag union extensions
+            .polarity_var = common.findIdent(types_mod.polarity_var_text) orelse unreachable,
         };
     }
 };

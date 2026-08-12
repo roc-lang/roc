@@ -122,10 +122,10 @@ main! = |_args| Ok({})
 		(patt (type "Str => {}"))
 		(patt (type "({}) -> Dec"))
 		(patt (type "Dec"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
 		(expr (type "({}) -> Dec"))
 		(expr (type "Dec"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~

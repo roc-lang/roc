@@ -26,6 +26,7 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
+const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
 /// The explicit declaration-backed opening operation (issue #9983): make a
@@ -118,6 +119,21 @@ pub const Instantiator = struct {
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
 
+    /// The `Ident.Idx` of `types.polarity_var_text` in `idents`, when the
+    /// caller wants polarity-deferred tag union extensions recognized. Rigids
+    /// with this name never reach `rigid_behavior`; they are handled per
+    /// `polarity_var_behavior`. When null, polarity vars are treated as
+    /// ordinary rigids (only sound for stores that cannot contain them).
+    polarity_var_ident: ?Ident.Idx = null,
+    /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
+    /// reproduces pre-polarity semantics and is the safe default.
+    polarity_var_behavior: PolarityVarBehavior = .close,
+    /// The polarity of the position currently being instantiated. Starts at
+    /// the polarity of the instantiation root (callers using
+    /// `.resolve_by_polarity` set it) and is negated for function argument
+    /// positions as the walk descends.
+    current_polarity: Polarity = .pos,
+
     /// Live recursion depth, guarded against non-terminating instantiation.
     depth: u32 = 0,
     /// Set once `depth` exceeds `max_instantiation_depth`. The entry point
@@ -153,6 +169,32 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    };
+
+    /// How to instantiate polarity vars: the marker rigids (named
+    /// `types.polarity_var_text`) that alias declarations store as the ext of
+    /// extensionless tag unions to defer the open-vs-closed decision to the
+    /// use site (see the doc comment on `types.polarity_var_text`).
+    pub const PolarityVarBehavior = union(enum) {
+        /// Resolve every polarity var to a closed (`[]`) extension. This is
+        /// the pre-polarity meaning of an extensionless tag union and the
+        /// behavior for positions with no meaningful polarity (eg nominal
+        /// declaration bodies, numeric suffix targets).
+        close,
+
+        /// Copy each polarity var as a fresh rigid with the same name,
+        /// keeping the decision deferred. Used when the instantiation target
+        /// is itself a type declaration body, where the use-site polarity is
+        /// still unknown.
+        preserve,
+
+        /// Resolve each polarity var by the polarity of the position it
+        /// occupies: open (fresh unnamed flex) in positive/output positions,
+        /// closed (`[]`) in negative/input positions. The walk starts at
+        /// `current_polarity` and negates through function argument
+        /// positions, so polarity composes correctly through functions
+        /// embedded in alias bodies.
+        resolve_by_polarity,
     };
 
     const Self = @This();
@@ -195,6 +237,27 @@ pub const Instantiator = struct {
 
         switch (resolved.desc.content) {
             .rigid => |rigid| {
+                // Polarity vars (the deferred open-vs-closed tag union
+                // extensions of alias declaration bodies) are resolved before
+                // any rigid behavior applies: they are compiler-internal and
+                // must never be substituted, flexed, or kept rigid by the
+                // caller's rigid policy.
+                if (self.polarity_var_ident) |polarity_ident| {
+                    if (rigid.name.eql(polarity_ident)) {
+                        const fresh_content: Content = switch (self.polarity_var_behavior) {
+                            .close => .{ .structure = .empty_tag_union },
+                            .preserve => .{ .rigid = Rigid.init(rigid.name) },
+                            .resolve_by_polarity => switch (self.current_polarity) {
+                                .pos => .{ .flex = Flex.init() },
+                                .neg => .{ .structure = .empty_tag_union },
+                            },
+                        };
+                        const fresh_var = try self.store.freshFromContentWithRank(fresh_content, self.current_rank);
+                        try self.var_map.put(resolved_var, fresh_var);
+                        return fresh_var;
+                    }
+                }
+
                 // If this var is rigid, then create a new var depending on the
                 // provided behavior
                 const fresh_type: enum { flex, rigid } = blk: {
@@ -417,12 +480,20 @@ pub const Instantiator = struct {
         var fresh_args = try std.ArrayList(Var).initCapacity(fresh_args_alloc, func.args.count);
         defer fresh_args.deinit(fresh_args_alloc);
 
+        // Argument positions negate the surrounding polarity; the return
+        // position preserves it. This drives `.resolve_by_polarity` handling
+        // of polarity vars nested inside alias bodies.
+        const saved_polarity = self.current_polarity;
+        defer self.current_polarity = saved_polarity;
+
+        self.current_polarity = saved_polarity.flip();
         const args_start: usize = @intFromEnum(func.args.start);
         for (0..func.args.count) |i| {
             // Re-fetch the var on each iteration since the backing array may have moved
             const arg_var = self.store.vars.items.items[args_start + i];
             fresh_args.appendAssumeCapacity(try self.instantiateVar(arg_var));
         }
+        self.current_polarity = saved_polarity;
 
         const fresh_ret = try self.instantiateVar(func.ret);
 
