@@ -25908,7 +25908,6 @@ const BodyContext = struct {
     /// graph is constructed and no other operand can publish into this scope.
     fn checkedSelectionsForCallConsumer(
         self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
         bindings: []const checked.SpecializationCallConsumerBinding,
         selections: []const solve.DirectRequestSelection,
     ) Allocator.Error!*ActiveCheckedSelections {
@@ -25922,7 +25921,6 @@ const BodyContext = struct {
 
         for (bindings) |binding| {
             const produced = self.callConsumerExactSourceNode(
-                plan,
                 selections,
                 binding.source,
             ) orelse switch (binding.source_kind) {
@@ -25944,19 +25942,14 @@ const BodyContext = struct {
 
     fn callConsumerExactSourceNode(
         self: *BodyContext,
-        plan: checked.SpecializationProjectionPlanView,
         selections: []const solve.DirectRequestSelection,
         source: checked.CheckedTypeId,
     ) ?NodeId {
-        for (plan.slots) |slot| {
-            const selected = directSelectionForSlot(selections, .{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
-            }) orelse continue;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.checked == source) return selected.produced;
-            }
-        }
+        const direct = directSelectionForSlot(selections, .{
+            .module_bytes = self.view.key.bytes,
+            .checked = source,
+        });
+        if (direct) |selection| return selection.produced;
         const active = self.active_checked_selections orelse return null;
         return active.get(.{
             .module_bytes = self.view.key.bytes,
@@ -25966,14 +25959,12 @@ const BodyContext = struct {
 
     fn callConsumerBindingsReady(
         self: *BodyContext,
-        plan: checked.SpecializationProjectionPlanView,
         bindings: []const checked.SpecializationCallConsumerBinding,
         selections: []const solve.DirectRequestSelection,
     ) bool {
         for (bindings) |binding| switch (binding.source_kind) {
             .concrete_checked => {},
             .exact_selection => if (self.callConsumerExactSourceNode(
-                plan,
                 selections,
                 binding.source,
             ) == null) return false,
@@ -25983,7 +25974,6 @@ const BodyContext = struct {
 
     fn lowerExprAtCallConsumerRequest(
         self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
         bindings: []const checked.SpecializationCallConsumerBinding,
         selections: []const solve.DirectRequestSelection,
         expr: checked.CheckedExprId,
@@ -25991,7 +25981,6 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const inherited = self.active_checked_selections;
         self.active_checked_selections = try self.checkedSelectionsForCallConsumer(
-            plan,
             bindings,
             selections,
         );
@@ -26667,7 +26656,6 @@ const BodyContext = struct {
             .exact_destination,
         );
         const callee = try self.lowerExprAtCallConsumerRequest(
-            call_plan,
             call_plan.callee_consumer_bindings,
             selections.items,
             call.func,
@@ -30359,7 +30347,6 @@ const BodyContext = struct {
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
                 if (needs_request and !self.callConsumerBindingsReady(
-                    plan,
                     consumer_bindings,
                     selections.items,
                 )) continue;
@@ -30371,7 +30358,6 @@ const BodyContext = struct {
                 );
                 const value = if (needs_request)
                     try self.lowerExprAtCallConsumerRequest(
-                        plan,
                         consumer_bindings,
                         selections.items,
                         checked_expr,
@@ -30532,7 +30518,6 @@ const BodyContext = struct {
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
                 if (needs_request and !self.callConsumerBindingsReady(
-                    plan,
                     consumer_bindings,
                     selections.items,
                 )) continue;
@@ -30552,7 +30537,6 @@ const BodyContext = struct {
                     );
                 const value = if (needs_request) switch (operand) {
                     .checked_expr => |expr| try self.lowerExprAtCallConsumerRequest(
-                        plan,
                         consumer_bindings,
                         selections.items,
                         expr,
@@ -30643,7 +30627,6 @@ const BodyContext = struct {
                 Common.invariant("non-callable operand was not produced before preliminary request materialization");
             }
             const lowered = try self.lowerExprAtCallConsumerRequest(
-                plan,
                 self.view.templates.specializationCallOperandConsumerBindings(plan, index),
                 selections,
                 expr,
@@ -30698,7 +30681,6 @@ const BodyContext = struct {
             if (self.preLoweredOperandAt(pre_lowered.items, index) != null) continue;
             if (!self.valueConsumesContextualRequest(expr)) continue;
             const lowered = try self.lowerExprAtCallConsumerRequest(
-                plan,
                 self.view.templates.specializationCallOperandConsumerBindings(plan, index),
                 selections,
                 expr,
@@ -32641,14 +32623,12 @@ const BodyContext = struct {
                     Common.invariant("checker-published record checked seed had dependent bindings");
                 }
                 if (needs_request and !checked_seed and !self.callConsumerBindingsReady(
-                    plan,
                     consumer_bindings,
                     selections.items,
                 )) continue;
                 const value = if (needs_request) blk: {
                     const request = try self.projectionSelectionArgumentNode(plan, selections.items, index);
                     break :blk try self.lowerExprAtCallConsumerRequest(
-                        plan,
                         consumer_bindings,
                         selections.items,
                         field.value,
@@ -45538,7 +45518,6 @@ const BodyContext = struct {
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(call_plan, operand_index);
                 if (needs_request and !self.callConsumerBindingsReady(
-                    call_plan,
                     consumer_bindings,
                     selections.items,
                 )) continue;
@@ -45554,7 +45533,6 @@ const BodyContext = struct {
                 produced_exprs[operand_index] = switch (operand) {
                     .checked_expr => |expr| if (needs_request)
                         try self.lowerExprAtCallConsumerRequest(
-                            call_plan,
                             consumer_bindings,
                             selections.items,
                             expr,

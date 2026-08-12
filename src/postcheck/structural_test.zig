@@ -612,6 +612,19 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(target_request, "const checked_target = try self.instNode(");
 }
 
+test "contextual call bindings read their exact source without a plan scan" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const source_lookup = sourceSliceBetween(
+        lower_source,
+        "fn callConsumerExactSourceNode(",
+        "fn persistentCheckedBaseNode(",
+    );
+    try expectContains(source_lookup, "directSelectionForSlot(selections,");
+    try expectContains(source_lookup, "active.get(");
+    try expectNotContains(source_lookup, "for (plan.slots)");
+    try expectNotContains(source_lookup, "specializationSlotOccurrences");
+}
+
 test "checked calls share one interned shape and have no whole-value plans" {
     const CheckedArtifact = check.CheckedArtifact;
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallPlan, "shape"));

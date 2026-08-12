@@ -2871,6 +2871,12 @@ function asks whether any descendant is generated, and no edge descends into a
 generated nominal's backing. The checked plan names the generated slot itself;
 the producer records the exact node at that point.
 
+A contextual consumer binding names its exact source identity directly. That
+identity is the checked ID of its call slot, so Monotype reads the flat
+selection span or the active dense column at that ID. It must not scan the
+plan's other slots or their occurrence lists to rediscover which slot owns the
+source; checking already made that decision when it emitted the binding.
+
 The active substitution environment stores one paged dense column per checked
 module namespace. A stable module digest selects the namespace; the
 artifact-local `CheckedTypeId` directly indexes that namespace's live column.
