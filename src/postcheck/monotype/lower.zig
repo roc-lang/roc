@@ -25138,22 +25138,42 @@ const BodyContext = struct {
             base_node_ptr.* = self.graph.rootNode(selected_node);
             return;
         }
-        Common.invariant("one checker projection selected two exact runtime nodes");
+        // This operation applies an already-selected substitution to one
+        // occurrence in a resolved base; the two nodes are intentionally not
+        // competing producers. Keep the selected child and rebuild only its
+        // declared ancestors. Competing producer values were rejected when
+        // the flat selection span was formed, before materialization began.
     }
+
+    const CallProjectionRootBase = union(enum) {
+        /// A checker-authored base, optionally carrying ancestors rebuilt by
+        /// an earlier substitution span. This is the only root kind whose
+        /// declared projection subtree may be materialized.
+        checked: ?NodeId,
+        /// A completed runtime edge. Its node is already the exact whole value
+        /// at this occurrence, so no descendant projection is legal or useful.
+        exact: NodeId,
+    };
 
     /// Apply an exact substitution span to one checker-published projection
     /// subtree. Work is proportional to changed projection ancestors, not to
-    /// the size of the checked type graph.
+    /// the size of the checked type graph. A complete runtime edge is returned
+    /// directly and never opened as though it were a checked base.
     fn materializeCallProjectionSubtree(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         root_projection: u32,
         selections: *ActiveCheckedSelections,
-        raw_root_base: ?NodeId,
+        root_base: CallProjectionRootBase,
     ) Allocator.Error!NodeId {
         if (root_projection >= plan.projections.len) {
             Common.invariant("call projection materialization referenced a missing root");
         }
+        switch (root_base) {
+            .exact => |exact| return self.graph.rootNode(exact),
+            .checked => {},
+        }
+        const raw_root_base = root_base.checked;
         const root_index: usize = root_projection;
         var subtree_end: usize = root_index + 1;
         while (subtree_end < plan.projections.len and
@@ -25174,12 +25194,13 @@ const BodyContext = struct {
         @memset(authoritative_roots, false);
         const base_nodes = try self.graph.arena().alloc(?NodeId, subtree_len);
         @memset(base_nodes, null);
-        const blocked_by_generated = try self.graph.arena().alloc(bool, subtree_len);
-        @memset(blocked_by_generated, false);
-        // Publish exact projections before walking the base. An exact compound
-        // remains authoritative, but its explicitly projected child cells are
-        // still visited so their producers can complete forward edges in
-        // place. A generated nominal is the only atomic traversal boundary.
+        const blocked_by_exact_parent = try self.graph.arena().alloc(bool, subtree_len);
+        @memset(blocked_by_exact_parent, false);
+        // Publish exact projections before walking the base. A completed exact
+        // node is the authoritative whole runtime value at that occurrence;
+        // no checked descendant projection is evaluated below it. Descendant
+        // selections were already published from the producer edge, and any
+        // other consumer materializes its own declared projection path.
         for (plan.projections[root_index..subtree_end], 0..) |projection, relative_index| {
             if (selections.get(.{
                 .module_bytes = self.view.key.bytes,
@@ -25216,16 +25237,13 @@ const BodyContext = struct {
                 continue;
             }
             const parent_index: usize = projection.parent - root_index;
-            if (blocked_by_generated[parent_index]) {
-                blocked_by_generated[relative_index] = true;
+            if (blocked_by_exact_parent[parent_index] or authoritative_roots[parent_index]) {
+                blocked_by_exact_parent[relative_index] = true;
                 continue;
             }
-            const parent = if (authoritative_roots[parent_index])
-                exact[parent_index].?
-            else
-                base_nodes[parent_index] orelse continue;
+            const parent = base_nodes[parent_index] orelse continue;
             if (self.graph.nodeIsGeneratedNominal(parent)) {
-                blocked_by_generated[relative_index] = true;
+                blocked_by_exact_parent[relative_index] = true;
                 continue;
             }
             if (self.graph.content(parent) != .unresolved) {
@@ -25242,7 +25260,7 @@ const BodyContext = struct {
         var relative_index = subtree_len;
         while (relative_index > 0) {
             relative_index -= 1;
-            if (blocked_by_generated[relative_index]) continue;
+            if (blocked_by_exact_parent[relative_index]) continue;
             const projection_index = root_index + relative_index;
             const projection = plan.projections[projection_index];
             if (relative_index == 0 or exact[relative_index] == null) continue;
@@ -25622,7 +25640,7 @@ const BodyContext = struct {
                             plan,
                             argument_projection orelse Common.invariant("generated iterator compound item had no checker-authored argument projection"),
                             selections,
-                            null,
+                            .{ .checked = null },
                         );
                     },
                     .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
@@ -25706,13 +25724,12 @@ const BodyContext = struct {
         consumer.parent = self.active_checked_selections;
         if (bindings.len == 0) return consumer;
 
-        const source_table = try self.checkedSelectionTableForCall(plan, selections);
         for (bindings) |binding| {
-            const source = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = binding.source,
-            };
-            const produced = source_table.get(source) orelse switch (binding.source_kind) {
+            const produced = self.callConsumerExactSourceNode(
+                plan,
+                selections,
+                binding.source,
+            ) orelse switch (binding.source_kind) {
                 .concrete_checked => try self.persistentCheckedBaseNode(binding.source),
                 .exact_selection => Common.invariant("contextual call binding source had no exact checker-published selection"),
             };
@@ -25727,6 +25744,45 @@ const BodyContext = struct {
             entry.value_ptr.* = produced;
         }
         return consumer;
+    }
+
+    fn callConsumerExactSourceNode(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        selections: []const solve.DirectRequestSelection,
+        source: checked.CheckedTypeId,
+    ) ?NodeId {
+        for (plan.slots) |slot| {
+            const selected = directSelectionForSlot(selections, .{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.checked,
+            }) orelse continue;
+            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
+                if (occurrence.checked == source) return selected.produced;
+            }
+        }
+        const active = self.active_checked_selections orelse return null;
+        return active.get(.{
+            .module_bytes = self.view.key.bytes,
+            .checked = source,
+        });
+    }
+
+    fn callConsumerBindingsReady(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        bindings: []const checked.SpecializationCallConsumerBinding,
+        selections: []const solve.DirectRequestSelection,
+    ) bool {
+        for (bindings) |binding| switch (binding.source_kind) {
+            .concrete_checked => {},
+            .exact_selection => if (self.callConsumerExactSourceNode(
+                plan,
+                selections,
+                binding.source,
+            ) == null) return false,
+        };
+        return true;
     }
 
     fn lowerExprAtCallConsumerRequest(
@@ -25849,7 +25905,7 @@ const BodyContext = struct {
                 break @intCast(projection_index);
             }
         } else Common.invariant("requested specialization argument had no checker-published root projection");
-        return try self.materializeCallProjectionSubtree(plan, projection, table, null);
+        return try self.materializeCallProjectionSubtree(plan, projection, table, .{ .checked = null });
     }
 
     fn materializeCurrentCallRequest(
@@ -25912,7 +25968,7 @@ const BodyContext = struct {
                 checked_arg,
             );
             out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, table, source.args[index])
+                try self.materializeCallProjectionSubtree(plan, root, table, .{ .checked = source.args[index] })
             else
                 try self.persistentCheckedBaseNode(checked_arg);
         }
@@ -25924,7 +25980,15 @@ const BodyContext = struct {
                 checked_fn.ret,
             );
             break :ret if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, table, source.ret)
+                try self.materializeCallProjectionSubtree(
+                    plan,
+                    root,
+                    table,
+                    if (self.graph.functionResultRelation(source_request) == .exact_destination)
+                        .{ .exact = source.ret }
+                    else
+                        .{ .checked = source.ret },
+                )
             else
                 try self.persistentCheckedBaseNode(checked_fn.ret);
         };
@@ -25990,7 +26054,7 @@ const BodyContext = struct {
                 checked_arg,
             );
             out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, table, produced_args[index])
+                try self.materializeCallProjectionSubtree(plan, root, table, .{ .checked = produced_args[index] })
             else
                 self.graph.rootNode(produced_args[index]);
         }
@@ -26001,7 +26065,15 @@ const BodyContext = struct {
             checked_fn.ret,
         );
         const ret = if (ret_projection) |root|
-            try self.materializeCallProjectionSubtree(plan, root, table, result_base)
+            try self.materializeCallProjectionSubtree(
+                plan,
+                root,
+                table,
+                if (produced_ret != null or result_relation == .exact_destination)
+                    .{ .exact = result_base }
+                else
+                    .{ .checked = result_base },
+            )
         else
             result_base;
         const request = try self.graphFunctionNode(args, ret);
@@ -26851,7 +26923,7 @@ const BodyContext = struct {
         return .{
             .callable = materialized,
             .dispatcher = if (dispatcher_projection) |projection|
-                try self.materializeCallProjectionSubtree(call_plan, projection, selection_table, null)
+                try self.materializeCallProjectionSubtree(call_plan, projection, selection_table, .{ .checked = null })
             else
                 try self.persistentCheckedBaseNode(plan.dispatcher_ty),
         };
@@ -31287,6 +31359,12 @@ const BodyContext = struct {
                 if (available[index]) continue;
                 const needs_request = plan.operand_flows[index] != .produced;
                 if (needs_request and producer_remaining) continue;
+                const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
+                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                    plan,
+                    consumer_bindings,
+                    selections,
+                )) continue;
                 const request_arg = try call_ctx.callSelectionArgumentNode(
                     plan,
                     checked_fn_ty,
@@ -31296,7 +31374,7 @@ const BodyContext = struct {
                 const value = if (needs_request)
                     try self.lowerExprAtCallConsumerRequest(
                         plan,
-                        self.view.templates.specializationCallOperandConsumerBindings(plan, index),
+                        consumer_bindings,
                         selections,
                         checked_expr,
                         request_arg,
@@ -31447,6 +31525,12 @@ const BodyContext = struct {
                 if (available[index]) continue;
                 const needs_request = plan.operand_flows[index] != .produced;
                 if (needs_request and producer_remaining) continue;
+                const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
+                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                    plan,
+                    consumer_bindings,
+                    selections,
+                )) continue;
                 // A contextual operand consumes the exact argument edge of
                 // the checker-selected target directly. Its lambda/pattern
                 // lowering will encounter and publish that compound's own
@@ -31464,7 +31548,7 @@ const BodyContext = struct {
                 const value = if (needs_request) switch (operand) {
                     .checked_expr => |expr| try self.lowerExprAtCallConsumerRequest(
                         plan,
-                        self.view.templates.specializationCallOperandConsumerBindings(plan, index),
+                        consumer_bindings,
                         selections,
                         expr,
                         request_arg,
@@ -33614,13 +33698,25 @@ const BodyContext = struct {
             var progressed = false;
             for (record.fields, 0..) |field, index| {
                 if (available[index]) continue;
-                const needs_request = plan.operand_flows[index] != .produced;
+                const flow = plan.operand_flows[index];
+                const needs_request = flow != .produced;
+                const checked_seed = flow == .requested_callable_checked_seed or
+                    flow == .requested_value_checked_seed;
                 if (needs_request and producer_remaining) continue;
+                const consumer_bindings = self.view.templates.specializationProjectionOperandConsumerBindings(plan, index);
+                if (checked_seed and consumer_bindings.len != 0) {
+                    Common.invariant("checker-published record checked seed had dependent bindings");
+                }
+                if (needs_request and !checked_seed and !self.callConsumerBindingsReady(
+                    plan,
+                    consumer_bindings,
+                    selections,
+                )) continue;
                 const value = if (needs_request) blk: {
                     const request = try self.projectionSelectionArgumentNode(plan, selections, index);
                     break :blk try self.lowerExprAtCallConsumerRequest(
                         plan,
-                        self.view.templates.specializationProjectionOperandConsumerBindings(plan, index),
+                        consumer_bindings,
                         selections,
                         field.value,
                         request,
@@ -34129,7 +34225,7 @@ const BodyContext = struct {
             plan.dispatcher_ty,
         );
         const dispatcher_type_node = if (dispatcher_projection) |projection|
-            try call_ctx.materializeCallProjectionSubtree(call_plan, projection, selection_table, null)
+            try call_ctx.materializeCallProjectionSubtree(call_plan, projection, selection_table, .{ .checked = null })
         else
             try call_ctx.persistentCheckedBaseNode(plan.dispatcher_ty);
         const dispatch_request = CallableDispatchRequest{
@@ -36708,13 +36804,19 @@ const BodyContext = struct {
             Common.invariant("selected method target arity differed from its checked call site");
         }
         const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty);
+        // The checker-published target signature is the sole producer of
+        // target-local substitutions. Callsite arguments are runtime values
+        // retained in the materialized request according to `available`; they
+        // are not a second authority for the target's checked identity slots.
+        const no_new_callsite_arguments = try self.graph.arena().alloc(bool, callsite.args.len);
+        @memset(no_new_callsite_arguments, false);
         const target_signature = try self.methodTargetSignatureNode(lookup);
         const selections = try target_ctx.directCallSelectionsFromPublishedPlan(
             plan,
             lookup.target.callable_ty,
             &.{},
             callsite.args,
-            available,
+            no_new_callsite_arguments,
             null,
             target_signature,
             callsite.ret,
@@ -44104,7 +44206,6 @@ const BodyContext = struct {
             body: DraftExprId = undefined,
         };
 
-        var try_scrutinee_request: ?NodeId = null;
         if (match.is_try_suffix) {
             if (match.branches.len == 0) {
                 Common.invariant("checked try suffix had no Ok branch");
@@ -44124,51 +44225,18 @@ const BodyContext = struct {
             if (ok_tag.args.len != 1) {
                 Common.invariant("checked try suffix Ok tag did not have one payload");
             }
-            const result_cell = switch (output) {
-                .value => |value| value.cell,
-                .state_result => |state| state.result_cell,
+            switch (output) {
+                .value, .state_result => {},
                 .state_only => Common.invariant("checked try suffix discarded its Ok payload result"),
-            };
-            const result_node = try result_cell.toGraphNode(self.graph);
-
-            // `?` returns the Ok payload by definition. Build that exact
-            // immediate-child edge into a fresh occurrence of the scrutinee
-            // request before lowering its producer. This is a local semantic
-            // edge authored by the checked `?`; it neither scans descendants
-            // nor relates two completed type graphs.
-            const checked_scrutinee = try self.persistentCheckedBaseNode(
-                self.view.bodies.expr(match.cond).ty,
-            );
-            const request_row = try self.graph.tagConstructionRow(checked_scrutinee);
-            const ok_name = try self.builder.tagName(self.view, ok_tag.name);
-            const request_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
-            var found_ok = false;
-            for (request_row.tags, request_tags) |request_tag, *request_copy| {
-                request_copy.* = request_tag;
-                if (!self.builder.program.names.tagLabelTextEql(request_tag.name, ok_name)) continue;
-                if (request_tag.payloads.len != 1) {
-                    Common.invariant("checked try suffix Ok request did not have one payload");
-                }
-                const payloads = try self.graph.arena().dupe(NodeId, request_tag.payloads);
-                payloads[0] = result_node;
-                request_copy.payloads = payloads;
-                found_ok = true;
             }
-            if (!found_ok) Common.invariant("checked try suffix request had no Ok tag");
-            const exact_backing = try self.graph.newNode(.{ .tag_union = .{
-                .tags = request_tags,
-                .ext = request_row.ext,
-            } });
-            try_scrutinee_request = try self.producedConstructorNode(checked_scrutinee, exact_backing);
         }
 
-        // Ordinary matches consume whatever exact node their scrutinee
-        // produces. `?` additionally owns the explicit Ok-payload-to-result
-        // edge above, so its producer receives that exact request directly.
-        const produced_scrutinee = if (try_scrutinee_request) |request|
-            try self.lowerExprAtExactRequest(match.cond, DraftTypeCell.fromGraphNode(request))
-        else
-            try self.lowerExpr(match.cond);
+        // Every match consumes the exact node produced by its scrutinee. A
+        // checked `?` is no exception: its Ok branch returns the exact payload
+        // child bound from that produced tag. Constructing a checked-shaped
+        // scrutinee request here would reverse that edge and could replace an
+        // already-selected payload child with a fresh checked variable.
+        const produced_scrutinee = try self.lowerExpr(match.cond);
         // A nominal pattern is an explicit constructor boundary. If the
         // producer is a definition-private structural local, insert that
         // boundary on this occurrence instead of retagging the stored local.
@@ -46251,6 +46319,12 @@ const BodyContext = struct {
                 if (available[operand_index]) continue;
                 const needs_request = call_plan.operand_flows[operand_index] != .produced;
                 if (needs_request and producer_remaining) continue;
+                const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(call_plan, operand_index);
+                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                    call_plan,
+                    consumer_bindings,
+                    selections,
+                )) continue;
                 const request_arg = if (needs_request)
                     try call_ctx.callSelectionArgumentNode(
                         call_plan,
@@ -46264,7 +46338,7 @@ const BodyContext = struct {
                     .checked_expr => |expr| if (needs_request)
                         try self.lowerExprAtCallConsumerRequest(
                             call_plan,
-                            self.view.templates.specializationCallOperandConsumerBindings(call_plan, operand_index),
+                            consumer_bindings,
                             selections,
                             expr,
                             request_arg,

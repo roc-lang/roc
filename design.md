@@ -2962,13 +2962,39 @@ operands by evaluating only the checker-published producer projections whose
 root edge has just completed. It never walks a checked operand beside a
 produced operand. Materialization rebuilds only ancestors on projection paths
 whose flat selections changed; it treats a generated nominal as an atomic leaf
-and never enters its private backing. The
+and never enters its private backing. Any complete exact node selected at an
+ordinary compound projection is also a hard boundary for that occurrence:
+the producer already returned the whole runtime value, so materialization
+neither validates nor visits its checked descendant projections. The
 specialization key reads the checked interface through the span, and the body
 uses the same span to return exact selected nodes directly from checked
 occurrences instead of copying the function graph. The body stores the
 exact `NodeId` it actually returns; the call expression uses that node directly.
 A recursive specialization reserves one result cell before lowering and
 redirects that cell to the stored exact identity when the body completes.
+
+Contextual operands start only when every non-concrete consumer binding named
+by checking has an exact source node. Lowering performs direct slot-occurrence
+lookups for those sources; it does not build a selection table by traversing a
+compound base, and absence is not permission to instantiate a checked default.
+For a record literal, checking publishes the complete field schedule. Produced
+fields publish only their own declared slot occurrences. A requested field runs
+only after its declared sources are available. Each dependency component with
+no earlier producer has exactly one checked seed: the first field in source
+order in that component. Checking marks that field with a distinct seed flow
+and removes its incoming bindings; lowering materializes that one
+checker-authored field projection, then the field's completed value supplies
+the component's later exact substitutions. This source-order rule is the
+semantic tie-break for a cyclic or source-free component, not a lowering
+heuristic or a fallback for missing metadata. Every exact binding source must
+occur in the published record shape, or checked-artifact construction fails.
+
+The `?` operator follows the same producer direction. It lowers its operand to
+the exact produced `Try`, binds patterns from that exact tag, and returns the
+exact `Ok` payload child. It never constructs a checker-shaped `Try` request
+around the declared output and pushes that compound backward into the operand;
+doing so would replace an already-selected payload with a fresh checked
+variable.
 
 An empty substitution span is the exact proof that a body may reuse an
 independent specialization. Reuse is decided from that explicit span and the

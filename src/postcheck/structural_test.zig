@@ -484,6 +484,14 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
     try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");
 
+    const projection_application = sourceSliceBetween(
+        lower_source,
+        "fn reconcileCallProjectionSelection(",
+        "fn callRootProjection(",
+    );
+    try expectNotContains(projection_application, "two exact runtime nodes");
+    try expectContains(projection_application, "blocked_by_exact_parent[parent_index] or authoritative_roots[parent_index]");
+
     const generated_call_slots = sourceSliceBetween(
         lower_source,
         "// Checking stores generated slots after every generated dependency.",
@@ -517,6 +525,15 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(lower_source, "specializationValueFlowForExpr(checked_expr)");
     try expectNotContains(lower_source, "instantiateTemplateDispatchRelations");
     try expectNotContains(lower_source, "replayStoredEvidenceRelations");
+
+    const target_request = sourceSliceBetween(
+        lower_source,
+        "fn methodTargetRequestFromCallsiteEdges(",
+        "fn exactMethodTargetNode(",
+    );
+    try expectContains(target_request, "const no_new_callsite_arguments");
+    try expectContains(target_request, "callsite.args,\n            no_new_callsite_arguments,");
+    try expectContains(target_request, "callsite.args,\n            available,");
 }
 
 test "checked calls share one interned shape and have no whole-value plans" {
@@ -873,8 +890,9 @@ test "Monotype match lowering projects exact scrutinee cells without checked roo
         "fn lowerMatch(",
         "fn savePatternBinders(",
     );
-    try expectContains(match_source, "const produced_scrutinee = if (try_scrutinee_request) |request|");
-    try expectContains(match_source, "else\n            try self.lowerExpr(match.cond)");
+    try expectContains(match_source, "const produced_scrutinee = try self.lowerExpr(match.cond)");
+    try expectNotContains(match_source, "try_scrutinee_request");
+    try expectNotContains(match_source, "lowerExprAtExactRequest(match.cond");
     try expectContains(match_source, "const destination = try self.producedConstructorNode(checked_nominal, scrutinee_node)");
     try expectContains(match_source, "scrutinee = try self.applyProducedExprToExactDestination(scrutinee, destination)");
     try expectContains(match_source, "try self.exprTypeCell(scrutinee).toGraphNode(self.graph)");

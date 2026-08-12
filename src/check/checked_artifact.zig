@@ -15354,6 +15354,14 @@ pub const SpecializationOperandFlow = enum(u8) {
     produced,
     requested_callable,
     requested_value,
+    /// A record dependency component has no earlier runtime producer. The
+    /// checker designates this source-order field as the component's exact
+    /// root: lowering materializes its checker-authored field projection,
+    /// lowers the callable against that request, and lets the completed value
+    /// supply the component's later substitutions.
+    requested_callable_checked_seed,
+    /// The value counterpart of `requested_callable_checked_seed`.
+    requested_value_checked_seed,
 };
 
 /// One direct substitution from a call plan's exact formal slot to the
@@ -18460,6 +18468,204 @@ fn compileCallConsumerBindings(
     return .{ .start = start, .len = @intCast(pool.items.len - start) };
 }
 
+fn specializationRecordCheckedSeedFlow(flow: SpecializationOperandFlow) SpecializationOperandFlow {
+    return switch (flow) {
+        .requested_callable => .requested_callable_checked_seed,
+        .requested_value => .requested_value_checked_seed,
+        .produced,
+        .requested_callable_checked_seed,
+        .requested_value_checked_seed,
+        => checkedArtifactInvariant("non-contextual record field was selected as a checked seed", .{}),
+    };
+}
+
+fn specializationRecordOccurrenceArgumentIndex(
+    projections: []const SpecializationProjection,
+    occurrence: SpecializationOccurrence,
+) usize {
+    if (occurrence.root != .argument or occurrence.projection >= projections.len) {
+        checkedArtifactInvariant("record specialization occurrence had no field root", .{});
+    }
+    var projection_index = occurrence.projection;
+    while (projections[projection_index].parent != no_specialization_projection_parent) {
+        const parent = projections[projection_index].parent;
+        if (parent >= projection_index) {
+            checkedArtifactInvariant("record specialization projection was not parent-first", .{});
+        }
+        projection_index = parent;
+    }
+    const root = projections[projection_index];
+    if (root.step != .argument) {
+        checkedArtifactInvariant("record specialization occurrence had a non-field root", .{});
+    }
+    return root.index;
+}
+
+fn publishSpecializationRecordFieldSelections(
+    shape: SpecializationCallShape,
+    field_index: usize,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    projections: []const SpecializationProjection,
+    available_slots: []bool,
+) void {
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    if (available_slots.len != shape_slots.len) {
+        checkedArtifactInvariant("record specialization selection column had the wrong length", .{});
+    }
+    const shape_projections = projections[shape.projections.start .. shape.projections.start + shape.projections.len];
+    for (shape_slots, available_slots) |slot, *available| {
+        if (available.*) continue;
+        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (occurrence.production != .producer) continue;
+            if (specializationRecordOccurrenceArgumentIndex(shape_projections, occurrence) != field_index) continue;
+            available.* = true;
+            break;
+        }
+    }
+}
+
+fn specializationRecordBindingSourceReady(
+    shape: SpecializationCallShape,
+    source: CheckedTypeId,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    available_slots: []const bool,
+) bool {
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    if (available_slots.len != shape_slots.len) {
+        checkedArtifactInvariant("record specialization source column had the wrong length", .{});
+    }
+    for (shape_slots, available_slots) |slot, available| {
+        if (!available) continue;
+        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (occurrence.checked == source) return true;
+        }
+    }
+    return false;
+}
+
+fn specializationRecordBindingSourceDeclared(
+    shape: SpecializationCallShape,
+    source: CheckedTypeId,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+) bool {
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    for (shape_slots) |slot| {
+        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (occurrence.checked == source) return true;
+        }
+    }
+    return false;
+}
+
+/// Publish the exact evaluation roots for a record's contextual fields. A
+/// completed producer makes only its checker-authored slot occurrences
+/// available. Requested fields whose bindings are then ready extend that set.
+/// If a dependency component has no incoming exact edge, its first remaining
+/// source-order field becomes the explicit checked-root seed for that
+/// component. Monotype therefore executes a complete schedule chosen here;
+/// it never chooses an authority while lowering.
+fn finalizeSpecializationRecordFieldSchedule(
+    allocator: Allocator,
+    shape: SpecializationCallShape,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    projections: []const SpecializationProjection,
+    flows: []SpecializationOperandFlow,
+    binding_spans: []artifact_serialize.Span,
+    bindings: []const SpecializationCallConsumerBinding,
+) Allocator.Error!void {
+    if (flows.len != binding_spans.len) {
+        checkedArtifactInvariant("record specialization schedule had mismatched field columns", .{});
+    }
+    const available_slots = try allocator.alloc(bool, shape.slots.len);
+    defer allocator.free(available_slots);
+    @memset(available_slots, false);
+    const pending = try allocator.alloc(bool, flows.len);
+    defer allocator.free(pending);
+    @memset(pending, false);
+
+    var remaining: usize = 0;
+    for (flows, binding_spans, 0..) |flow, span, field_index| {
+        for (bindings[span.start .. span.start + span.len]) |binding| {
+            if (binding.source_kind == .exact_selection and
+                !specializationRecordBindingSourceDeclared(shape, binding.source, slots, occurrences))
+            {
+                checkedArtifactInvariant("record specialization binding source was absent from its published shape", .{});
+            }
+        }
+        if (flow == .produced) {
+            publishSpecializationRecordFieldSelections(
+                shape,
+                field_index,
+                slots,
+                occurrences,
+                projections,
+                available_slots,
+            );
+        } else {
+            pending[field_index] = true;
+            remaining += 1;
+        }
+    }
+
+    while (remaining != 0) {
+        var progressed = false;
+        for (flows, binding_spans, pending, 0..) |*flow, *span, *is_pending, field_index| {
+            if (!is_pending.*) continue;
+            const field_bindings = bindings[span.start .. span.start + span.len];
+            var ready = true;
+            for (field_bindings) |binding| switch (binding.source_kind) {
+                .concrete_checked => {},
+                .exact_selection => if (!specializationRecordBindingSourceReady(
+                    shape,
+                    binding.source,
+                    slots,
+                    occurrences,
+                    available_slots,
+                )) {
+                    ready = false;
+                    break;
+                },
+            };
+            if (!ready) continue;
+            if (field_bindings.len == 0) {
+                flow.* = specializationRecordCheckedSeedFlow(flow.*);
+            }
+            is_pending.* = false;
+            remaining -= 1;
+            progressed = true;
+            publishSpecializationRecordFieldSelections(
+                shape,
+                field_index,
+                slots,
+                occurrences,
+                projections,
+                available_slots,
+            );
+        }
+        if (progressed) continue;
+
+        const seed_index: usize = for (pending, 0..) |is_pending, index| {
+            if (is_pending) break index;
+        } else checkedArtifactInvariant("record specialization schedule lost a pending dependency component", .{});
+        flows[seed_index] = specializationRecordCheckedSeedFlow(flows[seed_index]);
+        binding_spans[seed_index] = .{};
+        pending[seed_index] = false;
+        remaining -= 1;
+        publishSpecializationRecordFieldSelections(
+            shape,
+            seed_index,
+            slots,
+            occurrences,
+            projections,
+            available_slots,
+        );
+    }
+}
+
 fn appendEmptyCallConsumerBindingSpans(
     allocator: Allocator,
     count: usize,
@@ -19400,6 +19606,10 @@ fn publishSpecializationCallPlans(
     }
     var record_field_roots = std.ArrayList(CheckedTypeId).empty;
     defer record_field_roots.deinit(allocator);
+    var record_consumer_bindings = std.ArrayList(SpecializationCallConsumerBinding).empty;
+    defer record_consumer_bindings.deinit(allocator);
+    var record_consumer_binding_spans = std.ArrayList(artifact_serialize.Span).empty;
+    defer record_consumer_binding_spans.deinit(allocator);
     for (0..checked_bodies.exprCount()) |raw_expr| {
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
@@ -19455,21 +19665,48 @@ fn publishSpecializationCallPlans(
             .start = field_flow_start,
             .len = @intCast(expr.data.record.fields.len),
         };
-        record_by_expr[raw_expr].field_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
-            allocator,
-            expr.data.record.fields.len,
-            &consumer_binding_spans,
-        );
-        for (expr.data.record.fields, record_field_roots.items, 0..) |field, formal, index| {
-            if (value_flows_by_expr[@intFromEnum(field.value)] == .produced) continue;
-            consumer_binding_spans.items[record_by_expr[raw_expr].field_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
+        record_consumer_bindings.clearRetainingCapacity();
+        record_consumer_binding_spans.clearRetainingCapacity();
+        for (expr.data.record.fields, record_field_roots.items) |field, formal| {
+            if (value_flows_by_expr[@intFromEnum(field.value)] == .produced) {
+                try record_consumer_binding_spans.append(allocator, .{});
+                continue;
+            }
+            try record_consumer_binding_spans.append(allocator, try compileCallConsumerBindings(
                 allocator,
                 checked_types,
                 &concrete_sources,
                 formal,
                 checked_bodies.expr(field.value).ty,
-                &consumer_bindings,
+                &record_consumer_bindings,
+            ));
+        }
+        const record_shape = shapes.items[@intFromEnum(record_by_expr[raw_expr].shape)];
+        try finalizeSpecializationRecordFieldSchedule(
+            allocator,
+            record_shape,
+            slots.items,
+            occurrences.items,
+            projections.items,
+            operand_flows.items[field_flow_start .. field_flow_start + expr.data.record.fields.len],
+            record_consumer_binding_spans.items,
+            record_consumer_bindings.items,
+        );
+        record_by_expr[raw_expr].field_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
+            allocator,
+            expr.data.record.fields.len,
+            &consumer_binding_spans,
+        );
+        for (record_consumer_binding_spans.items, 0..) |span, index| {
+            const start: u32 = @intCast(consumer_bindings.items.len);
+            try consumer_bindings.appendSlice(
+                allocator,
+                record_consumer_bindings.items[span.start .. span.start + span.len],
             );
+            consumer_binding_spans.items[record_by_expr[raw_expr].field_consumer_binding_spans.start + index] = .{
+                .start = start,
+                .len = span.len,
+            };
         }
     }
     for (static_dispatch_plans.plans) |plan| {
@@ -31351,7 +31588,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 66;
+    const serialized_layout_version: u32 = 67;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35686,6 +35923,59 @@ fn testIndexId(comptime Id: type, index: usize) Id {
     return @enumFromInt(index);
 }
 
+test "record specialization schedule publishes explicit source-order component seeds" {
+    const a = testIndexId(CheckedTypeId, 0);
+    const b = testIndexId(CheckedTypeId, 1);
+    const c = testIndexId(CheckedTypeId, 2);
+    const projections = [_]SpecializationProjection{
+        .{ .checked = a, .parent = no_specialization_projection_parent, .index = 0, .payload_index = 0, .step = .argument },
+        .{ .checked = b, .parent = no_specialization_projection_parent, .index = 1, .payload_index = 0, .step = .argument },
+        .{ .checked = c, .parent = no_specialization_projection_parent, .index = 2, .payload_index = 0, .step = .argument },
+    };
+    const occurrences = [_]SpecializationOccurrence{
+        .{ .checked = a, .projection = 0, .root = .argument, .production = .producer },
+        .{ .checked = b, .projection = 1, .root = .argument, .production = .producer },
+        .{ .checked = c, .projection = 2, .root = .argument, .production = .producer },
+    };
+    const slots = [_]SpecializationCallSlot{
+        .{ .checked = a, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
+        .{ .checked = b, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
+        .{ .checked = c, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
+    };
+    const bindings = [_]SpecializationCallConsumerBinding{
+        .{ .source = b, .consumer = a, .source_kind = .exact_selection },
+        .{ .source = a, .consumer = b, .source_kind = .exact_selection },
+    };
+    var spans = [_]artifact_serialize.Span{
+        .{ .start = 0, .len = 1 },
+        .{ .start = 1, .len = 1 },
+        .{},
+    };
+    var flows = [_]SpecializationOperandFlow{
+        .requested_callable,
+        .requested_value,
+        .requested_value,
+    };
+
+    try finalizeSpecializationRecordFieldSchedule(
+        std.testing.allocator,
+        .{ .slots = .{ .start = 0, .len = 3 }, .projections = .{ .start = 0, .len = 3 } },
+        &slots,
+        &occurrences,
+        &projections,
+        &flows,
+        &spans,
+        &bindings,
+    );
+
+    try std.testing.expectEqual(SpecializationOperandFlow.requested_callable_checked_seed, flows[0]);
+    try std.testing.expectEqual(SpecializationOperandFlow.requested_value, flows[1]);
+    try std.testing.expectEqual(SpecializationOperandFlow.requested_value_checked_seed, flows[2]);
+    try std.testing.expectEqual(artifact_serialize.Span{}, spans[0]);
+    try std.testing.expectEqual(artifact_serialize.Span{ .start = 1, .len = 1 }, spans[1]);
+    try std.testing.expectEqual(artifact_serialize.Span{}, spans[2]);
+}
+
 test "local procedure uses carry exact producer-recorded dispatch scope ownership" {
     var records = [_]ResolvedValueRefRecord{
         .{
@@ -37237,8 +37527,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF2, 0x22, 0x60, 0x10, 0x17, 0xC8, 0x65, 0x21, 0xDD, 0xCB, 0x42, 0xB5, 0x27, 0xAE, 0xE0, 0xD0,
-        0xEF, 0x13, 0xD5, 0x3F, 0xF0, 0xA8, 0xDF, 0x6A, 0x52, 0x24, 0x6B, 0xA7, 0xEE, 0xF3, 0x2C, 0xAC,
+        0x27, 0xB3, 0xDE, 0x6A, 0x32, 0x86, 0x7E, 0xB5, 0xAB, 0xC9, 0x2B, 0xB4, 0xA0, 0xAB, 0xED, 0xF6,
+        0x73, 0x12, 0x97, 0x46, 0xAE, 0xF3, 0x8F, 0x11, 0x68, 0x45, 0xDE, 0xCD, 0xA9, 0x56, 0xCD, 0x9D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
