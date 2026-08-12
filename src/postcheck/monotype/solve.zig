@@ -436,6 +436,11 @@ pub const InstGraph = struct {
     /// program for each function request.
     direct_request_selection_spans: std.ArrayList(DirectRequestSelectionSpan),
     direct_request_selections: std.ArrayList(DirectRequestSelection),
+    /// Exact producer roots that meet at one runtime-value boundary. The
+    /// roots must converge through their own producer completions and the
+    /// immediate-child interners; validating this flat pair never traverses
+    /// either value graph or relates it to a checked graph.
+    required_exact_value_pairs: std.ArrayList(NodePair),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -480,6 +485,7 @@ pub const InstGraph = struct {
             .function_result_relations = .empty,
             .direct_request_selection_spans = .empty,
             .direct_request_selections = .empty,
+            .required_exact_value_pairs = .empty,
         };
         return graph;
     }
@@ -538,6 +544,7 @@ pub const InstGraph = struct {
         self.generated_nominal_nodes.deinit(allocator);
         self.direct_request_selections.deinit(allocator);
         self.direct_request_selection_spans.deinit(allocator);
+        self.required_exact_value_pairs.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.function_result_relations.deinit(allocator);
         self.row_parents.deinit();
@@ -710,6 +717,32 @@ pub const InstGraph = struct {
             Common.invariant("produced selection completed a non-placeholder cell");
         }
         try self.setContent(selection, .{ .redirect = produced });
+    }
+
+    /// Record that two independently produced values meet at one exact
+    /// runtime boundary. Produced compounds are canonicalized from their
+    /// immediate exact children, and generated nominals are atomic content
+    /// identities, so equal values converge to one root without a pairwise
+    /// structural traversal. Open producer cells may converge later; frozen
+    /// relation validation proves that they did.
+    pub fn requireSameExactProducedValue(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const left = self.find(raw_left);
+        const right = self.find(raw_right);
+        if (left == right) return;
+        if (self.nodes.items[@intFromEnum(left)] != .unresolved and
+            self.nodes.items[@intFromEnum(right)] != .unresolved)
+        {
+            Common.invariant("runtime-value boundary received two different exact produced nodes");
+        }
+        try self.required_exact_value_pairs.append(self.allocator, .{
+            .left = left,
+            .right = right,
+        });
     }
 
     /// Complete the one open tag-row extension owned by a generated producer.
@@ -994,6 +1027,11 @@ pub const InstGraph = struct {
     /// production. Final type sealing remains available after this transition.
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
+        for (self.required_exact_value_pairs.items) |pair| {
+            if (self.find(pair.left) != self.find(pair.right)) {
+                Common.invariant("runtime-value boundary received two different exact produced nodes");
+            }
+        }
         self.relation_state = .frozen;
     }
 
@@ -4655,6 +4693,30 @@ fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
             assertNoNodeId(field.type, path ++ "." ++ field.name);
         }
     }
+}
+
+test "exact produced boundary pairs converge without structural relation work" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const left = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const right = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.requireSameExactProducedValue(left, right);
+
+    const exact = try graph.newNode(.{ .primitive = .u64 });
+    try graph.completeProducedSelection(left, exact);
+    try graph.completeProducedSelection(right, exact);
+    try graph.freezeRelations();
+
+    try std.testing.expect(graph.sameClass(left, right));
 }
 
 test "active Monotype snapshots are immutable across graph mutations" {

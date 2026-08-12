@@ -3130,10 +3130,13 @@ control flow. Once relation production is frozen, the durable Monotype is
 immutable and no consumer may reopen, widen, or reinterpret it.
 
 Iterator-for lowering obtains the step result shape from the exact generated
-iterator node when one is present. The checked step type supplies the public
-interface and topology only; it cannot replace or merge the producer-owned
-private `rest` representation. This keeps the loop's initial state and every
-back-edge state in the same explicit representation family.
+iterator node. If the initial `.iter` call owns a queued producer, iterator-for
+lowering completes that producer before reading the step shape and keeps its
+completed exact node on the emitted expression. The checked step type supplies
+the public interface and topology only; it cannot replace or merge the
+producer-owned private `rest` representation. There is no checked-step fallback.
+This keeps the loop's initial state and every back-edge state in the same
+explicit representation family.
 
 An iterator method dispatch likewise rebuilds its callable request from the
 exact operands it lowered, then requests the method body at that produced
@@ -3153,25 +3156,21 @@ uses it directly.
 
 A value-producing `if` or `match` owns one explicit exact result selection for
 all of its inhabited branches. Each branch is lowered exactly once and returns
-its exact graph cell. Iterator branches with the same declaration and item type
-already have the same content digest. Ordinary compound structure is joined
-only where the shared storage boundary requires it.
-The emitted branch IR retains those live graph cells until the selection is
-complete and types are sealed, so the deterministic joined root is visible to
-every branch without a producer-discovery pre-pass, re-lowering, or rewriting
-emitted code. Match patterns first project their exact binder cells from the
-exact scrutinee, so branch-local lookups produce from those cells directly.
-Source order cannot change the joined identity, and lowering never relates the
-selected result back to a public interface.
+its exact graph cell. Produced compounds are canonicalized from their immediate
+exact children, and generated nominals are atomic content identities, so valid
+branches converge to one exact root without comparing their structures. If a
+branch producer is still open, the boundary records one flat root-equality
+obligation and validates it after producer completion. Two already-resolved
+different roots are immediately a compiler invariant. The boundary never walks
+either value, creates a pair memo, combines children from different roots, or
+relates the selection back to a checked-public graph.
 
-The stable selection cell walks only the two ordinary structures meeting at
-that declared boundary. It reuses either input when all selected children
-already come from that input and allocates new compound structure only when the
-result combines children from both. A generated nominal is an atomic child: an
-equal identity is selected directly, a public occurrence is only a request for
-the exact child, and different generated identities are an invariant. A
-graph-local pair memo allocates an indirection only on a real recursive
-re-entry; acyclic selections do not manufacture memo nodes.
+The emitted branch IR retains those live graph cells until the selection is
+complete and types are sealed, so the canonical exact root is visible to every
+branch without a producer-discovery pre-pass, re-lowering, or rewriting emitted
+code. Match patterns first project their exact binder cells from the exact
+scrutinee, so branch-local lookups produce from those cells directly. Source
+order cannot change the selected identity.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:
@@ -3183,6 +3182,14 @@ Record, tuple, tag, list, and box constructors build their exact container type
 from the exact child cells they emit. They never first construct a
 checked-public container, scan it for private descendants, or emit a second
 witness related to that container.
+
+Every element of a non-empty list meets one flat exact-root storage obligation;
+the list node stores the first element's exact root and final validation proves
+that the remaining producers converged to it. Record scheduling similarly
+publishes a complete compound projection only when a checker-authored consumer
+binding explicitly names that compound as a source. Unrelated record fields
+still publish only their necessary identity slots. Neither rule authorizes a
+compound scan during Monotype lowering.
 
 A tag-construction row carries both its exact payload cells and its exact
 structural root beneath any explicit nominal constructor. Rebuilding a changed
@@ -4054,6 +4061,11 @@ formal arguments, and immediate pattern projections. None of these edges
 unifies a whole checked root with a whole produced root. Pattern lowering, for
 example, consumes the exact scrutinee node and the checked field, tuple-item,
 tag-payload, or binder position directly.
+
+Transparent aliases are normalized to their runtime backing before the checker
+publishes one of these directional edges. A producer shape therefore names the
+same backing root as the consumer binding; it never publishes an alias wrapper
+that Monotype would have to rediscover or retain as a second runtime slot.
 
 Direct calls in the interface program are dependencies on a concrete callee
 specialization. The caller first lowers each operand once and constructs the

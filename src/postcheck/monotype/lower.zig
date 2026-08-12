@@ -19196,7 +19196,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_args: []const NodeId,
-    ) Allocator.Error!?NodeId {
+    ) Allocator.Error!NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         if (public_fn.args.len != request_args.len) {
             Common.invariant("iterator public/request function arity differed");
@@ -19222,6 +19222,7 @@ const BodyContext = struct {
                 if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
                     return request_args[0];
                 }
+                Common.invariant("Iter.iter received a non-generated exact iterator operand");
             },
             .iter_next => {
                 if (request_args.len != 1) {
@@ -19230,6 +19231,7 @@ const BodyContext = struct {
                 if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
                     return try self.generatedIteratorStepReturnNode(request_args[0]);
                 }
+                Common.invariant("Iter.next received a non-generated exact iterator operand");
             },
             .iter_custom => {
                 if (request_args.len != 3) {
@@ -19320,6 +19322,7 @@ const BodyContext = struct {
                         try self.generatedIteratorItemNode(source),
                     );
                 }
+                Common.invariant("Iter.concat received no generated exact iterator operand");
             },
             .iter_append => return try self.generatedIteratorAdapterResultNode(
                 public_fn.ret,
@@ -19327,7 +19330,7 @@ const BodyContext = struct {
                 request_args,
             ),
         }
-        return null;
+        unreachable;
     }
 
     fn generatedIteratorAdapterResultNode(
@@ -19335,11 +19338,13 @@ const BodyContext = struct {
         public_ret: NodeId,
         item_node: NodeId,
         args: []const NodeId,
-    ) Allocator.Error!?NodeId {
+    ) Allocator.Error!NodeId {
         if (args.len != 2) {
             Common.invariant("iterator adapter reached Monotype with an unexpected arity");
         }
-        if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
+        if (!self.isGeneratedIteratorEvidenceNode(args[0])) {
+            Common.invariant("iterator adapter received a non-generated exact iterator operand");
+        }
         return try self.generatedIteratorNode(public_ret, item_node);
     }
 
@@ -25101,7 +25106,7 @@ const BodyContext = struct {
         };
     }
 
-    fn reconcileCallProjectionSelection(
+    fn applyCallProjectionSelection(
         self: *BodyContext,
         selected: *?NodeId,
         base_node_ptr: *?NodeId,
@@ -25228,7 +25233,7 @@ const BodyContext = struct {
                     else
                         try self.persistentCheckedBaseNode(projection.checked),
                 });
-                try self.reconcileCallProjectionSelection(
+                try self.applyCallProjectionSelection(
                     &exact[0],
                     &base_nodes[0],
                     selected_roots[0],
@@ -25249,7 +25254,7 @@ const BodyContext = struct {
             if (self.graph.content(parent) != .unresolved) {
                 base_nodes[relative_index] = try self.projectSpecializationChild(plan, projection, parent);
             }
-            try self.reconcileCallProjectionSelection(
+            try self.applyCallProjectionSelection(
                 &exact[relative_index],
                 &base_nodes[relative_index],
                 selected_roots[relative_index],
@@ -26150,12 +26155,14 @@ const BodyContext = struct {
             Common.invariant("zero-argument iterator producer had no exact generated result selection");
         }
         const public_fn_node = try self.persistentCheckedBaseNode(checked_fn_ty);
-        const generated_ret = (try self.generatedIteratorResultNode(
+        const generated_ret = try self.generatedIteratorResultNode(
             procedure,
             public_fn_node,
             produced_args,
-        )) orelse return null;
-        if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) return null;
+        );
+        if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) {
+            Common.invariant("iterator producer did not construct its generated exact result");
+        }
 
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
@@ -26313,7 +26320,7 @@ const BodyContext = struct {
                         fn_nodes.args,
                         pre_lowered.items,
                     );
-                    if (try self.lowerGeneratedIteratorNextCall(procedure, iterator_args, fn_nodes)) |lowered| return lowered;
+                    return try self.lowerGeneratedIteratorNextCall(procedure, iterator_args, fn_nodes);
                 }
             }
             const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
@@ -26488,14 +26495,18 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         lowered_args: DraftSpan(DraftExprId),
         fn_nodes: FunctionNodes,
-    ) Allocator.Error!?LoweredCall {
-        if (procedure != .iter_next) return null;
+    ) Allocator.Error!LoweredCall {
+        if (procedure != .iter_next) {
+            Common.invariant("generated iterator next lowering received another iterator procedure");
+        }
         const args = self.exprSpan(lowered_args);
         if (args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("Iter.next reached Monotype with an unexpected arity");
         }
         const iterator_node = fn_nodes.args[0];
-        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) return null;
+        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) {
+            Common.invariant("Iter.next callable request did not carry its generated exact iterator argument");
+        }
 
         const iterator = args[0];
         const produced_iterator_node = try self.exprTypeCell(iterator).toGraphNode(self.graph);
@@ -33577,14 +33588,20 @@ const BodyContext = struct {
             };
         }
         // A non-empty list stores the exact node produced by its first item.
-        // Checking guarantees every later item has the same runtime type; the
-        // final structural interner verifies that without a lowering-time
-        // graph join. An empty list has no element value and retains its
-        // checker-selected element cell.
-        const produced_node = if (lowered.len == 0)
-            list_node
-        else
-            try self.graph.newNode(.{ .list = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph) });
+        // Every later item meets that same flat storage boundary. Record the
+        // exact-root obligation directly; neither item graph is traversed or
+        // related to the checked element graph. An empty list has no element
+        // value and retains its checker-selected element cell.
+        const produced_node = if (lowered.len == 0) list_node else blk: {
+            const produced_element = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph);
+            for (lowered[1..]) |item| {
+                try self.graph.requireSameExactProducedValue(
+                    produced_element,
+                    try self.exprTypeCell(item).toGraphNode(self.graph),
+                );
+            }
+            break :blk try self.graph.newNode(.{ .list = produced_element });
+        };
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
             .{ .list = try self.addExprSpan(lowered) },
@@ -44802,16 +44819,21 @@ const BodyContext = struct {
         // remain unconstrained, and cannot supply representation evidence for
         // the enclosing continuation's declared result cell.
         const first = selection.first_value orelse return selection.declared;
-        // Every reachable branch is an exact producer. Deterministic generated
-        // identities and the final structural interner make equal checked
-        // branches converge; control flow therefore selects the first exact
-        // node and never compares or joins complete branch graphs.
+        // Every reachable branch is an exact producer. Immediate-child
+        // interning and atomic generated identities make equal checked
+        // branches converge to one root. Keep a flat equality obligation for
+        // any still-open producer cells; neither side is traversed and no
+        // checked graph participates.
         if (first.next == null and !selection.target_required) return first.cell;
         const selected_value = try first.cell.toGraphNode(self.graph);
         const selected_node = try selection.selected.toGraphNode(self.graph);
         try self.graph.completeProducedSelection(selected_node, selected_value);
         var current: ?*ControlFlowResultValue = first;
         while (current) |entry| : (current = entry.next) {
+            try self.graph.requireSameExactProducedValue(
+                selected_value,
+                try entry.cell.toGraphNode(self.graph),
+            );
             self.draft.exprs.items[@intFromEnum(entry.expr)].ty = selection.selected;
         }
         return selection.selected;
@@ -46116,6 +46138,12 @@ const BodyContext = struct {
         }
 
         const initial_iterator = try self.lowerIteratorDispatch(plan_id, .iter, plan.iter, null, null);
+        const iterator_node = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(initial_iterator).toGraphNode(self.graph),
+        );
+        self.draft.exprs.items[@intFromEnum(initial_iterator)].ty =
+            DraftTypeCell.fromGraphNode(iterator_node);
         const iterator_cell = self.exprTypeCell(initial_iterator);
         try self.publishExactCheckedTypeAtCell(plan.iterator_ty, iterator_cell);
         const step = try self.iteratorStepShape(plan, iterator_cell);
@@ -46439,7 +46467,9 @@ const BodyContext = struct {
         if (procedure != .iter_iter and procedure != .iter_next) return null;
 
         const dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], loop_iterator);
-        if (!self.isGeneratedIteratorEvidenceNode(dispatcher_node)) return null;
+        if (!self.isGeneratedIteratorEvidenceNode(dispatcher_node)) {
+            Common.invariant("generated iterator dispatch did not receive a generated exact dispatcher");
+        }
         try self.publishExactCheckedTypeAtCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
 
         const iterator = try self.lowerIteratorOperandAtNode(
@@ -47062,10 +47092,10 @@ const BodyContext = struct {
     ) Allocator.Error!IterStepShape {
         const topology = plan.step_topology;
         const iterator_node = try iterator_cell.toGraphNode(self.graph);
-        const step_node = if (self.isGeneratedIteratorEvidenceNode(iterator_node))
-            try self.generatedIteratorStepReturnNode(iterator_node)
-        else
-            try self.lowerTypeNode(plan.step_ty);
+        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) {
+            Common.invariant("iterator loop received a non-generated exact iterator value");
+        }
+        const step_node = try self.generatedIteratorStepReturnNode(iterator_node);
         const done_tag_name = try self.builder.tagName(self.view, topology.done_tag);
         const one_tag_name = try self.builder.tagName(self.view, topology.one_tag);
         const skip_tag_name = try self.builder.tagName(self.view, topology.skip_tag);

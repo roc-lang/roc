@@ -486,7 +486,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const projection_application = sourceSliceBetween(
         lower_source,
-        "fn reconcileCallProjectionSelection(",
+        "fn applyCallProjectionSelection(",
         "fn callRootProjection(",
     );
     try expectNotContains(projection_application, "two exact runtime nodes");

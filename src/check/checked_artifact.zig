@@ -17958,6 +17958,7 @@ fn compileSpecializationRecordShape(
     checked_types: *const CheckedTypePublication,
     concrete_sources: *SpecializationConcreteSourceIndex,
     field_roots: []const CheckedTypeId,
+    exact_identity_roots: []const CheckedTypeId,
     slots_out: *std.ArrayList(SpecializationCallSlot),
     occurrences_out: *std.ArrayList(SpecializationOccurrence),
     projections_out: *std.ArrayList(SpecializationProjection),
@@ -17971,6 +17972,20 @@ fn compileSpecializationRecordShape(
     defer active.deinit();
     var projections = std.ArrayList(SpecializationProjection).empty;
     defer projections.deinit(allocator);
+
+    // Consumer bindings name the exact compound roots that later fields need
+    // from earlier producers. Seed only those explicit roots. The ordinary
+    // occurrence walk below then publishes their precise field projection;
+    // unrelated compounds still publish only their identity-bearing leaves.
+    for (exact_identity_roots) |exact_root| {
+        const payload = checked_types.store.payload(exact_root);
+        if (checkedTypeIsGeneratedNominal(payload)) continue;
+        try builds.append(allocator, .{
+            .checked = exact_root,
+            .kind = .identity,
+            .exact_identity = true,
+        });
+    }
 
     for (field_roots, 0..) |field_root, index| {
         _ = try collectSpecializationCallOccurrences(
@@ -17996,7 +18011,7 @@ fn compileSpecializationRecordShape(
         allocator,
         checked_types,
         concrete_sources,
-        &.{},
+        exact_identity_roots,
         &builds,
         &projections,
         slots_out,
@@ -18103,16 +18118,24 @@ const SpecializationCallShapeKey = struct {
 
 const SpecializationRecordShapeKey = struct {
     field_roots: []const CheckedTypeId,
+    exact_identity_roots: []const CheckedTypeId,
 };
 
 const SpecializationRecordShapeKeyContext = struct {
     pub fn hash(_: @This(), key: SpecializationRecordShapeKey) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.field_roots));
+        const fields_hash = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.field_roots));
+        return std.hash.Wyhash.hash(fields_hash, std.mem.sliceAsBytes(key.exact_identity_roots));
     }
 
     pub fn eql(_: @This(), left: SpecializationRecordShapeKey, right: SpecializationRecordShapeKey) bool {
-        return std.mem.eql(CheckedTypeId, left.field_roots, right.field_roots);
+        return std.mem.eql(CheckedTypeId, left.field_roots, right.field_roots) and
+            std.mem.eql(CheckedTypeId, left.exact_identity_roots, right.exact_identity_roots);
     }
+};
+
+const OwnedSpecializationRecordShapeKey = struct {
+    field_roots: []const CheckedTypeId,
+    exact_identity_roots: []const CheckedTypeId,
 };
 
 const SpecializationRecordShapeMap = std.HashMap(
@@ -18127,32 +18150,46 @@ fn publishSpecializationRecordShape(
     checked_types: *const CheckedTypePublication,
     concrete_sources: *SpecializationConcreteSourceIndex,
     field_roots: []const CheckedTypeId,
+    exact_identity_roots: []const CheckedTypeId,
     by_key: *SpecializationRecordShapeMap,
-    owned_keys: *std.ArrayList([]const CheckedTypeId),
+    owned_keys: *std.ArrayList(OwnedSpecializationRecordShapeKey),
     shapes: *std.ArrayList(SpecializationCallShape),
     slots: *std.ArrayList(SpecializationCallSlot),
     occurrences: *std.ArrayList(SpecializationOccurrence),
     projections: *std.ArrayList(SpecializationProjection),
 ) Allocator.Error!SpecializationCallShapeId {
-    const lookup = SpecializationRecordShapeKey{ .field_roots = field_roots };
+    const lookup = SpecializationRecordShapeKey{
+        .field_roots = field_roots,
+        .exact_identity_roots = exact_identity_roots,
+    };
     if (by_key.get(lookup)) |existing| return existing;
 
     const owned_roots = try allocator.dupe(CheckedTypeId, field_roots);
     errdefer allocator.free(owned_roots);
+    const owned_exact_roots = try allocator.dupe(CheckedTypeId, exact_identity_roots);
+    errdefer allocator.free(owned_exact_roots);
     const shape: SpecializationCallShapeId = @enumFromInt(@as(u32, @intCast(shapes.items.len)));
     try shapes.append(allocator, try compileSpecializationRecordShape(
         allocator,
         checked_types,
         concrete_sources,
         owned_roots,
+        owned_exact_roots,
         slots,
         occurrences,
         projections,
     ));
     errdefer _ = shapes.pop();
-    try by_key.put(.{ .field_roots = owned_roots }, shape);
-    errdefer _ = by_key.remove(.{ .field_roots = owned_roots });
-    try owned_keys.append(allocator, owned_roots);
+    const owned_key = SpecializationRecordShapeKey{
+        .field_roots = owned_roots,
+        .exact_identity_roots = owned_exact_roots,
+    };
+    try by_key.put(owned_key, shape);
+    errdefer _ = by_key.remove(owned_key);
+    try owned_keys.append(allocator, .{
+        .field_roots = owned_roots,
+        .exact_identity_roots = owned_exact_roots,
+    });
     return shape;
 }
 
@@ -18593,7 +18630,10 @@ fn finalizeSpecializationRecordFieldSchedule(
             if (binding.source_kind == .exact_selection and
                 !specializationRecordBindingSourceDeclared(shape, binding.source, slots, occurrences))
             {
-                checkedArtifactInvariant("record specialization binding source was absent from its published shape", .{});
+                checkedArtifactInvariant(
+                    "record specialization binding source {} for consumer {} in field {} was absent from its published shape",
+                    .{ @intFromEnum(binding.source), @intFromEnum(binding.consumer), field_index },
+                );
             }
         }
         if (flow == .produced) {
@@ -19449,9 +19489,12 @@ fn publishSpecializationCallPlans(
     defer shape_by_key.deinit();
     var record_shape_by_key = SpecializationRecordShapeMap.init(allocator);
     defer record_shape_by_key.deinit();
-    var owned_record_shape_keys = std.ArrayList([]const CheckedTypeId).empty;
+    var owned_record_shape_keys = std.ArrayList(OwnedSpecializationRecordShapeKey).empty;
     defer {
-        for (owned_record_shape_keys.items) |key| allocator.free(key);
+        for (owned_record_shape_keys.items) |key| {
+            allocator.free(key.field_roots);
+            allocator.free(key.exact_identity_roots);
+        }
         owned_record_shape_keys.deinit(allocator);
     }
     var occurrences = std.ArrayList(SpecializationOccurrence).empty;
@@ -19610,6 +19653,8 @@ fn publishSpecializationCallPlans(
     defer record_consumer_bindings.deinit(allocator);
     var record_consumer_binding_spans = std.ArrayList(artifact_serialize.Span).empty;
     defer record_consumer_binding_spans.deinit(allocator);
+    var record_exact_identity_roots = std.ArrayList(CheckedTypeId).empty;
+    defer record_exact_identity_roots.deinit(allocator);
     for (0..checked_bodies.exprCount()) |raw_expr| {
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
@@ -19643,19 +19688,6 @@ fn publishSpecializationCallPlans(
                 field.label,
             ),
         );
-        record_by_expr[raw_expr].shape = try publishSpecializationRecordShape(
-            allocator,
-            checked_types,
-            &concrete_sources,
-            record_field_roots.items,
-            &record_shape_by_key,
-            &owned_record_shape_keys,
-            &shapes,
-            &slots,
-            &occurrences,
-            &projections,
-        );
-
         const field_flow_start: u32 = @intCast(operand_flows.items.len);
         for (expr.data.record.fields) |field| try operand_flows.append(
             allocator,
@@ -19667,20 +19699,41 @@ fn publishSpecializationCallPlans(
         };
         record_consumer_bindings.clearRetainingCapacity();
         record_consumer_binding_spans.clearRetainingCapacity();
+        record_exact_identity_roots.clearRetainingCapacity();
         for (expr.data.record.fields, record_field_roots.items) |field, formal| {
             if (value_flows_by_expr[@intFromEnum(field.value)] == .produced) {
                 try record_consumer_binding_spans.append(allocator, .{});
                 continue;
             }
-            try record_consumer_binding_spans.append(allocator, try compileCallConsumerBindings(
+            const binding_span = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
                 &concrete_sources,
                 formal,
                 checked_bodies.expr(field.value).ty,
                 &record_consumer_bindings,
-            ));
+            );
+            try record_consumer_binding_spans.append(allocator, binding_span);
+            for (record_consumer_bindings.items[binding_span.start .. binding_span.start + binding_span.len]) |binding| {
+                if (binding.source_kind != .exact_selection) continue;
+                for (record_exact_identity_roots.items) |existing| {
+                    if (existing == binding.source) break;
+                } else try record_exact_identity_roots.append(allocator, binding.source);
+            }
         }
+        record_by_expr[raw_expr].shape = try publishSpecializationRecordShape(
+            allocator,
+            checked_types,
+            &concrete_sources,
+            record_field_roots.items,
+            record_exact_identity_roots.items,
+            &record_shape_by_key,
+            &owned_record_shape_keys,
+            &shapes,
+            &slots,
+            &occurrences,
+            &projections,
+        );
         const record_shape = shapes.items[@intFromEnum(record_by_expr[raw_expr].shape)];
         try finalizeSpecializationRecordFieldSchedule(
             allocator,
@@ -25300,6 +25353,36 @@ fn collectSpecializationIdentityRelationsInner(
 
     const source_payload = store.payload(source);
     const dependent_payload = store.payload(dependent);
+
+    // Aliases are transparent runtime views. Normalize them before deciding
+    // whether either endpoint is an identity leaf; otherwise a relation from
+    // `Alias(a)` to a dependent variable would name the alias root even
+    // though the producer shape correctly publishes only `a`'s exact edge.
+    if (source_payload == .alias) {
+        return collectSpecializationIdentityRelationsInner(
+            allocator,
+            store,
+            source_payload.alias.backing,
+            dependent,
+            out,
+            active,
+            source_substitutions,
+            dependent_substitutions,
+        );
+    }
+    if (dependent_payload == .alias) {
+        return collectSpecializationIdentityRelationsInner(
+            allocator,
+            store,
+            source,
+            dependent_payload.alias.backing,
+            out,
+            active,
+            source_substitutions,
+            dependent_substitutions,
+        );
+    }
+
     if (checkedTypePayloadIsIdentity(source_payload) or
         checkedTypePayloadIsIdentity(dependent_payload))
     {
@@ -25348,31 +25431,6 @@ fn collectSpecializationIdentityRelationsInner(
             );
         }
         return;
-    }
-
-    if (source_payload == .alias) {
-        return collectSpecializationIdentityRelationsInner(
-            allocator,
-            store,
-            source_payload.alias.backing,
-            dependent,
-            out,
-            active,
-            source_substitutions,
-            dependent_substitutions,
-        );
-    }
-    if (dependent_payload == .alias) {
-        return collectSpecializationIdentityRelationsInner(
-            allocator,
-            store,
-            source,
-            dependent_payload.alias.backing,
-            out,
-            active,
-            source_substitutions,
-            dependent_substitutions,
-        );
     }
 
     if (source_payload == .nominal) {
@@ -35974,6 +36032,113 @@ test "record specialization schedule publishes explicit source-order component s
     try std.testing.expectEqual(artifact_serialize.Span{}, spans[0]);
     try std.testing.expectEqual(artifact_serialize.Span{ .start = 1, .len = 1 }, spans[1]);
     try std.testing.expectEqual(artifact_serialize.Span{}, spans[2]);
+}
+
+test "directional specialization relations publish a transparent alias backing edge" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const source_identity = try store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(51),
+        true,
+    );
+    try store.fillSyntheticTypeRoot(allocator, source_identity, .{ .flex = .{} });
+    const dependent_identity = try store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(52),
+        true,
+    );
+    try store.fillSyntheticTypeRoot(allocator, dependent_identity, .{ .flex = .{} });
+
+    const alias_name = try names.internTypeName("Transparent");
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x7a} ** 32));
+    const alias = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(53),
+        .backing = source_identity,
+    } });
+
+    var relations = std.ArrayList(SpecializationIdentityRelation).empty;
+    defer relations.deinit(allocator);
+    try collectDirectionalCallIdentityRelations(
+        allocator,
+        &.{ .store = store },
+        alias,
+        dependent_identity,
+        &relations,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), relations.items.len);
+    try std.testing.expectEqual(source_identity, relations.items[0].source);
+    try std.testing.expectEqual(dependent_identity, relations.items[0].dependent);
+}
+
+test "record specialization shape publishes only an explicitly requested exact compound root" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var publication = CheckedTypePublication{ .store = .{} };
+    defer publication.deinit(allocator);
+
+    const item = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(61),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, item, .{ .flex = .{} });
+    const empty_row = try publication.store.appendSyntheticPayloadRoot(
+        allocator,
+        &names,
+        .empty_tag_union,
+    );
+    const tag_name = try names.internTagLabel("Item");
+    const tag_args = try allocator.alloc(CheckedTypeId, 1);
+    tag_args[0] = item;
+    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    tags[0] = .{ .name = tag_name, .args = tag_args };
+    const compound = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
+        .tags = tags,
+        .ext = empty_row,
+    } });
+
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, &publication);
+    defer concrete_sources.deinit();
+    var slots = std.ArrayList(SpecializationCallSlot).empty;
+    defer slots.deinit(allocator);
+    var occurrences = std.ArrayList(SpecializationOccurrence).empty;
+    defer occurrences.deinit(allocator);
+    var projections = std.ArrayList(SpecializationProjection).empty;
+    defer projections.deinit(allocator);
+
+    const shape = try compileSpecializationRecordShape(
+        allocator,
+        &publication,
+        &concrete_sources,
+        &.{compound},
+        &.{compound},
+        &slots,
+        &occurrences,
+        &projections,
+    );
+
+    var found_compound = false;
+    for (slots.items[shape.slots.start .. shape.slots.start + shape.slots.len]) |slot| {
+        if (slot.checked != compound) continue;
+        found_compound = true;
+        try std.testing.expect(slot.exact_identity);
+        try std.testing.expectEqual(@as(u32, 1), slot.occurrences.len);
+        const occurrence = occurrences.items[slot.occurrences.start];
+        try std.testing.expectEqual(SpecializationOccurrenceRoot.argument, occurrence.root);
+        try std.testing.expectEqual(SpecializationOccurrenceProduction.producer, occurrence.production);
+    }
+    try std.testing.expect(found_compound);
 }
 
 test "local procedure uses carry exact producer-recorded dispatch scope ownership" {
