@@ -565,7 +565,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
         "fn storedDispatchRequestFromCheckedPlan(",
-        "fn instantiateNumeralPlanCallNode(",
+        "fn lookupExprTypeNode(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
     try expectContains(dispatch_instantiation, "directCallSelectionsFromPublishedPlan(");
@@ -881,7 +881,7 @@ test "Monotype calls retain graph-native function provenance and lower operands 
         "fn lowerCallAtType(",
         "fn lowerDirectCallWithUninhabitedArgument(",
     );
-    try expectContains(call_source, "const checked_fn_node = try call_ctx.instNode(source_fn_ty);");
+    try expectContains(call_source, "const checked_fn_node = try self.persistentCheckedBaseNode(source_fn_ty);");
     try expectContains(call_source, "const planned = try self.lowerDirectCallOperandsByPlan(");
     try expectContains(call_source, "var fn_node = planned.request;");
     try expectContains(call_source, "const lowered_args = try self.lowerCallOperandsAtNodes(");
@@ -897,6 +897,8 @@ test "Monotype calls retain graph-native function provenance and lower operands 
     try expectNotContains(call_source, "indirectCalleeMonoType");
     try expectNotContains(call_source, "functionRequestFromAvailableProducedArgumentsWithGeneratedInterner");
     try expectNotContains(call_source, "applyProducedTypeToRequest");
+    try expectNotContains(call_source, "BodyContext.initWithMethodScope");
+    try expectNotContains(call_source, "call_ctx");
 
     const direct_request = std.mem.find(u8, call_source, "const planned = try self.lowerDirectCallOperandsByPlan(").?;
     const direct_specialize = std.mem.find(u8, call_source, "const callee = try self.fnTemplateForDirectCallAtNode").?;

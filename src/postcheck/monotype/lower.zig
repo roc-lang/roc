@@ -17614,36 +17614,11 @@ const BodyContext = struct {
         const target = call.direct_target orelse return null;
         const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-        const call_ctx = try self.allocator.create(BodyContext);
-        call_ctx.* = BodyContext.initWithMethodScope(
-            self.allocator,
-            self.builder,
-            self.view,
-            self.method_scope,
-            self.owner_template,
-            self.graph,
-            self.draft,
-        ) catch |err| {
-            self.allocator.destroy(call_ctx);
-            return err;
-        };
-        call_ctx.evidence = self.evidence;
-        defer {
-            call_ctx.deinit();
-            self.allocator.destroy(call_ctx);
-        }
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.active_checked_selections = self.active_checked_selections;
-
         const request_ret = expected_ret_node orelse
             try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        const checked_fn_node = try call_ctx.instNode(source_fn_ty);
+        const checked_fn_node = try self.persistentCheckedBaseNode(source_fn_ty);
         const plan = self.view.templates.specializationCallPlanForExpr(checked_expr_id);
         const planned = try self.lowerDirectCallOperandsByPlan(
-            call_ctx,
             plan,
             source_fn_ty,
             checked_fn_node,
@@ -26359,34 +26334,17 @@ const BodyContext = struct {
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
-            const call_ctx = try self.allocator.create(BodyContext);
-            call_ctx.* = BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft) catch |err| {
-                self.allocator.destroy(call_ctx);
-                return err;
-            };
-            call_ctx.evidence = self.evidence;
-            defer {
-                call_ctx.deinit();
-                self.allocator.destroy(call_ctx);
-            }
-            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-            call_ctx.current_fn_key = self.current_fn_key;
-            call_ctx.source_region_override = self.source_region_override;
-            call_ctx.current_entry_root = self.current_entry_root;
-            call_ctx.active_checked_selections = self.active_checked_selections;
-
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
             const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
-            const checked_function = call_ctx.checkedFunctionType(source_fn_ty);
+            const checked_function = self.checkedFunctionType(source_fn_ty);
             if (checked_function.args.len != call.args.len) {
                 Common.invariant("checked direct call arity differed from its callable type");
             }
             const request_ret = expected_ret_node orelse
                 try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
             const call_plan = self.view.templates.specializationCallPlanForExpr(expr_id);
-            const checked_fn_node = try call_ctx.instNode(source_fn_ty);
+            const checked_fn_node = try self.persistentCheckedBaseNode(source_fn_ty);
             const planned = try self.lowerDirectCallOperandsByPlan(
-                call_ctx,
                 call_plan,
                 source_fn_ty,
                 checked_fn_node,
@@ -26401,7 +26359,7 @@ const BodyContext = struct {
             const hosted_capability = try self.hostedTryCapabilityForResolvedTarget(target);
             if (hosted_capability) |capability| {
                 const completed = try self.graph.functionNodes(fn_node);
-                if (try call_ctx.hostedTryWidenedRequestNode(
+                if (try self.hostedTryWidenedRequestNode(
                     capability,
                     checked_fn_node,
                     completed.args,
@@ -26423,7 +26381,7 @@ const BodyContext = struct {
                     return try self.lowerGeneratedIteratorNextCall(procedure, iterator_args, fn_nodes);
                 }
             }
-            const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
+            const source_fn_key = self.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
                 const completed_fn = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, fn_node));
@@ -26868,26 +26826,6 @@ const BodyContext = struct {
                 .{ .checked = null },
             ),
         };
-    }
-
-    fn instantiateNumeralPlanCallNode(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!NodeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != operands.len) {
-            Common.invariant("checked from_numeral plan arity differs from its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        const fn_graph = switch (self.graph.content(fn_node)) {
-            .func => |func| func,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked from_numeral plan had a non-function instantiation node"),
-        };
-        if (fn_graph.args.len != operands.len) {
-            Common.invariant("checked from_numeral plan graph arity differed from its operand span");
-        }
-        return fn_node;
     }
 
     fn instantiateTargetCallNodeFromMonoArgs(
@@ -30207,7 +30145,6 @@ const BodyContext = struct {
     /// request has selected every slot they consume.
     fn lowerDirectCallOperandsByPlan(
         self: *BodyContext,
-        call_ctx: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         checked_fn_ty: checked.CheckedTypeId,
         checked_fn_node: NodeId,
@@ -30229,7 +30166,7 @@ const BodyContext = struct {
         const newly_available = try self.graph.arena().alloc(bool, checked_args.len);
         @memset(newly_available, false);
         var selections: []const solve.DirectRequestSelection = &.{};
-        selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+        selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
             selections,
@@ -30241,7 +30178,7 @@ const BodyContext = struct {
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+            selections = (try self.applyIteratorProducerToSelectionSpan(
                 plan,
                 selections,
                 procedure,
@@ -30268,12 +30205,12 @@ const BodyContext = struct {
                 const needs_request = plan.operand_flows[index] != .produced;
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
-                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                if (needs_request and !self.callConsumerBindingsReady(
                     plan,
                     consumer_bindings,
                     selections,
                 )) continue;
-                const request_arg = try call_ctx.callSelectionArgumentNode(
+                const request_arg = try self.callSelectionArgumentNode(
                     plan,
                     checked_fn_ty,
                     selections,
@@ -30306,7 +30243,7 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published call operand dependencies had no exact source");
             }
-            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+            selections = try self.directCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
                 selections,
@@ -30318,7 +30255,7 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+                selections = (try self.applyIteratorProducerToSelectionSpan(
                     plan,
                     selections,
                     procedure,
@@ -30328,7 +30265,7 @@ const BodyContext = struct {
                 )) orelse selections;
             }
         }
-        const materialized_request = try call_ctx.materializeCallSelectionSpan(
+        const materialized_request = try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
@@ -30362,7 +30299,6 @@ const BodyContext = struct {
 
     fn lowerDispatchOperandsByPlan(
         self: *BodyContext,
-        call_ctx: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         checked_fn_ty: checked.CheckedTypeId,
         checked_fn_node: NodeId,
@@ -30394,7 +30330,7 @@ const BodyContext = struct {
         const newly_available = try self.graph.arena().alloc(bool, operands.len);
         @memset(newly_available, false);
         var selections: []const solve.DirectRequestSelection = &.{};
-        selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+        selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
             selections,
@@ -30406,7 +30342,7 @@ const BodyContext = struct {
             include_result,
         );
         if (iterator_procedure) |procedure| {
-            selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+            selections = (try self.applyIteratorProducerToSelectionSpan(
                 plan,
                 selections,
                 procedure,
@@ -30434,7 +30370,7 @@ const BodyContext = struct {
                 const needs_request = plan.operand_flows[index] != .produced;
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(plan, index);
-                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                if (needs_request and !self.callConsumerBindingsReady(
                     plan,
                     consumer_bindings,
                     selections,
@@ -30447,7 +30383,7 @@ const BodyContext = struct {
                 const request_arg = if (needs_request and target_signature != null)
                     target_signature.?.args[index]
                 else
-                    try call_ctx.callSelectionArgumentNode(
+                    try self.callSelectionArgumentNode(
                         plan,
                         checked_fn_ty,
                         selections,
@@ -30480,7 +30416,7 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published dispatch operand dependencies had no exact source");
             }
-            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+            selections = try self.directCallSelectionsFromPublishedPlan(
                 plan,
                 checked_fn_ty,
                 selections,
@@ -30495,7 +30431,7 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+                selections = (try self.applyIteratorProducerToSelectionSpan(
                     plan,
                     selections,
                     procedure,
@@ -30505,7 +30441,7 @@ const BodyContext = struct {
                 )) orelse selections;
             }
         }
-        const materialized = try call_ctx.materializeCallSelectionSpan(
+        const materialized = try self.materializeCallSelectionSpan(
             plan,
             checked_fn_ty,
             checked_fn_node,
@@ -32975,16 +32911,7 @@ const BodyContext = struct {
             .sealed => |ty| ty,
             .graph_node => null,
         };
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.active_checked_selections = self.active_checked_selections;
-
-        const checked_callable_node = try call_ctx.instNode(plan.callable_ty);
+        const checked_callable_node = try self.persistentCheckedBaseNode(plan.callable_ty);
         const call_plan = self.view.templates.specializationCallPlanForExpr(plan.expr);
         const target_signature_node = try self.dispatchTargetSignatureNode(plan);
         const resolution = self.evidenceResolution(plan) orelse
@@ -32994,7 +32921,6 @@ const BodyContext = struct {
             .structural => null,
         };
         const planned = try self.lowerDispatchOperandsByPlan(
-            &call_ctx,
             call_plan,
             plan.callable_ty,
             checked_callable_node,
@@ -33015,16 +32941,16 @@ const BodyContext = struct {
         var pre_lowered = planned.lowered;
         defer pre_lowered.deinit(self.allocator);
         const callable_node = planned.request;
-        try call_ctx.publishCompletedCallResult(
+        try self.publishCompletedCallResult(
             call_plan,
             plan.callable_ty,
             checked_callable_node,
             callable_node,
         );
         const selections = self.graph.directRequestSelections(callable_node);
-        const dispatcher_type_node = try call_ctx.materializeCallProjectionSubtree(
+        const dispatcher_type_node = try self.materializeCallProjectionSubtree(
             call_plan,
-            call_ctx.callDispatcherRootEdge(call_plan, plan.dispatcher_ty),
+            self.callDispatcherRootEdge(call_plan, plan.dispatcher_ty),
             selections,
             .{ .checked = null },
         );
@@ -33086,14 +33012,14 @@ const BodyContext = struct {
                     dispatch_request.dispatcher,
                     pre_lowered.items,
                 ),
-                .map => |map_plan| try call_ctx.deferStructuralMapAtNode(
+                .map => |map_plan| try self.deferStructuralMapAtNode(
                     plan,
                     map_plan,
                     callable_node,
                     self,
                     pre_lowered.items,
                 ),
-                .map_effectful => |map_plan| try call_ctx.deferStructuralMapAtNode(
+                .map_effectful => |map_plan| try self.deferStructuralMapAtNode(
                     plan,
                     map_plan,
                     callable_node,
@@ -33150,7 +33076,6 @@ const BodyContext = struct {
         const call_plan = self.view.templates.specializationCallPlanForExpr(plan.expr);
         const target_signature_node = try self.dispatchTargetSignatureNode(plan);
         const planned = try self.lowerDispatchOperandsByPlan(
-            self,
             call_plan,
             plan.callable_ty,
             checked_callable_node,
@@ -33324,15 +33249,10 @@ const BodyContext = struct {
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
 
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, plan_args);
+        const callable_node = try self.persistentCheckedBaseNode(plan.callable_ty);
+        if ((try self.graph.functionNodes(callable_node)).args.len != plan_args.len) {
+            Common.invariant("checked from_numeral plan graph arity differed from its operand span");
+        }
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
         const callable = try self.graph.functionNodes(callable_node);
@@ -33365,16 +33285,11 @@ const BodyContext = struct {
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
 
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-
         _ = checked_ret_ty;
-        const callable_node = try call_ctx.instantiateNumeralPlanCallNode(plan.callable_ty, plan_args);
+        const callable_node = try self.persistentCheckedBaseNode(plan.callable_ty);
+        if ((try self.graph.functionNodes(callable_node)).args.len != plan_args.len) {
+            Common.invariant("checked from_numeral plan graph arity differed from its operand span");
+        }
 
         const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
@@ -45231,16 +45146,7 @@ const BodyContext = struct {
             return generated;
         }
 
-        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
-        call_ctx.evidence = self.evidence;
-        defer call_ctx.deinit();
-        call_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        call_ctx.current_fn_key = self.current_fn_key;
-        call_ctx.source_region_override = self.source_region_override;
-        call_ctx.current_entry_root = self.current_entry_root;
-        call_ctx.active_checked_selections = self.active_checked_selections;
-
-        const checked_callable_node = try call_ctx.instNode(plan.callable_ty);
+        const checked_callable_node = try self.persistentCheckedBaseNode(plan.callable_ty);
         const checked_callable = try self.graph.functionNodes(checked_callable_node);
         if (checked_callable.args.len != plan_args.len) {
             Common.invariant("iterator dispatch plan argument arity differed from its checked callable");
@@ -45265,7 +45171,7 @@ const BodyContext = struct {
         @memset(available, false);
         const newly_available = try self.graph.arena().alloc(bool, produced_nodes.len);
         @memset(newly_available, false);
-        var selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+        var selections = try self.directCallSelectionsFromPublishedPlan(
             call_plan,
             plan.callable_ty,
             &.{},
@@ -45293,13 +45199,13 @@ const BodyContext = struct {
                 const needs_request = call_plan.operand_flows[operand_index] != .produced;
                 if (needs_request and producer_remaining) continue;
                 const consumer_bindings = self.view.templates.specializationCallOperandConsumerBindings(call_plan, operand_index);
-                if (needs_request and !call_ctx.callConsumerBindingsReady(
+                if (needs_request and !self.callConsumerBindingsReady(
                     call_plan,
                     consumer_bindings,
                     selections,
                 )) continue;
                 const request_arg = if (needs_request)
-                    try call_ctx.callSelectionArgumentNode(
+                    try self.callSelectionArgumentNode(
                         call_plan,
                         plan.callable_ty,
                         selections,
@@ -45337,7 +45243,7 @@ const BodyContext = struct {
             if (!progressed) {
                 Common.invariant("checker-published iterator operand dependencies had no exact source");
             }
-            selections = try call_ctx.directCallSelectionsFromPublishedPlan(
+            selections = try self.directCallSelectionsFromPublishedPlan(
                 call_plan,
                 plan.callable_ty,
                 selections,
@@ -45349,7 +45255,7 @@ const BodyContext = struct {
                 false,
             );
             if (iterator_procedure) |procedure| {
-                selections = (try call_ctx.applyIteratorProducerToSelectionSpan(
+                selections = (try self.applyIteratorProducerToSelectionSpan(
                     call_plan,
                     selections,
                     procedure,
@@ -45359,7 +45265,7 @@ const BodyContext = struct {
                 )) orelse selections;
             }
         }
-        const callsite_callable = try call_ctx.materializeCallSelectionSpan(
+        const callsite_callable = try self.materializeCallSelectionSpan(
             call_plan,
             plan.callable_ty,
             checked_callable_node,
