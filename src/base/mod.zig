@@ -11,9 +11,13 @@ pub const LowLevelBuiltins = @import("LowLevelBuiltins.zig");
 /// Structural rules for `LowLevel.rcEffect()` rows, enforced over the whole
 /// table by the comptime block below.
 pub const rc_effect_rules = @import("rc_effect_rules.zig");
+/// The source type, destination type, and mode of each numeric conversion
+/// low-level, parsed from its name.
+pub const numeric_conversion = @import("numeric_conversion.zig");
 
 comptime {
     rc_effect_rules.assertTableConforms();
+    numeric_conversion.assertTableConforms();
 }
 
 pub const RegionInfo = @import("RegionInfo.zig");
