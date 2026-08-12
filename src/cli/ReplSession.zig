@@ -963,7 +963,7 @@ pub fn inspectExpressionType(
                 .empty_tag_union,
                 => return error.Internal,
             },
-            .err, .flex, .rigid => return error.Internal,
+            .err, .flex, .rigid, .field_presence => return error.Internal,
         }
     };
     var tw = try parsed.module_env.initTypeWriter();
@@ -3461,7 +3461,7 @@ test "Repl - destructure definitions replace atomically by any bound name" {
     try testing.expect(store.hasKind("a", .value));
     try testing.expect(store.hasKind("b", .value));
 
-    try store.addOrReplace(testing.allocator, "a = 3", "a", .value);
+    try store.addOrReplace(testing.allocator, "a = 3", "a", .value, false);
     try testing.expectEqual(@as(usize, 1), store.count());
     try testing.expect(store.hasKind("a", .value));
     try testing.expect(!store.hasKind("b", .value));
