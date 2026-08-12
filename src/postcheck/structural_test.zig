@@ -1369,6 +1369,16 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectNotContains(binder_map, "[]?DraftLocalId");
     try expectNotContains(binder_map, "AutoHashMap");
 
+    const active_checked_selections = sourceSliceBetween(
+        lower_source,
+        "const ActiveCheckedSelectionColumn = struct",
+        "const ActiveGeneratedIterator = struct",
+    );
+    try expectContains(active_checked_selections, "DenseMap(checked.CheckedTypeId, NodeId)");
+    try expectContains(active_checked_selections, "DenseMap(checked.CheckedTypeId, void)");
+    try expectContains(active_checked_selections, "additional: std.ArrayList(ActiveCheckedSelectionColumn)");
+    try expectNotContains(active_checked_selections, "AutoHashMap");
+
     const inst_node = sourceSliceBetween(
         lower_source,
         "fn instNode(self: *BodyContext",

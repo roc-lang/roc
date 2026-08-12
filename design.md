@@ -2855,6 +2855,13 @@ function asks whether any descendant is generated, and no edge descends into a
 generated nominal's backing. The checked plan names the generated slot itself;
 the producer records the exact node at that point.
 
+The active substitution environment stores one paged dense column per checked
+module namespace. A stable module digest selects the namespace; the
+artifact-local `CheckedTypeId` directly indexes that namespace's live column.
+It does not hash the composite `(module digest, CheckedTypeId)` on every
+lookup. Lexically nested environments retain their parent explicitly, and an
+owned-but-unfilled local slot shadows the same numeric ID in that parent.
+
 An ordinary nominal's identity is its declaration plus its exact public type
 arguments. Its declaration backing is a function of those arguments, not an
 additional identity input and not another substitution root. A directional

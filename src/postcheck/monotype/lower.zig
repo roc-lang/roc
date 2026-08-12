@@ -12142,59 +12142,140 @@ const TypeInstantiationContext = struct {
     }
 };
 
+const ActiveCheckedSelectionColumn = struct {
+    module_bytes: [32]u8,
+    nodes: collections.DenseMap(checked.CheckedTypeId, NodeId),
+    owned_roots: collections.DenseMap(checked.CheckedTypeId, void),
+
+    fn init(allocator: Allocator, module_bytes: [32]u8) ActiveCheckedSelectionColumn {
+        return .{
+            .module_bytes = module_bytes,
+            .nodes = collections.DenseMap(checked.CheckedTypeId, NodeId).init(allocator),
+            .owned_roots = collections.DenseMap(checked.CheckedTypeId, void).init(allocator),
+        };
+    }
+};
+
+/// Exact checked selections are dense inside their artifact-local checked-ID
+/// namespace. The primary column serves the current body module; the uncommon
+/// cross-module method edge gets another dense column instead of turning every
+/// lookup into a hash of a 32-byte module digest plus an integer ID.
 const ActiveCheckedSelections = struct {
     allocator: Allocator,
-    nodes: std.AutoHashMap(solve.CheckedBaseKey, NodeId),
-    owned_roots: std.AutoHashMap(solve.CheckedBaseKey, void),
+    primary: ActiveCheckedSelectionColumn,
+    additional: std.ArrayList(ActiveCheckedSelectionColumn) = .empty,
     parent: ?*ActiveCheckedSelections = null,
 
-    fn init(allocator: Allocator) ActiveCheckedSelections {
+    const Entry = struct {
+        key_ptr: *const solve.CheckedBaseKey,
+        value_ptr: *NodeId,
+    };
+
+    const Iterator = struct {
+        selections: *ActiveCheckedSelections,
+        column_index: usize = 0,
+        node_iter: collections.DenseMap(checked.CheckedTypeId, NodeId).Iterator,
+        key: solve.CheckedBaseKey = undefined,
+
+        fn next(self: *Iterator) ?Entry {
+            while (true) {
+                if (self.node_iter.next()) |entry| {
+                    const column = self.selections.columnAt(self.column_index);
+                    self.key = .{
+                        .module_bytes = column.module_bytes,
+                        .checked = entry.key_ptr.*,
+                    };
+                    return .{ .key_ptr = &self.key, .value_ptr = entry.value_ptr };
+                }
+                self.column_index += 1;
+                if (self.column_index >= self.selections.columnCount()) return null;
+                self.node_iter = self.selections.columnAt(self.column_index).nodes.iterator();
+            }
+        }
+    };
+
+    fn init(allocator: Allocator, module_bytes: [32]u8) ActiveCheckedSelections {
         return .{
             .allocator = allocator,
-            .nodes = std.AutoHashMap(solve.CheckedBaseKey, NodeId).init(allocator),
-            .owned_roots = std.AutoHashMap(solve.CheckedBaseKey, void).init(allocator),
+            .primary = ActiveCheckedSelectionColumn.init(allocator, module_bytes),
         };
     }
 
     fn get(self: *const ActiveCheckedSelections, key: solve.CheckedBaseKey) ?NodeId {
-        if (self.nodes.get(key)) |node| return node;
-        if (self.owned_roots.contains(key)) return null;
+        if (self.columnForModuleConst(key.module_bytes)) |column| {
+            if (column.nodes.get(key.checked)) |node| return node;
+            if (column.owned_roots.contains(key.checked)) return null;
+        }
         return if (self.parent) |parent| parent.get(key) else null;
     }
 
     fn getOrPut(
         self: *ActiveCheckedSelections,
         key: solve.CheckedBaseKey,
-    ) Allocator.Error!std.AutoHashMap(solve.CheckedBaseKey, NodeId).GetOrPutResult {
-        return try self.nodes.getOrPut(key);
+    ) Allocator.Error!collections.DenseMap(checked.CheckedTypeId, NodeId).GetOrPutResult {
+        return try (try self.columnForModule(key.module_bytes)).nodes.getOrPut(key.checked);
     }
 
     fn put(self: *ActiveCheckedSelections, key: solve.CheckedBaseKey, node: NodeId) Allocator.Error!void {
-        try self.nodes.put(key, node);
+        try (try self.columnForModule(key.module_bytes)).nodes.put(key.checked, node);
     }
 
     fn count(self: *const ActiveCheckedSelections) usize {
-        return self.nodes.count() + if (self.parent) |parent| parent.count() else 0;
+        var total = self.primary.nodes.count();
+        for (self.additional.items) |*column| total += column.nodes.count();
+        return total + if (self.parent) |parent| parent.count() else 0;
     }
 
     fn contains(self: *const ActiveCheckedSelections, key: solve.CheckedBaseKey) bool {
         return self.get(key) != null;
     }
 
-    fn iterator(self: *ActiveCheckedSelections) std.AutoHashMap(solve.CheckedBaseKey, NodeId).Iterator {
-        return self.nodes.iterator();
-    }
-
-    fn inherit(self: *ActiveCheckedSelections, inherited: *ActiveCheckedSelections) Allocator.Error!void {
-        if (inherited.parent) |parent| try self.inherit(parent);
-        var owned_iter = inherited.owned_roots.iterator();
-        while (owned_iter.next()) |entry| try self.owned_roots.put(entry.key_ptr.*, {});
-        var node_iter = inherited.nodes.iterator();
-        while (node_iter.next()) |entry| try self.put(entry.key_ptr.*, entry.value_ptr.*);
+    fn iterator(self: *ActiveCheckedSelections) Iterator {
+        return .{
+            .selections = self,
+            .node_iter = self.primary.nodes.iterator(),
+        };
     }
 
     fn own(self: *ActiveCheckedSelections, key: solve.CheckedBaseKey) Allocator.Error!void {
-        try self.owned_roots.put(key, {});
+        try (try self.columnForModule(key.module_bytes)).owned_roots.put(key.checked, {});
+    }
+
+    fn owns(self: *const ActiveCheckedSelections, key: solve.CheckedBaseKey) bool {
+        const column = self.columnForModuleConst(key.module_bytes) orelse return false;
+        return column.owned_roots.contains(key.checked);
+    }
+
+    fn columnCount(self: *const ActiveCheckedSelections) usize {
+        return 1 + self.additional.items.len;
+    }
+
+    fn columnAt(self: *ActiveCheckedSelections, index: usize) *ActiveCheckedSelectionColumn {
+        if (index == 0) return &self.primary;
+        return &self.additional.items[index - 1];
+    }
+
+    fn columnForModuleConst(
+        self: *const ActiveCheckedSelections,
+        module_bytes: [32]u8,
+    ) ?*const ActiveCheckedSelectionColumn {
+        if (moduleBytesEqual(self.primary.module_bytes, module_bytes)) return &self.primary;
+        for (self.additional.items) |*column| {
+            if (moduleBytesEqual(column.module_bytes, module_bytes)) return column;
+        }
+        return null;
+    }
+
+    fn columnForModule(
+        self: *ActiveCheckedSelections,
+        module_bytes: [32]u8,
+    ) Allocator.Error!*ActiveCheckedSelectionColumn {
+        if (moduleBytesEqual(self.primary.module_bytes, module_bytes)) return &self.primary;
+        for (self.additional.items) |*column| {
+            if (moduleBytesEqual(column.module_bytes, module_bytes)) return column;
+        }
+        try self.additional.append(self.allocator, ActiveCheckedSelectionColumn.init(self.allocator, module_bytes));
+        return &self.additional.items[self.additional.items.len - 1];
     }
 };
 
@@ -16241,7 +16322,7 @@ const BodyContext = struct {
         raw_fn_node: NodeId,
     ) Allocator.Error!*ActiveCheckedSelections {
         const selections = try self.graph.arena().create(ActiveCheckedSelections);
-        selections.* = ActiveCheckedSelections.init(self.graph.arena());
+        selections.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
         if (self.active_checked_selections) |inherited| {
             selections.parent = inherited;
         }
@@ -16263,7 +16344,7 @@ const BodyContext = struct {
             // procedure but is not a type substitution owned by its body.
             // Only the checker's published interface column may enter this
             // procedure-local substitution span.
-            if (!selections.owned_roots.contains(selection.base)) continue;
+            if (!selections.owns(selection.base)) continue;
             const entry = try selections.getOrPut(selection.base);
             if (entry.found_existing and !self.graph.sameClass(entry.value_ptr.*, selection.produced)) {
                 Common.invariant("one procedure request published two exact nodes for one owned identity");
@@ -17370,7 +17451,7 @@ const BodyContext = struct {
 
     fn newExactCheckedSelections(self: *BodyContext) Allocator.Error!*ActiveCheckedSelections {
         const selections = try self.graph.arena().create(ActiveCheckedSelections);
-        selections.* = ActiveCheckedSelections.init(self.graph.arena());
+        selections.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
         return selections;
     }
 
@@ -25744,7 +25825,7 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
     ) Allocator.Error!*ActiveCheckedSelections {
         const consumer = try self.graph.arena().create(ActiveCheckedSelections);
-        consumer.* = ActiveCheckedSelections.init(self.graph.arena());
+        consumer.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
         consumer.parent = self.active_checked_selections;
         if (bindings.len == 0) return consumer;
 
