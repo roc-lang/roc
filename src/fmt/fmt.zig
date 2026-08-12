@@ -1265,10 +1265,14 @@ const Formatter = struct {
                 return .{ .region = field.region, .ends_with_multiline_string_line = false };
             }
         }
-        if (field.value) |v| {
-            try fmt.pushAll(": ");
-            const formatted_value = try fmt.formatExprWithInfo(v);
-            ends_with_multiline_string_line = formatted_value.ends_with_multiline_string_line;
+        switch (field.value) {
+            .supplied => |v| {
+                try fmt.pushAll(": ");
+                const formatted_value = try fmt.formatExprWithInfo(v);
+                ends_with_multiline_string_line = formatted_value.ends_with_multiline_string_line;
+            },
+            .punned => {},
+            .unset => try fmt.pushAll(": _"),
         }
 
         return .{
@@ -2846,12 +2850,12 @@ const Formatter = struct {
                         try fmt.pushIndent();
                     }
                     try fmt.pushTokenText(field.name);
-                    if (field.value) |v| {
+                    if (field.value == .supplied) {
                         try fmt.push(':');
                         try fmt.push(' ');
                         try fmt.pushAll("platform");
                         try fmt.push(' ');
-                        try fmt.formatExprDiscard(v);
+                        try fmt.formatExprDiscard(field.value.supplied);
                     }
                     if (packages_multiline) {
                         try fmt.push(',');
@@ -4150,8 +4154,8 @@ const Formatter = struct {
                 return true;
             }
 
-            if (recordField.value) |value| {
-                if (fmt.nodeWillBeMultiline(AST.Expr.Idx, value)) {
+            if (recordField.value == .supplied) {
+                if (fmt.nodeWillBeMultiline(AST.Expr.Idx, recordField.value.supplied)) {
                     return true;
                 }
             }

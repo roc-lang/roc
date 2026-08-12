@@ -921,10 +921,10 @@ fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField
         try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = start, .end = start + 1 });
     }
     const name = start;
-    var value: ?AST.Expr.Idx = null;
+    var value: AST.RecordField.Value = .punned;
     if (self.peek() == .OpColon) {
         self.advance();
-        value = try self.runExprRoot(0);
+        value = .{ .supplied = try self.runExprRoot(0) };
     }
     return try self.store.addRecordField(.{
         .name = name,
@@ -1446,7 +1446,7 @@ fn takeRocVersionField(
         found = field_idx;
 
         const version_is_valid = blk: {
-            const value = field.value orelse break :blk false;
+            const value = field.value.asSupplied() orelse break :blk false;
             const token = self.store.singleStringPartToken(value) orelse break :blk false;
             break :blk base.roc_version.parse(self.tokenText(token)) != null;
         };
@@ -1513,7 +1513,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             };
             const field = try self.store.addRecordField(.{
                 .name = name_tok,
-                .value = value,
+                .value = .{ .supplied = value },
                 .region = .{ .start = entry_start, .end = self.pos },
             });
             try self.store.addScratchRecordField(field);
@@ -1526,7 +1526,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             const value = try self.parseStringExprTokens();
             try self.store.addScratchRecordField(try self.store.addRecordField(.{
                 .name = name_tok,
-                .value = value,
+                .value = .{ .supplied = value },
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
@@ -4117,7 +4117,7 @@ fn runExprStatementKernel(
                         last_expr = null;
                         const field = try self.store.addRecordField(.{
                             .name = state.name,
-                            .value = completed,
+                            .value = .{ .supplied = completed },
                             .region = .{ .start = state.field_start, .end = self.pos },
                         });
                         try self.store.addScratchRecordField(field);
@@ -4683,6 +4683,25 @@ fn runExprStatementKernel(
                 const name = field_start;
                 if (self.peek() == .OpColon) {
                     self.advance();
+                    // A bare `_` as the entire field value marks the field
+                    // unset. Only `Underscore` directly followed by `,` or
+                    // `}` counts—`_name` is a `NamedUnderscore` ident
+                    // expression, and `_` anywhere else in expression
+                    // position stays rejected by the expr kernel.
+                    if (self.peek() == .Underscore and (self.peekNext() == .Comma or self.peekNext() == .CloseCurly)) {
+                        self.advance();
+                        const field = try self.store.addRecordField(.{
+                            .name = name,
+                            .value = .unset,
+                            .region = .{ .start = field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchRecordField(field);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .record_fields_next;
+                        }
+                        continue :expr_kernel .record_finish;
+                    }
                     try open_syntax.pushExpr(open_allocator, .expr_record_field, ExprRecordFieldState, .{
                         .start = expr_record_state.start,
                         .record_start = expr_record_state.record_start,
@@ -4698,7 +4717,7 @@ fn runExprStatementKernel(
                 }
                 const field = try self.store.addRecordField(.{
                     .name = name,
-                    .value = null,
+                    .value = .punned,
                     .region = .{ .start = field_start, .end = self.pos },
                 });
                 try self.store.addScratchRecordField(field);

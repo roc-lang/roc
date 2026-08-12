@@ -1357,8 +1357,15 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
     };
     node.tag = .record_field;
     node.main_token = field.name;
-    if (field.value) |v| {
-        node.data.lhs = @intFromEnum(v);
+    // rhs discriminates the value state: 0 = punned, 1 = unset, 2 = supplied
+    // (with lhs holding the expression index).
+    switch (field.value) {
+        .supplied => |v| {
+            node.data.lhs = @intFromEnum(v);
+            node.data.rhs = 2;
+        },
+        .punned => node.data.rhs = 0,
+        .unset => node.data.rhs = 1,
     }
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2627,7 +2634,13 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
 pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) AST.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field_idx)));
     const name = node.main_token;
-    const value: ?AST.Expr.Idx = if (node.tag == .malformed) null else if (node.data.lhs > 0) @enumFromInt(node.data.lhs) else null;
+    const value: AST.RecordField.Value = if (node.tag == .malformed)
+        .punned
+    else switch (node.data.rhs) {
+        0 => .punned,
+        1 => .unset,
+        else => .{ .supplied = @enumFromInt(node.data.lhs) },
+    };
 
     return .{
         .name = name,

@@ -10831,6 +10831,8 @@ fn runExprKernel(
 
                     var field_work: std.ArrayList(ExprRecordFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
+                    var unset_work: std.ArrayList(ExprUnsetFieldWork) = .empty;
+                    defer unset_work.deinit(frame_allocator);
 
                     for (fields_slice) |field_idx| {
                         const ast_field = self.parse_ir.store.getRecordField(field_idx);
@@ -10856,13 +10858,23 @@ fn runExprKernel(
                             .region = field_name_region,
                         });
 
-                        const value_expr_idx = if (ast_field.value) |value_idx| value_idx else blk: {
-                            const ident_expr_idx = try self.parse_ir.store.addExpr(AST.Expr{ .ident = .{
-                                .token = ast_field.name,
-                                .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
-                                .region = ast_field.region,
-                            } });
-                            break :blk ident_expr_idx;
+                        const value_expr_idx = switch (ast_field.value) {
+                            .supplied => |value_idx| value_idx,
+                            .punned => blk: {
+                                const ident_expr_idx = try self.parse_ir.store.addExpr(AST.Expr{ .ident = .{
+                                    .token = ast_field.name,
+                                    .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
+                                    .region = ast_field.region,
+                                } });
+                                break :blk ident_expr_idx;
+                            },
+                            .unset => {
+                                try unset_work.append(frame_allocator, .{
+                                    .name = field_name_ident,
+                                    .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                                });
+                                continue;
+                            },
                         };
 
                         try field_work.append(frame_allocator, .{
@@ -10872,11 +10884,13 @@ fn runExprKernel(
                     }
 
                     const fields = try field_work.toOwnedSlice(frame_allocator);
+                    const unsets = try unset_work.toOwnedSlice(frame_allocator);
                     try stacks.pushFinishRecord(frame_allocator, .{
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
                         .ext = e.ext,
                         .fields = fields,
+                        .unsets = unsets,
                     });
 
                     var child_count = fields.len;
@@ -10988,10 +11002,22 @@ fn runExprKernel(
                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                             continue :expr_kernel_loop .dispatch;
                         };
-                        if (field.value != null) explicit_value_count += 1;
+                        if (field.value == .unset) {
+                            // A builder field's value is mapped through the
+                            // builder function; there is nothing to map for an
+                            // unset (`name: _`) field.
+                            const feature = try self.env.insertString("unset field (`name: _`) in record builder");
+                            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                                .feature = feature,
+                                .region = region,
+                            } });
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        }
+                        if (field.value == .supplied) explicit_value_count += 1;
                         try field_work.append(frame_allocator, .{
                             .name = field_name,
-                            .value_expr = field.value,
+                            .value_expr = field.value.asSupplied(),
                         });
                     }
 
@@ -12953,6 +12979,7 @@ fn runExprKernel(
         .finish_record => {
             const state = stacks.takeFinishRecord();
             defer frame_allocator.free(state.fields);
+            defer frame_allocator.free(state.unsets);
 
             const child_count = state.fields.len + @as(usize, @intFromBool(state.ext != null));
             const result_start = child_slots.items.len - child_count;
@@ -12965,7 +12992,7 @@ fn runExprKernel(
                 break :blk if (maybe_ext.expr) |can_ext| can_ext.idx else null;
             } else null;
 
-            if (state.fields.len == 0) {
+            if (state.fields.len == 0 and state.unsets.len == 0) {
                 child_slots.shrinkRetainingCapacity(result_start);
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_empty_record = .{},
@@ -12995,9 +13022,18 @@ fn runExprKernel(
             }
 
             const fields_span = try self.env.store.recordFieldSpanFrom(scratch_top);
+
+            const unsets_scratch_top = self.env.store.scratch.?.record_unset_fields.top();
+            for (state.unsets) |unset| {
+                const unset_idx = try self.env.addUnsetField(CIR.UnsetField{ .name = unset.name }, unset.region);
+                try self.env.store.scratch.?.record_unset_fields.append(unset_idx);
+            }
+            const unsets_span = try self.env.store.unsetFieldSpanFrom(unsets_scratch_top);
+
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
+                    .unsets = unsets_span,
                     .ext = ext_expr,
                 },
             }, state.region);
@@ -14175,7 +14211,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .unsets = .{ .span = DataSpan.empty() }, .ext = null } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -14217,7 +14253,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .unsets = .{ .span = DataSpan.empty() }, .ext = null } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -16276,6 +16312,7 @@ const ExprFinishRecordWork = struct {
     free_vars_start: u32,
     ext: ?AST.Expr.Idx,
     fields: []const ExprRecordFieldWork,
+    unsets: []const ExprUnsetFieldWork,
 };
 
 const ExprFinishLambdaWork = struct {
@@ -17257,6 +17294,11 @@ const ExprKernelWork = struct {
 const ExprRecordFieldWork = struct {
     field_idx: AST.RecordField.Idx,
     value_expr_idx: AST.Expr.Idx,
+};
+
+const ExprUnsetFieldWork = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
 };
 
 const ExprIfBranchWork = struct {

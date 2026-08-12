@@ -220,6 +220,33 @@ test "emit empty record" {
     try testing.expectEqualStrings("{}", emitter.getOutput());
 }
 
+test "emit record with unset fields writes `name: _` after the supplied fields" {
+    const module_env = try createTestEnv(test_allocator, "{ x: 1, opt: _ }");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const one = try addIntExpr(module_env, 1);
+    const x = try module_env.insertIdent(base.Ident.for_text("x"));
+    const opt = try module_env.insertIdent(base.Ident.for_text("opt"));
+
+    const fields_start = module_env.store.scratch.?.record_fields.top();
+    const x_field = try module_env.addRecordField(.{ .name = x, .value = one }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", x_field);
+    const fields = try module_env.store.recordFieldSpanFrom(fields_start);
+
+    const unsets_start = module_env.store.scratch.?.record_unset_fields.top();
+    const opt_unset = try module_env.addUnsetField(.{ .name = opt }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(opt_unset);
+    const unsets = try module_env.store.unsetFieldSpanFrom(unsets_start);
+
+    const record = try module_env.addExpr(.{ .e_record = .{ .fields = fields, .unsets = unsets, .ext = null } }, base.Region.zero());
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    try emitter.emitExpr(record);
+    try testing.expectEqualStrings("{ x: 1, opt: _ }", emitter.getOutput());
+}
+
 test "emit expression with lexicographic records sorts every nesting level" {
     const module_env = try createTestEnv(test_allocator, "{ z: 0, inner: { b: 2, a: 1 } }");
     defer destroyTestEnv(test_allocator, module_env);
@@ -238,7 +265,7 @@ test "emit expression with lexicographic records sorts every nesting level" {
     const a_field = try module_env.addRecordField(.{ .name = a, .value = one }, base.Region.zero());
     try module_env.store.addScratch("record_fields", a_field);
     const inner_fields = try module_env.store.recordFieldSpanFrom(inner_start);
-    const inner_record = try module_env.addExpr(.{ .e_record = .{ .fields = inner_fields, .ext = null } }, base.Region.zero());
+    const inner_record = try module_env.addExpr(.{ .e_record = .{ .fields = inner_fields, .unsets = .{ .span = base.DataSpan.empty() }, .ext = null } }, base.Region.zero());
 
     const outer_start = module_env.store.scratch.?.record_fields.top();
     const z_field = try module_env.addRecordField(.{ .name = z, .value = zero }, base.Region.zero());
@@ -246,7 +273,7 @@ test "emit expression with lexicographic records sorts every nesting level" {
     const inner_field = try module_env.addRecordField(.{ .name = inner, .value = inner_record }, base.Region.zero());
     try module_env.store.addScratch("record_fields", inner_field);
     const outer_fields = try module_env.store.recordFieldSpanFrom(outer_start);
-    const outer_record = try module_env.addExpr(.{ .e_record = .{ .fields = outer_fields, .ext = null } }, base.Region.zero());
+    const outer_record = try module_env.addExpr(.{ .e_record = .{ .fields = outer_fields, .unsets = .{ .span = base.DataSpan.empty() }, .ext = null } }, base.Region.zero());
 
     var emitter = Emitter.init(test_allocator, module_env);
     defer emitter.deinit();

@@ -151,7 +151,8 @@ pub const Constants = struct {
     /// 64: Compile-time root selection rejects values containing callables.
     /// 65: A hosted entry written without a module resolves to the platform
     ///     module's own declaration.
-    pub const CACHE_VERSION = 65;
+    /// 66: Record expressions carry a span of unset (`name: _`) fields.
+    pub const CACHE_VERSION = 66;
 };
 
 /// Configuration for the Roc cache system.

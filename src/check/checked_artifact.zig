@@ -32049,6 +32049,10 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
                 const field = store.getRecordField(@enumFromInt(raw_node_idx));
                 try visitor.recordField(field.name);
             },
+            .record_unset_field => {
+                const unset = store.getUnsetField(@enumFromInt(raw_node_idx));
+                try visitor.recordField(unset.name);
+            },
             .record_destruct => {
                 const destruct = store.getRecordDestruct(@enumFromInt(raw_node_idx));
                 switch (destruct.kind) {

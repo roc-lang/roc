@@ -98,7 +98,7 @@ pub fn parseAppHeader(
     const platform_field = ast.store.getRecordField(app.platform_idx);
 
     const platform_ref: PlatformRef = blk: {
-        const value_expr = platform_field.value orelse break :blk .none;
+        const value_expr = platform_field.value.asSupplied() orelse break :blk .none;
         break :blk platformRefFromExpr(ast, value_expr, arena) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ExpectedPlatformRef => .none,
@@ -135,7 +135,7 @@ pub fn parseAppHeader(
             if (std.mem.eql(u8, shorthand, qual)) continue;
         }
 
-        const value_idx = field.value orelse continue;
+        const value_idx = field.value.asSupplied() orelse continue;
         const value_node = ast.store.getExpr(value_idx);
         if (value_node != .string) continue;
         const str_region = ast.tokenizedRegionToRegion(value_node.string.region);

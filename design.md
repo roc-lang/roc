@@ -5043,29 +5043,45 @@ optional field constructs the `#Missing` tag in the same
 `lowerRecordExpr` slot-fill where an omitted defaulted field
 materializes its default.
 
-### Deferred: Unsetting an Optional Field (`{ ..r, x: _ }`)
+### In Progress: Unsetting an Optional Field (`{ ..r, x: _ }`, `{ x: _ }`)
 
-Not yet implemented—this is the design sketch for when it is. `{ ..r,
-x: _ }` UNSETS a field in a record update: the result carries `x` as an
-optional slot in the Missing state. Unsetting does NOT remove the field
-from the row—the `absent` presence state is gone (Field Kinds above), rows
-never shrink, and the slot union `[#Missing, #Present(τ)]` already has a
-representation for "not there". That one observation dissolves the
-asymmetry the old record-update TODO feared: input and output presence no
-longer differ, because presence is a static KIND and unsetting only changes
-the runtime STATE of a slot whose kind stays `optional`.
+PARSE and CAN are IMPLEMENTED; CHECK and LOWER remain (sketches below).
+`x: _` marks a field UNSET, in BOTH record update and record construction:
+the result carries `x` as an optional slot in the Missing state. Unsetting
+does NOT remove the field from the row—the `absent` presence state is gone
+(Field Kinds above), rows never shrink, and the slot union
+`[#Missing, #Present(τ)]` already has a representation for "not there".
+That one observation dissolves the asymmetry the old record-update TODO
+feared: input and output presence no longer differ, because presence is a
+static KIND and unsetting only changes the runtime STATE of a slot whose
+kind stays `optional`.
 
-Syntax. Today `x: _` is a parse error: field names in expression records
-must be `LowerIdent` (`record_fields_next` in src/parse/Parser.zig), and
-after `name:` the value parses through the general expression kernel, where
-a bare `Underscore` has no prefix rule and lands in the
-`expr_unexpected_token` malformed fallthrough. (`_name` is a
-`NamedUnderscore` IDENT expression, so `x: _name` is an ordinary set and
-stays one; only bare `_` means unset.) The parser newly accepts a bare `_`
-as the ENTIRE field value—`Underscore` directly followed by `,` or `}`—
-in expression-record field position only, recorded as an explicit marker on
-`AST.RecordField` (a third state beside a value and punning's null; never a
-sentinel expression). `_` anywhere else in expressions stays rejected. Note
+Construction unset (a revision of this section's earlier sketch, which
+rejected it): `{ x: _ }` without `..base` is ALLOWED and DECLARES the
+field—omission cannot introduce a field into an inferred row, unset can.
+The field's kind is `optional` and its payload type is a fresh flex var,
+so `{ x: _ }` infers `{ x ?: a }` with `a` generalizing when nothing pins
+it. The only construction-position rejection is inside a RECORD BUILDER
+(`{ Mapper.build <- x: _ }`), where a field's value is mapped through the
+builder function and there is nothing to map for an unset field
+(canonicalization rejects it like the other unsupported builder shapes).
+
+Representation (IMPLEMENTED): the parser accepts a bare `_`—an
+`Underscore` token directly followed by `,` or `}`—as the entire field
+value in expression-record field position only, recorded as an explicit
+third state of `AST.RecordField.Value` (`supplied | punned | unset`; a
+union, never a sentinel expression). CAN collects unset fields into their
+own span on `e_record` (`unsets: CIR.UnsetField.Span`, name-only nodes
+beside `fields` and `ext`; duplicate-name checking covers supplied and
+unset fields uniformly), and an all-unset record does NOT collapse to
+`e_empty_record`. The CIR node payload encodes the span through
+`span2_data` (`ExprRecord.unsets_span2_idx`); the checked-cache version
+was bumped for the layout change.
+
+Syntax notes: `_name` is a `NamedUnderscore` IDENT expression, so
+`x: _name` is an ordinary set and stays one; only bare `_` means unset,
+and `_` anywhere else in expressions stays rejected (it still lands in the
+`expr_unexpected_token` malformed fallthrough of the expr kernel). Note
 the grammar split this must not blur: TYPE records already use `_`/`_name`
 as field NAMES (unnamed padding fields); expression records do not, and
 unset's `_` sits in VALUE position, after the colon.
@@ -5097,6 +5113,17 @@ Only the PER-FIELD demand becomes kind-directed:
   that lacks it, silently accepting typo'd unsets. With the flex-kind
   probe, a field the base row genuinely lacks is an ordinary
   missing-field mismatch.
+- A CONSTRUCTION unset field (no `..base`) joins the literal row
+  directly: append `{ x: unknown(π, τ) }`—fresh presence var π, fresh
+  flex payload var τ—to the literal's fields and enqueue (π, field,
+  region, use=unset) in the SAME `optional_field_accesses` queue. NOT in
+  `literal_field_kinds`: that queue's finalize sweep
+  (`defaultLiteralFieldKinds`) commits never-pinned kinds to `required`,
+  and an unset field's kind must default to `optional` instead—which the
+  judgment's flex-pin does. τ is constrained only by context (e.g. an
+  annotation), so `{ x: _ }` infers `{ x ?: a }` with `a` generalizing;
+  an annotation demanding `required`/`defaulted` is rejected through the
+  same judgment as updates.
 - Mixed set-and-unset composes with nothing extra: each mentioned field
   runs its own probe against the base, then one wholesale base ~ result
   unify. Chained/nested updates compose because every update's type equals
@@ -5107,7 +5134,7 @@ Lowering. Trivial by construction: `lowerRecordExpr`
 the base binds to a let-local, mentioned fields take their new values,
 unmentioned fields copy via field access. An unset field takes the existing
 `optionalSlotMissingExpr(field.ty)` arm—the same Missing-tag construction
-an omitted optional field uses. ARC needs no new rules: the replaced
+an omitted optional field uses—in construction and update alike. ARC needs no new rules: the replaced
 Present payload is never read, exactly like a SET field's replaced value
 today, and is freed when ARC decrefs the base after its last use; backends
 keep dumbly following the emitted incref/decref.
@@ -5121,8 +5148,8 @@ Interactions:
   field instead.
 - Unset of a field the base row lacks: ordinary missing-field mismatch from
   the probe (flex kinds never absorb).
-- `{ x: _ }` WITHOUT `..base` is rejected at canonicalization—unset is
-  meaningless in construction, where omission already builds Missing.
+- `{ x: _ }` WITHOUT `..base` is a valid construction (see above); the
+  only canonicalization rejection is an unset field in a RECORD BUILDER.
 - Patterns: `{ x: _ }` in a destructure already means "match `x`, ignore
   the value" (wildcard sub-pattern over the kind-flexible destructure
   probe) and KEEPS that meaning—expression `_` (unset) and pattern `_`
@@ -5135,22 +5162,26 @@ Interactions:
 
 Diagnostics (Title Case, cf. "Optional Access Of Required Field"): "Unset
 Of Required Field" and "Unset Of Defaulted Field" at check (the latter with
-the construction hint), "Unset Outside Record Update" at canonicalization.
-The probe unifies under its own `record_unset` context so a missing-field
-mismatch renders against the update site.
+the construction hint). The update probe unifies under its own
+`record_unset` context so a missing-field mismatch renders against the
+update site. (Unset in a record builder reuses the builder's existing
+not-implemented rejection at canonicalization.)
 
-Phasing (each stage lands with its pins before the next): (1) PARSE—the
-`_` field value with its explicit AST marker; snapshots pin the accepted
-form and `_` still rejected elsewhere. (2) CAN—an explicit unset
-representation on `e_record`: a SEPARATE span of unset field names (name +
-region, no value expression; a new span, not a sentinel `Expr.Idx`, per
-AGENTS.md explicitness), plus the outside-update rejection. (3) CHECK—the
+Phasing (each stage lands with its pins before the next): (1) PARSE
+(DONE)—the `_` field value as an explicit `AST.RecordField.Value` state;
+snapshots pin the accepted form and `_` still rejected elsewhere. (2) CAN
+(DONE)—an explicit unset representation on `e_record`: a SEPARATE span of
+unset field names (name + region, no value expression; a new span, not a
+sentinel `Expr.Idx`, per AGENTS.md explicitness), valid with or without
+`..base`, plus the record-builder rejection. (3) CHECK—the
 probe, the queue's use marker, and the judgment split; pinned in
 src/check/test/type_checking_integration.zig: accepted—unset of a
 `?:`-annotated field (result keeps `x ?: τ`), unset pinning an undetermined
-kind to optional, mixed set-and-unset; rejected—unset of required, of
-defaulted, of a missing field, and unset judged through a generalized
-function instantiated at a required row. (4) LOWER—route unset fields to
+kind to optional, construction `{ x: _ }` inferring `{ x ?: a }` (payload
+generalizing; annotation pinning it), mixed set-and-unset; rejected—unset
+of required (annotated construction AND update of a required base field), of
+defaulted, of a missing field (update), and unset judged through a
+generalized function instantiated at a required row. (4) LOWER—route unset fields to
 `optionalSlotMissingExpr`; an eval test (run-test-eval, all backends)
 proving `.?x` on the updated record yields `Err(MissingField)` while other
 fields survive. Beyond this sketch, FALLBACK destructure (`{ x ?? d }`)

@@ -481,6 +481,7 @@ const Scratch = struct {
     statements: base.Scratch(CIR.Statement.Idx),
     exprs: base.Scratch(CIR.Expr.Idx),
     record_fields: base.Scratch(CIR.RecordField.Idx),
+    record_unset_fields: base.Scratch(CIR.UnsetField.Idx),
     match_branches: base.Scratch(CIR.Expr.Match.Branch.Idx),
     match_branch_patterns: base.Scratch(CIR.Expr.Match.BranchPattern.Idx),
     if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
@@ -504,6 +505,8 @@ const Scratch = struct {
         errdefer exprs.deinit();
         var record_fields = try base.Scratch(CIR.RecordField.Idx).init(gpa);
         errdefer record_fields.deinit();
+        var record_unset_fields = try base.Scratch(CIR.UnsetField.Idx).init(gpa);
+        errdefer record_unset_fields.deinit();
         var match_branches = try base.Scratch(CIR.Expr.Match.Branch.Idx).init(gpa);
         errdefer match_branches.deinit();
         var match_branch_patterns = try base.Scratch(CIR.Expr.Match.BranchPattern.Idx).init(gpa);
@@ -533,6 +536,7 @@ const Scratch = struct {
             .statements = statements,
             .exprs = exprs,
             .record_fields = record_fields,
+            .record_unset_fields = record_unset_fields,
             .match_branches = match_branches,
             .match_branch_patterns = match_branch_patterns,
             .if_branches = if_branches,
@@ -554,6 +558,7 @@ const Scratch = struct {
         self.statements.deinit();
         self.exprs.deinit();
         self.record_fields.deinit();
+        self.record_unset_fields.deinit();
         self.match_branches.deinit();
         self.match_branch_patterns.deinit();
         self.if_branches.deinit();
@@ -1615,10 +1620,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             // Retrieve fields span and ext from span_with_node_data
             const fields_ext = store.span_with_node_data.items.items[p.fields_ext_idx];
             const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @enumFromInt(fields_ext.node));
+            const unsets = store.span2_data.items.items[p.unsets_span2_idx];
 
             return CIR.Expr{
                 .e_record = .{
                     .fields = .{ .span = .{ .start = fields_ext.start, .len = fields_ext.len } },
+                    .unsets = .{ .span = .{ .start = unsets.start, .len = unsets.len } },
                     .ext = ext,
                 },
             };
@@ -3329,9 +3336,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .len = e.fields.span.len,
                 .node = ext_value,
             });
+            const unsets_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{ .start = e.unsets.span.start, .len = e.unsets.span.len });
 
             node.setPayload(.{ .expr_record = .{
                 .fields_ext_idx = fields_ext_idx,
+                .unsets_span2_idx = unsets_span2_idx,
             } });
         },
         .e_empty_record => {
@@ -3433,6 +3443,21 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
     node.setPayload(.{ .record_field = .{
         .name = @bitCast(recordField.name),
         .expr = @intFromEnum(recordField.value),
+    } });
+
+    const nid = try store.nodes.append(store.gpa, node);
+    _ = try store.regions.append(store.gpa, region);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds an unset record field (`name: _`) to the store.
+///
+/// IMPORTANT: You should not use this function directly! Instead, use it's
+/// corresponding function in `ModuleEnv`.
+pub fn addUnsetField(store: *NodeStore, unset_field: CIR.UnsetField, region: base.Region) Allocator.Error!CIR.UnsetField.Idx {
+    var node = Node.init(.record_unset_field);
+    node.setPayload(.{ .record_unset_field = .{
+        .name = @bitCast(unset_field.name),
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -4213,6 +4238,15 @@ pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.Rec
     };
 }
 
+/// Retrieves an unset record field from the store.
+pub fn getUnsetField(store: *const NodeStore, idx: CIR.UnsetField.Idx) CIR.UnsetField {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const payload = node.getPayload();
+    return CIR.UnsetField{
+        .name = @bitCast(payload.record_unset_field.name),
+    };
+}
+
 /// Retrieves a record destructure from the store.
 pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -4498,6 +4532,11 @@ pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CI
 /// Returns a span from the scratch record fields starting at the given index.
 pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.RecordField.Span {
     return try store.spanFrom("record_fields", CIR.RecordField.Span, start);
+}
+
+/// Returns a span from the scratch unset record fields starting at the given index.
+pub fn unsetFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.UnsetField.Span {
+    return try store.spanFrom("record_unset_fields", CIR.UnsetField.Span, start);
 }
 
 /// Returns a span from the scratch where clauses starting at the given index,
@@ -4860,6 +4899,11 @@ pub fn statementAt(store: *const NodeStore, span: CIR.Statement.Span, offset: us
 /// Returns a slice of record fields from the store.
 pub fn sliceRecordFields(store: *const NodeStore, span: CIR.RecordField.Span) []CIR.RecordField.Idx {
     return store.sliceFromSpan(CIR.RecordField.Idx, span.span);
+}
+
+/// Returns a slice of unset record fields from the store.
+pub fn sliceUnsetFields(store: *const NodeStore, span: CIR.UnsetField.Span) []CIR.UnsetField.Idx {
+    return store.sliceFromSpan(CIR.UnsetField.Idx, span.span);
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
