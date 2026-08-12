@@ -1901,6 +1901,15 @@ pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoist
     return self.selected_hoisted_roots.items;
 }
 
+/// Whether a selected root materializes a top-level binding.
+pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.SelectedHoistedRoot) bool {
+    const pattern = switch (root.body) {
+        .expr => root.pattern orelse return false,
+        .pattern_extraction => |extraction| extraction.scrutinee_pattern,
+    };
+    return self.patternIsTopLevelDef(pattern);
+}
+
 /// Record a top-level root that will be evaluated as a zero-arg executable
 /// thunk. This must be explicit producer metadata from canonicalization or the
 /// caller; the checker never recovers roots from names or source shape.

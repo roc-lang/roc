@@ -118,8 +118,14 @@ fn lowerModuleWithOptions(
         view_index += 1;
     }
 
-    const published_roots = resources.checked_artifact.root_requests.runtime_requests;
-    if (published_roots.len == 0) return error.MissingRootProcedure;
+    const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
+    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+        switch (request.source) {
+            .def => |def| if (def == main_def) break request,
+            .expr, .statement, .required_binding, .hoisted => {},
+        }
+    } else return error.MissingRootProcedure;
+    const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
@@ -127,7 +133,7 @@ fn lowerModuleWithOptions(
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = published_roots },
+        .{ .requests = &published_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
             .specialization_strategy = options.specialization_strategy,

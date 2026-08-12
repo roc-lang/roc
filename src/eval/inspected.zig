@@ -915,6 +915,14 @@ pub fn compileProgramForTargetWithBuiltinAndContext(
     );
     errdefer cleanupParseAndCanonical(allocator, resources);
 
+    // This API compiles one explicit evaluation root. If checking rejected
+    // that root, publication intentionally leaves it out of the runtime root
+    // table; diagnose the checked program before post-check lowering rather
+    // than invoking a pipeline that requires at least one explicit root.
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) {
+        return error.TypeCheckError;
+    }
+
     const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, target_usize, .{
         .specialization_strategy = specialization_strategy,
     });
@@ -1479,8 +1487,17 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     }
 
     const selected_hoisted_roots = main_checked.checker.selectedHoistedRoots();
+    var top_level_hoisted_roots = std.ArrayList(check.HoistRoots.SelectedHoistedRoot).empty;
+    defer top_level_hoisted_roots.deinit(allocator);
     const hoisted_roots = switch (root_mode) {
-        .eval_root => selected_hoisted_roots[0..0],
+        .eval_root => roots: {
+            for (selected_hoisted_roots) |root| {
+                if (main_checked.checker.selectedHoistedRootIsTopLevel(root)) {
+                    try top_level_hoisted_roots.append(allocator, root);
+                }
+            }
+            break :roots top_level_hoisted_roots.items;
+        },
         .published_roots_only => selected_hoisted_roots,
     };
     var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(

@@ -352,17 +352,6 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
             const validation = try self.validateDefinitions(report_config);
             if (!validation.valid) {
                 self.definitions.restore(self.allocator, &snapshot);
-                // Drop pending annotations for binders that the restored definition
-                // store no longer defines. A `y : Str` typed before a failed `y = 5`
-                // would otherwise poison every subsequent REPL turn with
-                // "Declaration Has No Value".
-                if (bound_names) |names| {
-                    for (names) |bound_name| {
-                        if (!self.definitions.hasKind(bound_name, .value)) {
-                            self.definitions.removeByNameAndKind(self.allocator, bound_name, .annotation);
-                        }
-                    }
-                }
                 if (validation.error_message) |msg| return .{ .diagnostic = .{
                     .kind = .compile_error,
                     .input = input_info,
@@ -3194,15 +3183,24 @@ test "Repl - top-level destructure definitions publish their binders" {
     defer testing.allocator.free(tuple_sum);
     try testing.expectEqualStrings("3.0", tuple_sum);
 
-    const req_type = try repl.step(":t req");
-    defer testing.allocator.free(req_type);
-    try testing.expect(std.mem.find(u8, req_type, "req : U8") != null);
+    const config = reporting.ReportingConfig.initForTesting();
+    const req_type = try repl.executeCommandWithConfig(.{ .type_of = "req" }, config);
+    defer req_type.deinit(testing.allocator);
+    switch (req_type) {
+        .output => |output| try testing.expect(std.mem.find(u8, output, "req : U8") != null),
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
 
-    const definitions = try repl.step(":defs");
-    defer testing.allocator.free(definitions);
-    try testing.expect(std.mem.find(u8, definitions, "req : U8") != null);
-    try testing.expect(std.mem.find(u8, definitions, "a :") != null);
-    try testing.expect(std.mem.find(u8, definitions, "b :") != null);
+    const definitions = try repl.executeCommandWithConfig(.definitions, config);
+    defer definitions.deinit(testing.allocator);
+    switch (definitions) {
+        .output => |output| {
+            try testing.expect(std.mem.find(u8, output, "req : U8") != null);
+            try testing.expect(std.mem.find(u8, output, "a :") != null);
+            try testing.expect(std.mem.find(u8, output, "b :") != null);
+        },
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
 }
 
 test "Repl - polymorphic numeric in comparison snapshot sequence" {

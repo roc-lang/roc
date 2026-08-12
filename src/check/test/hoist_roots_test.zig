@@ -557,7 +557,9 @@ test "hoist roots selected for record destructure extraction binders" {
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 2), roots.len);
     try expectPatternExtractionRoot(roots[0]);
+    try std.testing.expect(!test_env.checker.selectedHoistedRootIsTopLevel(roots[0]));
     try std.testing.expect(roots[1].pattern != null);
+    try std.testing.expect(!test_env.checker.selectedHoistedRootIsTopLevel(roots[1]));
 }
 
 test "hoist roots selected for tuple destructure extraction binders" {
@@ -664,7 +666,10 @@ test "hoist roots publish top-level destructure binders used by executable roots
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
     try std.testing.expectEqual(@as(usize, 3), roots.len);
-    for (roots) |root| try expectPatternExtractionRoot(root);
+    for (roots) |root| {
+        try expectPatternExtractionRoot(root);
+        try std.testing.expect(test_env.checker.selectedHoistedRootIsTopLevel(root));
+    }
 }
 
 test "hoist roots selected for single-branch match tuple binders" {
