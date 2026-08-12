@@ -150,6 +150,13 @@ Exhaustion therefore retains the ordinary exact IR; it is never cached as
 `disproven` and never selects a guessed runtime
 representation.
 
+A linear walk whose only successor is another node in the same finite store
+may use the store's node count solely to detect an impossible cycle. Such an
+invariant walk does not allocate a visited-node map: it either reaches its
+required terminal shape within the number of stored nodes or reports a
+compiler invariant violation. This bound is termination evidence, not proof
+fuel for selecting a rewrite or representation.
+
 Iterator representation is finite by construction: every `Iter(item)` uses one
 content-addressed self-recursive runtime nominal for its public declaration and exact
 item type. It does not grow with adapter depth. SpecConstr's shape,

@@ -1887,15 +1887,9 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
         access: BackingAccess,
     ) Allocator.Error!NodeId {
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
-
         var node = self.find(raw_node);
-        while (true) {
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) {
-                Common.invariant("instantiation " ++ noun ++ " read encountered a recursive named backing");
-            }
+        var remaining = self.nodes.items.len;
+        while (remaining > 0) : (remaining -= 1) {
             const node_content = self.nodes.items[@intFromEnum(node)];
             if (node_content == .named) {
                 const named = node_content.named;
@@ -1909,6 +1903,7 @@ pub const InstGraph = struct {
                 return node;
             }
         }
+        Common.invariant("instantiation " ++ noun ++ " read encountered a recursive named backing");
     }
 
     /// Structural root of a function-shaped request node. Callable request
