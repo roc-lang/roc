@@ -1689,6 +1689,16 @@ fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
     return numeric_conversions.u128FitsTarget(val, target_bits, target_signed);
 }
 
+// The conversion wrappers below move results between widths assuming a value's
+// low-order bytes come first in memory: narrowing copies the value's first
+// bytes, and widening writes it into the first bytes of a larger slot. That
+// assumption holds only on a little-endian target.
+comptime {
+    if (@import("builtin").cpu.arch.endian() == .big) {
+        @compileError("the conversion wrappers assume a value's low-order bytes come first, which is false on big-endian targets");
+    }
+}
+
 /// i128 try convert
 pub fn roc_builtins_i128_try_convert(out: [*]u8, val_low: u64, val_high: u64, target_bits: u32, target_is_signed: u32, payload_size: u32, disc_offset: u32) callconv(.c) void {
     const val: i128 = @bitCast(i128h.from_u64_pair(val_low, val_high));
