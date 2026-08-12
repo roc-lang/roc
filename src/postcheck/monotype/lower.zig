@@ -31720,9 +31720,23 @@ const BodyContext = struct {
         if (monoAliasBacking(&self.builder.program.types, actual)) |backing| {
             if (self.sameTypeInner(expected, backing, visiting)) return true;
         }
-        const expected_digest = self.builder.program.types.typeDigestCached(&self.builder.program.names, expected, null);
-        const actual_digest = self.builder.program.types.typeDigestCached(&self.builder.program.names, actual, null);
-        if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
+
+        // A generated nominal's producer-assigned content address is its
+        // complete atomic identity. Equality never hashes or traverses its
+        // private backing, declared layout metadata, or public arguments.
+        const expected_content = self.builder.program.types.get(expected);
+        const actual_content = self.builder.program.types.get(actual);
+        const expected_generated = if (expected_content == .named and expected_content.named.kind != .alias)
+            expected_content.named.def.generated
+        else
+            null;
+        const actual_generated = if (actual_content == .named and actual_content.named.kind != .alias)
+            actual_content.named.def.generated
+        else
+            null;
+        if (expected_generated != null or actual_generated != null) {
+            return std.meta.eql(expected_generated, actual_generated);
+        }
 
         const pair = TypePair{ .expected = expected, .actual = actual };
         if (visiting.contains(pair)) return true;
@@ -31795,6 +31809,8 @@ const BodyContext = struct {
         if (expected.def.module != actual.def.module) return false;
         if (expected.def.source_decl != actual.def.source_decl) return false;
         if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+        if (!std.meta.eql(expected.def.generated, actual.def.generated)) return false;
+        if (!std.meta.eql(expected.def.iterator_topology, actual.def.iterator_topology)) return false;
         if (expected.kind != actual.kind) return false;
         if (expected.builtin_owner != actual.builtin_owner) return false;
         if (!self.sameTypeSpans(expected.args, actual.args, visiting)) return false;
@@ -48058,6 +48074,50 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     try std.testing.expect(ctx.sameType(str_ty, alias_str));
     try std.testing.expect(!ctx.sameType(alias_i64, alias_str));
     try std.testing.expect(!ctx.sameType(alias_str, alias_i64));
+}
+
+test "monotype sameType treats generated identities as atomic" {
+    var program = Ast.Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xBC} ** 32));
+    const type_name = try program.names.internTypeName("Generated");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(2);
+    const i64_ty = try program.types.add(.{ .primitive = .i64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const first_digest: names.TypeDigest = .{ .bytes = [_]u8{0x31} ** 32 };
+    const second_digest: names.TypeDigest = .{ .bytes = [_]u8{0x32} ** 32 };
+    const generated_base: Type.NamedContent = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .generated = first_digest,
+        },
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+        .backing = .{
+            .ty = i64_ty,
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    };
+    const first = try program.types.add(.{ .named = generated_base });
+    var same_identity = generated_base;
+    same_identity.backing.?.ty = str_ty;
+    const same = try program.types.add(.{ .named = same_identity });
+    var different_identity = generated_base;
+    different_identity.def.generated = second_digest;
+    const different = try program.types.add(.{ .named = different_identity });
+
+    var builder: Builder = undefined;
+    builder.program = &program;
+    var ctx: BodyContext = undefined;
+    ctx.allocator = std.testing.allocator;
+    ctx.builder = &builder;
+
+    try std.testing.expect(ctx.sameType(first, same));
+    try std.testing.expect(!ctx.sameType(first, different));
 }
 
 test "graph constructor representation follows aliases and preserves nominal layers" {

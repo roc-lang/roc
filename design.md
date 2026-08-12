@@ -2720,6 +2720,11 @@ nested generated type contributes its already-stored digest as one opaque,
 fixed-size identity; an outer digest never expands its backing or implementation
 history.
 
+That atomic rule continues after graph sealing. Any Monotype equality needed
+while constructing later Monotype bodies compares generated content addresses
+directly. It must not compute a fresh whole-type digest or descend into the
+generated nominal's backing, declared layout metadata, or public arguments.
+
 Every representation producer consumes its current exact operand cells. An
 expected result type is a destination request, never a source from which the
 producer may read adapter inputs, state, callable evidence, or a prior

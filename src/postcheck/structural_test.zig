@@ -1458,6 +1458,15 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectNotContains(complete_reserved, "invalidateActiveSnapshots");
     try expectNotContains(complete_reserved, "try self.setContent(root");
 
+    const sealed_type_equality = sourceSliceBetween(
+        lower_source,
+        "fn sameTypeInner(",
+        "fn lowerRecordExpr(",
+    );
+    try expectContains(sealed_type_equality, "expected_content.named.def.generated");
+    try expectContains(sealed_type_equality, "return std.meta.eql(expected_generated, actual_generated)");
+    try expectNotContains(sealed_type_equality, "typeDigestCached");
+
     const produced_occurrence = sourceSliceBetween(
         lower_source,
         "fn producedOccurrenceNode(",
