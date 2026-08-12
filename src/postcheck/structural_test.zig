@@ -1426,10 +1426,16 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     );
     const reserve_backing = std.mem.find(u8, ordinary_reservation, "self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() })") orelse
         return error.TestExpectedEqual;
-    const register_named = std.mem.find(u8, ordinary_reservation, "self.newNode(.{ .named = completed })") orelse
+    const exact_lookup = std.mem.find(u8, ordinary_reservation, "self.existingNamedIdentity(raw_named)") orelse
         return error.TestExpectedEqual;
-    try expectContains(ordinary_reservation, "if (self.existingNamedIdentity(canonical)) |existing|");
+    const normalize = std.mem.find(u8, ordinary_reservation, "self.canonicalizeNamedArguments(raw_named)") orelse
+        return error.TestExpectedEqual;
+    const register_named = std.mem.find(u8, ordinary_reservation, "self.appendDistinctNode(.{ .named = completed })") orelse
+        return error.TestExpectedEqual;
+    try expectContains(ordinary_reservation, "if (self.existingNamedIdentity(normalized)) |existing|");
+    try expectContains(ordinary_reservation, "try self.registerNamedIdentity(named, completed)");
     try expectContains(ordinary_reservation, ".backing = backing");
+    try std.testing.expect(exact_lookup < normalize);
     try std.testing.expect(reserve_backing < register_named);
 
     const complete_reserved = sourceSliceBetween(

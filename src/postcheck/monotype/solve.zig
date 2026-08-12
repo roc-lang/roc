@@ -1632,13 +1632,21 @@ pub const InstGraph = struct {
             Common.invariant("generated nominal reached ordinary identity reservation");
         }
 
-        const canonical = if (try self.canonicalizeNamedArguments(raw_named)) |normalized|
-            normalized
-        else
-            raw_named;
-        if (self.existingNamedIdentity(canonical)) |existing| {
+        // Exact argument roots are already sufficient identity evidence. Most
+        // requests repeat those roots, so consult the interner before doing
+        // any row normalization. A miss may still need normalization because
+        // two distinct row-extension decompositions can describe the same
+        // public argument.
+        if (self.existingNamedIdentity(raw_named)) |existing| {
             return .{ .existing = existing };
         }
+
+        const canonical = if (try self.canonicalizeNamedArguments(raw_named)) |normalized| blk: {
+            if (self.existingNamedIdentity(normalized)) |existing| {
+                return .{ .existing = existing };
+            }
+            break :blk normalized;
+        } else raw_named;
 
         const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() });
         var completed = canonical;
@@ -1647,11 +1655,11 @@ pub const InstGraph = struct {
             .use = backing_use,
             .authority = .checked_public,
         };
-        const expected_named: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
-        const named = try self.newNode(.{ .named = completed });
-        if (named != expected_named) {
-            Common.invariant("ordinary nominal identity changed between lookup and reservation");
-        }
+        // `canonical` has already missed the identity table. Publish it
+        // directly: routing this vacant reservation through `newNode` would
+        // normalize and query the same identity a second time.
+        const named = try self.appendDistinctNode(.{ .named = completed });
+        try self.registerNamedIdentity(named, completed);
         return .{ .vacant = .{ .named = named, .backing = backing } };
     }
 
@@ -4913,6 +4921,68 @@ test "generated identity treats public opaque and private nominal views as one t
     const public_digest = try graph.generatedIdentityInputDigest(public);
     const private_digest = try graph.generatedIdentityInputDigest(private);
     try std.testing.expectEqualSlices(u8, &public_digest.bytes, &private_digest.bytes);
+}
+
+test "ordinary nominal reservation checks exact roots before normalizing row decompositions" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const empty = try graph.newNode(.empty_record);
+    const label = try name_store.internRecordFieldLabel("value");
+    const fields = try graph.arena().alloc(InstField, 1);
+    fields[0] = .{
+        .name = label,
+        .ty = try graph.newNode(.{ .primitive = .u64 }),
+    };
+    const flat_argument = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = empty,
+    } });
+    const extended_argument = try graph.newNode(.{ .record = .{
+        .fields = &.{},
+        .ext = flat_argument,
+    } });
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD2} ** 32));
+    const type_name = try name_store.internTypeName("Wrapper");
+    var exact_args = [_]NodeId{flat_argument};
+    var identity: InstNamed = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(16) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &exact_args,
+        .backing = null,
+    };
+
+    const first = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    const named = switch (first) {
+        .existing => return error.TestUnexpectedResult,
+        .vacant => |reservation| reservation.named,
+    };
+    const before_exact_hit = graph.nodes.items.len;
+    const exact_hit = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    try std.testing.expectEqual(named, switch (exact_hit) {
+        .existing => |existing| existing,
+        .vacant => return error.TestUnexpectedResult,
+    });
+    try std.testing.expectEqual(before_exact_hit, graph.nodes.items.len);
+
+    var extended_args = [_]NodeId{extended_argument};
+    identity.args = &extended_args;
+    const normalized_hit = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    try std.testing.expectEqual(named, switch (normalized_hit) {
+        .existing => |existing| existing,
+        .vacant => return error.TestUnexpectedResult,
+    });
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

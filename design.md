@@ -2686,6 +2686,15 @@ vacant reservation evaluates the recipe and registers the resulting backing.
 The private backing is not itself a lookup input, because requiring it in order
 to ask the cache would perform precisely the work a cache hit must avoid.
 
+Ordinary declaration-backed nominals follow the same early-deduplication
+discipline. Their declaration plus exact public argument roots are sufficient
+identity evidence, so Monotype consults that identity before normalizing any
+row argument. Only an exact-root miss may flatten a row to account for two
+different extension decompositions of the same public argument. A vacant
+normalized identity is published directly; it must not pass through a generic
+constructor that repeats normalization and lookup before the declaration
+backing is built.
+
 The same construction boundary appends a cache miss to an explicit dense
 generated-root registry. Sealing iterates only that registry so a completed root
 can enter the durable interner before a deferred nested body requests it. It
