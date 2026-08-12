@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
 const LowLevelBuiltins = Base.LowLevelBuiltins;
+const numeric_conversion = Base.numeric_conversion;
 const builtins = @import("builtins");
 const shim_symbols = builtins.shim_symbols;
 const BoxyBuiltinFn = @import("backend").LirCodeGenMod.BoxyBuiltinFn;
@@ -6163,130 +6164,50 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
+    /// Every scalar numeric conversion the backend lowers, dispatched on the
+    /// family the op belongs to. The switch has no `else` prong, so a family
+    /// added to the shared classification is a compile error here.
     fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        const name = @tagName(op);
-        const SpecialConversion = enum {
-            f32_to_i8_try_unsafe,
-            f32_to_i16_try_unsafe,
-            f32_to_i32_try_unsafe,
-            f32_to_i64_try_unsafe,
-            f32_to_i128_try_unsafe,
-            f32_to_u8_try_unsafe,
-            f32_to_u16_try_unsafe,
-            f32_to_u32_try_unsafe,
-            f32_to_u64_try_unsafe,
-            f32_to_u128_try_unsafe,
-            f64_to_i8_try_unsafe,
-            f64_to_i16_try_unsafe,
-            f64_to_i32_try_unsafe,
-            f64_to_i64_try_unsafe,
-            f64_to_i128_try_unsafe,
-            f64_to_u8_try_unsafe,
-            f64_to_u16_try_unsafe,
-            f64_to_u32_try_unsafe,
-            f64_to_u64_try_unsafe,
-            f64_to_u128_try_unsafe,
-            f64_to_f32_try_unsafe,
-            dec_to_f32_try_unsafe,
-            i128_to_dec_try_unsafe,
-            u128_to_dec_try_unsafe,
-            dec_to_f32_wrap,
-            dec_to_f64,
-            dec_to_i8_try_unsafe,
-            dec_to_i16_try_unsafe,
-            dec_to_i32_try_unsafe,
-            dec_to_i64_try_unsafe,
-            dec_to_i128_try_unsafe,
-            dec_to_u8_try_unsafe,
-            dec_to_u16_try_unsafe,
-            dec_to_u32_try_unsafe,
-            dec_to_u64_try_unsafe,
-            dec_to_u128_try_unsafe,
-        };
-        if (std.meta.stringToEnum(SpecialConversion, name)) |conversion| switch (conversion) {
-            .f32_to_i8_try_unsafe,
-            .f32_to_i16_try_unsafe,
-            .f32_to_i32_try_unsafe,
-            .f32_to_i64_try_unsafe,
-            .f32_to_i128_try_unsafe,
-            .f32_to_u8_try_unsafe,
-            .f32_to_u16_try_unsafe,
-            .f32_to_u32_try_unsafe,
-            .f32_to_u64_try_unsafe,
-            .f32_to_u128_try_unsafe,
-            .f64_to_i8_try_unsafe,
-            .f64_to_i16_try_unsafe,
-            .f64_to_i32_try_unsafe,
-            .f64_to_i64_try_unsafe,
-            .f64_to_i128_try_unsafe,
-            .f64_to_u8_try_unsafe,
-            .f64_to_u16_try_unsafe,
-            .f64_to_u32_try_unsafe,
-            .f64_to_u64_try_unsafe,
-            .f64_to_u128_try_unsafe,
-            => {
-                try self.emitFloatToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
-            },
-            .f64_to_f32_try_unsafe => {
-                try self.emitF64ToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
-            },
-            .dec_to_f32_try_unsafe => {
-                try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
-            },
-            .i128_to_dec_try_unsafe, .u128_to_dec_try_unsafe => {
-                try self.emitInt128ToDecTryUnsafeConversion(target, GuardedList.at(args, 0), op == .i128_to_dec_try_unsafe);
-                return;
-            },
-            .dec_to_f32_wrap, .dec_to_f64 => {
-                try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
-                return;
-            },
-            .dec_to_i8_try_unsafe,
-            .dec_to_i16_try_unsafe,
-            .dec_to_i32_try_unsafe,
-            .dec_to_i64_try_unsafe,
-            .dec_to_i128_try_unsafe,
-            .dec_to_u8_try_unsafe,
-            .dec_to_u16_try_unsafe,
-            .dec_to_u32_try_unsafe,
-            .dec_to_u64_try_unsafe,
-            .dec_to_u128_try_unsafe,
-            => {
-                try self.emitDecToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
-                return;
-            },
-        };
-        if (args.len >= 1 and isIntegerLayout(self.localLayout(GuardedList.at(args, 0))) and self.localLayout(target) == .dec and std.mem.endsWith(u8, name, "_to_dec")) {
-            try self.emitIntToDec(target, GuardedList.at(args, 0));
-            return;
+        if (args.len < 1) return error.UnsupportedLowLevel;
+        const arg = GuardedList.at(args, 0);
+        // Neither fallback below is reachable: only conversion ops route here,
+        // and every conversion has a family. Both are held open so a future op
+        // that breaks either property fails the build instead of this switch.
+        const conversion = numeric_conversion.classify(op) orelse return error.UnsupportedLowLevel;
+        switch (conversion.family() orelse return error.UnsupportedLowLevel) {
+            // coerceScalar emits one LLVM conversion instruction, chosen from
+            // the source and target types. These are the families where that
+            // instruction is also the semantics Roc wants: sext, zext, or
+            // trunc, where wrapping to N bits means keeping the low N bits;
+            // sitofp or uitofp, defined for every integer; and fpext or
+            // fptrunc, rounding as required.
+            .int_to_int_exact,
+            .int_to_int_wrap,
+            .int_to_float_exact,
+            .float_to_float_exact,
+            .float_to_float_wrap,
+            => try self.emitScalarCoercion(target, arg),
+            .int_to_int_try => try self.emitIntTryConversion(target, arg),
+            .int_to_dec_exact => try self.emitIntToDec(target, arg),
+            .int_to_dec_try_unsafe => try self.emitInt128ToDecTryUnsafeConversion(target, arg, conversion.src.isSigned()),
+            .float_to_float_try_unsafe => try self.emitF64ToF32TryUnsafeConversion(target, arg),
+            .float_to_int_trunc => try self.emitFloatToIntTruncConversion(target, arg, conversion),
+            .float_to_int_try_unsafe => try self.emitFloatToIntTryUnsafeConversion(target, arg),
+            .dec_to_float_exact, .dec_to_float_wrap => try self.emitDecToFloatConversion(target, arg, conversion.dst == .f32),
+            .dec_to_float_try_unsafe => try self.emitDecToF32TryUnsafeConversion(target, arg),
+            .dec_to_int_trunc => try self.emitDecToIntTruncConversion(target, arg),
+            .dec_to_int_try_unsafe => try self.emitDecToIntTryUnsafeConversion(target, arg),
         }
-        if (args.len >= 1 and isIntegerLayout(self.localLayout(GuardedList.at(args, 0))) and std.mem.endsWith(u8, name, "_try")) {
-            try self.emitIntTryConversion(target, GuardedList.at(args, 0));
-            return;
-        }
-        if (args.len >= 1) {
-            if (floatToIntTruncInfo(op)) |info| {
-                try self.emitFloatToIntTruncConversion(target, GuardedList.at(args, 0), info);
-                return;
-            }
-        }
-        if (args.len >= 1 and isDecToIntTrunc(op)) {
-            try self.emitDecToIntTruncConversion(target, GuardedList.at(args, 0));
-            return;
-        }
-        if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
-            std.mem.find(u8, name, "_try") == null and
-            std.mem.find(u8, name, "_str") == null)
-        {
-            const value = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0)));
-            const coerced = try self.coerceScalar(value, self.scalarType(self.localLayout(target)), self.localLayout(GuardedList.at(args, 0)).isSigned());
-            try self.storeScalar(self.slot(target).ptr, self.localLayout(target), coerced);
-            return;
-        }
-        return error.UnsupportedLowLevel;
+    }
+
+    /// A conversion LLVM performs with the single instruction implied by the
+    /// operand types.
+    fn emitScalarCoercion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const src_layout = self.localLayout(arg);
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, src_layout);
+        const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
+        try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
@@ -6300,22 +6221,6 @@ pub const MonoLlvmCodeGen = struct {
             &.{ parts.low, parts.high },
         );
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
-    }
-
-    fn isDecToIntTrunc(op: lir.LowLevel) bool {
-        const DecToIntTrunc = enum {
-            dec_to_i8_trunc,
-            dec_to_u8_trunc,
-            dec_to_i16_trunc,
-            dec_to_u16_trunc,
-            dec_to_i32_trunc,
-            dec_to_u32_trunc,
-            dec_to_i64_trunc,
-            dec_to_u64_trunc,
-            dec_to_i128_trunc,
-            dec_to_u128_trunc,
-        };
-        return std.meta.stringToEnum(DecToIntTrunc, @tagName(op)) != null;
     }
 
     /// A Dec's payload is its value scaled by 10^18, so recovering the whole
@@ -6339,66 +6244,25 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
     }
 
-    const FloatToIntTruncInfo = struct {
-        src_is_f32: bool,
-        target_bits: u8,
-    };
-
-    fn floatToIntTruncInfo(op: lir.LowLevel) ?FloatToIntTruncInfo {
-        const FloatToIntTrunc = enum {
-            f32_to_i8_trunc,
-            f32_to_u8_trunc,
-            f32_to_i16_trunc,
-            f32_to_u16_trunc,
-            f32_to_i32_trunc,
-            f32_to_u32_trunc,
-            f32_to_i64_trunc,
-            f32_to_u64_trunc,
-            f32_to_i128_trunc,
-            f32_to_u128_trunc,
-            f64_to_i8_trunc,
-            f64_to_u8_trunc,
-            f64_to_i16_trunc,
-            f64_to_u16_trunc,
-            f64_to_i32_trunc,
-            f64_to_u32_trunc,
-            f64_to_i64_trunc,
-            f64_to_u64_trunc,
-            f64_to_i128_trunc,
-            f64_to_u128_trunc,
-        };
-        const conversion = std.meta.stringToEnum(FloatToIntTrunc, @tagName(op)) orelse return null;
-        return switch (conversion) {
-            .f32_to_i8_trunc, .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8 },
-            .f32_to_i16_trunc, .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16 },
-            .f32_to_i32_trunc, .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32 },
-            .f32_to_i64_trunc, .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64 },
-            .f32_to_i128_trunc, .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128 },
-            .f64_to_i8_trunc, .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8 },
-            .f64_to_i16_trunc, .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16 },
-            .f64_to_i32_trunc, .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32 },
-            .f64_to_i64_trunc, .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64 },
-            .f64_to_i128_trunc, .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128 },
-        };
-    }
-
     /// Wrapping float→int conversion: the builtin wrapper implements Roc's
     /// wrap semantics (NaN and the infinities produce 0; finite values
     /// truncate toward zero and wrap modulo 2^bits), writing the result bytes
     /// directly into the target slot.
-    fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatToIntTruncInfo) Error!void {
+    fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, conversion: numeric_conversion.Conversion) Error!void {
+        const src_is_f32 = conversion.src == .f32;
+        const target_bits: u32 = conversion.dst.bits();
         const builder = self.builder orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-        const name = if (info.src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
-        const float_ty: LlvmBuilder.Type = if (info.src_is_f32) .float else .double;
+        const name = if (src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
+        const float_ty: LlvmBuilder.Type = if (src_is_f32) .float else .double;
         try self.callBuiltinVoid(
             name,
             &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
-                builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                builder.intValue(.i32, @as(u32, info.target_bits) / 8) catch return error.OutOfMemory,
+                builder.intValue(.i32, target_bits) catch return error.OutOfMemory,
+                builder.intValue(.i32, target_bits / 8) catch return error.OutOfMemory,
             },
         );
     }
