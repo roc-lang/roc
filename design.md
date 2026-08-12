@@ -4067,6 +4067,19 @@ the archived default, and reach monotype lowering as an unresolved
 instantiation. Display follows the same polarity: an anonymous, unshared,
 unconstrained flex ext in an output position is not rendered as `..`.
 
+After the module fully solves, `Check.closeUnquantifiedTagRowExts` grounds
+every tag-row extension that is still an unconstrained flex var and is not
+reachable from anything a later instantiation consumes (top-level def
+schemes, generalized local schemes, expression-position schemes recorded at
+construction edges and their dispatch-evidence pairs, type declarations and
+their backing templates, standalone annotations, annotation-only Builtin
+intrinsic signatures, and platform requirements). Nothing can constrain such
+an extension once checking settles — it would only reach the same empty
+default at Monotype sealing, while costing Monotype its structural
+specialization identity along the way. Rows reachable from a scheme root
+keep their openness: instantiation copies them fresh at each use, which is
+where output-position widening actually happens.
+
 Monotype adapts to the resulting rows in two places. A stored constant's
 ground representation can be narrower than a use-site request that widened
 its implicitly open row, so produced-value witnesses compare flattened rows
@@ -5149,6 +5162,17 @@ Other solved-graph mutations:
   ignorable payload vars for tags the expression provably never constructs
   close to the empty tag union, so matches on constructed values are
   exhaustive without wildcard arms.
+- `closeTagRowsForDerivation`—policy: Polarity (above). Before a structural
+  parser or encoder is derived for a type, every reachable tag-union
+  extension that is an unbound flex var (implicit output-position openness)
+  unifies with the empty tag union: a derived codec determines each row
+  exactly, so the openness collapses like an exhaustive match closing an
+  inferred row.
+- `closeUnquantifiedTagRowExts`—policy: Polarity (above). After the module
+  fully solves, a reachability probe from every scheme root gates closing the
+  remaining unconstrained flex tag-row extensions to the empty tag union
+  through ordinary unification; quantified rows stay open for later
+  instantiation.
 - `validateDerivedParseTagExt`—policy: Derived Parser Tag-Row Closure
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
