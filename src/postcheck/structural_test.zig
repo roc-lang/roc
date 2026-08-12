@@ -667,8 +667,30 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerExpr(self: *BodyContext",
         "fn lowerExprInner(",
     );
+    try expectContains(lower_expr, "enterProducedOccurrenceInstantiation()");
     try expectContains(lower_expr, "self.exprTypeCell(lowered).toGraphNode(self.graph)");
     try expectContains(lower_expr, "return try self.requireLoweredExpr(");
+
+    const contextual_expr = sourceSliceBetween(
+        lower_source,
+        "fn lowerExprAtTypeCellWithKnownDivergence(",
+        "fn listNodeWithElement(",
+    );
+    try expectContains(contextual_expr, "enterProducedOccurrenceInstantiation()");
+
+    const call = sourceSliceBetween(
+        lower_source,
+        "fn lowerCallAtExpectedNode(",
+        "fn lowerDirectCallWithUninhabitedArgument(",
+    );
+    try expectNotContains(call, "produced_instantiation = TypeInstantiationContext.init(");
+
+    const dispatch = sourceSliceBetween(
+        lower_source,
+        "fn lowerDispatchExprAtType(",
+        "fn lowerClosedDirectLowLevelDispatch(",
+    );
+    try expectNotContains(dispatch, "produced_instantiation = TypeInstantiationContext.init(");
 
     const tuple = sourceSliceBetween(
         lower_source,

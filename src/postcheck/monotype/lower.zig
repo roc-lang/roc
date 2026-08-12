@@ -16728,23 +16728,42 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
-        // A checked id is immutable provenance, not storage for every runtime
-        // occurrence that happens to mention it. Each produced expression
-        // owns one fresh instantiation column; compound constructors retain
-        // their exact child nodes explicitly instead of sharing defaults with
-        // sibling expressions through a procedure- or call-wide cache.
-        const inherited_produced_instantiation = self.produced_instantiation;
+    const ProducedOccurrenceInstantiationScope = struct {
+        ctx: *BodyContext,
+        previous: TypeInstantiationContext,
+
+        fn leave(self: ProducedOccurrenceInstantiationScope) void {
+            self.ctx.produced_instantiation.deinit();
+            self.ctx.produced_instantiation = self.previous;
+        }
+    };
+
+    /// Every checked expression occurrence owns one fresh producer column,
+    /// regardless of whether its consumer supplied an exact destination.
+    /// Nested call and dispatch lowering consume this scope directly; they do
+    /// not create a second occurrence merely because the expression is a call.
+    fn enterProducedOccurrenceInstantiation(self: *BodyContext) ProducedOccurrenceInstantiationScope {
+        const scope = ProducedOccurrenceInstantiationScope{
+            .ctx = self,
+            .previous = self.produced_instantiation,
+        };
         self.produced_instantiation = TypeInstantiationContext.init(
             self.allocator,
             self.builder.allocateInstantiationScope(),
             self.view.key.bytes,
             .produced_occurrence,
         );
-        defer {
-            self.produced_instantiation.deinit();
-            self.produced_instantiation = inherited_produced_instantiation;
-        }
+        return scope;
+    }
+
+    fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
+        // A checked id is immutable provenance, not storage for every runtime
+        // occurrence that happens to mention it. Each produced expression
+        // owns one fresh instantiation column; compound constructors retain
+        // their exact child nodes explicitly instead of sharing defaults with
+        // sibling expressions through a procedure- or call-wide cache.
+        const occurrence_scope = self.enterProducedOccurrenceInstantiation();
+        defer occurrence_scope.leave();
         const expr = self.view.bodies.expr(expr_id);
         const lowered = try self.lowerExprInner(expr_id);
         return try self.requireLoweredExpr(
@@ -26317,17 +26336,6 @@ const BodyContext = struct {
     ) Allocator.Error!LoweredCall {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         defer timing_scope.end();
-        const inherited_produced_instantiation = self.produced_instantiation;
-        self.produced_instantiation = TypeInstantiationContext.init(
-            self.allocator,
-            self.builder.allocateInstantiationScope(),
-            self.view.key.bytes,
-            .produced_occurrence,
-        );
-        defer {
-            self.produced_instantiation.deinit();
-            self.produced_instantiation = inherited_produced_instantiation;
-        }
         self.builder.countBodyDiagnostic("call_expressions");
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
@@ -31228,6 +31236,8 @@ const BodyContext = struct {
         expr_diverges: bool,
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
+        const occurrence_scope = self.enterProducedOccurrenceInstantiation();
+        defer occurrence_scope.leave();
         const expr = self.view.bodies.expr(checked_expr);
         const saved_loc = self.builder.program.current_loc;
         defer self.builder.program.current_loc = saved_loc;
@@ -32851,17 +32861,6 @@ const BodyContext = struct {
         self.builder.countBodyDiagnostic("dispatch_expressions");
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        const inherited_produced_instantiation = self.produced_instantiation;
-        self.produced_instantiation = TypeInstantiationContext.init(
-            self.allocator,
-            self.builder.allocateInstantiationScope(),
-            self.view.key.bytes,
-            .produced_occurrence,
-        );
-        defer {
-            self.produced_instantiation.deinit();
-            self.produced_instantiation = inherited_produced_instantiation;
-        }
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
         var direct_graph_call = false;
         switch (plan.resolution) {
