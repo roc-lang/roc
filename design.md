@@ -2911,6 +2911,14 @@ entry, Monotype consumes that immutable span directly. It does not compare the
 caller's complete function graph with the target's complete checked function,
 and it does not reconstruct substitutions from either graph.
 
+The same rule constructs a selected method's callable signature. Monotype
+starts from the persistent immutable checked callable base and applies only the
+target slots present in the active checker-published substitution span, using
+their sparse projection paths. It does not instantiate the complete selected
+signature under an ambient substitution map, and request construction reuses
+that one materialized target signature instead of constructing it a second
+time.
+
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the
 same content-addressed iterator type identity.

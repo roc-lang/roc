@@ -34692,11 +34692,48 @@ const BodyContext = struct {
                 .view = lookup.view,
                 .callable_ty = lookup.target.callable_ty,
             };
-        const signature = try self.typeOnlyCheckedNode(
-            source.view,
-            source.callable_ty,
-            self.active_checked_selections,
+        const scope = self.enterTypeOnlyInstantiation(source.view, self.active_checked_selections);
+        defer scope.leave();
+        const checked_base = try self.persistentCheckedBaseNode(source.callable_ty);
+        const base_fn = try self.graph.functionNodes(checked_base);
+        const checked_fn = self.checkedFunctionType(source.callable_ty);
+        if (base_fn.args.len != checked_fn.args.len) {
+            Common.invariant("checked method target base had a different arity from its callable type");
+        }
+        const active = self.active_checked_selections orelse return checked_base;
+        const plan = source.view.templates.specializationCallPlanForCallable(source.callable_ty);
+
+        var selected = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selected.deinit(self.allocator);
+        for (plan.slots) |slot| {
+            const key = solve.CheckedBaseKey{
+                .module_bytes = source.view.key.bytes,
+                .checked = slot.checked,
+            };
+            const produced = active.get(key) orelse continue;
+            try selected.append(self.allocator, .{
+                .base = key,
+                .produced = produced,
+            });
+        }
+        if (selected.items.len == 0) return checked_base;
+
+        const args = try self.graph.arena().alloc(NodeId, base_fn.args.len);
+        for (args, base_fn.args, 0..) |*arg, base_arg, index| {
+            arg.* = try self.materializeCallProjectionSubtree(
+                plan,
+                self.callArgumentRootEdge(plan, index, checked_fn.args[index]),
+                selected.items,
+                .{ .checked = base_arg },
+            );
+        }
+        const ret = try self.materializeCallProjectionSubtree(
+            plan,
+            self.callResultRootEdge(plan, checked_fn.ret),
+            selected.items,
+            .{ .checked = base_fn.ret },
         );
+        const signature = try self.graphFunctionNode(args, ret);
         if (self.graph.content(signature) != .func) {
             Common.invariant("checked method target had a non-function exact signature");
         }
@@ -35765,7 +35802,7 @@ const BodyContext = struct {
         );
         defer type_scope.leave();
 
-        const checked_target = try self.instNode(lookup.target.callable_ty);
+        const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty);
         const checked_target_fn = try self.graph.functionNodes(checked_target);
         if (checked_target_fn.args.len != callsite.args.len) {
             Common.invariant("selected method target arity differed from its checked call site");
@@ -35777,6 +35814,7 @@ const BodyContext = struct {
         // are not a second authority for the target's checked identity slots.
         const no_new_callsite_arguments = try self.graph.arena().alloc(bool, callsite.args.len);
         @memset(no_new_callsite_arguments, false);
+        const target_signature = try self.methodTargetSignatureNode(lookup);
         const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             lookup.target.callable_ty,
@@ -35784,7 +35822,7 @@ const BodyContext = struct {
             callsite.args,
             no_new_callsite_arguments,
             null,
-            checked_target,
+            target_signature,
             callsite.ret,
             include_result,
         );
