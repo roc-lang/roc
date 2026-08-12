@@ -429,6 +429,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(solve_source, "applyProducedTypeToRequest");
     try expectNotContains(solve_source, "applyCheckedTypeMapping");
     try expectNotContains(solve_source, "applyProducedTypePair");
+    try expectNotContains(solve_source, "generatedNominalReplacesPublic");
 
     const ordinary_unify = sourceSliceBetween(
         solve_source,
@@ -446,6 +447,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "class_member_next");
     try expectNotContains(lower_source, "OpenFunctionInterfaceShape");
     try expectNotContains(lower_source, "selectRequestRepresentation");
+    try expectNotContains(lower_source, "sameFieldHandleType");
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
@@ -502,6 +504,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
     try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
+    try expectContains(generated_call_identity, "generatedFieldNominalNode(");
     try expectNotContains(generated_call_identity, "instNominalBackingNode(");
     try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
     try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");

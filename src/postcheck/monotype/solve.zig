@@ -3607,28 +3607,6 @@ pub const InstGraph = struct {
     pub fn nodeIsGeneratedNominal(self: *InstGraph, node: NodeId) bool {
         return isGeneratedPrivateRootContent(self.content(node));
     }
-
-    /// Whether `generated_node` is the content-addressed runtime identity that
-    /// replaces this exact public nominal occurrence. This compares only the
-    /// atomic definition and immediate argument identities; no backing or
-    /// descendant graph is inspected.
-    pub fn generatedNominalReplacesPublic(
-        self: *InstGraph,
-        public_node: NodeId,
-        generated_node: NodeId,
-    ) bool {
-        const public_content = self.content(public_node);
-        const generated_content = self.content(generated_node);
-        if (public_content != .named or generated_content != .named) return false;
-        const public = public_content.named;
-        const generated = generated_content.named;
-        return public.def.generated == null and
-            generated.def.generated != null and
-            sameTypeDef(public.def, generated.def) and
-            (public.kind == .alias) == (generated.kind == .alias) and
-            public.builtin_owner == generated.builtin_owner and
-            self.sameNamedArgs(public.args, generated.args);
-    }
 };
 
 /// Shared finalization state for materializing graph nodes into immutable

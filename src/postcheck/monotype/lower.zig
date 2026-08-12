@@ -15504,10 +15504,6 @@ const BodyContext = struct {
                     return produced;
                 }
                 if (self.graph.content(existing) != .unresolved) {
-                    if (self.graph.generatedNominalReplacesPublic(existing, produced)) {
-                        try self.putScopedNode(scoped_ty, produced);
-                        return produced;
-                    }
                     Common.invariant("exact selection arrived after a runtime occurrence chose a different node");
                 }
                 try self.graph.completeProducedSelection(existing, produced);
@@ -15818,6 +15814,52 @@ const BodyContext = struct {
             .declared_order = declared_order,
             .identity = lookup.digest,
         }, Context.fill);
+    }
+
+    /// Construct the exact generated FieldName handle from the record shape
+    /// that determines its runtime implementation. This is the same atomic,
+    /// content-addressed operation as iterator generation, but its backing is
+    /// non-recursive and can be completed immediately after the identity
+    /// lookup misses.
+    fn generatedFieldNominalNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        nominal: checked.CheckedNominalType,
+        shape_node: NodeId,
+        public_def: Type.TypeDef,
+        declared_order: []const InstDeclaredField,
+    ) Allocator.Error!NodeId {
+        const args = [_]NodeId{shape_node};
+        const lookup = try self.graph.lookupGeneratedNominal(public_def, &args);
+        if (try self.existingGeneratedNominalNode(lookup)) |existing| return existing;
+
+        self.builder.count("generated_nominal_backing_instantiations");
+        const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
+        const backing = try self.graphClosedRecord(&.{
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = try self.graph.newNode(.{ .primitive = .str }) },
+            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node },
+        });
+        var def = public_def;
+        def.generated = lookup.digest;
+        const node = try self.graph.newNode(.{ .named = .{
+            .named_type = .{
+                .module = self.builder.declaredModuleForNominal(self.view, nominal),
+                .ty = checked_ty,
+            },
+            .def = def,
+            .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
+            .builtin_owner = builtinOwner(nominal.builtin),
+            .args = try self.graph.arena().dupe(NodeId, &args),
+            .backing = .{
+                .node = backing,
+                .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
+                .authority = .generated_private,
+            },
+            .declared_order = declared_order,
+        } });
+        try self.graph.registerGeneratedNominalAtDigest(node, lookup.digest);
+        return node;
     }
 
     fn instDeclaredOrderForNominal(
@@ -19266,37 +19308,9 @@ const BodyContext = struct {
         if (info.item_fields.len != expected_count) return null;
         for (0..GuardedList.borrowLen(info.item_fields)) |index| {
             const field = GuardedList.at(info.item_fields, index);
-            if (!self.sameFieldHandleType(field.ty, field_handle_ty)) return null;
+            if (!self.sameType(field.ty, field_handle_ty)) return null;
         }
         return info.item_fields;
-    }
-
-    /// Whether two field-handle types name the same instantiation. The stored
-    /// metadata's items carry the compiler-generated backing while a consumer
-    /// specialized through the checked interface sees the checked-public
-    /// backing of the same nominal; both back onto the identical declared
-    /// record, so the pairing is one runtime type.
-    fn sameFieldHandleType(self: *BodyContext, left_ty: Type.TypeId, right_ty: Type.TypeId) bool {
-        if (self.sameType(left_ty, right_ty)) return true;
-        const left = switch (self.builder.program.types.get(left_ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
-        };
-        const right = switch (self.builder.program.types.get(right_ty)) {
-            .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
-        };
-        if (!sameTypeDef(left.def, right.def)) return false;
-        const left_args = self.builder.program.types.span(left.args);
-        const right_args = self.builder.program.types.span(right.args);
-        if (GuardedList.borrowLen(left_args) != GuardedList.borrowLen(right_args)) return false;
-        for (0..GuardedList.borrowLen(left_args)) |index| {
-            if (!self.sameType(GuardedList.at(left_args, index), GuardedList.at(right_args, index))) return false;
-        }
-        const left_backing = left.backing orelse return false;
-        const right_backing = right.backing orelse return false;
-        return self.sameType(left_backing.ty, right_backing.ty) and
-            (left_backing.authority == .generated_private) != (right_backing.authority == .generated_private);
     }
 
     fn generatedFieldNamesBackingValueFieldNames(
@@ -19649,6 +19663,17 @@ const BodyContext = struct {
         const sealed = self.builder.generated_types_by_identity.get(lookup.digest) orelse return null;
         const imported = try self.graph.importMono(sealed);
         try self.graph.registerGeneratedIteratorAtDigest(imported, lookup.digest);
+        return imported;
+    }
+
+    fn existingGeneratedNominalNode(
+        self: *BodyContext,
+        lookup: solve.GeneratedNominalLookup,
+    ) Allocator.Error!?NodeId {
+        if (lookup.existing) |existing| return existing;
+        const sealed = self.builder.generated_types_by_identity.get(lookup.digest) orelse return null;
+        const imported = try self.graph.importMono(sealed);
+        try self.graph.registerGeneratedNominalAtDigest(imported, lookup.digest);
         return imported;
     }
 
@@ -25649,34 +25674,37 @@ const BodyContext = struct {
         };
         const builtin = nominal.builtin orelse
             Common.invariant("generated call slot referenced a non-builtin nominal");
+        if (nominal.args.len != 1) {
+            Common.invariant("exact-argument generated call slot had a non-unary public nominal");
+        }
+        const public_arg = switch (slot.generated_argument_source) {
+            .exact_selection => self.exactSelectionForChecked(
+                selections,
+                nominal.args[0],
+            ) orelse return null,
+            .checked_substitution => try self.materializeCallProjectionSubtree(
+                plan,
+                if (slot.generated_argument_projection != checked.no_specialization_projection_parent)
+                    slot.generated_argument_projection
+                else
+                    Common.invariant("exact-argument generated slot had no checker-authored public-argument edge"),
+                selections,
+                .{ .checked = null },
+            ),
+            .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
+        };
+        if (!try self.graph.typeIsResolved(public_arg)) {
+            return null;
+        }
+        const def = try self.builder.typeDef(
+            self.view,
+            nominal.origin_module,
+            nominal.name,
+            nominal.source_decl,
+        );
+        const declared_order = try self.instDeclaredOrderForNominal(nominal);
         return switch (checked.builtinRuntimeEncoding(builtin)) {
             .iterator => blk: {
-                if (nominal.args.len != 1) Common.invariant("generated iterator call slot had a non-unary public nominal");
-                const item_node = switch (slot.generated_argument_source) {
-                    .exact_selection => self.exactSelectionForChecked(
-                        selections,
-                        nominal.args[0],
-                    ) orelse break :blk null,
-                    .checked_substitution => try self.materializeCallProjectionSubtree(
-                        plan,
-                        if (slot.generated_argument_projection != checked.no_specialization_projection_parent)
-                            slot.generated_argument_projection
-                        else
-                            Common.invariant("generated iterator compound item had no checker-authored argument edge"),
-                        selections,
-                        .{ .checked = null },
-                    ),
-                    .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
-                };
-                if (!try self.graph.typeIsResolved(item_node)) {
-                    Common.invariant("generated iterator slot item argument was not resolved before identity construction");
-                }
-                const def = try self.builder.typeDef(
-                    self.view,
-                    nominal.origin_module,
-                    nominal.name,
-                    nominal.source_decl,
-                );
                 const owner = builtinOwner(nominal.builtin) orelse
                     Common.invariant("generated iterator slot had no builtin owner");
                 if (!static_dispatch.isIteratorOwner(owner)) {
@@ -25685,12 +25713,19 @@ const BodyContext = struct {
                 break :blk try self.generatedIteratorNominalNode(
                     checked_ty,
                     nominal,
-                    item_node,
+                    public_arg,
                     def,
-                    try self.instDeclaredOrderForNominal(nominal),
+                    declared_order,
                 );
             },
-            .parse_tag_union_spec, .fields, .field => Common.invariant("non-iterator generated call slot requested iterator argument materialization"),
+            .field => try self.generatedFieldNominalNode(
+                checked_ty,
+                nominal,
+                public_arg,
+                def,
+                declared_order,
+            ),
+            .parse_tag_union_spec, .fields => Common.invariant("generated protocol without an exact-argument recipe reached call slot materialization"),
             .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("ordinary builtin reached generated call slot materialization"),
         };
     }

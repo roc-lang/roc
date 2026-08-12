@@ -17785,10 +17785,24 @@ fn checkedTypeIsGeneratedNominal(payload: CheckedTypePayload) bool {
     };
 }
 
-fn checkedTypeIsGeneratedIterator(payload: CheckedTypePayload) bool {
+fn checkedTypeCanGenerateFromExactArguments(payload: CheckedTypePayload) bool {
     if (payload != .nominal) return false;
     const builtin_nominal = payload.nominal.builtin orelse return false;
-    return builtinRuntimeEncoding(builtin_nominal) == .iterator;
+    return builtinCanGenerateFromExactArguments(builtin_nominal);
+}
+
+fn builtinCanGenerateFromExactArguments(builtin_nominal: CheckedBuiltinNominal) bool {
+    return switch (builtinRuntimeEncoding(builtin_nominal)) {
+        .iterator, .field => true,
+        .parse_tag_union_spec, .fields, .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
+    };
+}
+
+test "generated iterators and field handles consume exact public arguments" {
+    try std.testing.expect(builtinCanGenerateFromExactArguments(.iter));
+    try std.testing.expect(builtinCanGenerateFromExactArguments(.field));
+    try std.testing.expect(!builtinCanGenerateFromExactArguments(.fields));
+    try std.testing.expect(!builtinCanGenerateFromExactArguments(.parse_tag_union_spec));
 }
 
 /// Compile one checked callable into the exact occurrence lists consumed by
@@ -18074,7 +18088,7 @@ fn finishSpecializationProjectionShape(
         }
         const generated_source: SpecializationGeneratedSlotSource = if (build.kind == .generated_nominal and
             has_produced_value_position and
-            checkedTypeIsGeneratedIterator(checked_types.store.payload(build.checked)))
+            checkedTypeCanGenerateFromExactArguments(checked_types.store.payload(build.checked)))
             .exact_arguments
         else
             .producer;
@@ -18083,7 +18097,7 @@ fn finishSpecializationProjectionShape(
         if (generated_source == .exact_arguments) {
             const nominal = checked_types.store.payload(build.checked).nominal;
             if (nominal.args.len != 1) {
-                checkedArtifactInvariant("generated iterator specialization slot had a non-unary item type", .{});
+                checkedArtifactInvariant("exact-argument generated specialization slot had a non-unary public type", .{});
             }
             if (try concrete_sources.isConcrete(nominal.args[0])) {
                 generated_argument_source = .concrete_checked;
@@ -18113,7 +18127,7 @@ fn finishSpecializationProjectionShape(
                     }
                 }
                 if (generated_argument_projection == no_specialization_projection_parent) {
-                    checkedArtifactInvariant("generated iterator compound item had no declared argument edge", .{});
+                    checkedArtifactInvariant("exact-argument generated slot had no declared public-argument edge", .{});
                 }
             }
         }

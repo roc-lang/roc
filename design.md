@@ -3217,12 +3217,20 @@ are never hashed twice for one miss.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs
-the exact result independently from its operands, and directed
-request application handles the public/generated pair at that exact nominal
-edge without traversing either backing. A request whose ordinary generic
-substitution completes an `Iter(item)` occurrence invokes the same choke point,
-so recursive calls can reserve the already-exact ABI before the body is
-lowered. The body must independently produce that same identity.
+the exact result independently from its operands. When a checker-published
+call slot supplies the exact item argument, forward instantiation constructs
+the generated iterator identity at that checked nominal occurrence and returns
+it directly; there is never a completed public/generated pair to compare or
+relate. Recursive calls can therefore reserve the already-exact ABI before the
+body is lowered, and the body must independently produce that same identity.
+
+The same rule applies to compiler-generated `FieldName(shape)` handles. Their
+runtime backing is determined solely by the exact record-shape argument, so a
+checker-published exact-argument slot constructs the content-addressed handle
+before an enclosing `Iter(FieldName(shape))` is constructed. The `FieldNames`
+backing and the iterator item consequently contain the identical atomic type;
+post-seal code never compares public and generated nominal structures or treats
+different backing authorities as compatibility evidence.
 
 Recursive procedures and loops need no iterator-specific growth analysis,
 owner snapshots, depth caps, or representation finalization. Their argument,
