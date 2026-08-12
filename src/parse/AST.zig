@@ -754,8 +754,8 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
 /// pin at all rather than guessing at what was meant.
 pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
     const field = self.store.getRecordField(field_idx);
-    const value = field.value orelse return null;
-    const token = self.store.singleStringPartToken(value) orelse return null;
+    if (field.value != .supplied) return null;
+    const token = self.store.singleStringPartToken(field.value.supplied) orelse return null;
     return self.resolve(token);
 }
 
@@ -3227,9 +3227,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3389,9 +3390,10 @@ pub const Expr = union(enum) {
                     const field_node = tree.beginNode();
                     try tree.pushStaticAtom("field");
                     try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    if (record_field.value == .unset) try tree.pushBoolPair("unset", true);
                     const attrs2 = tree.beginNode();
-                    if (record_field.value) |value_id| {
-                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    if (record_field.value == .supplied) {
+                        try ast.store.getExpr(record_field.value.supplied).pushToSExprTree(gpa, env, ast, tree);
                     }
                     try tree.endNode(field_node, attrs2);
                 }
@@ -3594,11 +3596,27 @@ pub const PatternRecordField = struct {
     pub const Span = struct { span: base.DataSpan };
 };
 
-/// TODO
+/// One field in an expression record. A field's value is exactly one of:
+/// supplied (`x: expr`), punned (`x` alone), or unset (`x: _`)—unset marks
+/// the field Missing in a construction or update rather than carrying a
+/// value expression.
 pub const RecordField = struct {
     name: Token.Idx,
-    value: ?Expr.Idx,
+    value: Value,
     region: TokenizedRegion,
+
+    pub const Value = union(enum) {
+        supplied: Expr.Idx,
+        punned,
+        unset,
+
+        pub fn asSupplied(self: Value) ?Expr.Idx {
+            return switch (self) {
+                .supplied => |idx| idx,
+                .punned, .unset => null,
+            };
+        }
+    };
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
@@ -3612,10 +3630,11 @@ pub const RecordField = struct {
         try tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         try tree.endNode(name, attrs2);
+        if (self.value == .unset) try tree.pushBoolPair("unset", true);
         const attrs = tree.beginNode();
 
-        if (self.value) |idx| {
-            const value = ast.store.getExpr(idx);
+        if (self.value == .supplied) {
+            const value = ast.store.getExpr(self.value.supplied);
             try value.pushToSExprTree(gpa, env, ast, tree);
         }
 

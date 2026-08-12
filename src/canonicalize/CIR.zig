@@ -1123,6 +1123,25 @@ pub const RecordField = struct {
     }
 };
 
+/// Represents an unset field (`name: _`) in a record expression. The field
+/// is declared in the record's row—kind `optional`—but carries no value
+/// expression; its runtime slot is constructed in the Missing state. The
+/// field's region lives in the node store's regions array, like every node.
+pub const UnsetField = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = extern struct { span: base.DataSpan };
+
+    name: base.Ident.Idx,
+
+    pub fn pushToSExprTree(self: *const UnsetField, cir: anytype, tree: anytype) Allocator.Error!void {
+        const begin = tree.beginNode();
+        try tree.pushStaticAtom("unset-field");
+        try tree.pushStringPair("name", cir.getIdent(self.name));
+        const attrs = tree.beginNode();
+        try tree.endNode(begin, attrs);
+    }
+};
+
 /// Represents an external declaration from another module
 pub const ExternalDecl = struct {
     /// Fully qualified name (e.g., "json.Json.utf8")

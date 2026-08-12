@@ -4606,6 +4606,14 @@ pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.me
     return expr_idx;
 }
 
+/// Add a new unset record field (`name: _`) to the node store.
+/// This function asserts that the nodes and regions are in sync.
+pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
+    const unset_idx = try self.store.addUnsetField(unset_field, region);
+    self.debugAssertArraysInSync();
+    return unset_idx;
+}
+
 /// Add a new record destructuring to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {

@@ -106,6 +106,75 @@ test "record literal uses record_unbound" {
     }
 }
 
+test "record with unset fields collects them into the unsets span" {
+    const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
+
+    // Construction: `{ opt: _, other: 1 }` keeps `other` as a regular field
+    // and records `opt` as an unset field, not an empty record.
+    {
+        const source = "{ opt: _, other: 1 }";
+
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+
+        try env.initCIRFields("test");
+
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
+
+        const ast = try parse.expr(gpa, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+            return error.CanonicalizeError;
+        };
+
+        const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+        if (canonical_expr != .e_record) return error.ExpectedRecord;
+        const record = canonical_expr.e_record;
+        try std.testing.expect(record.fields.span.len == 1);
+        try std.testing.expect(record.unsets.span.len == 1);
+
+        const unset_idxs = env.store.sliceUnsetFields(record.unsets);
+        const unset = env.store.getUnsetField(unset_idxs[0]);
+        try std.testing.expectEqualStrings("opt", env.getIdent(unset.name));
+    }
+
+    // An all-unset record must not collapse to `e_empty_record`.
+    {
+        const source = "{ opt: _ }";
+
+        var env = try ModuleEnv.init(gpa, source);
+        defer env.deinit();
+
+        try env.initCIRFields("test");
+
+        const roc_ctx = CoreCtx.testing(gpa, gpa);
+
+        const ast = try parse.expr(gpa, &env.common);
+        defer ast.deinit();
+
+        var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+        defer can.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
+            return error.CanonicalizeError;
+        };
+
+        const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
+        if (canonical_expr != .e_record) return error.ExpectedRecord;
+        const record = canonical_expr.e_record;
+        try std.testing.expect(record.fields.span.len == 0);
+        try std.testing.expect(record.unsets.span.len == 1);
+    }
+}
+
 test "record pattern destructuring" {
     const gpa = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(gpa);

@@ -263,6 +263,9 @@ pub const Expr = union(enum) {
     /// ```
     e_record: struct {
         fields: CIR.RecordField.Span,
+        /// Fields unset with `name: _`: declared in the row as optional,
+        /// constructed in the Missing state. No value expression.
+        unsets: CIR.UnsetField.Span,
         ext: ?Expr.Idx,
     },
     /// Empty record constant
@@ -1175,6 +1178,16 @@ pub const Expr = union(enum) {
                     try ir.store.getRecordField(field_idx).pushToSExprTree(ir, tree);
                 }
                 try tree.endNode(fields_begin, fields_attrs);
+
+                if (record_expr.unsets.span.len > 0) {
+                    const unsets_begin = tree.beginNode();
+                    try tree.pushStaticAtom("unsets");
+                    const unsets_attrs = tree.beginNode();
+                    for (ir.store.sliceUnsetFields(record_expr.unsets)) |unset_idx| {
+                        try ir.store.getUnsetField(unset_idx).pushToSExprTree(ir, tree);
+                    }
+                    try tree.endNode(unsets_begin, unsets_attrs);
+                }
 
                 try tree.endNode(begin, attrs);
             },

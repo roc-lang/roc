@@ -653,10 +653,19 @@ fn emitExprFrame(
             try self.write("{ ");
             try frames.append(allocator, .{ .write = " }" });
             const fields = self.module_env.store.sliceRecordFields(record.fields);
+            const unsets = self.module_env.store.sliceUnsetFields(record.unsets);
             if (record.ext) |ext_idx| {
                 try frames.append(allocator, .{ .expr = ext_idx });
                 try frames.append(allocator, .{ .write = ".." });
-                if (fields.len > 0) try frames.append(allocator, .{ .write = ", " });
+                if (fields.len > 0 or unsets.len > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+            var unset_i = unsets.len;
+            while (unset_i > 0) {
+                unset_i -= 1;
+                const unset = self.module_env.store.getUnsetField(unsets[unset_i]);
+                try frames.append(allocator, .{ .write = ": _" });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(unset.name) });
+                if (unset_i > 0 or fields.len > 0) try frames.append(allocator, .{ .write = ", " });
             }
             try self.pushRecordFields(frames, allocator, fields);
         },
