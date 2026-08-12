@@ -13965,6 +13965,42 @@ const BodyContext = struct {
         return produced_node;
     }
 
+    /// Consume checked field-presence evidence at the record producer that
+    /// knows the exact runtime slot. Per-occurrence undetermined ids are not
+    /// part of a produced record's identity: retaining them would make two
+    /// records with identical immediate children hash as different values.
+    fn completedProducedRecordField(
+        self: *BodyContext,
+        field: InstField,
+    ) InstField {
+        const resolved = self.graph.resolvedFieldKind(field.kind) orelse switch (field.kind) {
+            .sealed => return field,
+            .undetermined => Common.invariant("produced record retained an unresolved field kind"),
+            .required, .optional, .defaulted => unreachable,
+        };
+        var completed = field;
+        completed.kind = switch (resolved) {
+            .required => .required,
+            .optional => .optional,
+            .defaulted => |default| .{ .defaulted = default },
+        };
+        completed.default = resolved.defaultIdentity();
+        switch (resolved) {
+            .required, .defaulted => completed.value_ty = null,
+            .optional => if (completed.value_ty == null) {
+                Common.invariant("produced optional record field had no source value node");
+            },
+        }
+        return completed;
+    }
+
+    fn completeProducedRecordFields(
+        self: *BodyContext,
+        fields: []InstField,
+    ) void {
+        for (fields) |*field| field.* = self.completedProducedRecordField(field.*);
+    }
+
     /// Pattern counterpart to `addConstructorExpr`, used by compiler-generated
     /// exhaustive matches whose constructor pattern has no checked source node.
     fn addConstructorPat(self: *BodyContext, ty: Type.TypeId, data: BodyPatData) Allocator.Error!DraftPatId {
@@ -16194,11 +16230,39 @@ const BodyContext = struct {
         existing: NodeId,
     };
 
+    /// A produced occurrence owns every checked variable which was not
+    /// replaced by an explicit exact selection. Consume checker-published
+    /// language defaults at that leaf before an enclosing compound is
+    /// content-addressed; finished compounds must never retain mutable
+    /// per-occurrence default cells among their immediate children.
+    fn producedVariableDefault(variable: checked.CheckedTypeVariable) ?InstNode {
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached produced Monotype instantiation");
+            return switch (target) {
+                .dec => .{ .primitive = .dec },
+                .str => .{ .primitive = .str },
+            };
+        }
+        if (variable.row_default) |row_default| {
+            return switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+        return null;
+    }
+
     fn instNodeBuild(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!InstNodeBuild {
         return switch (checkedPayload(self.view, checked_ty)) {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
             .flex, .rigid => |variable| blk: {
+                if (self.instantiation.authority == .produced_occurrence) {
+                    if (producedVariableDefault(variable)) |default| {
+                        break :blk .{ .content = default };
+                    }
+                }
                 const key = self.view.types.rootKey(checked_ty).bytes;
                 break :blk .{ .content = .{ .unresolved = InstVariable.checkedVariableAtKey(
                     variable.numeric_default_phase,
@@ -16221,7 +16285,10 @@ const BodyContext = struct {
             } } },
             .record_unbound => |fields| .{ .content = .{ .record = .{
                 .fields = try self.instFields(fields),
-                .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
+                .ext = if (self.instantiation.authority == .produced_occurrence)
+                    try self.graph.newNode(.empty_record)
+                else
+                    try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
             } } },
             .record => |record| .{ .content = .{ .record = .{
                 .fields = try self.instFields(record.fields),
@@ -16262,6 +16329,19 @@ const BodyContext = struct {
                     .default = null,
                 },
                 .undetermined => blk: {
+                    // Field presence is not a specialization slot. A whole
+                    // exact record selection bypasses this construction; in
+                    // every other produced occurrence the checker's
+                    // undetermined presence has reached its specified
+                    // required default.
+                    if (self.instantiation.authority == .produced_occurrence) {
+                        break :blk .{
+                            .name = name,
+                            .ty = value_node,
+                            .kind = .required,
+                            .default = null,
+                        };
+                    }
                     const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
                         Common.invariant("undetermined checked field kind carried no presence variable"));
                     const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
@@ -29001,8 +29081,9 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
         const stored_node = try self.graph.importMono(stored_ty);
-        try self.publishExactCheckedTypeAtCell(requested_ty, DraftTypeCell.fromGraphNode(stored_node));
-        return stored_node;
+        const runtime_node = self.constructorRepresentationNode(stored_node);
+        try self.publishExactCheckedTypeAtCell(requested_ty, DraftTypeCell.fromGraphNode(runtime_node));
+        return runtime_node;
     }
 
     /// Checked root-edge evidence for a compile-time root's
@@ -33802,6 +33883,7 @@ const BodyContext = struct {
                     break;
                 } else Common.invariant("record update named a field absent from its exact base value");
             }
+            self.completeProducedRecordFields(produced_fields);
             const structural_node = try self.graph.newNode(.{ .record = .{
                 .fields = produced_fields,
                 .ext = try self.graph.newNode(.empty_record),
@@ -33910,6 +33992,11 @@ const BodyContext = struct {
                 requires_distinct_witness = true;
             }
             produced_fields[index].ty = produced_value_node;
+            produced_fields[index] = self.completedProducedRecordField(produced_fields[index]);
+            requires_distinct_witness = requires_distinct_witness or
+                !std.meta.eql(field.kind, produced_fields[index].kind) or
+                !std.meta.eql(field.default, produced_fields[index].default) or
+                field.value_ty != produced_fields[index].value_ty;
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
@@ -33984,6 +34071,11 @@ const BodyContext = struct {
             );
             changed = changed or !self.graph.sameClass(field.ty, produced_value_node);
             produced_field.ty = produced_value_node;
+            produced_field.* = self.completedProducedRecordField(produced_field.*);
+            changed = changed or
+                !std.meta.eql(field.kind, produced_field.kind) or
+                !std.meta.eql(field.default, produced_field.default) or
+                field.value_ty != produced_field.value_ty;
             lowered_field.* = .{ .name = field.name, .value = value };
         }
 
@@ -34060,10 +34152,17 @@ const BodyContext = struct {
             produced_tag.payloads = produced_payloads;
         }
         if (!found) Common.invariant("tag constructor was absent from its exact row");
+        const produced_ext = try self.graph.checkedDefaultNode(request_row.ext) orelse
+            Common.invariant("tag producer had no exact row remainder");
         const structural_node = if (changed)
             try self.graph.newNode(.{ .tag_union = .{
                 .tags = produced_tags,
-                .ext = request_row.ext,
+                .ext = produced_ext,
+            } })
+        else if (!self.graph.sameClass(request_row.ext, produced_ext))
+            try self.graph.newNode(.{ .tag_union = .{
+                .tags = try self.graph.arena().dupe(InstTag, request_row.tags),
+                .ext = produced_ext,
             } })
         else
             request_row.root;
