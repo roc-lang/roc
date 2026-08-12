@@ -372,6 +372,13 @@ hoist_frames: std.ArrayListUnmanaged(HoistFrame),
 /// Temporary maximal eligible expression roots that may become selected if an
 /// enclosing expression cannot cover them.
 hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx),
+/// Last answer from `methodCallPreservesIteratorSourceInput`. The hoist flow
+/// asks the same question about one expression up to five times while
+/// deciding that expression's role (root, cover, binding root, and the two
+/// recorders), and every miss resolves the receiver and looks up a
+/// cross-module method binding. One entry serves those repeats, and it also
+/// keeps the decisions about a single expression consistent with each other.
+hoist_iterator_source_memo: ?struct { expr: CIR.Expr.Idx, preserves: bool } = null,
 /// Compile-time-known local dependencies encountered while checking a local
 /// binding RHS. They are selected only if that RHS cannot itself be hoisted, or
 /// later when a selected parent root recursively selects dependencies.
@@ -3191,8 +3198,8 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_hosted_lambda,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3270,8 +3277,8 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_run_low_level,
         => false,
         .e_str => |str| self.stringHasInterpolation(str.span),
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
         .e_list,
         .e_tuple,
         .e_block,
@@ -3306,8 +3313,8 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_type_method_call,
         .e_type_dispatch_call,
         => true,
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(call),
+        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
+        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
         .e_for,
         .e_run_low_level,
         .e_lookup_required,
@@ -3367,14 +3374,24 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
     };
 }
 
-fn methodCallPreservesIteratorSourceInput(self: *Self, call: anytype) bool {
-    // Every def that can answer true is reachable only through a method named
-    // `iter` or `iter_rev`: the registered producer table's hoist-preserving
-    // entries, the delegating Dict/Set wrappers, and the FieldNames intrinsic
-    // (`static_dispatch_registry.zig`) all bind those two names. Anything else
-    // skips receiver resolution and the cross-module binding lookup.
-    const method_text = self.cir.getIdentText(call.method_name);
-    if (!Ident.textEql(method_text, "iter") and !Ident.textEql(method_text, "iter_rev")) return false;
+fn methodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx, call: anytype) bool {
+    if (self.hoist_iterator_source_memo) |memo| {
+        if (memo.expr == expr) return memo.preserves;
+    }
+    const preserves = self.computeMethodCallPreservesIteratorSourceInput(expr, call);
+    self.hoist_iterator_source_memo = .{ .expr = expr, .preserves = preserves };
+    return preserves;
+}
+
+fn computeMethodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx, call: anytype) bool {
+    // Every def that can answer true is reachable only through the registry's
+    // hoist-preserving method names: its producer table, the delegating
+    // Dict/Set wrappers, and the FieldNames intrinsic all bind those names,
+    // and a user-defined conversion is recognized by result type under the
+    // same names (`static_dispatch_registry.zig` pins this by comptime
+    // check). Anything else skips receiver resolution and the cross-module
+    // binding lookup.
+    if (!methodNameIsHoistPreservingCandidate(self.cir.getIdentText(call.method_name))) return false;
     var owner_var = ModuleEnv.varFrom(call.receiver);
     const nominal = while (true) {
         const resolved = self.types.resolveVar(owner_var);
@@ -3390,10 +3407,49 @@ fn methodCallPreservesIteratorSourceInput(self: *Self, call: anytype) bool {
         self.cir,
         call.method_name,
     ) orelse return false;
-    return static_dispatch.procedurePreservesHoistableSourceInputForEnvDef(
-        method.env,
-        method.binding.def_idx,
-    );
+    if (method.env.module_role == .builtin) {
+        return static_dispatch.procedurePreservesHoistableSourceInputForEnvDef(
+            method.env,
+            method.binding.def_idx,
+        );
+    }
+    // A user-defined conversion has no registry entry, so its result type
+    // decides: an `Iter` holds its step closure by value, and selecting the
+    // conversion itself as a static-data root would bake that closure instead
+    // of the receiver collection it reads.
+    return self.varIsIteratorNominal(ModuleEnv.varFrom(expr));
+}
+
+fn methodNameIsHoistPreservingCandidate(method_text: []const u8) bool {
+    for (static_dispatch.hoist_preserving_method_names) |candidate| {
+        if (Ident.textEql(method_text, candidate)) return true;
+    }
+    return false;
+}
+
+/// Whether this type is the builtin `Iter` nominal, looking through
+/// transparent aliases.
+fn varIsIteratorNominal(self: *Self, var_: Var) bool {
+    const iter_source_decl = self.iteratorNominalSourceDecl() orelse return false;
+    var walk = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(walk);
+        switch (resolved.desc.content) {
+            .alias => |alias| walk = self.types.getAliasBackingVar(alias),
+            .flex, .rigid, .structure, .err => {
+                const nominal = resolved.desc.content.unwrapNominalType() orelse return false;
+                const source_decl = nominal.sourceDeclOptional() orelse return false;
+                return source_decl == iter_source_decl;
+            },
+        }
+    }
+}
+
+fn iteratorNominalSourceDecl(self: *const Self) ?u32 {
+    if (self.builtin_ctx.builtin_indices) |indices| return @intFromEnum(indices.iter_type);
+    if (self.cir.module_role != .builtin) return null;
+    const iter_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_iter) orelse return null;
+    return @intFromEnum(iter_stmt_idx);
 }
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {

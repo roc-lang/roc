@@ -429,6 +429,15 @@ pub const Store = struct {
     /// any structural depth. Closed-call lowering uses this directly so an
     /// ordinary return type never has to be imported into a live graph merely
     /// to answer an ownership question.
+    ///
+    /// `InstGraph.containsIteratorInterface` answers the same question for the
+    /// live graph. The two walk different representations, so they cannot
+    /// share code, but they must agree for every pair of corresponding types:
+    /// this walk gates skipping graph construction entirely, so a structural
+    /// position it declines to descend into would drop a producer's minted
+    /// representation while the graph walk still claims to protect it. The
+    /// test "iterator-interface containment agrees between Monotype and graph"
+    /// in `solve.zig` pins the two together position by position.
     pub fn containsIteratorInterface(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
         self.requireConstructed(root);
         const root_index = @intFromEnum(root);

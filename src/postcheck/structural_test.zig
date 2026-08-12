@@ -462,7 +462,7 @@ test "Monotype iterator result completion stays out of relation replay and retai
         "fn completeDeferredIteratorResult(",
         "fn constUseMonoType(",
     );
-    try expectContains(completion, "try registerTemplateSpecInterfaceLookups(");
+    try expectContains(completion, "try updateTemplateSpecInterfaceLookups(");
     try expectContains(completion, "completed_source.evidence_digest.bytes");
     try expectNotContains(completion, "unregisterTemplateSpec");
 

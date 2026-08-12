@@ -3980,7 +3980,7 @@ const Builder = struct {
         });
         try source_ctx.draft.template_spec_by_fn.put(fn_id, @intCast(spec_index));
         lexical_needs_cleanup = false;
-        try registerTemplateSpecInterfaceLookups(
+        try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
             source_ctx.graph,
@@ -4071,7 +4071,7 @@ const Builder = struct {
         });
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
-        try registerTemplateSpecInterfaceLookups(
+        try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
             self.allocator,
             source_ctx.graph,
@@ -9906,26 +9906,6 @@ fn registerTemplateSpecLookup(
     if (!entry.found_existing) entry.value_ptr.* = .empty;
     for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
     try entry.value_ptr.append(allocator, raw_spec);
-}
-
-fn registerTemplateSpecInterfaceLookups(
-    draft: *BodyDraftStore,
-    allocator: Allocator,
-    graph: *InstGraph,
-    family: DraftTemplateFamilyAddress,
-    evidence_digest: [32]u8,
-    request_fn_node: NodeId,
-    raw_spec: u32,
-) Allocator.Error!void {
-    return updateTemplateSpecInterfaceLookups(
-        draft,
-        allocator,
-        graph,
-        family,
-        evidence_digest,
-        request_fn_node,
-        raw_spec,
-    );
 }
 
 fn updateTemplateSpecInterfaceLookups(
@@ -16816,7 +16796,16 @@ const BodyContext = struct {
             // class; the directed relation still validates the pair's shared
             // public interface so neither side's expectation is dropped.
             try relateRequestComponent(self.graph, checked_root, produced_root);
-            return produced_node;
+            // The private side is the runtime representation, matching the
+            // selection every other site makes (field access, control-flow
+            // result selection, and the containment branch below). Typing the
+            // value at a public node against a private request is the state
+            // `includeControlFlowResult` reports as fatal, so the checked side
+            // is selected only when it is the private one.
+            if (produced_private_root or try self.graph.containsGeneratedPrivate(produced_root)) {
+                return produced_node;
+            }
+            return checked_node;
         }
         if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
         if (try self.relateMatchingProducedValueContainers(checked_root, produced_root, visiting)) |witness| {
@@ -20138,25 +20127,12 @@ const BodyContext = struct {
                     ),
                 );
             },
-            .list_iter => {
+            // Both list-backed conversions mint over the same component and
+            // item; only the producer kind differs, and that comes from the
+            // registry.
+            .list_iter, .list_iter_rev => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("List.iter reached Monotype with an unexpected arity");
-                }
-                if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
-                return try self.graphFunctionNode(
-                    request_fn.args,
-                    try self.generatedIteratorNodeWithItem(
-                        mintedProducerKind(procedure),
-                        public_fn.ret,
-                        &.{request_fn.args[0]},
-                        null,
-                        try self.graph.listElementNode(request_fn.args[0]),
-                    ),
-                );
-            },
-            .list_iter_rev => {
-                if (checked_args.len != 1 or request_fn.args.len != 1) {
-                    Common.invariant("List.iter_rev reached Monotype with an unexpected arity");
+                    Common.invariant("list-backed iterator conversion reached Monotype with an unexpected arity");
                 }
                 if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
@@ -26033,11 +26009,26 @@ const BodyContext = struct {
             if (!self.sameType(expected, fn_data.ret)) return null;
         }
         for (checked_args) |checked_arg| {
-            if (try self.exprCallResultEvidenceNode(checked_arg, null)) |evidence_node| {
-                if (try self.graph.containsGeneratedPrivate(evidence_node)) return null;
-            }
+            if (try self.argumentMayCarryGeneratedPrivateEvidence(checked_arg)) return null;
         }
         return fn_ty;
+    }
+
+    /// Whether this argument may reach its callee carrying generated-private
+    /// evidence. The sealed-callee snapshot above is only valid when no
+    /// argument can, so an argument still carrying the public iterator
+    /// interface answers true: completing it is what mints the private
+    /// representation, and this question must stay a read of the checked
+    /// type. Deriving the exact evidence node here would lower the argument's
+    /// callee body and freeze its specialization key as a side effect of a
+    /// predicate whose caller may then discard the answer.
+    fn argumentMayCarryGeneratedPrivateEvidence(
+        self: *BodyContext,
+        checked_arg: checked.CheckedExprId,
+    ) Allocator.Error!bool {
+        const argument_node = try self.instNode(self.view.bodies.expr(checked_arg).ty);
+        if (try self.graph.containsGeneratedPrivate(argument_node)) return true;
+        return try self.graph.containsIteratorInterface(argument_node);
     }
 
     fn directCallInstantiationSourceFnType(
@@ -27994,7 +27985,7 @@ const BodyContext = struct {
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
         const completed_spec = self.draft.template_specs.items[spec_index];
         const completed_source = self.draft.fns.items[@intFromEnum(draft_fn)].source;
-        try registerTemplateSpecInterfaceLookups(
+        try updateTemplateSpecInterfaceLookups(
             self.draft,
             self.allocator,
             self.graph,
@@ -30299,27 +30290,49 @@ const BodyContext = struct {
         return try self.lowerExprAtTypeCell(child, cell);
     }
 
+    /// What one constructor child contributes to its container's value
+    /// witness.
+    const ConstructorChildWitness = struct {
+        /// The representation this child's slot carries in a container
+        /// witness, whether or not this child is the one that requires the
+        /// witness.
+        slot: NodeId,
+        /// Whether this child alone requires the container to be rebuilt at
+        /// an exact value witness.
+        requires_witness: bool,
+    };
+
     /// Decide whether an emitted constructor child needs an exact value
-    /// witness instead of the checked-public slot it was requested at. Every
-    /// accepted difference must carry producer-authored representation or
-    /// completion evidence; constructor lowering never guesses from shape.
-    fn constructorChildRequiresWitness(
+    /// witness instead of the checked-public slot it was requested at, and
+    /// which representation its slot carries when any sibling forces the
+    /// container to be rebuilt. Every accepted difference must carry
+    /// producer-authored representation or completion evidence; constructor
+    /// lowering never guesses from shape.
+    fn constructorChildWitness(
         self: *BodyContext,
         slot_node: NodeId,
         child_node: NodeId,
         comptime missing_evidence_message: []const u8,
-    ) Allocator.Error!bool {
-        if (self.graph.sameClass(slot_node, child_node)) return false;
-        const child_private = try self.graph.containsGeneratedPrivate(child_node);
-        const slot_private = try self.graph.containsGeneratedPrivate(slot_node);
-        if (child_private) return true;
+    ) Allocator.Error!ConstructorChildWitness {
+        if (self.graph.sameClass(slot_node, child_node)) {
+            return .{ .slot = child_node, .requires_witness = false };
+        }
+        if (try self.graph.containsGeneratedPrivate(child_node)) {
+            return .{ .slot = child_node, .requires_witness = true };
+        }
         // A codec-authored private slot is the selected constructor
         // representation even when the user-authored opaque value lowered at
-        // its public handle. Rebuilding the container from that public child
-        // would discard the earlier producer selection.
-        if (slot_private) return false;
-        if (try self.resultCompletesRequest(slot_node, child_node)) return true;
-        if (try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node)) return true;
+        // its public handle. Emitting a container witness from that public
+        // child would discard the earlier producer selection, so a witness
+        // driven by some other child keeps this slot private.
+        if (try self.graph.containsGeneratedPrivate(slot_node)) {
+            return .{ .slot = slot_node, .requires_witness = false };
+        }
+        if (try self.resultCompletesRequest(slot_node, child_node) or
+            try self.producedValueHasExplicitRepresentationEvidence(slot_node, child_node))
+        {
+            return .{ .slot = child_node, .requires_witness = true };
+        }
         Common.invariant(missing_evidence_message);
     }
 
@@ -31712,14 +31725,13 @@ const BodyContext = struct {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph update lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
-                if (try self.constructorChildRequiresWitness(
+                const witness = try self.constructorChildWitness(
                     field.ty,
                     child_node,
                     "record graph update child differed without explicit representation evidence",
-                )) {
-                    requires_distinct_witness = true;
-                }
-                produced_fields[index] = .{ .name = field.name, .ty = child_node };
+                );
+                if (witness.requires_witness) requires_distinct_witness = true;
+                produced_fields[index] = .{ .name = field.name, .ty = witness.slot };
             }
             const produced_node = if (requires_distinct_witness) blk: {
                 const witness_fields = try self.graph.arena().dupe(InstField, produced_fields);
@@ -31749,18 +31761,17 @@ const BodyContext = struct {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
-                if (try self.constructorChildRequiresWitness(
+                // A producer-authored child can carry a representation
+                // distinct from the checked-public field slot. A private
+                // codec-authored slot carrying a public opaque handle keeps
+                // its private representation in the rebuilt witness instead.
+                const witness = try self.constructorChildWitness(
                     field.ty,
                     child_node,
                     "record graph constructor child differed without explicit representation evidence",
-                )) {
-                    // A producer-authored child can carry a representation
-                    // distinct from the checked-public field slot. A private
-                    // codec-authored slot carrying a public opaque handle is
-                    // retained by `constructorChildRequiresWitness` instead.
-                    requires_distinct_witness = true;
-                }
-                produced_fields[index] = .{ .name = field.name, .ty = child_node };
+                );
+                if (witness.requires_witness) requires_distinct_witness = true;
+                produced_fields[index] = .{ .name = field.name, .ty = witness.slot };
                 break :blk pre;
             } else Common.invariant("closed record graph constructor was missing a checked field value");
             lowered[index] = .{ .name = field.name, .value = value };
@@ -31801,14 +31812,13 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(payload_node),
             );
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            produced_payloads[index] = child_node;
-            if (try self.constructorChildRequiresWitness(
+            const witness = try self.constructorChildWitness(
                 payload_node,
                 child_node,
                 "tag graph constructor child differed without explicit representation evidence",
-            )) {
-                requires_distinct_witness = true;
-            }
+            );
+            produced_payloads[index] = witness.slot;
+            if (witness.requires_witness) requires_distinct_witness = true;
         }
         const produced_node = if (requires_distinct_witness) blk: {
             const structural_node = try self.graph.tagValueNodeWithPayloads(tag_node, name, produced_payloads);
@@ -31839,12 +31849,13 @@ const BodyContext = struct {
             DraftTypeCell.fromGraphNode(backing_node),
         );
         const child_node = try self.exprTypeCell(backing).toGraphNode(self.graph);
-        const produced_node = if (try self.constructorChildRequiresWitness(
+        const backing_witness = try self.constructorChildWitness(
             backing_node,
             child_node,
             "nominal graph constructor child differed without explicit representation evidence",
-        )) blk: {
-            const witness_node = try self.graph.namedValueNodeWithBacking(representation_node, child_node);
+        );
+        const produced_node = if (backing_witness.requires_witness) blk: {
+            const witness_node = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
             break :blk try self.relateCheckedNodeToProducedValue(representation_node, witness_node);
         } else representation_node;
         return try self.addExprWithTypeCell(
@@ -31869,14 +31880,13 @@ const BodyContext = struct {
         for (items, item_nodes, 0..) |item, item_node, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(item_node));
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
-            produced_items[index] = child_node;
-            if (try self.constructorChildRequiresWitness(
+            const witness = try self.constructorChildWitness(
                 item_node,
                 child_node,
                 "tuple graph constructor child differed without explicit representation evidence",
-            )) {
-                requires_distinct_witness = true;
-            }
+            );
+            produced_items[index] = witness.slot;
+            if (witness.requires_witness) requires_distinct_witness = true;
         }
         const produced_node = if (requires_distinct_witness) blk: {
             const structural_node = try self.graph.newNode(.{
@@ -31901,24 +31911,39 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         var produced_element: ?NodeId = null;
+        var selected_index: usize = 0;
+        const child_nodes = try self.allocator.alloc(NodeId, items.len);
+        defer self.allocator.free(child_nodes);
         for (items, 0..) |item, index| {
             lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
             const child_node = try self.exprTypeCell(lowered[index]).toGraphNode(self.graph);
+            child_nodes[index] = child_node;
             if (produced_element) |selected| {
                 // A list has exactly one element representation, so every
                 // later child joins the selected witness—including a child
                 // whose class already matches the checked element slot, which
                 // otherwise would silently diverge from the selection.
                 try selectRequestRepresentation(self.graph, selected, child_node);
-            } else if (try self.constructorChildRequiresWitness(
-                element_node,
-                child_node,
-                "list graph constructor child differed without explicit representation evidence",
-            )) {
-                produced_element = child_node;
+            } else {
+                const witness = try self.constructorChildWitness(
+                    element_node,
+                    child_node,
+                    "list graph constructor child differed without explicit representation evidence",
+                );
+                if (witness.requires_witness) {
+                    produced_element = witness.slot;
+                    selected_index = index;
+                }
             }
         }
         const produced_node = if (produced_element) |element_witness| blk: {
+            // Elements lowered before the selection were only checked against
+            // the public element slot, so they join the selection here; every
+            // element is stored at one representation regardless of which
+            // element chose it.
+            for (child_nodes[0..selected_index]) |child_node| {
+                try selectRequestRepresentation(self.graph, element_witness, child_node);
+            }
             const structural_node = try self.graph.newNode(.{ .list = element_witness });
             const witness = try self.constructorWitnessWithStructuralNode(list_node, structural_node);
             // Every element is stored at the list's single element
@@ -35172,12 +35197,10 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
         direct: bool,
     ) Allocator.Error!NodeId {
-        const request_fn = try self.graph.functionNodes(request_fn_node);
-        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
-            try self.graph.containsGeneratedPrivate(request_fn.ret))
-        {
-            return request_fn_node;
-        }
+        // The target kind is an O(1) tag compare and rejects every builtin
+        // iterator method (the registry classifies iterator owners as
+        // `.graph_participating`), so it runs before the structural
+        // containment walks below.
         switch (lookup.target.kind) {
             .procedure => |procedure| switch (procedure.runtime_target) {
                 .procedure => {},
@@ -35185,6 +35208,12 @@ const BodyContext = struct {
             },
             .local_proc => {},
             .structural => return request_fn_node,
+        }
+        const request_fn = try self.graph.functionNodes(request_fn_node);
+        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
+            try self.graph.containsGeneratedPrivate(request_fn.ret))
+        {
+            return request_fn_node;
         }
         // Materialized only past the guards above: most dispatches return
         // without consuming evidence, and materialization arena-allocates one
@@ -42385,6 +42414,9 @@ const BodyContext = struct {
         if (!try self.graph.containsIteratorInterface(public_node)) {
             return try self.lowerExprTypeNode(checked_expr);
         }
+        // The scrutinee's branches are lowered against this node, so a
+        // deferred iterator result is completed here on purpose: the match
+        // must read the representation the producer actually returns.
         return switch (expr.data) {
             .call,
             .dispatch_call,

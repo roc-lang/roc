@@ -383,6 +383,15 @@ pub fn iteratorProcedureForEnvDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?
     return iterator_procedure_by_name.get(env.getIdent(pattern.assign.ident));
 }
 
+/// Every method name a hoist-preserving iterator conversion can be reached
+/// through. The checker uses this as a cheap pre-filter before resolving a
+/// receiver and looking up its binding, and answers from a user-defined
+/// method's result type under these same names, so a producer reachable
+/// through any other name would silently lose its receiver's hoistability.
+/// The comptime block below keeps this in step with the two tables that
+/// decide the answer.
+pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev" };
+
 /// Builtin methods that delegate to a registered producer (`Dict.iter` calls
 /// `List.iter` on its backing entries, and so on). They carry no
 /// `IteratorProcedureId` of their own—their iterator representation arrives
@@ -394,6 +403,37 @@ const hoist_preserving_delegating_producer_names = std.StaticStringMap(void).ini
     .{"Builtin.Set.iter"},
     .{"Builtin.Set.iter_rev"},
 });
+
+comptime {
+    // Both tables that can answer "preserves hoistable source input" must stay
+    // reachable through `hoist_preserving_method_names`: the checker never
+    // resolves a receiver for any other method name, so an entry outside that
+    // set would be dead and its producer's receiver would stop being hoisted.
+    for (iterator_procedure_base_names) |entry| {
+        if (!entry[1].preservesHoistableSourceInput()) continue;
+        if (!methodNameIsHoistPreserving(entry[0])) {
+            @compileError("hoist-preserving iterator producer '" ++ entry[0] ++
+                "' is not reachable through hoist_preserving_method_names");
+        }
+    }
+    for (hoist_preserving_delegating_producer_names.keys()) |name| {
+        if (!methodNameIsHoistPreserving(name)) {
+            @compileError("hoist-preserving delegating producer '" ++ name ++
+                "' is not reachable through hoist_preserving_method_names");
+        }
+    }
+}
+
+/// Whether a qualified definition name's final segment is one of the method
+/// names the checker pre-filters hoist classification on.
+fn methodNameIsHoistPreserving(qualified_name: []const u8) bool {
+    const start = if (std.mem.findScalarLast(u8, qualified_name, '.')) |dot| dot + 1 else 0;
+    const method = qualified_name[start..];
+    for (hoist_preserving_method_names) |candidate| {
+        if (std.mem.eql(u8, method, candidate)) return true;
+    }
+    return false;
+}
 
 /// Whether this exact Builtin procedure needs its eager receiver preserved as
 /// a separate hoist root. Iterator identity covers public producers, the

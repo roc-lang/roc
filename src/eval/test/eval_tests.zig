@@ -4238,6 +4238,33 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "195" },
     },
+    .{
+        .name = "for loop over a procedure returning a list of tag payloads holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List([Ready(Iter(U64)), Empty])
+        \\wrap = |xs| [Ready(xs.iter()), Empty]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for slot in wrap(xs) {
+        \\        match slot {
+        \\            Ready(it) => {
+        \\                for x in it {
+        \\                    $out = $out * 10 + x
+        \\                }
+        \\            }
+        \\            Empty => {}
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
     // Every element of a list literal contributes its own producer
     // representation. A literal that mixes producers must read each element
     // back at the representation that element was built with.
