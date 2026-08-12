@@ -16,6 +16,7 @@ const serialize = @import("serialize.zig");
 
 const InstGraph = solve.InstGraph;
 const InstNode = solve.InstNode;
+const InstNamed = solve.InstNamed;
 const NodeId = solve.NodeId;
 const InstTag = solve.InstTag;
 const InstField = solve.InstField;
@@ -3892,7 +3893,7 @@ const Builder = struct {
         for (mono_args, 0..) |mono_arg, index| {
             arg_nodes[index] = try graph.importMono(mono_arg);
         }
-        const backing_node = try ctx.instNominalDeclarationBackingNode(source, arg_nodes);
+        const backing_node = try ctx.buildNominalDeclarationBackingNode(source, arg_nodes, .checked_base);
         try graph.freezeRelations();
         const backing = try graph.sealNode(backing_node);
         return try self.structuralBackingForNominal(view, nominal, mono_args, backing);
@@ -12075,10 +12076,8 @@ const TypeInstantiationContext = struct {
     module_bytes: [32]u8,
     authority: InstantiationAuthority,
     node_map: collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState),
-    /// Exact generated nominal selected for a checked-public node by this
-    /// procedure's complete function request.
     /// Innermost-last stack of nominal-instance instantiation scopes; see
-    /// instNominalBackingNode.
+    /// ordinaryNominalNode.
     decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiationNodeState)) = .empty,
 
     fn init(
@@ -15623,23 +15622,21 @@ const BodyContext = struct {
                 return .{ .existing = active.self_node };
             }
         }
-        const backing_node: ?NodeId = switch (nominal.representation) {
-            .opaque_without_backing => null,
-            .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => try self.instNominalBackingNode(nominal, args),
-        };
-        const backing: ?InstBacking = if (backing_node) |node| .{
-            .node = node,
-            .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
-        } else null;
-        return .{ .content = .{ .named = .{
+        const identity: InstNamed = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = def,
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
-            .backing = backing,
+            .backing = null,
             .declared_order = declared_order,
-        } } };
+        };
+        if (nominal.representation == .opaque_without_backing) {
+            return .{ .content = .{ .named = identity } };
+        }
+
+        const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
+        return .{ .existing = try self.ordinaryNominalNode(nominal, identity, backing_use) };
     }
 
     /// Construct the exact generated iterator nominal directly at its checked
@@ -15740,24 +15737,38 @@ const BodyContext = struct {
         return entries;
     }
 
-    /// Instantiate a nominal instance's backing. A declaration-backed nominal's
-    /// formals and backing share one set of checked roots across every instance
-    /// of the nominal, so the backing instantiates inside a fresh scope seeded
-    /// with this instance's argument nodes: two instances of the same nominal at
-    /// different arguments stay independent, and the recursive uses inside the
-    /// backing resolve through the scope chain.
-    fn instNominalBackingNode(
+    /// Intern one ordinary nominal identity before constructing its backing.
+    /// The reservation is the recursion authority: a repeated declaration and
+    /// exact-argument identity returns immediately without inspecting or
+    /// rebuilding implementation data.
+    fn ordinaryNominalNode(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
-        args: []NodeId,
+        identity: InstNamed,
+        backing_use: Type.BackingUse,
     ) Allocator.Error!NodeId {
-        const source = self.nominalInstantiationSource(nominal) orelse
-            Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
-        return try self.instNominalDeclarationBackingNode(source, args);
+        return switch (try self.graph.reserveOrdinaryNamedBacking(identity, backing_use)) {
+            .existing => |existing| blk: {
+                self.builder.count("nominal_backing_reuses");
+                break :blk existing;
+            },
+            .vacant => |reservation| blk: {
+                self.builder.count("nominal_backing_instantiations");
+                const source = self.nominalInstantiationSource(nominal) orelse
+                    Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
+                try self.fillNominalDeclarationBackingNode(
+                    source,
+                    identity.args,
+                    reservation.backing,
+                    self.instantiation.authority,
+                );
+                break :blk reservation.named;
+            },
+        };
     }
 
     /// Construct the producer-owned backing of a content-addressed generated
-    /// nominal. This deliberately bypasses the ordinary declaration-backing
+    /// nominal. This deliberately bypasses the ordinary nominal-identity
     /// cache: a public `Iter(item)` and its generated runtime identity have
     /// different recursive self edges even though they share a declaration
     /// and public arguments. The generated-identity interner is the cache for
@@ -15770,51 +15781,28 @@ const BodyContext = struct {
         const source = self.nominalInstantiationSource(nominal) orelse
             Common.invariant("generated nominal backing construction could not resolve its declaration");
         self.builder.count("generated_nominal_backing_instantiations");
-        return try self.buildNominalDeclarationBackingNode(
-            source,
-            args,
-            false,
-            .produced_occurrence,
-        );
-    }
-
-    fn instNominalDeclarationBackingNode(
-        self: *BodyContext,
-        source: NominalInstantiationSource,
-        args: []NodeId,
-    ) Allocator.Error!NodeId {
-        const declaration_id: u32 = @intFromEnum(source.declaration.id);
-        if (self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, args)) |cached| {
-            self.builder.count("nominal_backing_reuses");
-            return cached;
-        }
-        self.builder.count("nominal_backing_instantiations");
-
-        return try self.buildNominalDeclarationBackingNode(
-            source,
-            args,
-            true,
-            self.instantiation.authority,
-        );
+        return try self.buildNominalDeclarationBackingNode(source, args, .produced_occurrence);
     }
 
     fn buildNominalDeclarationBackingNode(
         self: *BodyContext,
         source: NominalInstantiationSource,
         args: []NodeId,
-        cache_public_backing: bool,
         authority: InstantiationAuthority,
     ) Allocator.Error!NodeId {
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        if (cache_public_backing) {
-            try self.graph.putNominalBackingNode(
-                source.view.key.bytes,
-                @intFromEnum(source.declaration.id),
-                args,
-                placeholder,
-            );
-        }
-        const constructs_checked_base = cache_public_backing and authority == .checked_base;
+        try self.fillNominalDeclarationBackingNode(source, args, placeholder, authority);
+        return placeholder;
+    }
+
+    fn fillNominalDeclarationBackingNode(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+        args: []NodeId,
+        placeholder: NodeId,
+        authority: InstantiationAuthority,
+    ) Allocator.Error!void {
+        const constructs_checked_base = authority == .checked_base;
         if (constructs_checked_base) self.graph.beginCheckedBaseConstruction();
         defer if (constructs_checked_base) self.graph.endCheckedBaseConstruction();
 
@@ -15843,7 +15831,6 @@ const BodyContext = struct {
         if (constructs_checked_base) {
             self.graph.markCheckedBase(placeholder);
         }
-        return placeholder;
     }
 
     fn fillNominalDeclarationBackingNodeInCurrentView(
@@ -25112,11 +25099,10 @@ const BodyContext = struct {
                         .nominal => |value| value,
                         .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => Common.invariant("nominal projection rebuild had a non-nominal checked base"),
                     };
-                    if (named.backing) |backing| named.backing = .{
-                        .node = try self.instNominalBackingNode(nominal, named.args),
-                        .use = backing.use,
-                        .authority = backing.authority,
-                    };
+                    if (named.backing) |backing| {
+                        named.backing = null;
+                        break :blk try self.ordinaryNominalNode(nominal, named, backing.use);
+                    }
                     break :blk try self.graph.newNode(.{ .named = named });
                 },
                 .redirect, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal projection rebuild had a non-nominal base"),

@@ -286,32 +286,14 @@ const RelationStamp = struct {
     right_version: u32,
 };
 
-const NominalBackingDeclaration = struct {
-    module_bytes: [32]u8,
-    declaration_id: u32,
-};
-
-const NominalBackingCacheContext = struct {
-    pub fn hash(_: NominalBackingCacheContext, key: NominalBackingDeclaration) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&key.module_bytes);
-        var declaration_id = std.mem.nativeToLittle(u32, key.declaration_id);
-        hasher.update(std.mem.asBytes(&declaration_id));
-        return hasher.final();
-    }
-
-    pub fn eql(_: NominalBackingCacheContext, left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
-        return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-            left.declaration_id == right.declaration_id;
-    }
-};
-
-/// One instantiated backing of a declaration. Argument identity follows the
-/// union-find classes rather than raw node ids, which can redirect as producer
-/// evidence is applied.
-const NominalBackingInstance = struct {
-    args: []NodeId,
-    node: NodeId,
+/// Result of reserving one ordinary nominal identity before evaluating its
+/// deterministic declaration backing.
+pub const OrdinaryNamedReservation = union(enum) {
+    existing: NodeId,
+    vacant: struct {
+        named: NodeId,
+        backing: NodeId,
+    },
 };
 
 const GeneratedNominalInternContext = struct {
@@ -370,11 +352,6 @@ pub const InstGraph = struct {
     row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Declaration-backed nominal backings already instantiated in this graph,
-    /// bucketed by source declaration. Entries compare argument union-find
-    /// classes, so a backing instance keeps one identity after evidence merges
-    /// or redirects its original argument nodes.
-    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
     /// Generated nominals keyed by the final content digest assigned by their
     /// producer. Identity, arguments, and backing are complete before entry.
     generated_nominal_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80),
@@ -443,7 +420,6 @@ pub const InstGraph = struct {
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
             .generated_nominal_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80).init(allocator),
             .named_nodes_by_identity_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .list_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
@@ -484,11 +460,6 @@ pub const InstGraph = struct {
         while (parents.next()) |list| {
             list.deinit(allocator);
         }
-        var backing_buckets = self.nominal_backings.valueIterator();
-        while (backing_buckets.next()) |bucket| {
-            bucket.deinit(allocator);
-        }
-        self.nominal_backings.deinit();
         var generated_item_buckets = self.generated_iterators_by_item.valueIterator();
         while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
         self.generated_iterators_by_item.deinit();
@@ -1623,45 +1594,45 @@ pub const InstGraph = struct {
         return reserved;
     }
 
-    pub fn nominalBackingNode(
+    /// Intern an ordinary nominal from its complete identity before evaluating
+    /// its declaration backing. The declaration plus exact public arguments
+    /// are the identity; the backing is deterministic implementation data.
+    /// Publishing the named node first makes recursive occurrences direct
+    /// identity hits and means an ordinary hit performs no backing work.
+    pub fn reserveOrdinaryNamedBacking(
         self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-    ) ?NodeId {
-        const bucket = self.nominal_backings.getPtr(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        }) orelse return null;
-        instances: for (bucket.items) |*instance| {
-            if (instance.args.len != args.len) continue;
-            for (instance.args, args) |*stored, wanted| {
-                stored.* = self.find(stored.*);
-                if (stored.* != self.find(wanted)) continue :instances;
-            }
-            return instance.node;
-        }
-        return null;
-    }
-
-    pub fn putNominalBackingNode(
-        self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-        node: NodeId,
-    ) Allocator.Error!void {
+        raw_named: InstNamed,
+        backing_use: Type.BackingUse,
+    ) Allocator.Error!OrdinaryNamedReservation {
         self.requireRelationProduction();
-        const stored_args = try self.arena().alloc(NodeId, args.len);
-        for (stored_args, args) |*stored, arg| {
-            stored.* = self.find(arg);
+        if (raw_named.backing != null) {
+            Common.invariant("ordinary nominal identity reservation received an existing backing");
         }
-        const bucket = try self.nominal_backings.getOrPut(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        });
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        try bucket.value_ptr.append(self.allocator, .{ .args = stored_args, .node = node });
+        if (raw_named.def.generated != null) {
+            Common.invariant("generated nominal reached ordinary identity reservation");
+        }
+
+        const canonical = if (try self.canonicalizeNamedArguments(raw_named)) |normalized|
+            normalized
+        else
+            raw_named;
+        if (self.existingNamedIdentity(canonical)) |existing| {
+            return .{ .existing = existing };
+        }
+
+        const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() });
+        var completed = canonical;
+        completed.backing = .{
+            .node = backing,
+            .use = backing_use,
+            .authority = .checked_public,
+        };
+        const expected_named: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
+        const named = try self.newNode(.{ .named = completed });
+        if (named != expected_named) {
+            Common.invariant("ordinary nominal identity changed between lookup and reservation");
+        }
+        return .{ .vacant = .{ .named = named, .backing = backing } };
     }
 
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {

@@ -2859,6 +2859,15 @@ content-addressed generated nominal is stricter still: it is atomic at the
 nominal occurrence, so even its public arguments are consumed only by the
 explicit generated-construction operation that precedes the slot.
 
+Monotype interns that ordinary declaration-plus-arguments identity before it
+evaluates the declaration backing. An identity hit returns the existing atomic
+nominal immediately and performs no backing work. On a miss, Monotype reserves
+the backing cell, publishes the named identity pointing at that cell, and only
+then instantiates the declaration recipe. A recursive occurrence therefore
+finds the already-published nominal directly. There is no separate backing
+cache, no bucket scan over prior instances of the same declaration, and no
+need to construct a backing in order to ask whether its nominal already exists.
+
 A checked-view mapping may relate an ordinary checked nominal view to its
 declared structural backing. This is not an inferred type relation: the
 nominal's checker-authored backing edge is the explicit authorization. An

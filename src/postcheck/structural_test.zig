@@ -1348,15 +1348,35 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
 
     const nominal_backing = sourceSliceBetween(
         lower_source,
-        "fn instNominalDeclarationBackingNode(",
+        "fn ordinaryNominalNode(",
         "const NominalInstantiationSource = struct",
     );
+    const reserve_identity = std.mem.find(u8, nominal_backing, "reserveOrdinaryNamedBacking(identity, backing_use)") orelse
+        return error.TestExpectedEqual;
+    const fill_backing = std.mem.find(u8, nominal_backing, "fillNominalDeclarationBackingNode(") orelse
+        return error.TestExpectedEqual;
+    try std.testing.expect(reserve_identity < fill_backing);
     try expectContains(nominal_backing, "try self.putScopedNode(backing, placeholder)");
     try expectContains(nominal_backing, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
     try expectNotContains(nominal_backing, "self.graph.unify(");
     try expectNotContains(nominal_backing, "attachCheckedBaseAlias");
 
     const solve_source = @embedFile("monotype/solve.zig");
+    try expectNotContains(solve_source, "nominal_backings");
+    try expectNotContains(solve_source, "nominalBackingNode(");
+    const ordinary_reservation = sourceSliceBetween(
+        solve_source,
+        "pub fn reserveOrdinaryNamedBacking(",
+        "fn registerRowParent(",
+    );
+    const reserve_backing = std.mem.find(u8, ordinary_reservation, "self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() })") orelse
+        return error.TestExpectedEqual;
+    const register_named = std.mem.find(u8, ordinary_reservation, "self.newNode(.{ .named = completed })") orelse
+        return error.TestExpectedEqual;
+    try expectContains(ordinary_reservation, "if (self.existingNamedIdentity(canonical)) |existing|");
+    try expectContains(ordinary_reservation, ".backing = backing");
+    try std.testing.expect(reserve_backing < register_named);
+
     const complete_reserved = sourceSliceBetween(
         solve_source,
         "pub fn completeReservedProducedNode(",
