@@ -909,8 +909,10 @@ store: NodeStore,
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
 /// Exact strict-demand edges between top-level definitions. Canonicalization
-/// produces this data and serialization preserves it for checked-artifact
-/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+/// produces the initial relation and checking replaces it after resolving
+/// literal dispatch; serialization preserves the finalized relation for
+/// checked-artifact publication. Unlike `evaluation_order`, it is not a
+/// transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
 
@@ -1250,18 +1252,18 @@ pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.Low
     return null;
 }
 
-/// Return the exact strict-demand relation produced by canonicalization.
+/// Return the current producer-authored exact strict-demand relation.
 pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
     std.debug.assert(self.top_level_demand_dependencies_ready);
     return self.top_level_demand_dependencies.items.items;
 }
 
-/// Whether canonicalization has produced the exact strict-demand relation.
+/// Whether a compiler stage has produced the exact strict-demand relation.
 pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
     return self.top_level_demand_dependencies_ready;
 }
 
-/// Whether one exact strict-demand edge was produced by canonicalization.
+/// Whether the current exact strict-demand relation contains one edge.
 pub fn hasTopLevelDemandDependency(
     self: *const Self,
     dependent: CIR.Def.Idx,

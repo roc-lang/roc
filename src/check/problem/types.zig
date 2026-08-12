@@ -69,6 +69,7 @@ pub const Problem = union(enum) {
     effectful_default_value: EffectfulDefaultValue,
     non_concrete_default_value: NonConcreteDefaultValue,
     recursive_default_value: RecursiveDefaultValue,
+    circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -305,6 +306,13 @@ pub const NonConcreteDefaultValue = struct {
 pub const RecursiveDefaultValue = struct {
     region: base.Region,
     field_name: Ident.Idx,
+};
+
+/// A top-level non-function value in a strict dependency cycle discovered
+/// after type-directed dispatch targets have resolved.
+pub const CircularValueDefinition = struct {
+    ident: Ident.Idx,
+    region: base.Region,
 };
 
 /// Tuple access on a value whose resolved type proves the access is invalid.

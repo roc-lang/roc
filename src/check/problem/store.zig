@@ -228,6 +228,7 @@ pub const Store = struct {
                     .effectful_default_value,
                     .non_concrete_default_value,
                     .recursive_default_value,
+                    .circular_value_definition,
                     .literal_defaulted,
                     .redundant_pattern,
                     .unmatchable_pattern,

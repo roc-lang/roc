@@ -1108,6 +1108,9 @@ const EvidenceTargetSite = struct {
 /// copy/instantiation unified with that edge's raw function var.
 const DispatchTargetInstantiation = struct {
     constraint_fn_var: Var,
+    /// Whether this edge came from a literal conversion. The strict-demand
+    /// finalizer consumes only those selected targets.
+    is_literal_conversion: bool,
     receiver_var: Var,
     parent_constraint_fn_var: ?Var,
     /// Canonical receiver+callable digest for this edge, computed at record
@@ -6820,8 +6823,107 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.finalizeLiteralDispatchResolutions();
+    try self.finalizeTopLevelDemandDependencies(&env);
 
     self.debugAssertNominalDeclTableComplete();
+}
+
+/// Finish canonicalization's strict-demand relation with the exact local
+/// literal-conversion targets selected by checking, then reject any value
+/// cycle that only became visible through those calls. The rebuilt graph is
+/// the durable producer output consumed by checked-root scheduling and CTFE.
+fn finalizeTopLevelDemandDependencies(self: *Self, env: *Env) Allocator.Error!void {
+    var literal_targets = std.ArrayList(DependencyGraph.ResolvedLiteralTarget).empty;
+    defer literal_targets.deinit(self.gpa);
+    for (self.dispatch_target_instantiations.items) |target| {
+        if (!target.is_literal_conversion or target.target_env != self.cir) continue;
+        try literal_targets.append(self.gpa, .{
+            .fn_var = target.constraint_fn_var,
+            .target_def = target.target_binding.def_idx,
+        });
+    }
+
+    // Imported conversion methods cannot participate in a same-module value
+    // cycle: their checked constants have already been finalized in the owner
+    // artifact. Preserve canonicalization's relation when there is no local
+    // target overlay to apply.
+    if (literal_targets.items.len == 0) return;
+
+    var graph = try DependencyGraph.buildDependencyGraphWithResolvedLiteralTargets(
+        self.cir,
+        self.cir.all_defs,
+        literal_targets.items,
+        self.gpa,
+    );
+    defer graph.deinit();
+
+    var dependencies = try DependencyGraph.collectDependencies(&graph, self.gpa);
+    errdefer dependencies.deinit(self.gpa);
+    var eval_order = try DependencyGraph.computeSCCs(&graph, self.gpa);
+    defer eval_order.deinit();
+
+    try self.poisonCheckedStrictDemandCycles(&eval_order, env);
+    self.cir.setTopLevelDemandDependencies(dependencies);
+    dependencies = .{};
+
+    // The new cycle poisoning happens after the ordinary erroneous-use sweep,
+    // so propagate it once more before checked bodies are published.
+    try self.poisonErroneousValueUses();
+    try self.poisonErroneousValueExprs();
+}
+
+fn poisonCheckedStrictDemandCycles(
+    self: *Self,
+    eval_order: *const DependencyGraph.EvaluationOrder,
+    env: *Env,
+) Allocator.Error!void {
+    const RecursiveNonFunctionDef = struct {
+        def_idx: CIR.Def.Idx,
+        ident: Ident.Idx,
+        region: Region,
+    };
+
+    for (eval_order.sccs) |scc| {
+        if (!scc.is_recursive) continue;
+
+        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef).empty;
+        defer defs_to_poison.deinit(self.gpa);
+
+        for (scc.defs) |def_idx| {
+            const def = self.cir.store.getDef(def_idx);
+            if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
+            const ident = self.getPatternIdent(def.pattern) orelse continue;
+            try defs_to_poison.append(self.gpa, .{
+                .def_idx = def_idx,
+                .ident = ident,
+                .region = self.cir.store.getPatternRegion(def.pattern),
+            });
+        }
+
+        std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
+            fn lessThan(_: void, a: RecursiveNonFunctionDef, b: RecursiveNonFunctionDef) bool {
+                if (a.region.start.offset != b.region.start.offset) {
+                    return a.region.start.offset < b.region.start.offset;
+                }
+                if (a.region.end.offset != b.region.end.offset) {
+                    return a.region.end.offset < b.region.end.offset;
+                }
+                return @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx);
+            }
+        }.lessThan);
+
+        for (defs_to_poison.items) |def_to_poison| {
+            _ = try self.problems.appendProblem(self.gpa, .{ .circular_value_definition = .{
+                .ident = def_to_poison.ident,
+                .region = def_to_poison.region,
+            } });
+            try self.poisonRecursiveNonFunctionProcessingDef(.{
+                .def_idx = def_to_poison.def_idx,
+                .def_name = def_to_poison.ident,
+                .status = .processed,
+            }, null, env);
+        }
+    }
 }
 
 /// Debug-only invariant check: every nominal application in this store that
@@ -25291,6 +25393,7 @@ fn instantiateDispatchTargetMethodVar(
     const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
     self.dispatch_target_instantiations.appendAssumeCapacity(.{
         .constraint_fn_var = constraint.fn_var,
+        .is_literal_conversion = constraint.origin.literalKind() != null,
         .receiver_var = dispatcher_var,
         .parent_constraint_fn_var = parent_constraint_fn_var,
         .state_type_key = state_type_key,
@@ -28402,6 +28505,118 @@ test "literal dispatch finalization records custom callable resolution" {
         found = true;
     }
     try std.testing.expect(found);
+}
+
+test "literal dispatch finalization rejects a strict value cycle through from_numeral" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\MyNum := { value : U64 }.{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok({ value: bump })
+        \\}
+        \\
+        \\number : MyNum
+        \\number = 1
+        \\
+        \\bump : U64
+        \\bump = number.value
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), test_env.checker.problems.problems.items.len);
+    var cycle_defs: [2]CIR.Def.Idx = undefined;
+    for (test_env.checker.problems.problems.items, 0..) |found_problem, problem_index| {
+        try std.testing.expect(found_problem == .circular_value_definition);
+        var matching_def: ?CIR.Def.Idx = null;
+        for (test_env.module_env.store.sliceDefs(test_env.module_env.all_defs)) |def_idx| {
+            const def = test_env.module_env.store.getDef(def_idx);
+            const pattern = test_env.module_env.store.getPattern(def.pattern);
+            if (pattern == .assign and pattern.assign.ident.eql(found_problem.circular_value_definition.ident)) {
+                matching_def = def_idx;
+                break;
+            }
+        }
+        cycle_defs[problem_index] = matching_def.?;
+    }
+    try std.testing.expect(cycle_defs[0] != cycle_defs[1]);
+    try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[0], cycle_defs[1]));
+    try std.testing.expect(test_env.module_env.hasTopLevelDemandDependency(cycle_defs[1], cycle_defs[0]));
+}
+
+test "literal strict demands flow through polymorphic called function summaries" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // `make`'s literal requirement is copied into `through`, then copied
+    // again at `number` before it selects the local MyNum target.
+    const source =
+        \\MyNum := { value : U64 }.{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok({ value: bump })
+        \\}
+        \\
+        \\make = |_| 1
+        \\
+        \\through = |_| make({})
+        \\
+        \\number : MyNum
+        \\number = through({})
+        \\
+        \\bump : U64
+        \\bump = number.value
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), test_env.checker.problems.problems.items.len);
+    for (test_env.checker.problems.problems.items) |found_problem| {
+        try std.testing.expect(found_problem == .circular_value_definition);
+    }
+}
+
+test "literal strict demands stay delayed under an uncalled function" {
+    const TestEnv = @import("test/TestEnv.zig");
+    // Storing a concretely instantiated function value does not execute its
+    // body, so the selected literal target must remain delayed.
+    const source =
+        \\MyNum := { value : U64 }.{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok({ value: anchor.value })
+        \\}
+        \\
+        \\make = |_| 1
+        \\
+        \\anchor : { callback: {} -> MyNum, value: U64 }
+        \\anchor = { callback: make, value: 0 }
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "literal pattern strict demands flow through a called function summary" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\MyNum := [MyNum(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |_| Ok(MyNum(anchor))
+        \\    is_eq : MyNum, MyNum -> Bool
+        \\    is_eq = |MyNum(a), MyNum(b)| a == b
+        \\}
+        \\
+        \\describe : MyNum -> U64
+        \\describe = |value| match value {
+        \\    1 => 0
+        \\    _ => 1
+        \\}
+        \\
+        \\anchor : U64
+        \\anchor = describe(MyNum(1))
+    ;
+    var test_env = try TestEnv.init("LiteralResolution", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Circular Value Definition");
 }
 
 test "literal dispatch finalization resolves every literal of one merged dispatch edge" {

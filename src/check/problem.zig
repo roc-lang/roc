@@ -44,6 +44,7 @@ pub const OptionalAccessOfRequiredField = types.OptionalAccessOfRequiredField;
 pub const EffectfulDefaultValue = types.EffectfulDefaultValue;
 pub const NonConcreteDefaultValue = types.NonConcreteDefaultValue;
 pub const RecursiveDefaultValue = types.RecursiveDefaultValue;
+pub const CircularValueDefinition = types.CircularValueDefinition;
 pub const InvalidTupleAccess = types.InvalidTupleAccess;
 pub const LiteralDefaulted = types.LiteralDefaulted;
 pub const UnusedValue = types.UnusedValue;
