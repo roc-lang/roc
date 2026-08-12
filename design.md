@@ -2693,7 +2693,9 @@ row argument. Only an exact-root miss may flatten a row to account for two
 different extension decompositions of the same public argument. A vacant
 normalized identity is published directly; it must not pass through a generic
 constructor that repeats normalization and lookup before the declaration
-backing is built.
+backing is built. Declared field order and padding types are likewise
+deterministic declaration metadata, not identity inputs; Monotype instantiates
+and attaches them only to a vacant ordinary nominal reservation.
 
 The same construction boundary appends a cache miss to an explicit dense
 generated-root registry. Sealing iterates only that registry so a completed root

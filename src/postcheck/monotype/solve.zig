@@ -1663,6 +1663,30 @@ pub const InstGraph = struct {
         return .{ .vacant = .{ .named = named, .backing = backing } };
     }
 
+    /// Complete declaration metadata for one newly reserved ordinary nominal.
+    /// Declared field order is deterministic implementation data rather than
+    /// nominal identity, so callers produce it only after an identity miss.
+    pub fn completeOrdinaryNamedDeclaredOrder(
+        self: *InstGraph,
+        raw_named: NodeId,
+        declared_order: []const InstDeclaredField,
+    ) Allocator.Error!void {
+        const named_node = self.find(raw_named);
+        const node_content = self.nodes.items[@intFromEnum(named_node)];
+        if (node_content != .named or node_content.named.def.generated != null) {
+            Common.invariant("ordinary nominal declared order completed a non-ordinary named node");
+        }
+        if (node_content.named.backing == null) {
+            Common.invariant("ordinary nominal declared order completed a node without reserved backing");
+        }
+        if (node_content.named.declared_order.len != 0) {
+            Common.invariant("ordinary nominal declared order was completed more than once");
+        }
+        var completed = node_content.named;
+        completed.declared_order = declared_order;
+        _ = try self.replaceRootContent(named_node, .{ .named = completed });
+    }
+
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
         const row_root = self.find(row);
         const maybe_ext = if (node_content == .tag_union)
@@ -4968,6 +4992,13 @@ test "ordinary nominal reservation checks exact roots before normalizing row dec
         .existing => return error.TestUnexpectedResult,
         .vacant => |reservation| reservation.named,
     };
+    const declared_order = [_]InstDeclaredField{.{ .named = label }};
+    try graph.completeOrdinaryNamedDeclaredOrder(named, &declared_order);
+    try std.testing.expectEqualSlices(
+        InstDeclaredField,
+        &declared_order,
+        graph.content(named).named.declared_order,
+    );
     const before_exact_hit = graph.nodes.items.len;
     const exact_hit = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
     try std.testing.expectEqual(named, switch (exact_hit) {

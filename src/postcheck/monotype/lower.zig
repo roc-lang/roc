@@ -15783,7 +15783,6 @@ const BodyContext = struct {
         const args = try self.instNodeSlice(nominal.args);
         const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, def);
-        const declared_order = try self.instDeclaredOrderForNominal(nominal);
         if (self.active_generated_iterator) |active| {
             if (nominal.builtin != null and
                 checked.builtinRuntimeEncoding(nominal.builtin.?) == .iterator and
@@ -15800,7 +15799,6 @@ const BodyContext = struct {
             .builtin_owner = builtinOwner(nominal.builtin),
             .args = args,
             .backing = null,
-            .declared_order = declared_order,
         };
         if (nominal.representation == .opaque_without_backing) {
             return .{ .content = .{ .named = identity } };
@@ -15928,26 +15926,33 @@ const BodyContext = struct {
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
     ) Allocator.Error![]const InstDeclaredField {
-        const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse {
+        const source = self.nominalInstantiationSource(nominal) orelse {
             if (!nominalHasDeclarationBacking(nominal)) return &.{};
             Common.invariant("declaration-backed nominal reached Monotype instantiation without declaration data");
         };
-        const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
+        return try self.instDeclaredOrderForSource(source);
+    }
+
+    fn instDeclaredOrderForSource(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+    ) Allocator.Error![]const InstDeclaredField {
+        const fields = source.declaration.declaredRecordFields(source.view.types);
         if (fields.len == 0) return &.{};
 
         const entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
-        const padding_types = lookup.padding_field_tys;
+        const padding_types = source.padding_field_tys;
         var padding_cursor: usize = 0;
         for (fields, 0..) |field, index| {
             switch (field) {
-                .named => |label| entries[index] = .{ .named = try self.builder.recordFieldName(lookup.view, label) },
+                .named => |label| entries[index] = .{ .named = try self.builder.recordFieldName(source.view, label) },
                 .padding => {
                     if (padding_cursor >= padding_types.len) {
                         Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
                     }
                     const checked_ty = padding_types[padding_cursor];
                     padding_cursor += 1;
-                    entries[index] = .{ .padding = try self.instNode(self.checkedTypeInCurrentView(lookup.view, checked_ty)) };
+                    entries[index] = .{ .padding = try self.instNode(self.checkedTypeInCurrentView(source.view, checked_ty)) };
                 },
             }
         }
@@ -15973,6 +15978,10 @@ const BodyContext = struct {
                 self.builder.count("nominal_backing_instantiations");
                 const source = self.nominalInstantiationSource(nominal) orelse
                     Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
+                try self.graph.completeOrdinaryNamedDeclaredOrder(
+                    reservation.named,
+                    try self.instDeclaredOrderForSource(source),
+                );
                 try self.fillNominalDeclarationBackingNode(
                     source,
                     identity.args,
@@ -16101,48 +16110,18 @@ const BodyContext = struct {
     const NominalInstantiationSource = struct {
         view: ModuleView,
         declaration: checked.CheckedNominalDeclaration,
+        padding_field_tys: []const checked.CheckedTypeId,
     };
 
     fn nominalInstantiationSource(
         self: *BodyContext,
         nominal: checked.CheckedNominalType,
     ) ?NominalInstantiationSource {
-        return switch (nominal.representation) {
-            .local_declaration => |id| .{
-                .view = self.view,
-                .declaration = self.view.types.nominalDeclarationById(id),
-            },
-            .local_box_payload_capability => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
-                    Common.invariant("local box-payload nominal had no declaration source");
-                break :blk .{
-                    .view = lookup.view,
-                    .declaration = lookup.declaration,
-                };
-            },
-            .imported_declaration => |imported| blk: {
-                const source_view = self.builder.moduleForId(checked.importedNominalDeclarationModuleId(imported));
-                break :blk .{
-                    .view = source_view,
-                    .declaration = source_view.types.nominalDeclarationById(imported.declaration),
-                };
-            },
-            .imported_box_payload_capability => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse
-                    Common.invariant("imported box-payload nominal had no declaration source");
-                break :blk .{
-                    .view = lookup.view,
-                    .declaration = lookup.declaration,
-                };
-            },
-            .builtin => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse break :blk null;
-                break :blk .{
-                    .view = lookup.view,
-                    .declaration = lookup.declaration,
-                };
-            },
-            .opaque_without_backing => null,
+        const lookup = self.builder.nominalDeclarationFor(self.view, nominal) orelse return null;
+        return .{
+            .view = lookup.view,
+            .declaration = lookup.declaration,
+            .padding_field_tys = lookup.padding_field_tys,
         };
     }
 

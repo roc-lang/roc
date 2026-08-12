@@ -1401,6 +1401,13 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectContains(child_context, ".{ .ready = inherited }");
     try expectNotContains(child_context, "node_map.put(entry.key_ptr.*, entry.value_ptr.*)");
 
+    const inst_nominal = sourceSliceBetween(
+        lower_source,
+        "fn instNominalBuild(",
+        "fn generatedIteratorNominalNode(",
+    );
+    try expectNotContains(inst_nominal, "instDeclaredOrderForNominal");
+
     const nominal_backing = sourceSliceBetween(
         lower_source,
         "fn ordinaryNominalNode(",
@@ -1410,7 +1417,11 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         return error.TestExpectedEqual;
     const fill_backing = std.mem.find(u8, nominal_backing, "fillNominalDeclarationBackingNode(") orelse
         return error.TestExpectedEqual;
+    const complete_declared_order = std.mem.find(u8, nominal_backing, "completeOrdinaryNamedDeclaredOrder(") orelse
+        return error.TestExpectedEqual;
     try std.testing.expect(reserve_identity < fill_backing);
+    try std.testing.expect(reserve_identity < complete_declared_order);
+    try std.testing.expect(complete_declared_order < fill_backing);
     try expectContains(nominal_backing, "try self.putScopedNode(backing, placeholder)");
     try expectContains(nominal_backing, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
     try expectNotContains(nominal_backing, "self.graph.unify(");
