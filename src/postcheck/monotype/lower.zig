@@ -25491,22 +25491,60 @@ const BodyContext = struct {
         return self.graph.rootNode(materialized);
     }
 
-    fn callRootProjection(
+    fn checkedCallRootEdge(
         _: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
+        plan: checked.SpecializationProjectionPlanView,
+        edge: u32,
         step: checked.SpecializationProjectionStep,
         root_index: usize,
         checked_root: checked.CheckedTypeId,
-    ) ?u32 {
-        for (plan.projections, 0..) |projection, index| {
-            if (projection.parent == checked.no_specialization_projection_parent and
-                projection.step == step and projection.index == root_index and
-                projection.checked == checked_root)
-            {
-                return @intCast(index);
-            }
+    ) u32 {
+        if (edge == checked.no_specialization_projection_parent or edge >= plan.projections.len) {
+            Common.invariant("call shape had no checker-published root edge");
         }
-        return null;
+        const root = plan.projections[edge];
+        if (root.parent != checked.no_specialization_projection_parent or
+            root.step != step or
+            root.index != root_index or
+            root.checked != checked_root)
+        {
+            Common.invariant("call shape root edge disagreed with its direct index");
+        }
+        return edge;
+    }
+
+    fn callArgumentRootEdge(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        index: usize,
+        checked_root: checked.CheckedTypeId,
+    ) u32 {
+        if (index >= plan.argument_roots.len) {
+            Common.invariant("call argument exceeded its checker-published root column");
+        }
+        return self.checkedCallRootEdge(
+            plan,
+            plan.argument_roots[index],
+            .argument,
+            index,
+            checked_root,
+        );
+    }
+
+    fn callResultRootEdge(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_root: checked.CheckedTypeId,
+    ) u32 {
+        return self.checkedCallRootEdge(plan, plan.result_root, .result, 0, checked_root);
+    }
+
+    fn callDispatcherRootEdge(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        checked_root: checked.CheckedTypeId,
+    ) u32 {
+        return self.checkedCallRootEdge(plan, plan.dispatcher_root, .dispatcher, 0, checked_root);
     }
 
     fn directSelectionsForCall(
@@ -26034,14 +26072,15 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
         index: usize,
     ) Allocator.Error!NodeId {
-        const projection: u32 = for (plan.projections, 0..) |candidate, projection_index| {
-            if (candidate.parent == checked.no_specialization_projection_parent and
-                candidate.step == .argument and candidate.index == index)
-            {
-                break @intCast(projection_index);
-            }
-        } else Common.invariant("requested specialization argument had no checker-published root projection");
-        return try self.materializeCallProjectionSubtree(plan, projection, selections, .{ .checked = null });
+        if (index >= plan.argument_roots.len) {
+            Common.invariant("requested specialization argument exceeded its root column");
+        }
+        return try self.materializeCallProjectionSubtree(
+            plan,
+            plan.argument_roots[index],
+            selections,
+            .{ .checked = null },
+        );
     }
 
     fn materializeCurrentCallRequest(
@@ -26096,36 +26135,25 @@ const BodyContext = struct {
                 out.* = self.graph.rootNode(produced_args.?[index]);
                 continue;
             }
-            const projection = self.callRootProjection(
+            const root = self.callArgumentRootEdge(plan, index, checked_arg);
+            out.* = try self.materializeCallProjectionSubtree(
                 plan,
-                .argument,
-                index,
-                checked_arg,
+                root,
+                selections,
+                .{ .checked = source.args[index] },
             );
-            out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, selections, .{ .checked = source.args[index] })
-            else
-                try self.persistentCheckedBaseNode(checked_arg);
         }
         const ret = if (produced_ret) |exact| self.graph.rootNode(exact) else ret: {
-            const projection = self.callRootProjection(
+            const root = self.callResultRootEdge(plan, checked_fn.ret);
+            break :ret try self.materializeCallProjectionSubtree(
                 plan,
-                .result,
-                0,
-                checked_fn.ret,
+                root,
+                selections,
+                if (self.graph.functionResultRelation(source_request) == .exact_destination)
+                    .{ .exact = source.ret }
+                else
+                    .{ .checked = source.ret },
             );
-            break :ret if (projection) |root|
-                try self.materializeCallProjectionSubtree(
-                    plan,
-                    root,
-                    selections,
-                    if (self.graph.functionResultRelation(source_request) == .exact_destination)
-                        .{ .exact = source.ret }
-                    else
-                        .{ .checked = source.ret },
-                )
-            else
-                try self.persistentCheckedBaseNode(checked_fn.ret);
         };
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
@@ -26181,35 +26209,23 @@ const BodyContext = struct {
                 out.* = self.graph.rootNode(produced_args[index]);
                 continue;
             }
-            const projection = self.callRootProjection(
-                plan,
-                .argument,
-                index,
-                checked_arg,
-            );
-            out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, completed_selections, .{ .checked = produced_args[index] })
-            else
-                self.graph.rootNode(produced_args[index]);
-        }
-        const ret_projection = self.callRootProjection(
-            plan,
-            .result,
-            0,
-            checked_fn.ret,
-        );
-        const ret = if (ret_projection) |root|
-            try self.materializeCallProjectionSubtree(
+            const root = self.callArgumentRootEdge(plan, index, checked_arg);
+            out.* = try self.materializeCallProjectionSubtree(
                 plan,
                 root,
                 completed_selections,
-                if (produced_ret != null or result_relation == .exact_destination)
-                    .{ .exact = result_base }
-                else
-                    .{ .checked = result_base },
-            )
-        else
-            result_base;
+                .{ .checked = produced_args[index] },
+            );
+        }
+        const ret = try self.materializeCallProjectionSubtree(
+            plan,
+            self.callResultRootEdge(plan, checked_fn.ret),
+            completed_selections,
+            if (produced_ret != null or result_relation == .exact_destination)
+                .{ .exact = result_base }
+            else
+                .{ .checked = result_base },
+        );
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
         self.graph.registerFunctionResultRelation(request, result_relation);
@@ -26887,18 +26903,15 @@ const BodyContext = struct {
             if (expected_ret_node != null) .exact_destination else .produced,
         );
         const completed_selections = self.graph.directRequestSelections(materialized);
-        const dispatcher_projection = self.callRootProjection(
-            call_plan,
-            .dispatcher,
-            0,
-            plan.dispatcher_ty,
-        );
+        const dispatcher_root = self.callDispatcherRootEdge(call_plan, plan.dispatcher_ty);
         return .{
             .callable = materialized,
-            .dispatcher = if (dispatcher_projection) |projection|
-                try self.materializeCallProjectionSubtree(call_plan, projection, completed_selections, .{ .checked = null })
-            else
-                try self.persistentCheckedBaseNode(plan.dispatcher_ty),
+            .dispatcher = try self.materializeCallProjectionSubtree(
+                call_plan,
+                dispatcher_root,
+                completed_selections,
+                .{ .checked = null },
+            ),
         };
     }
 
@@ -33884,16 +33897,12 @@ const BodyContext = struct {
             callable_node,
         );
         const selections = self.graph.directRequestSelections(callable_node);
-        const dispatcher_projection = call_ctx.callRootProjection(
+        const dispatcher_type_node = try call_ctx.materializeCallProjectionSubtree(
             call_plan,
-            .dispatcher,
-            0,
-            plan.dispatcher_ty,
+            call_ctx.callDispatcherRootEdge(call_plan, plan.dispatcher_ty),
+            selections,
+            .{ .checked = null },
         );
-        const dispatcher_type_node = if (dispatcher_projection) |projection|
-            try call_ctx.materializeCallProjectionSubtree(call_plan, projection, selections, .{ .checked = null })
-        else
-            try call_ctx.persistentCheckedBaseNode(plan.dispatcher_ty);
         const dispatch_request = CallableDispatchRequest{
             .callable = callable_node,
             .dispatcher = dispatcher_type_node,

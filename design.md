@@ -2981,6 +2981,11 @@ atomic leaf and never enters its private backing. Any complete exact node
 selected at an ordinary compound edge is also a hard boundary for that
 occurrence: the producer already returned the whole runtime value, so
 materialization neither validates nor visits checked descendants below it.
+Every explicit argument, result, dispatcher, and selected-target root is
+retained in the shared shape even when it has no identity-bearing child. The
+shape stores direct root-edge IDs in arity order. Lowering indexes those IDs; it
+does not scan the shape for a matching root, and a missing ID is an artifact
+invariant rather than permission to instantiate a checked default.
 The specialization key reads the checked interface through the span, and the
 body uses the same span to return exact selected nodes directly from checked
 occurrences instead of copying the function graph. The body stores the exact

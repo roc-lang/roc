@@ -497,7 +497,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const projection_application = sourceSliceBetween(
         lower_source,
         "const SparseProjectionSelection = struct",
-        "fn callRootProjection(",
+        "fn checkedCallRootEdge(",
     );
     try expectContains(projection_application, "fn sparseProjectionSelections(");
     try expectContains(projection_application, "fn applySparseProjectionSelection(");
@@ -560,14 +560,27 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallPlan, "shape"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "slots"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "projections"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "argument_roots"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "result_root"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "dispatcher_root"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "target_argument_roots"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "target_result_root"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "slots"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "projections"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallConsumerBinding, "source_kind"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
+    try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_root_edges"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_projection"));
+
+    const lower_source = @embedFile("monotype/lower.zig");
+    try expectContains(lower_source, "plan.argument_roots[index]");
+    try expectContains(lower_source, "plan.result_root");
+    try expectContains(lower_source, "plan.dispatcher_root");
+    try expectNotContains(lower_source, "for (plan.projections");
+    try expectNotContains(lower_source, "fn callRootProjection(");
 }
 
 test "unsubstituted checked bases are persistent and checked-node reservations are recursion-only" {
