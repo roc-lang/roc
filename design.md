@@ -2967,22 +2967,24 @@ the corresponding operation; it does not
 run a second whole-module value-flow analysis to predict whether an exact value
 might eventually occur.
 
-One function specialization owns an immutable checked interface and a flat
-dense substitution span from checked occurrence `NodeId` to exact argument or
+One function specialization owns an immutable checked interface and a small
+flat substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
-operands by evaluating only the checker-published producer projections whose
-root edge has just completed. It never walks a checked operand beside a
-produced operand. Materialization rebuilds only ancestors on projection paths
-whose flat selections changed; it treats a generated nominal as an atomic leaf
-and never enters its private backing. Any complete exact node selected at an
-ordinary compound projection is also a hard boundary for that occurrence:
-the producer already returned the whole runtime value, so materialization
-neither validates nor visits its checked descendant projections. The
-specialization key reads the checked interface through the span, and the body
-uses the same span to return exact selected nodes directly from checked
-occurrences instead of copying the function graph. The body stores the
-exact `NodeId` it actually returns; the call expression uses that node directly.
-A recursive specialization reserves one result cell before lowering and
+operands by following only the checker-published root-to-child paths whose
+producer edge has just completed. Lowering keeps a sparse list of only the
+immediate edges reached by those paths; it never allocates demand, result, or
+base columns sized to every descendant in the shared call shape, and it never
+walks a checked operand beside a produced operand. Materialization rebuilds
+only the ancestors on changed paths. It treats a generated nominal as an
+atomic leaf and never enters its private backing. Any complete exact node
+selected at an ordinary compound edge is also a hard boundary for that
+occurrence: the producer already returned the whole runtime value, so
+materialization neither validates nor visits checked descendants below it.
+The specialization key reads the checked interface through the span, and the
+body uses the same span to return exact selected nodes directly from checked
+occurrences instead of copying the function graph. The body stores the exact
+`NodeId` it actually returns; the call expression uses that node directly. A
+recursive specialization reserves one result cell before lowering and
 redirects that cell to the stored exact identity when the body completes.
 
 Contextual operands start only when every non-concrete consumer binding named

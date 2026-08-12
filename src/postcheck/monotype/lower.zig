@@ -24810,79 +24810,145 @@ const BodyContext = struct {
         };
     }
 
-    /// Evaluate one checker-authored projection tree into a dense parallel
-    /// node column. Roots are supplied only when that producer edge has just
-    /// completed; every non-root projection follows exactly one declared
-    /// immediate-child edge from an earlier column entry.
-    fn evaluateCallProjections(
-        self: *BodyContext,
+    const EvaluatedCallEdge = struct {
+        edge: u32,
+        node: ?NodeId,
+    };
+
+    fn evaluatedCallEdge(
+        _: *BodyContext,
+        evaluated: []const EvaluatedCallEdge,
+        edge: u32,
+    ) ??NodeId {
+        for (evaluated) |entry| {
+            if (entry.edge == edge) return entry.node;
+        }
+        return null;
+    }
+
+    fn callRootEdgeNode(
+        _: *BodyContext,
         plan: checked.SpecializationCallPlanView,
-        needed: ?[]const bool,
+        edge: u32,
         produced_args: []const NodeId,
         newly_available: []const bool,
         dispatcher_node: ?NodeId,
         target_signature: ?solve.FunctionNodes,
         request_ret: ?NodeId,
         include_result: bool,
-    ) Allocator.Error![]const ?NodeId {
-        const projected = try self.graph.arena().alloc(?NodeId, plan.projections.len);
-        @memset(projected, null);
-        for (plan.projections, 0..) |projection, index| {
-            if (needed) |required| {
-                if (required.len != plan.projections.len) {
-                    Common.invariant("specialization projection demand column had the wrong length");
-                }
-                if (!required[index]) continue;
-            }
-            projected[index] = switch (projection.step) {
-                .argument => blk: {
-                    if (projection.index >= produced_args.len or projection.index >= newly_available.len) {
-                        Common.invariant("checked call projection exceeded function arity");
-                    }
-                    if (!newly_available[projection.index]) break :blk null;
-                    break :blk produced_args[projection.index];
-                },
-                .result => if (include_result)
-                    request_ret orelse Common.invariant("result projection had no exact result edge")
-                else
-                    null,
-                .dispatcher => dispatcher_node,
-                .target_argument => blk: {
-                    const target = target_signature orelse break :blk null;
-                    if (projection.index >= target.args.len) {
-                        Common.invariant("checked target projection exceeded function arity");
-                    }
-                    break :blk target.args[projection.index];
-                },
-                .target_result => if (target_signature) |target| target.ret else null,
-                .alias_argument,
-                .alias_backing,
-                .nominal_argument,
-                .function_argument,
-                .function_result,
-                .tuple_item,
-                .record_field,
-                .record_remainder,
-                .tag_payload,
-                .tag_remainder,
-                => blk: {
-                    if (projection.parent >= index) {
-                        Common.invariant("checker-authored specialization projection was not parent-first");
-                    }
-                    const parent = projected[projection.parent] orelse break :blk null;
-                    // An unavailable exact child remains an unresolved cell;
-                    // it is not a structure from which another edge can yet
-                    // be selected. Its producer will publish it directly.
-                    if (self.graph.content(parent) == .unresolved) break :blk null;
-                    break :blk try self.projectSpecializationChild(
-                        plan,
-                        projection,
-                        parent,
-                    );
-                },
-            };
+    ) ?NodeId {
+        if (edge >= plan.projections.len) {
+            Common.invariant("call root edge exceeded its checker-authored plan");
         }
-        return projected;
+        const root = plan.projections[edge];
+        if (root.parent != checked.no_specialization_projection_parent) {
+            Common.invariant("call root edge had a parent");
+        }
+        return switch (root.step) {
+            .argument => blk: {
+                if (root.index >= produced_args.len or root.index >= newly_available.len) {
+                    Common.invariant("checked call argument edge exceeded function arity");
+                }
+                if (!newly_available[root.index]) break :blk null;
+                break :blk produced_args[root.index];
+            },
+            .result => if (include_result)
+                request_ret orelse Common.invariant("result edge had no exact result node")
+            else
+                null,
+            .dispatcher => dispatcher_node,
+            .target_argument => blk: {
+                const target = target_signature orelse break :blk null;
+                if (root.index >= target.args.len) {
+                    Common.invariant("checked target argument edge exceeded function arity");
+                }
+                break :blk target.args[root.index];
+            },
+            .target_result => if (target_signature) |target| target.ret else null,
+            .alias_argument,
+            .alias_backing,
+            .nominal_argument,
+            .function_argument,
+            .function_result,
+            .tuple_item,
+            .record_field,
+            .record_remainder,
+            .tag_payload,
+            .tag_remainder,
+            => Common.invariant("call root edge was an immediate-child operation"),
+        };
+    }
+
+    /// Read one checker-published occurrence by following only its declared
+    /// root-to-child path. The sparse cache shares prefixes between slots but
+    /// never allocates a column sized to the complete call shape.
+    fn evaluateCallOccurrence(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        occurrence: checked.SpecializationOccurrence,
+        produced_args: []const NodeId,
+        newly_available: []const bool,
+        dispatcher_node: ?NodeId,
+        target_signature: ?solve.FunctionNodes,
+        request_ret: ?NodeId,
+        include_result: bool,
+        evaluated: *std.ArrayList(EvaluatedCallEdge),
+        reverse_path: *std.ArrayList(u32),
+    ) Allocator.Error!?NodeId {
+        if (self.evaluatedCallEdge(evaluated.items, occurrence.projection)) |cached| {
+            return cached;
+        }
+        reverse_path.clearRetainingCapacity();
+        var edge = occurrence.projection;
+        var current: ?NodeId = null;
+        while (true) {
+            if (edge >= plan.projections.len) {
+                Common.invariant("call occurrence exceeded its checker-authored edge plan");
+            }
+            if (self.evaluatedCallEdge(evaluated.items, edge)) |cached| {
+                current = cached;
+                break;
+            }
+            try reverse_path.append(self.allocator, edge);
+            const parent = plan.projections[edge].parent;
+            if (parent == checked.no_specialization_projection_parent) {
+                current = self.callRootEdgeNode(
+                    plan,
+                    edge,
+                    produced_args,
+                    newly_available,
+                    dispatcher_node,
+                    target_signature,
+                    request_ret,
+                    include_result,
+                );
+                try evaluated.append(self.allocator, .{ .edge = edge, .node = current });
+                _ = reverse_path.pop();
+                break;
+            }
+            if (parent >= edge) {
+                Common.invariant("checker-authored call edge was not parent-first");
+            }
+            edge = parent;
+        }
+        var index = reverse_path.items.len;
+        while (index > 0) {
+            index -= 1;
+            const child_edge = reverse_path.items[index];
+            current = if (current) |parent|
+                if (self.graph.content(parent) == .unresolved)
+                    null
+                else
+                    try self.projectSpecializationChild(
+                        plan,
+                        plan.projections[child_edge],
+                        parent,
+                    )
+            else
+                null;
+            try evaluated.append(self.allocator, .{ .edge = child_edge, .node = current });
+        }
+        return current;
     }
 
     fn projectSpecializationChild(
@@ -25201,6 +25267,177 @@ const BodyContext = struct {
         exact: NodeId,
     };
 
+    const SparseProjectionSelection = struct {
+        projection: u32,
+        produced: NodeId,
+
+        fn lessThan(_: void, left: SparseProjectionSelection, right: SparseProjectionSelection) bool {
+            return left.projection < right.projection;
+        }
+    };
+
+    fn projectionDescendsFromRoot(
+        _: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        raw_projection: u32,
+        root_projection: u32,
+    ) bool {
+        var projection = raw_projection;
+        while (true) {
+            if (projection == root_projection) return true;
+            if (projection >= plan.projections.len) {
+                Common.invariant("specialization occurrence referenced a missing projection");
+            }
+            const parent = plan.projections[projection].parent;
+            if (parent == checked.no_specialization_projection_parent) return false;
+            if (parent >= projection) {
+                Common.invariant("specialization projection parent was not parent-first");
+            }
+            projection = parent;
+        }
+    }
+
+    /// Collect only exact substitutions whose checker-authored occurrence is
+    /// below this root. The result is bounded by the small substitution span,
+    /// not by the number of nodes in the checked type.
+    fn sparseProjectionSelections(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        root_projection: u32,
+        selections: []const solve.DirectRequestSelection,
+    ) Allocator.Error![]const SparseProjectionSelection {
+        var sparse = std.ArrayList(SparseProjectionSelection).empty;
+        defer sparse.deinit(self.allocator);
+        for (plan.slots) |slot| {
+            const selected = directSelectionForSlot(selections, .{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.checked,
+            }) orelse continue;
+            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
+                if (!self.projectionDescendsFromRoot(plan, occurrence.projection, root_projection)) continue;
+                for (sparse.items) |existing| {
+                    if (existing.projection != occurrence.projection) continue;
+                    if (!self.graph.sameClass(existing.produced, selected.produced)) {
+                        Common.invariant("one checker-authored projection received two exact runtime nodes");
+                    }
+                    break;
+                } else try sparse.append(self.allocator, .{
+                    .projection = occurrence.projection,
+                    .produced = selected.produced,
+                });
+            }
+        }
+        std.mem.sort(SparseProjectionSelection, sparse.items, {}, SparseProjectionSelection.lessThan);
+        return try self.graph.arena().dupe(SparseProjectionSelection, sparse.items);
+    }
+
+    fn projectionHasAuthoritativeAncestor(
+        _: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        raw_projection: u32,
+        authoritative: []const u32,
+    ) bool {
+        var projection = raw_projection;
+        while (true) {
+            const parent = plan.projections[projection].parent;
+            if (parent == checked.no_specialization_projection_parent) return false;
+            for (authoritative) |candidate| if (candidate == parent) return true;
+            projection = parent;
+        }
+    }
+
+    fn callProjectionRootBaseNode(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        root_projection: u32,
+        raw_runtime_cell: ?NodeId,
+    ) Allocator.Error!NodeId {
+        const projection = plan.projections[root_projection];
+        return self.graph.rootNode(switch (projection.root_source) {
+            .concrete_checked => try self.persistentCheckedBaseNode(projection.checked),
+            .runtime_edge => if (raw_runtime_cell) |raw| blk: {
+                const runtime = self.graph.rootNode(raw);
+                break :blk if (self.graph.content(runtime) == .unresolved)
+                    try self.persistentCheckedBaseNode(projection.checked)
+                else
+                    runtime;
+            } else try self.persistentCheckedBaseNode(projection.checked),
+        });
+    }
+
+    /// Apply one sparse exact substitution by reading and rebuilding only its
+    /// checker-authored ancestor path from `root_projection`.
+    fn applySparseProjectionSelection(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        root_projection: u32,
+        raw_root: NodeId,
+        selected: SparseProjectionSelection,
+    ) Allocator.Error!struct { root: NodeId, authoritative: bool } {
+        if (selected.projection == root_projection) {
+            var exact: ?NodeId = self.graph.rootNode(selected.produced);
+            var base_node: ?NodeId = self.graph.rootNode(raw_root);
+            var authoritative = false;
+            try self.applyCallProjectionSelection(&exact, &base_node, true, &authoritative);
+            return .{
+                .root = self.graph.rootNode(exact orelse base_node orelse
+                    Common.invariant("selected call root had no exact node")),
+                .authoritative = authoritative,
+            };
+        }
+
+        var reverse_path = std.ArrayList(u32).empty;
+        defer reverse_path.deinit(self.allocator);
+        var cursor = selected.projection;
+        while (cursor != root_projection) {
+            if (cursor >= plan.projections.len) {
+                Common.invariant("sparse call substitution referenced a missing projection");
+            }
+            try reverse_path.append(self.allocator, cursor);
+            const parent = plan.projections[cursor].parent;
+            if (parent == checked.no_specialization_projection_parent or parent >= cursor) {
+                Common.invariant("sparse call substitution did not descend from its declared root");
+            }
+            cursor = parent;
+        }
+
+        const path_nodes = try self.allocator.alloc(NodeId, reverse_path.items.len + 1);
+        defer self.allocator.free(path_nodes);
+        path_nodes[0] = self.graph.rootNode(raw_root);
+        var path_index: usize = 0;
+        while (path_index < reverse_path.items.len) : (path_index += 1) {
+            const projection_index = reverse_path.items[reverse_path.items.len - 1 - path_index];
+            const parent = path_nodes[path_index];
+            if (self.graph.nodeIsGeneratedNominal(parent)) {
+                return .{ .root = self.graph.rootNode(raw_root), .authoritative = true };
+            }
+            path_nodes[path_index + 1] = try self.projectSpecializationChild(
+                plan,
+                plan.projections[projection_index],
+                parent,
+            );
+        }
+
+        var exact: ?NodeId = self.graph.rootNode(selected.produced);
+        var base_node: ?NodeId = path_nodes[path_nodes.len - 1];
+        var authoritative = false;
+        try self.applyCallProjectionSelection(&exact, &base_node, true, &authoritative);
+        var rebuilt = exact orelse base_node orelse
+            Common.invariant("sparse call substitution had no selected child");
+        var rebuild_index = reverse_path.items.len;
+        while (rebuild_index > 0) {
+            rebuild_index -= 1;
+            const projection_index = reverse_path.items[reverse_path.items.len - 1 - rebuild_index];
+            rebuilt = try self.rebuildSpecializationProjectionParent(
+                plan,
+                plan.projections[projection_index],
+                path_nodes[rebuild_index],
+                rebuilt,
+            );
+        }
+        return .{ .root = self.graph.rootNode(rebuilt), .authoritative = authoritative };
+    }
+
     /// Apply an exact substitution span to one checker-published projection
     /// subtree. Work is proportional to changed projection ancestors, not to
     /// the size of the checked type graph. A complete runtime edge is returned
@@ -25209,7 +25446,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         root_projection: u32,
-        selections: *ActiveCheckedSelections,
+        selections: []const solve.DirectRequestSelection,
         root_base: CallProjectionRootBase,
     ) Allocator.Error!NodeId {
         if (root_projection >= plan.projections.len) {
@@ -25220,125 +25457,28 @@ const BodyContext = struct {
             .checked => {},
         }
         const raw_root_base = root_base.checked;
-        const root_index: usize = root_projection;
-        var subtree_end: usize = root_index + 1;
-        while (subtree_end < plan.projections.len and
-            plan.projections[subtree_end].parent != checked.no_specialization_projection_parent)
-        {
-            const parent_index: usize = plan.projections[subtree_end].parent;
-            if (parent_index < root_index or parent_index >= subtree_end) {
-                Common.invariant("call projection subtree was not contiguous and parent-first");
-            }
-            subtree_end += 1;
-        }
-        const subtree_len = subtree_end - root_index;
-        const exact = try self.graph.arena().alloc(?NodeId, subtree_len);
-        @memset(exact, null);
-        const selected_roots = try self.graph.arena().alloc(bool, subtree_len);
-        @memset(selected_roots, false);
-        const authoritative_roots = try self.graph.arena().alloc(bool, subtree_len);
-        @memset(authoritative_roots, false);
-        const base_nodes = try self.graph.arena().alloc(?NodeId, subtree_len);
-        @memset(base_nodes, null);
-        const blocked_by_exact_parent = try self.graph.arena().alloc(bool, subtree_len);
-        @memset(blocked_by_exact_parent, false);
-        // Publish exact projections before walking the base. A completed exact
-        // node is the authoritative whole runtime value at that occurrence;
-        // no checked descendant projection is evaluated below it. Descendant
-        // selections were already published from the producer edge, and any
-        // other consumer materializes its own declared projection path.
-        for (plan.projections[root_index..subtree_end], 0..) |projection, relative_index| {
-            if (selections.get(.{
-                .module_bytes = self.view.key.bytes,
-                .checked = projection.checked,
-            })) |selected| {
-                exact[relative_index] = self.graph.rootNode(selected);
-                selected_roots[relative_index] = true;
-                authoritative_roots[relative_index] = self.graph.content(selected) != .unresolved;
-            }
-        }
-        const selection_cells = try self.graph.arena().dupe(?NodeId, exact);
-        const root_runtime_cell = if (raw_root_base) |raw|
-            self.graph.rootNode(raw)
-        else
-            null;
-        for (plan.projections[root_index..subtree_end], 0..) |projection, relative_index| {
-            if (relative_index == 0) {
-                base_nodes[0] = self.graph.rootNode(switch (projection.root_source) {
-                    .concrete_checked => try self.persistentCheckedBaseNode(projection.checked),
-                    .runtime_edge => if (root_runtime_cell) |runtime|
-                        if (self.graph.content(runtime) == .unresolved)
-                            try self.persistentCheckedBaseNode(projection.checked)
-                        else
-                            runtime
-                    else
-                        try self.persistentCheckedBaseNode(projection.checked),
-                });
-                try self.applyCallProjectionSelection(
-                    &exact[0],
-                    &base_nodes[0],
-                    selected_roots[0],
-                    &authoritative_roots[0],
-                );
-                continue;
-            }
-            const parent_index: usize = projection.parent - root_index;
-            if (blocked_by_exact_parent[parent_index] or authoritative_roots[parent_index]) {
-                blocked_by_exact_parent[relative_index] = true;
-                continue;
-            }
-            const parent = base_nodes[parent_index] orelse continue;
-            if (self.graph.nodeIsGeneratedNominal(parent)) {
-                blocked_by_exact_parent[relative_index] = true;
-                continue;
-            }
-            if (self.graph.content(parent) != .unresolved) {
-                base_nodes[relative_index] = try self.projectSpecializationChild(plan, projection, parent);
-            }
-            try self.applyCallProjectionSelection(
-                &exact[relative_index],
-                &base_nodes[relative_index],
-                selected_roots[relative_index],
-                &authoritative_roots[relative_index],
-            );
-        }
-
-        var relative_index = subtree_len;
-        while (relative_index > 0) {
-            relative_index -= 1;
-            if (blocked_by_exact_parent[relative_index]) continue;
-            const projection_index = root_index + relative_index;
-            const projection = plan.projections[projection_index];
-            if (relative_index == 0 or exact[relative_index] == null) continue;
-            const parent_index: usize = projection.parent - root_index;
-            if (authoritative_roots[parent_index]) continue;
-            const parent = if (exact[parent_index]) |candidate|
-                if (self.graph.content(candidate) != .unresolved) candidate else base_nodes[parent_index] orelse
-                    Common.invariant("changed call projection child had no exact base parent")
-            else
-                base_nodes[parent_index] orelse
-                    Common.invariant("changed call projection child had no exact base parent");
-            exact[parent_index] = try self.rebuildSpecializationProjectionParent(
+        const root_runtime_cell = if (raw_root_base) |raw| self.graph.rootNode(raw) else null;
+        var materialized = try self.callProjectionRootBaseNode(
+            plan,
+            root_projection,
+            root_runtime_cell,
+        );
+        const sparse = try self.sparseProjectionSelections(plan, root_projection, selections);
+        var authoritative = std.ArrayList(u32).empty;
+        defer authoritative.deinit(self.allocator);
+        for (sparse) |selection| {
+            if (self.projectionHasAuthoritativeAncestor(plan, selection.projection, authoritative.items)) continue;
+            const applied = try self.applySparseProjectionSelection(
                 plan,
-                projection,
-                parent,
-                exact[relative_index].?,
+                root_projection,
+                materialized,
+                selection,
             );
-        }
-        // Any selected forward cell whose compound was rebuilt now points at
-        // that exact result. The cell remains the stable identity held by
-        // callers; only its one producer writes this directional edge.
-        for (selection_cells, exact, selected_roots) |maybe_cell, maybe_exact, is_selected| {
-            if (!is_selected) continue;
-            const cell = maybe_cell.?;
-            const rebuilt = maybe_exact orelse continue;
-            if (self.graph.sameClass(cell, rebuilt)) continue;
-            if (self.graph.content(cell) == .unresolved and !self.graph.nodeIsCheckedBase(cell)) {
-                try self.graph.completeProducedSelection(cell, rebuilt);
+            materialized = applied.root;
+            if (applied.authoritative) {
+                try authoritative.append(self.allocator, selection.projection);
             }
         }
-        const materialized = exact[0] orelse base_nodes[0] orelse
-            Common.invariant("call projection root had no exact base");
         if (root_runtime_cell) |cell| {
             if (!self.graph.sameClass(cell, materialized) and
                 self.graph.content(cell) == .unresolved and
@@ -25425,8 +25565,6 @@ const BodyContext = struct {
             try self.graph.functionNodes(node)
         else
             null;
-        const needed = try self.graph.arena().alloc(bool, plan.projections.len);
-        @memset(needed, false);
         for (plan.slots) |slot| {
             const base_id = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
@@ -25448,44 +25586,11 @@ const BodyContext = struct {
             if (directSelectionForSlot(selections.items, base_id)) |direct| {
                 if (self.graph.content(direct.produced) != .unresolved) continue;
             }
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (!callOccurrenceSuppliesExactSelection(
-                    occurrence,
-                    include_result,
-                    dispatcher_node != null,
-                    target_signature != null,
-                )) continue;
-                var root_index = occurrence.projection;
-                while (plan.projections[root_index].parent != checked.no_specialization_projection_parent) {
-                    root_index = plan.projections[root_index].parent;
-                }
-                const root_projection = plan.projections[root_index];
-                const available = switch (occurrence.root) {
-                    .argument => root_projection.index < newly_available.len and newly_available[root_projection.index],
-                    .result => include_result,
-                    .dispatcher => dispatcher_node != null,
-                    .target_argument, .target_result => target_signature != null,
-                };
-                if (!available) continue;
-                var projection_index = occurrence.projection;
-                while (true) {
-                    needed[projection_index] = true;
-                    const parent = plan.projections[projection_index].parent;
-                    if (parent == checked.no_specialization_projection_parent) break;
-                    projection_index = parent;
-                }
-            }
         }
-        const projected = try self.evaluateCallProjections(
-            plan,
-            needed,
-            produced_args,
-            newly_available,
-            dispatcher_node,
-            target_signature,
-            request_ret,
-            include_result,
-        );
+        var evaluated = std.ArrayList(EvaluatedCallEdge).empty;
+        defer evaluated.deinit(self.allocator);
+        var reverse_path = std.ArrayList(u32).empty;
+        defer reverse_path.deinit(self.allocator);
         for (plan.slots) |slot| {
             const base_id = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
@@ -25499,10 +25604,18 @@ const BodyContext = struct {
                     dispatcher_node != null,
                     target_signature != null,
                 )) continue;
-                if (occurrence.projection >= projected.len) {
-                    Common.invariant("checked specialization occurrence exceeded its projection plan");
-                }
-                const candidate = projected[occurrence.projection] orelse continue;
+                const candidate = (try self.evaluateCallOccurrence(
+                    plan,
+                    occurrence,
+                    produced_args,
+                    newly_available,
+                    dispatcher_node,
+                    target_signature,
+                    request_ret,
+                    include_result,
+                    &evaluated,
+                    &reverse_path,
+                )) orelse continue;
                 if (slot.kind == .generated_nominal and
                     !self.graph.nodeIsGeneratedNominal(candidate)) continue;
                 if (selected) |existing| {
@@ -25549,7 +25662,6 @@ const BodyContext = struct {
         // One forward pass therefore constructs every identity whose public
         // arguments are available at this call stage; no retry or descendant
         // query is needed.
-        const table = try self.checkedSelectionTableForCall(plan, selections.items);
         for (plan.slots) |slot| {
             const base_id = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
@@ -25561,19 +25673,15 @@ const BodyContext = struct {
             // determine this generated nominal. Construct the atomic result
             // from those nodes directly; no intermediate public nominal graph
             // exists to be replaced.
-            _ = table.nodes.remove(base_id);
-            try table.own(base_id);
-            const exact = (try self.generatedNominalFromSelectedArguments(plan, slot, table)) orelse continue;
+            const exact = (try self.generatedNominalFromSelectedArguments(
+                plan,
+                slot,
+                selections.items,
+            )) orelse continue;
             try selections.append(self.allocator, .{
                 .base = base_id,
                 .produced = exact,
             });
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                try table.put(.{
-                    .module_bytes = self.view.key.bytes,
-                    .checked = occurrence.checked,
-                }, exact);
-            }
         }
         // Result-context identities may themselves be supplied by an operand
         // producer in this invocation. Apply the same direct checker edges
@@ -25651,7 +25759,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         slot: checked.SpecializationCallSlot,
-        selections: *ActiveCheckedSelections,
+        selections: []const solve.DirectRequestSelection,
     ) Allocator.Error!?NodeId {
         const checked_ty = slot.checked;
         const nominal = switch (checkedPayload(self.view, checked_ty)) {
@@ -25664,10 +25772,12 @@ const BodyContext = struct {
             .iterator => blk: {
                 if (nominal.args.len != 1) Common.invariant("generated iterator call slot had a non-unary public nominal");
                 const item_node = switch (slot.generated_argument_source) {
-                    .exact_selection => selections.get(.{
-                        .module_bytes = self.view.key.bytes,
-                        .checked = nominal.args[0],
-                    }) orelse break :blk null,
+                    .exact_selection => self.callExactSelectionForChecked(
+                        plan,
+                        selections,
+                        nominal.args[0],
+                        slot.checked,
+                    ) orelse break :blk null,
                     .checked_substitution => compound: {
                         var argument_projection: ?u32 = null;
                         occurrence_loop: for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
@@ -25728,31 +25838,44 @@ const BodyContext = struct {
         };
     }
 
-    fn checkedSelectionTableForCall(
+    /// Resolve one exact checked occurrence directly from the call's flat
+    /// substitution span. This is a sparse span lookup; it does not expand the
+    /// substitutions into a checked-id hash table or walk any type graph.
+    fn callExactSelectionForChecked(
         self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
+        plan: checked.SpecializationProjectionPlanView,
         selections: []const solve.DirectRequestSelection,
-    ) Allocator.Error!*ActiveCheckedSelections {
-        const table = try self.graph.arena().create(ActiveCheckedSelections);
-        table.* = ActiveCheckedSelections.init(self.graph.arena());
-        if (self.active_checked_selections) |inherited| {
-            try table.inherit(inherited);
-        }
+        checked_ty: checked.CheckedTypeId,
+        excluded_slot: ?checked.CheckedTypeId,
+    ) ?NodeId {
+        const direct = directSelectionForSlot(selections, .{
+            .module_bytes = self.view.key.bytes,
+            .checked = checked_ty,
+        });
+        var selected: ?NodeId = if (direct) |selection| selection.produced else null;
         for (plan.slots) |slot| {
+            if (excluded_slot != null and slot.checked == excluded_slot.?) continue;
             const base_id = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
                 .checked = slot.checked,
             };
             const selection = directSelectionForSlot(selections, base_id) orelse continue;
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                const entry = try table.getOrPut(.{
-                    .module_bytes = self.view.key.bytes,
-                    .checked = occurrence.checked,
-                });
-                entry.value_ptr.* = selection.produced;
+                if (occurrence.checked != checked_ty) continue;
+                if (selected) |existing| {
+                    if (!self.graph.sameClass(existing, selection.produced)) {
+                        Common.invariant("one checked occurrence selected two exact runtime nodes");
+                    }
+                } else selected = selection.produced;
             }
         }
-        return table;
+        if (selected == null) if (self.active_checked_selections) |active| {
+            selected = active.get(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            });
+        };
+        return selected;
     }
 
     /// Build the exact, operand-local substitutions for one contextual value.
@@ -25943,7 +26066,6 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
         index: usize,
     ) Allocator.Error!NodeId {
-        const table = try self.checkedSelectionTableForCall(plan, selections);
         const projection: u32 = for (plan.projections, 0..) |candidate, projection_index| {
             if (candidate.parent == checked.no_specialization_projection_parent and
                 candidate.step == .argument and candidate.index == index)
@@ -25951,7 +26073,7 @@ const BodyContext = struct {
                 break @intCast(projection_index);
             }
         } else Common.invariant("requested specialization argument had no checker-published root projection");
-        return try self.materializeCallProjectionSubtree(plan, projection, table, .{ .checked = null });
+        return try self.materializeCallProjectionSubtree(plan, projection, selections, .{ .checked = null });
     }
 
     fn materializeCurrentCallRequest(
@@ -26000,7 +26122,6 @@ const BodyContext = struct {
         if (source.args.len != checked_fn.args.len) {
             Common.invariant("source call request had a different arity from its checked callable");
         }
-        const table = try self.checkedSelectionTableForCall(plan, selections);
         const args = try self.graph.arena().alloc(NodeId, checked_fn.args.len);
         for (args, checked_fn.args, 0..) |*out, checked_arg, index| {
             if (produced_args != null and available.?[index]) {
@@ -26014,7 +26135,7 @@ const BodyContext = struct {
                 checked_arg,
             );
             out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, table, .{ .checked = source.args[index] })
+                try self.materializeCallProjectionSubtree(plan, root, selections, .{ .checked = source.args[index] })
             else
                 try self.persistentCheckedBaseNode(checked_arg);
         }
@@ -26029,7 +26150,7 @@ const BodyContext = struct {
                 try self.materializeCallProjectionSubtree(
                     plan,
                     root,
-                    table,
+                    selections,
                     if (self.graph.functionResultRelation(source_request) == .exact_destination)
                         .{ .exact = source.ret }
                     else
@@ -26086,7 +26207,6 @@ const BodyContext = struct {
             result_base,
             true,
         );
-        const table = try self.checkedSelectionTableForCall(plan, completed_selections);
         const args = try self.graph.arena().alloc(NodeId, checked_fn.args.len);
         for (args, checked_fn.args, 0..) |*out, checked_arg, index| {
             if (available[index]) {
@@ -26100,7 +26220,7 @@ const BodyContext = struct {
                 checked_arg,
             );
             out.* = if (projection) |root|
-                try self.materializeCallProjectionSubtree(plan, root, table, .{ .checked = produced_args[index] })
+                try self.materializeCallProjectionSubtree(plan, root, completed_selections, .{ .checked = produced_args[index] })
             else
                 self.graph.rootNode(produced_args[index]);
         }
@@ -26114,7 +26234,7 @@ const BodyContext = struct {
             try self.materializeCallProjectionSubtree(
                 plan,
                 root,
-                table,
+                completed_selections,
                 if (produced_ret != null or result_relation == .exact_destination)
                     .{ .exact = result_base }
                 else
@@ -26798,10 +26918,7 @@ const BodyContext = struct {
             request_ret,
             if (expected_ret_node != null) .exact_destination else .produced,
         );
-        const selection_table = try self.checkedSelectionTableForCall(
-            call_plan,
-            self.graph.directRequestSelections(materialized),
-        );
+        const completed_selections = self.graph.directRequestSelections(materialized);
         const dispatcher_projection = self.callRootProjection(
             call_plan,
             .dispatcher,
@@ -26811,7 +26928,7 @@ const BodyContext = struct {
         return .{
             .callable = materialized,
             .dispatcher = if (dispatcher_projection) |projection|
-                try self.materializeCallProjectionSubtree(call_plan, projection, selection_table, .{ .checked = null })
+                try self.materializeCallProjectionSubtree(call_plan, projection, completed_selections, .{ .checked = null })
             else
                 try self.persistentCheckedBaseNode(plan.dispatcher_ty),
         };
@@ -33799,7 +33916,6 @@ const BodyContext = struct {
             callable_node,
         );
         const selections = self.graph.directRequestSelections(callable_node);
-        const selection_table = try call_ctx.checkedSelectionTableForCall(call_plan, selections);
         const dispatcher_projection = call_ctx.callRootProjection(
             call_plan,
             .dispatcher,
@@ -33807,7 +33923,7 @@ const BodyContext = struct {
             plan.dispatcher_ty,
         );
         const dispatcher_type_node = if (dispatcher_projection) |projection|
-            try call_ctx.materializeCallProjectionSubtree(call_plan, projection, selection_table, .{ .checked = null })
+            try call_ctx.materializeCallProjectionSubtree(call_plan, projection, selections, .{ .checked = null })
         else
             try call_ctx.persistentCheckedBaseNode(plan.dispatcher_ty);
         const dispatch_request = CallableDispatchRequest{

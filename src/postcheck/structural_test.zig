@@ -480,10 +480,10 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const generated_call_identity = sourceSliceBetween(
         lower_source,
         "fn generatedNominalFromSelectedArguments(",
-        "fn checkedSelectionTableForCall(",
+        "fn callExactSelectionForChecked(",
     );
     try expectContains(generated_call_identity, "slot.generated_argument_source");
-    try expectContains(generated_call_identity, ".exact_selection => selections.get(");
+    try expectContains(generated_call_identity, ".exact_selection => self.callExactSelectionForChecked(");
     try expectContains(generated_call_identity, ".checked_substitution => compound:");
     try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
@@ -493,18 +493,25 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const projection_application = sourceSliceBetween(
         lower_source,
-        "fn applyCallProjectionSelection(",
+        "const SparseProjectionSelection = struct",
         "fn callRootProjection(",
     );
-    try expectNotContains(projection_application, "two exact runtime nodes");
-    try expectContains(projection_application, "blocked_by_exact_parent[parent_index] or authoritative_roots[parent_index]");
+    try expectContains(projection_application, "fn sparseProjectionSelections(");
+    try expectContains(projection_application, "fn applySparseProjectionSelection(");
+    try expectContains(projection_application, "reverse_path");
+    try expectContains(projection_application, "rebuildSpecializationProjectionParent(");
+    try expectNotContains(projection_application, "subtree_end");
+    try expectNotContains(projection_application, "blocked_by_exact_parent");
+    try expectNotContains(projection_application, "selection_cells");
+    try expectNotContains(projection_application, "base_nodes");
+    try expectNotContains(projection_application, "checked-id hash table");
 
     const generated_call_slots = sourceSliceBetween(
         lower_source,
         "// Checking stores generated slots after every generated dependency.",
         "// Result-context identities may themselves be supplied by an operand",
     );
-    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(plan, slot, table)");
+    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(\n                plan,\n                slot,\n                selections.items,");
     try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
 
     try expectContains(solve_source, "generated_iterators_by_item: collections.DenseMap(NodeId");
