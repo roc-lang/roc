@@ -505,7 +505,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_call_identity, "for (plan.projections");
     try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
     try expectContains(generated_call_identity, "self.materializeCheckedCallNode(");
-    try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
+    try expectContains(generated_call_identity, ".concrete_checked => try self.persistentConcreteCheckedNode(");
     try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
     try expectContains(generated_call_identity, "generatedFieldNominalNode(");
     try expectNotContains(generated_call_identity, "instNominalBackingNode(");
@@ -785,7 +785,7 @@ test "Monotype producers return and compose exact graph nodes directly" {
     );
     try expectContains(tag, "produced_payload.* = try self.builder.completePendingProducedNode(");
     try expectContains(tag, "try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
-    try expectContains(tag, "self.graph.newNode(.{ .tag_union");
+    try expectContains(tag, "self.graph.newProducedTagUnion(");
 
     const low_level = sourceSliceBetween(
         lower_source,

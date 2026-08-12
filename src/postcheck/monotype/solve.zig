@@ -1465,6 +1465,44 @@ pub const InstGraph = struct {
         try bucket.value_ptr.append(self.allocator, node);
     }
 
+    /// Construct one completed producer-owned tag row. Row chaining is a
+    /// checked construction recipe, not runtime identity: consume the chain,
+    /// sort the variants, and intern the canonical immediate children once at
+    /// the producer boundary.
+    pub fn newProducedTagUnion(
+        self: *InstGraph,
+        initial_tags: []const InstTag,
+        raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        var tags = std.ArrayList(InstTag).empty;
+        defer tags.deinit(self.allocator);
+        try tags.appendSlice(self.allocator, initial_tags);
+
+        var ext = self.find(raw_ext);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (self.nodes.items[@intFromEnum(ext)] == .tag_union) {
+            const entry = try seen.getOrPut(ext);
+            if (entry.found_existing) {
+                Common.invariant("completed produced tag row contained an extension cycle");
+            }
+            const tail = self.nodes.items[@intFromEnum(ext)].tag_union;
+            try tags.appendSlice(self.allocator, tail.tags);
+            ext = self.find(tail.ext);
+        }
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_tag_union => {},
+            .redirect => unreachable,
+            .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("completed produced tag row had a non-tag extension"),
+            .tag_union => unreachable,
+        }
+        std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
+        return try self.newNode(.{ .tag_union = .{
+            .tags = try self.arena().dupe(InstTag, tags.items),
+            .ext = ext,
+        } });
+    }
+
     fn nodeSpanShapeHash(self: *InstGraph, nodes: []const NodeId) u64 {
         var hasher = std.hash.Wyhash.init(0);
         var len = std.mem.nativeToLittle(u32, @intCast(nodes.len));
@@ -1639,7 +1677,7 @@ pub const InstGraph = struct {
         return switch (self.nodes.items[@intFromEnum(node)]) {
             .tag_union => blk: {
                 const row = try self.flattenTagRow(node);
-                break :blk try self.newNode(.{ .tag_union = .{ .tags = row.tags, .ext = row.ext } });
+                break :blk try self.newProducedTagUnion(row.tags, row.ext);
             },
             .record => blk: {
                 const row = try self.flattenRecordRow(node);
@@ -4554,6 +4592,10 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
         .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };
+}
+
+fn instTagLessThan(name_store: *const names.NameStore, lhs: InstTag, rhs: InstTag) bool {
+    return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
 /// Orders record fields by label text for layout-stable sorting.

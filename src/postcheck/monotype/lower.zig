@@ -10497,6 +10497,8 @@ const BodyDraftStore = struct {
     /// specialization graph. Exact runtime substitutions live in occurrence
     /// scopes; an unsubstituted checked base is constructed only once.
     persistent_checked_base_nodes: std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState),
+    /// Completed substitution-free values, separate from checked recipes.
+    persistent_concrete_checked_nodes: std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState),
     /// Reusable storage for the one direct request instantiation active in
     /// this specialization graph. Direct instantiation only constructs types;
     /// it never lowers another call, so these scopes cannot nest. Retaining
@@ -10588,6 +10590,7 @@ const BodyDraftStore = struct {
             .owner_runs = .empty,
             .inhabitation_visiting = .{},
             .persistent_checked_base_nodes = std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState).init(allocator),
+            .persistent_concrete_checked_nodes = std.AutoHashMap(solve.CheckedBaseKey, InstantiationNodeState).init(allocator),
             .direct_instantiation_scratch = null,
             .direct_instantiation_scratch_in_use = false,
             .static_data_candidate_exprs = std.AutoHashMap(StaticDataCandidateAddress, DraftExprId).init(allocator),
@@ -10644,6 +10647,7 @@ const BodyDraftStore = struct {
             Common.invariant("direct instantiation scratch remained active when its draft was destroyed");
         }
         if (self.direct_instantiation_scratch) |*scratch| scratch.deinit();
+        self.persistent_concrete_checked_nodes.deinit();
         self.persistent_checked_base_nodes.deinit();
         self.stmt_impossibility_proofs.deinit(self.allocator);
         self.pat_impossibility_proofs.deinit(self.allocator);
@@ -12445,6 +12449,8 @@ const InstantiationScopeId = enum(u64) { _ };
 const InstantiationAuthority = enum {
     /// Persistent, immutable description copied from the checked artifact.
     checked_base,
+    /// Persistent exact value for a checker-published concrete source.
+    concrete_checked,
     /// One runtime specialization occurrence. Unselected checked variables
     /// become producer-owned cells which can be completed exactly once.
     produced_occurrence,
@@ -16009,18 +16015,28 @@ const BodyContext = struct {
             })
         else
             null;
-        const active_selection = if (direct_selection == null)
+        const direct_exact = if (direct_selection) |selection|
+            if (self.exactSelectionRequiresLocalDefault(scoped_ty, selection.produced)) null else selection
+        else
+            null;
+        const active_selection = if (direct_exact == null)
             if (self.active_checked_selections) |selections|
                 selections.get(.{ .module_bytes = self.view.key.bytes, .checked = checked_ty })
             else
                 null
         else
             null;
-        if (direct_selection) |selection| {
+        if (direct_exact) |selection| {
             return try self.instNodeAtExactSelection(scoped_ty, selection.produced);
         }
         if (active_selection) |selection| {
-            return try self.instNodeAtExactSelection(scoped_ty, selection);
+            if (!self.exactSelectionRequiresLocalDefault(scoped_ty, selection)) {
+                return try self.instNodeAtExactSelection(scoped_ty, selection);
+            }
+            // A checked-base default cell is an immutable recipe, not an
+            // exact runtime leaf. This occurrence owns the unresolved
+            // default, so instantiate it locally below instead of publishing
+            // the recipe as produced data.
         }
         if (self.scopedNodeState(scoped_ty)) |state| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
@@ -16074,6 +16090,21 @@ const BodyContext = struct {
             self.graph.markCheckedBase(completed);
         }
         return completed;
+    }
+
+    fn exactSelectionRequiresLocalDefault(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        raw_selection: NodeId,
+    ) bool {
+        const selection = self.graph.rootNode(raw_selection);
+        if (!self.graph.nodeIsCheckedBase(selection) or self.graph.content(selection) != .unresolved) {
+            return false;
+        }
+        return switch (checkedPayload(self.view, checked_ty)) {
+            .flex, .rigid => |variable| variable.numeric_default_phase != null or variable.row_default != null,
+            else => false,
+        };
     }
 
     fn instNodeAtExactSelection(
@@ -16146,6 +16177,12 @@ const BodyContext = struct {
                 .checked = checked_ty,
             });
         }
+        if (self.usesPersistentConcreteChecked()) {
+            return self.draft.persistent_concrete_checked_nodes.getPtr(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            });
+        }
         return self.instantiation.node_map.getPtr(checked_ty);
     }
 
@@ -16155,6 +16192,18 @@ const BodyContext = struct {
             self.direct_checked_selections.len == 0 and
             self.direct_selection_slots.len == 0 and
             self.direct_materialization_nodes.len == 0;
+    }
+
+    fn usesPersistentConcreteChecked(self: *const BodyContext) bool {
+        return self.instantiation.authority == .concrete_checked and
+            self.active_checked_selections == null and
+            self.direct_checked_selections.len == 0 and
+            self.direct_selection_slots.len == 0 and
+            self.direct_materialization_nodes.len == 0;
+    }
+
+    fn consumesProducedDefaults(self: *const BodyContext) bool {
+        return self.instantiation.authority != .checked_base;
     }
 
     fn putScopedNodeState(
@@ -16168,6 +16217,13 @@ const BodyContext = struct {
         }
         if (self.usesPersistentCheckedBase()) {
             try self.draft.persistent_checked_base_nodes.put(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            }, state);
+            return;
+        }
+        if (self.usesPersistentConcreteChecked()) {
+            try self.draft.persistent_concrete_checked_nodes.put(.{
                 .module_bytes = self.view.key.bytes,
                 .checked = checked_ty,
             }, state);
@@ -16187,6 +16243,13 @@ const BodyContext = struct {
         }
         if (self.usesPersistentCheckedBase()) {
             _ = self.draft.persistent_checked_base_nodes.remove(.{
+                .module_bytes = self.view.key.bytes,
+                .checked = checked_ty,
+            });
+            return;
+        }
+        if (self.usesPersistentConcreteChecked()) {
+            _ = self.draft.persistent_concrete_checked_nodes.remove(.{
                 .module_bytes = self.view.key.bytes,
                 .checked = checked_ty,
             });
@@ -16258,7 +16321,7 @@ const BodyContext = struct {
             .pending => Common.invariant("pending checked type reached Monotype instantiation"),
             .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
             .flex, .rigid => |variable| blk: {
-                if (self.instantiation.authority == .produced_occurrence) {
+                if (self.consumesProducedDefaults()) {
                     if (producedVariableDefault(variable)) |default| {
                         break :blk .{ .content = default };
                     }
@@ -16285,7 +16348,7 @@ const BodyContext = struct {
             } } },
             .record_unbound => |fields| .{ .content = .{ .record = .{
                 .fields = try self.instFields(fields),
-                .ext = if (self.instantiation.authority == .produced_occurrence)
+                .ext = if (self.consumesProducedDefaults())
                     try self.graph.newNode(.empty_record)
                 else
                     try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
@@ -16299,10 +16362,14 @@ const BodyContext = struct {
                 .args = try self.instNodeSlice(function.args),
                 .ret = try self.instNode(function.ret),
             } } },
-            .tag_union => |tag_union| .{ .content = .{ .tag_union = .{
-                .tags = try self.instTags(tag_union.tags),
-                .ext = try self.instNode(tag_union.ext),
-            } } },
+            .tag_union => |tag_union| blk: {
+                const tags = try self.instTags(tag_union.tags);
+                const ext = try self.instNode(tag_union.ext);
+                if (self.consumesProducedDefaults()) {
+                    break :blk .{ .existing = try self.graph.newProducedTagUnion(tags, ext) };
+                }
+                break :blk .{ .content = .{ .tag_union = .{ .tags = tags, .ext = ext } } };
+            },
             .nominal => |nominal| try self.instNominalBuild(checked_ty, nominal),
         };
     }
@@ -16334,7 +16401,7 @@ const BodyContext = struct {
                     // every other produced occurrence the checker's
                     // undetermined presence has reached its specified
                     // required default.
-                    if (self.instantiation.authority == .produced_occurrence) {
+                    if (self.consumesProducedDefaults()) {
                         break :blk .{
                             .name = name,
                             .ty = value_node,
@@ -16387,10 +16454,10 @@ const BodyContext = struct {
             .checked_name = present,
             .payloads = present_payloads,
         };
-        return try self.graph.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.graph.newNode(.empty_tag_union),
-        } });
+        return try self.graph.newProducedTagUnion(
+            tags,
+            try self.graph.newNode(.empty_tag_union),
+        );
     }
 
     fn instTags(self: *BodyContext, tags: []const checked.CheckedTag) Allocator.Error![]InstTag {
@@ -17030,7 +17097,7 @@ const BodyContext = struct {
                 .checked = selection.dependent,
             };
             if (selections.get(dependent) != null) continue;
-            const produced = try self.persistentCheckedBaseNode(selection.source);
+            const produced = try self.persistentConcreteCheckedNode(selection.source);
             try selections.put(dependent, produced);
         }
         for (interface_slots) |slot| {
@@ -17040,7 +17107,7 @@ const BodyContext = struct {
                 .checked = slot.checked,
             };
             if (selections.get(key) != null) continue;
-            const produced = try self.persistentCheckedBaseNode(slot.concrete_source);
+            const produced = try self.persistentConcreteCheckedNode(slot.concrete_source);
             try selections.put(key, produced);
         }
         // The call edge already published the callee's immutable flat
@@ -17803,10 +17870,7 @@ const BodyContext = struct {
             ),
             .zero_argument_tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                return try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
-                    .name = try self.builder.tagName(self.view, tag.name),
-                    .payloads = .empty(),
-                } });
+                return try self.lowerZeroArgumentTagAtNode(tag, expr_node);
             },
             .nominal => |nominal| return try self.lowerNominalConstructorAtNode(
                 expr_id,
@@ -25947,7 +26011,7 @@ const BodyContext = struct {
         if (runtime_node) |node| return node;
         return switch (root.root_source) {
             .runtime_edge => null,
-            .concrete_checked => try self.persistentCheckedBaseNode(root.checked),
+            .concrete_checked => try self.persistentConcreteCheckedNode(root.checked),
         };
     }
 
@@ -26153,9 +26217,6 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
         checked_node: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
-        if (selections.len == 0) {
-            return self.graph.rootNode(try self.persistentCheckedBaseNode(checked_node));
-        }
         var materialization_nodes = std.ArrayList(checked.CheckedTypeId).empty;
         defer materialization_nodes.deinit(self.allocator);
         try self.appendDirectSelectionMaterializationNodes(
@@ -26163,9 +26224,10 @@ const BodyContext = struct {
             selections,
             &materialization_nodes,
         );
-        if (materialization_nodes.items.len == 0) {
-            return self.graph.rootNode(try self.persistentCheckedBaseNode(checked_node));
-        }
+        // The checked node is an immutable construction recipe, never an
+        // exact runtime value. Even without substitutions, instantiate it as
+        // a produced occurrence so numeric, row, and field-presence defaults
+        // are consumed before this call edge advertises an exact node.
         try self.appendDirectMaterializationNode(&materialization_nodes, checked_node);
         const scope = self.enterDirectSelectionInstantiation(
             selections,
@@ -26525,7 +26587,7 @@ const BodyContext = struct {
                 .concrete_checked => if (direct) |selection|
                     selection.produced
                 else
-                    try self.persistentCheckedBaseNode(binding.source),
+                    try self.persistentConcreteCheckedNode(binding.source),
                 .exact_selection => blk: {
                     if (direct) |selection| {
                         if (self.graph.content(selection.produced) != .unresolved) {
@@ -26616,7 +26678,7 @@ const BodyContext = struct {
                     projection.checked,
                 );
             },
-            .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
+            .concrete_checked => try self.persistentConcreteCheckedNode(nominal.args[0]),
         };
         if (!try self.graph.typeIsResolved(public_arg)) {
             return null;
@@ -26699,7 +26761,7 @@ const BodyContext = struct {
                 selections,
                 binding.source,
             ) orelse switch (binding.source_kind) {
-                .concrete_checked => try self.persistentCheckedBaseNode(binding.source),
+                .concrete_checked => try self.persistentConcreteCheckedNode(binding.source),
                 .exact_selection => Common.invariant("contextual call binding source had no exact checker-published selection"),
             };
             const dependent = solve.CheckedBaseKey{
@@ -26792,6 +26854,50 @@ const BodyContext = struct {
             self.builder.allocateInstantiationScope(),
             self.view.key.bytes,
             .checked_base,
+        );
+        self.active_checked_selections = null;
+        self.direct_checked_selections = &.{};
+        self.direct_selection_slots = &.{};
+        self.direct_materialization_nodes = &.{};
+        self.direct_materialization_module = @splat(0);
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.active_checked_selections = previous_selections;
+            self.direct_checked_selections = previous_direct_selections;
+            self.direct_selection_slots = previous_direct_slots;
+            self.direct_materialization_nodes = previous_materialization_nodes;
+            self.direct_materialization_module = previous_materialization_module;
+        }
+        return try self.instNode(checked_ty);
+    }
+
+    /// Materialize one checker-proven substitution-free source into a
+    /// persistent exact node. This consumes explicit language defaults while
+    /// leaving the immutable checked base untouched as a construction recipe.
+    fn persistentConcreteCheckedNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!NodeId {
+        const key = solve.CheckedBaseKey{
+            .module_bytes = self.view.key.bytes,
+            .checked = checked_ty,
+        };
+        if (self.draft.persistent_concrete_checked_nodes.getPtr(key)) |state| switch (state.*) {
+            .ready => |node| return node,
+            .building => {},
+        };
+        const previous_instantiation = self.instantiation;
+        const previous_selections = self.active_checked_selections;
+        const previous_direct_selections = self.direct_checked_selections;
+        const previous_direct_slots = self.direct_selection_slots;
+        const previous_materialization_nodes = self.direct_materialization_nodes;
+        const previous_materialization_module = self.direct_materialization_module;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            self.view.key.bytes,
+            .concrete_checked,
         );
         self.active_checked_selections = null;
         self.direct_checked_selections = &.{};
@@ -27056,14 +27162,18 @@ const BodyContext = struct {
                 .{ .checked = produced_args[index] },
             );
         }
+        const result_root_base: CallProjectionRootBase = if (produced_ret) |exact|
+            .{ .exact = exact }
+        else if (result_relation == .exact_destination and
+            !self.graph.nodeIsCheckedBase(request_ret))
+            .{ .exact = request_ret }
+        else
+            .{ .checked = if (result_relation == .exact_destination) request_ret else null };
         const ret = try self.materializeCallProjectionSubtree(
             plan,
             self.callResultRootEdge(plan, checked_fn.ret),
             completed_selections,
-            if (include_result)
-                .{ .exact = result_base }
-            else
-                .{ .checked = null },
+            result_root_base,
         );
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
@@ -32438,17 +32548,12 @@ const BodyContext = struct {
                         destination_relation,
                     ),
                     .zero_argument_tag => |tag| {
-                        const name = try self.builder.tagName(self.view, tag.name);
-                        break :blk try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
-                            .name = name,
-                            .payloads = .empty(),
-                        } });
+                        break :blk try self.lowerZeroArgumentTagAtNode(tag, expected_node);
                     },
-                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNodeWithRelation(
+                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNode(
                         checked_expr,
                         nominal,
                         expected_node,
-                        destination_relation,
                     ),
                     .tuple => |items| break :blk try self.lowerTupleConstructorAtNodeWithRelation(
                         items,
@@ -34100,6 +34205,33 @@ const BodyContext = struct {
         return try self.lowerTagConstructorAtNodeWithRelation(tag, tag_node, .exact_producer);
     }
 
+    fn lowerZeroArgumentTagAtNode(
+        self: *BodyContext,
+        tag: anytype,
+        tag_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const name = try self.builder.tagName(self.view, tag.name);
+        const request_row = try self.graph.tagConstructionRow(tag_node);
+        for (request_row.tags) |request_tag| {
+            if (!self.builder.program.names.tagLabelTextEql(request_tag.name, name)) continue;
+            if (request_tag.payloads.len != 0) {
+                Common.invariant("zero-argument tag constructor had payloads in its exact row");
+            }
+            const produced_ext = try self.graph.checkedDefaultNode(request_row.ext) orelse
+                Common.invariant("zero-argument tag producer had no exact row remainder");
+            const structural_node = try self.graph.newProducedTagUnion(
+                request_row.tags,
+                produced_ext,
+            );
+            const produced_node = try self.producedConstructorNode(tag_node, structural_node);
+            return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
+                .name = name,
+                .payloads = .empty(),
+            } });
+        }
+        Common.invariant("zero-argument tag constructor was absent from its exact row");
+    }
+
     fn lowerTagConstructorAtNodeWithRelation(
         self: *BodyContext,
         tag: anytype,
@@ -34132,7 +34264,6 @@ const BodyContext = struct {
             };
         }
         const produced_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
-        var changed = false;
         var found = false;
         for (request_row.tags, produced_tags) |request_tag, *produced_tag| {
             produced_tag.* = request_tag;
@@ -34142,30 +34273,25 @@ const BodyContext = struct {
                 Common.invariant("tag constructor payload count differed from its exact row");
             }
             const produced_payloads = try self.graph.arena().alloc(NodeId, lowered.len);
-            for (lowered, request_tag.payloads, produced_payloads) |payload_expr, request_payload, *produced_payload| {
+            for (lowered, request_tag.payloads, produced_payloads) |payload_expr, _, *produced_payload| {
                 produced_payload.* = try self.builder.completePendingProducedNode(
                     self,
                     try self.exprTypeCell(payload_expr).toGraphNode(self.graph),
                 );
-                changed = changed or !self.graph.sameClass(request_payload, produced_payload.*);
             }
             produced_tag.payloads = produced_payloads;
         }
         if (!found) Common.invariant("tag constructor was absent from its exact row");
         const produced_ext = try self.graph.checkedDefaultNode(request_row.ext) orelse
             Common.invariant("tag producer had no exact row remainder");
-        const structural_node = if (changed)
-            try self.graph.newNode(.{ .tag_union = .{
-                .tags = produced_tags,
-                .ext = produced_ext,
-            } })
-        else if (!self.graph.sameClass(request_row.ext, produced_ext))
-            try self.graph.newNode(.{ .tag_union = .{
-                .tags = try self.graph.arena().dupe(InstTag, request_row.tags),
-                .ext = produced_ext,
-            } })
-        else
-            request_row.root;
+        // `tagConstructionRow` is the producer's completed flat row. Always
+        // intern that value: returning the original request root when only
+        // its row nesting differed would leak a checked representation recipe
+        // into exact runtime identity.
+        const structural_node = try self.graph.newProducedTagUnion(
+            produced_tags,
+            produced_ext,
+        );
         const produced_node = try self.producedConstructorNode(tag_node, structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
             .name = name,
@@ -34178,21 +34304,6 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         nominal: anytype,
         expected_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        return try self.lowerNominalConstructorAtNodeWithRelation(
-            checked_expr,
-            nominal,
-            expected_node,
-            .exact_producer,
-        );
-    }
-
-    fn lowerNominalConstructorAtNodeWithRelation(
-        self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        nominal: anytype,
-        expected_node: NodeId,
-        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const checked_node = try self.lowerExprTypeNode(checked_expr);
         const checked_ty = self.view.bodies.expr(checked_expr).ty;
@@ -34224,7 +34335,6 @@ const BodyContext = struct {
         const named = self.graph.content(self.constructorRepresentationNode(nominal_node)).named;
         const backing_node = (named.backing orelse
             Common.invariant("nominal constructor had no exact backing request")).node;
-        _ = destination_relation;
         // Nominal syntax is the explicit parent operation for its private
         // backing. The declaration-selected backing node is therefore the
         // direct child request in every context, including when the nominal
