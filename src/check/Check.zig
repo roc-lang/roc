@@ -30948,11 +30948,10 @@ fn validateDerivedParseTagUnion(
         .unsupported, .reported_error => |result| return result,
     }
 
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    for (tags.items(.args)) |tag_args_range| {
-        const tag_args = try self.gpa.dupe(Var, self.types.sliceVars(tag_args_range));
-        defer self.gpa.free(tag_args);
-        for (tag_args) |tag_arg| {
+    for (0..tag_union.tags.count) |tag_offset| {
+        const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+        for (0..tag_args_range.count) |tag_arg_offset| {
+            const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
             switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
@@ -31469,11 +31468,10 @@ fn validateDerivedEncodeTagUnion(
         .unsupported, .unresolved => return .unsupported,
     }
 
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    for (tags.items(.args)) |tag_args_range| {
-        const tag_args = try self.gpa.dupe(Var, self.types.sliceVars(tag_args_range));
-        defer self.gpa.free(tag_args);
-        for (tag_args) |tag_arg| {
+    for (0..tag_union.tags.count) |tag_offset| {
+        const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
+        for (0..tag_args_range.count) |tag_arg_offset| {
+            const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
             switch (try self.validateDerivedEncodeVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
