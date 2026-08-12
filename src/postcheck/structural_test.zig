@@ -944,6 +944,18 @@ test "Monotype open specialization lookup reuses only exact function interfaces"
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
 }
 
+test "Monotype prepared codec reuse requires the complete exact function request" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const lookup = sourceSliceBetween(
+        lower_source,
+        "fn preparedCodecCalleeAtNode(",
+        "fn methodTargetCalleeAtNode(",
+    );
+    try expectContains(lookup, "sameExactFunctionRequest(prepared.callable_node, callable_node)");
+    try expectNotContains(lookup, "sameFunctionInterface(prepared.callable_node, callable_node)");
+    try expectNotContains(lookup, "sameDirectRequestSelections(prepared.callable_node, callable_node)");
+}
+
 test "Monotype match lowering projects exact scrutinee cells without checked root relations" {
     const lower_source = @embedFile("monotype/lower.zig");
     const match_source = sourceSliceBetween(

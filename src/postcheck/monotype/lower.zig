@@ -35650,10 +35650,7 @@ const BodyContext = struct {
     ) Allocator.Error!?DraftFnSlot {
         for (self.draft.prepared_codec_calls.items) |prepared| {
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
-            if (self.graph.sameFunctionInterface(prepared.callable_node, callable_node)) {
-                return prepared.callee;
-            }
-            if (self.graph.sameDirectRequestSelections(prepared.callable_node, callable_node)) {
+            if (self.graph.sameExactFunctionRequest(prepared.callable_node, callable_node)) {
                 return prepared.callee;
             }
         }
