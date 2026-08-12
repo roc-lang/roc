@@ -1764,13 +1764,13 @@ const Builder = struct {
         if (self.counters != null) {
             self.count("specialization_type_digest_requests");
             var stats: Type.Store.DigestStats = .{};
-            const digest = self.program.types.specializationDigestCached(&self.program.names, ty, &stats);
+            const digest = self.program.types.specializationLookupDigestCached(&self.program.names, ty, &stats);
             self.countBy("specialization_type_digest_cache_hits", @intCast(stats.cache_hits));
             self.countBy("specialization_type_digest_cache_misses", @intCast(stats.cache_misses));
             self.countBy("specialization_type_digest_nodes_visited", @intCast(stats.nodes_visited));
             return digest;
         }
-        return self.program.types.specializationDigestCached(&self.program.names, ty, null);
+        return self.program.types.specializationLookupDigestCached(&self.program.names, ty, null);
     }
 
     fn sealedCaptureAbiDigest(
@@ -3930,7 +3930,7 @@ const Builder = struct {
             try seen.put(current, {});
             switch (self.program.types.get(current)) {
                 .named => |named| {
-                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
+                    if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !try self.sameNominalArgs(named.args, mono_args))) {
                         return current;
                     }
                     const next = named.backing orelse return current;
@@ -3941,15 +3941,13 @@ const Builder = struct {
         }
     }
 
-    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) bool {
+    fn sameNominalArgs(self: *Builder, actual_span: Type.Span, expected: []const Type.TypeId) Allocator.Error!bool {
         const actual = self.program.types.span(actual_span);
         if (actual.len != expected.len) return false;
         for (expected, 0..) |expected_ty, index| {
             const actual_ty = GuardedList.at(actual, index);
             if (actual_ty == expected_ty) continue;
-            const actual_digest = self.program.types.specializationDigest(&self.program.names, actual_ty);
-            const expected_digest = self.program.types.specializationDigest(&self.program.names, expected_ty);
-            if (!std.mem.eql(u8, actual_digest.bytes[0..], expected_digest.bytes[0..])) return false;
+            if (!try self.program.types.typeEql(&self.program.names, actual_ty, expected_ty)) return false;
         }
         return true;
     }

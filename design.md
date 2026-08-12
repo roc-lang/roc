@@ -4766,6 +4766,14 @@ callable identity, method scope, exact evidence topology, and exact structural
 equality of the closed Monotype function type. Digest collisions are therefore
 harmless.
 
+The request and solved function-type digests are stable structural bucket
+selectors, not type identities or correctness proofs. They use a fast
+non-cryptographic hash because every same-store hit is followed by exact
+structural equality when its dense `TypeId` differs, and every cross-store hit
+is followed by exact cross-store structural equality. Full durable Monotype
+type digests and content-addressed generated nominal identities remain SHA-256;
+only specialization bucket selection uses the non-cryptographic digest.
+
 The producer that materializes a retained dispatch-evidence topology computes
 its digest exactly once and stores the digest beside that topology. Every
 borrowed or owned evidence view carries the producer-computed digest into the

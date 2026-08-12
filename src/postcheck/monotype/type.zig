@@ -189,7 +189,7 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
-    specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
+    specialization_lookup_digests: StoreList(?names.TypeDigest, "specialization_lookup_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
@@ -205,7 +205,7 @@ pub const Store = struct {
             .allocator = allocator,
             .types = .empty,
             .type_digests = .empty,
-            .specialization_digests = .empty,
+            .specialization_lookup_digests = .empty,
             .constructing = .empty,
             .spans = .empty,
             .fields = .empty,
@@ -221,7 +221,7 @@ pub const Store = struct {
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
-        self.specialization_digests.deinit(self.allocator);
+        self.specialization_lookup_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
     }
@@ -288,8 +288,8 @@ pub const Store = struct {
         errdefer _ = self.types.pop();
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
-        try self.specialization_digests.append(self.allocator, null);
-        errdefer _ = self.specialization_digests.pop();
+        try self.specialization_lookup_digests.append(self.allocator, null);
+        errdefer _ = self.specialization_lookup_digests.pop();
         try self.constructing.append(self.allocator, false);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
@@ -358,7 +358,7 @@ pub const Store = struct {
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
-        specialization_digests_len: usize,
+        specialization_lookup_digests_len: usize,
         constructing_len: usize,
         spans_len: usize,
         fields_len: usize,
@@ -370,7 +370,7 @@ pub const Store = struct {
         return .{
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
-            .specialization_digests_len = self.specialization_digests.len(),
+            .specialization_lookup_digests_len = self.specialization_lookup_digests.len(),
             .constructing_len = self.constructing.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
@@ -383,7 +383,7 @@ pub const Store = struct {
         self.assertMutable();
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
-        self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.specialization_lookup_digests.restoreLen(mark_.specialization_lookup_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
@@ -620,8 +620,8 @@ pub const Store = struct {
         return self.view().verify(name_store);
     }
 
-    pub fn specializationDigestsView(self: *const Store) []const ?names.TypeDigest {
-        return self.specialization_digests.unsafeRawItemsForView();
+    pub fn specializationLookupDigestsView(self: *const Store) []const ?names.TypeDigest {
+        return self.specialization_lookup_digests.unsafeRawItemsForView();
     }
 
     pub fn typeDigestCached(
@@ -634,7 +634,7 @@ pub const Store = struct {
         return self.cachedDigestInner(name_store, ty, .full, &ctx, stats);
     }
 
-    pub fn specializationDigestCached(
+    pub fn specializationLookupDigestCached(
         self: *Store,
         name_store: *const names.NameStore,
         ty: TypeId,
@@ -690,6 +690,28 @@ pub const Store = struct {
     const NamedDigestMode = enum {
         full,
         identity_only,
+    };
+
+    /// Specialization lookup needs a stable structural bucket selector, not a
+    /// cryptographic content identity. Exact structural equality remains the
+    /// authority after a bucket hit. Keep the same 32-byte carrier as durable
+    /// type digests while placing the stable Wyhash result in its first word.
+    const SpecializationHasher = struct {
+        inner: std.hash.Wyhash,
+
+        fn init(_: struct {}) SpecializationHasher {
+            return .{ .inner = std.hash.Wyhash.init(0x726f635f73706563) };
+        }
+
+        fn update(self: *SpecializationHasher, bytes: []const u8) void {
+            self.inner.update(bytes);
+        }
+
+        fn finalResult(self: *SpecializationHasher) [32]u8 {
+            var result = [_]u8{0} ** 32;
+            std.mem.writeInt(u64, result[0..8], self.inner.final(), .little);
+            return result;
+        }
     };
 
     fn assertMutable(self: *const Store) void {
@@ -776,12 +798,12 @@ pub const Store = struct {
         for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
                 ctx.cycle_count += 1;
-                return cycleDigest(@intCast(position));
+                return cycleDigest(@intCast(position), named_mode);
             }
         }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len])) |position| {
+        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len], named_mode)) |position| {
             ctx.cycle_count += 1;
-            return cycleDigest(@intCast(position));
+            return cycleDigest(@intCast(position), named_mode);
         }
 
         const index = @intFromEnum(ty);
@@ -793,7 +815,7 @@ pub const Store = struct {
                 }
             },
             .identity_only => {
-                if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
+                if (self.specialization_lookup_digests.unsafeRawItemsForView()[index]) |digest| {
                     if (stats) |s| s.cache_hits += 1;
                     return digest;
                 }
@@ -807,30 +829,45 @@ pub const Store = struct {
 
         if (ctx.len == digest_visiting_max) {
             ctx.cycle_count += 1;
-            return deepDigest(ty);
+            return deepDigest(ty, named_mode);
         }
 
         ctx.items[ctx.len] = ty;
         ctx.len += 1;
         const cycle_count_before = ctx.cycle_count;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
+        const digest = switch (named_mode) {
+            .full => self.computeCachedDigest(std.crypto.hash.sha2.Sha256, name_store, ty, named_mode, ctx, stats),
+            .identity_only => self.computeCachedDigest(SpecializationHasher, name_store, ty, named_mode, ctx, stats),
+        };
         ctx.len -= 1;
 
-        const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
         if (ctx.cycle_count == cycle_count_before) {
             switch (named_mode) {
                 .full => self.type_digests.set(index, digest),
-                .identity_only => self.specialization_digests.set(index, digest),
+                .identity_only => self.specialization_lookup_digests.set(index, digest),
             }
         }
         return digest;
     }
 
+    fn computeCachedDigest(
+        self: *Store,
+        comptime Hasher: type,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        named_mode: NamedDigestMode,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) names.TypeDigest {
+        var hasher = Hasher.init(.{});
+        self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     fn writeCachedChildDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         child: TypeId,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -844,7 +881,7 @@ pub const Store = struct {
     fn writeCachedTypeSpanDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         span_: Span,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -861,7 +898,7 @@ pub const Store = struct {
     fn writeCachedTypeDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         ty: TypeId,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -956,7 +993,7 @@ pub const Store = struct {
     fn writeCachedNamedBackingDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         backing: ?NamedBacking,
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
@@ -974,7 +1011,7 @@ pub const Store = struct {
     fn writeCachedDeclaredOrderDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         declared_order: Span,
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
@@ -1003,7 +1040,7 @@ pub const Store = struct {
     /// a function of its declaration and arguments.
     fn writeNamedIdentityHead(
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         named: NamedContent,
     ) void {
         hasher.update(&named.named_type.module.bytes);
@@ -1026,10 +1063,20 @@ pub const Store = struct {
     fn namedIdentityHead(
         name_store: *const names.NameStore,
         named: NamedContent,
+        named_mode: NamedDigestMode,
     ) [32]u8 {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        writeNamedIdentityHead(name_store, &hasher, named);
-        return hasher.finalResult();
+        return switch (named_mode) {
+            .full => blk: {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                writeNamedIdentityHead(name_store, &hasher, named);
+                break :blk hasher.finalResult();
+            },
+            .identity_only => blk: {
+                var hasher = SpecializationHasher.init(.{});
+                writeNamedIdentityHead(name_store, &hasher, named);
+                break :blk hasher.finalResult();
+            },
+        };
     }
 
     /// Whether two named nodes denote the same named type at the same
@@ -1043,11 +1090,12 @@ pub const Store = struct {
         lhs: NamedContent,
         rhs: NamedContent,
         rhs_head: [32]u8,
+        named_mode: NamedDigestMode,
     ) bool {
         const lhs_args = self.span(lhs.args);
         const rhs_args = self.span(rhs.args);
         if (lhs_args.len != rhs_args.len) return false;
-        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &rhs_head)) return false;
+        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs, named_mode), &rhs_head)) return false;
         for (0..lhs_args.len) |index| {
             const lhs_arg = GuardedList.at(lhs_args, index);
             const rhs_arg = GuardedList.at(rhs_args, index);
@@ -1057,8 +1105,14 @@ pub const Store = struct {
             // so mixing them here would let the cached and uncached callers
             // reach different fold decisions and disagree about which types are
             // the same.
-            const lhs_digest = self.typeDigest(name_store, lhs_arg);
-            const rhs_digest = self.typeDigest(name_store, rhs_arg);
+            const lhs_digest = switch (named_mode) {
+                .full => self.typeDigest(name_store, lhs_arg),
+                .identity_only => self.specializationDigest(name_store, lhs_arg),
+            };
+            const rhs_digest = switch (named_mode) {
+                .full => self.typeDigest(name_store, rhs_arg),
+                .identity_only => self.specializationDigest(name_store, rhs_arg),
+            };
             if (!std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes)) return false;
         }
         return true;
@@ -1074,17 +1128,18 @@ pub const Store = struct {
         name_store: *const names.NameStore,
         node: Content,
         open: []const TypeId,
+        named_mode: NamedDigestMode,
     ) ?usize {
         if (node != .named) return null;
         const named = node.named;
         if (named.kind == .alias) return null;
-        const head = namedIdentityHead(name_store, named);
+        const head = namedIdentityHead(name_store, named, named_mode);
         for (open, 0..) |open_ty, position| {
             const open_content = self.get(open_ty);
             if (open_content != .named) continue;
             const open_named = open_content.named;
             if (open_named.kind == .alias) continue;
-            if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
+            if (self.namedIdentityMatches(name_store, open_named, named, head, named_mode)) return position;
         }
         return null;
     }
@@ -1092,7 +1147,7 @@ pub const Store = struct {
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         ty: TypeId,
         visiting: *DigestVisiting,
         named_mode: NamedDigestMode,
@@ -1105,7 +1160,7 @@ pub const Store = struct {
                 return;
             }
         }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len])) |position| {
+        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len], named_mode)) |position| {
             writeBytes(hasher, "cycle");
             writeU32(hasher, @intCast(position));
             return;
@@ -1211,7 +1266,7 @@ pub const Store = struct {
     fn writeTypeSpanDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         span_: Span,
         visiting: *DigestVisiting,
         named_mode: NamedDigestMode,
@@ -1227,7 +1282,7 @@ pub const Store = struct {
     fn writeNamedBackingDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         backing: ?NamedBacking,
         visiting: *DigestVisiting,
     ) void {
@@ -1244,7 +1299,7 @@ pub const Store = struct {
     fn writeDeclaredOrderDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         declared_order: Span,
         visiting: *DigestVisiting,
     ) void {
@@ -2220,21 +2275,28 @@ fn assertNoDuplicateTags(name_store: *const names.NameStore, tags_: []const Tag)
     }
 }
 
-fn cycleDigest(position: u32) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "cycle");
-    writeU32(&hasher, position);
+fn cycleDigest(position: u32, named_mode: Store.NamedDigestMode) names.TypeDigest {
+    return switch (named_mode) {
+        .full => taggedDigest(std.crypto.hash.sha2.Sha256, "cycle", position),
+        .identity_only => taggedDigest(Store.SpecializationHasher, "cycle", position),
+    };
+}
+
+fn deepDigest(ty: TypeId, named_mode: Store.NamedDigestMode) names.TypeDigest {
+    return switch (named_mode) {
+        .full => taggedDigest(std.crypto.hash.sha2.Sha256, "deep", @intFromEnum(ty)),
+        .identity_only => taggedDigest(Store.SpecializationHasher, "deep", @intFromEnum(ty)),
+    };
+}
+
+fn taggedDigest(comptime Hasher: type, tag: []const u8, value: u32) names.TypeDigest {
+    var hasher = Hasher.init(.{});
+    writeBytes(&hasher, tag);
+    writeU32(&hasher, value);
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn deepDigest(ty: TypeId) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "deep");
-    writeU32(&hasher, @intFromEnum(ty));
-    return .{ .bytes = hasher.finalResult() };
-}
-
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: anytype, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
@@ -2243,18 +2305,18 @@ fn specializationUsesBacking(backing: ?NamedBacking) bool {
     return if (backing) |present| present.authority == .generated_private else false;
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: anytype, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: anytype, value: ?u32) void {
     const present: u8 = if (value == null) 0 else 1;
     hasher.update(std.mem.asBytes(&present));
     if (value) |v| writeU32(hasher, v);
 }
 
-fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
+fn writeOptionalDigest(hasher: anytype, value: ?names.TypeDigest) void {
     if (value) |digest| {
         writeBytes(hasher, "digest");
         hasher.update(&digest.bytes);
@@ -2264,7 +2326,7 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
 }
 
 fn writeIteratorTopology(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: anytype,
     name_store: *const names.NameStore,
     topology: ?IteratorTopology,
 ) void {
@@ -2826,6 +2888,10 @@ test "monotype digest terminates on recursive structural types" {
 
     const other = store.typeDigest(&name_store, rec_b);
     try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
+
+    const first_specialization = store.specializationLookupDigestCached(&name_store, rec_a, null);
+    const other_specialization = store.specializationLookupDigestCached(&name_store, rec_b, null);
+    try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], other_specialization.bytes[0..]));
 }
 
 test "monotype cached digest survives completion of an unrelated reserved slot" {
@@ -2890,8 +2956,8 @@ test "monotype cached digest stays stable across multiple edges into one recursi
     const second_full = store.typeDigestCached(&name_store, recursive, null);
     try std.testing.expect(std.mem.eql(u8, first_full.bytes[0..], second_full.bytes[0..]));
 
-    const first_specialization = store.specializationDigestCached(&name_store, recursive, null);
-    const second_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    const first_specialization = store.specializationLookupDigestCached(&name_store, recursive, null);
+    const second_specialization = store.specializationLookupDigestCached(&name_store, recursive, null);
     try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], second_specialization.bytes[0..]));
 }
 
