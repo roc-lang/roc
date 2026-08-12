@@ -180,8 +180,8 @@ pub const IteratorKind = enum(u8) {
 /// This is the one partition consumed by Monotype's mint-depth assignment,
 /// graph depth finalization, and expected-producer request shaping; consumers
 /// must never re-derive it independently, since a kind classified as source
-/// in one consumer and adapter in another compiles clean and mis-mints far
-/// from the edit.
+/// in one consumer and adapter in another compiles clean and mints the wrong
+/// representation far from the edit.
 pub const IteratorComponentTopology = enum {
     /// A source whose construction inputs initialize generated step state
     /// without being stored as nominal component arguments (ranges). Its
