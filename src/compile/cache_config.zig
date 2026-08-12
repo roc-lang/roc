@@ -123,20 +123,21 @@ pub const Constants = struct {
     ///     instead of reconstructing them from normalized module identities.
     /// 49: Associated lookups retain exact alias-resolution targets in CIR.
     /// 50: Interned literal entries record maximum runtime backing alignment.
-    /// 51: Optional + defaulted record fields: canonical record annotations
+    /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    /// 52: Optional + defaulted record fields: canonical record annotations
     ///     carry field presence and default expressions, field-access paths
     ///     keep source-ordered required/optional segments, type-store fields
     ///     carry the static kind axis (required/optional/defaulted with a
     ///     default identity; no `absent` state, `present` renamed
     ///     `required`), and checked layouts include field kinds and archived
     ///     defaults (design.md "Field Kinds", "Defaulted Fields").
-    /// 52: Generalized checked record fields retain presence-variable identity,
+    /// 53: Generalized checked record fields retain presence-variable identity,
     ///     and const record evidence retains optional source-value types.
-    /// 53: Compile-time root requests retain exact checked-root identity.
-    /// 54: Record constructors retain exact checker-selected omitted defaults.
-    /// 55: Record field presence uses an explicit sentinel representation.
-    /// 56: Field-default roots can own their literal-conversion evaluation.
-    pub const CACHE_VERSION = 56;
+    /// 54: Compile-time root requests retain exact checked-root identity.
+    /// 55: Record constructors retain exact checker-selected omitted defaults.
+    /// 56: Record field presence uses an explicit sentinel representation.
+    /// 57: Field-default roots can own their literal-conversion evaluation.
+    pub const CACHE_VERSION = 57;
 };
 
 /// Configuration for the Roc cache system.

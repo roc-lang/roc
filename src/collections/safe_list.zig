@@ -522,13 +522,31 @@ pub fn SafeList(comptime T: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeMultiList(comptime T: type) type {
     return struct {
+        const Self = @This();
+
         items: std.MultiArrayList(T) = .empty,
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { first = 0, _ };
 
-        /// A non-type-safe slice of the list.
-        pub const Slice = std.MultiArrayList(T).Slice;
+        /// A non-type-safe range view. Resolve fields from the backing list on
+        /// demand so this value never carries MultiArrayList's cached pointer
+        /// array across a target ABI boundary.
+        pub const Slice = struct {
+            list: *const Self,
+            start: usize,
+            len: usize,
+
+            pub inline fn items(self: Slice, comptime field_name: Field) []@FieldType(T, @tagName(field_name)) {
+                const all_items = self.list.field(field_name);
+                return all_items[self.start..][0..self.len];
+            }
+
+            pub inline fn get(self: Slice, index: usize) T {
+                std.debug.assert(index < self.len);
+                return @call(.always_inline, std.MultiArrayList(T).get, .{ self.list.items, self.start + index });
+            }
+        };
 
         /// A type-safe slice of the list.
         pub const Range = SafeRange(Idx);
@@ -622,46 +640,15 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
-            // Empty ranges have undefined start, return empty slice directly
-            if (range.count == 0) {
-                const base = self.items.slice();
-                // Return a zero-length slice based on the existing slice
-                return .{
-                    .ptrs = base.ptrs,
-                    .len = 0,
-                    .capacity = 0,
-                };
-            }
+        pub inline fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
+            if (range.count == 0) return .{ .list = self, .start = 0, .len = 0 };
 
             const start: usize = @intFromEnum(range.start);
             const end: usize = start + range.count;
 
             std.debug.assert(start <= end);
             std.debug.assert(end <= self.items.len);
-
-            const base = self.items.slice();
-
-            var new_ptrs: [base.ptrs.len][*]u8 = undefined;
-
-            // This has to be inline, so `cur_field` can be known at comptime
-            inline for (0..base.ptrs.len) |i| {
-                const cur_field = @as(Field, @enumFromInt(i));
-                const cur_items = base.items(cur_field);
-
-                new_ptrs[i] = if (cur_items.len == 0)
-                    @as([*]u8, @ptrFromInt(@alignOf(T)))
-                else if (start >= cur_items.len)
-                    @ptrCast(cur_items.ptr + cur_items.len)
-                else
-                    @ptrCast(&cur_items[start]);
-            }
-
-            return .{
-                .ptrs = new_ptrs,
-                .len = end - start,
-                .capacity = base.capacity - start,
-            };
+            return .{ .list = self, .start = start, .len = end - start };
         }
 
         /// Set the value of an element in this list.

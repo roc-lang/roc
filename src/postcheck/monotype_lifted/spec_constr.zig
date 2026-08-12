@@ -6174,28 +6174,27 @@ const Cloner = struct {
         value_expr: Ast.ExprId,
         selection: LoopExitSelection,
     ) Common.LowerError!Ast.ExprId {
-        const value_data = self.pass.program.getExpr(value_expr).data;
-        if (value_data != .tuple) Common.invariant("selected loop exit did not carry compiler-generated tuple state");
-        const tuple = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(value_data.tuple));
-        defer self.pass.allocator.free(tuple);
-        if (tuple.len != selection.source_arity) {
+        var bindings: BindingChain = .{};
+        const exit_value = try self.cloneExprValueDemandingShapeInto(value_expr, &bindings);
+        const tuple = tupleFromValue(exit_value) orelse Common.invariant("selected loop exit did not carry compiler-generated tuple state");
+        if (tuple.items.len != selection.source_arity) {
             Common.invariant("selected loop exit tuple arity differed from its source ABI");
         }
 
-        return switch (selection.transfer) {
+        const projected = switch (selection.transfer) {
             .break_value => blk: {
                 if (selection.kept_indices.len != 1) Common.invariant("direct loop exit selection did not contain one value");
-                const projected = try self.addExpr(.{
+                const projected_expr = try self.addExpr(.{
                     .ty = break_ty,
-                    .data = .{ .break_ = try self.cloneExpr(tuple[selection.kept_indices[0]]) },
+                    .data = .{ .break_ = try self.materialize(tuple.items[selection.kept_indices[0]]) },
                 });
-                try self.selected_loop_exit_tys.put(projected, selection.result_ty);
-                break :blk projected;
+                try self.selected_loop_exit_tys.put(projected_expr, selection.result_ty);
+                break :blk projected_expr;
             },
             .jump => |jump_transfer| blk: {
                 const args = try self.pass.allocator.alloc(Ast.ExprId, selection.kept_indices.len);
                 defer self.pass.allocator.free(args);
-                for (selection.kept_indices, args) |index, *out| out.* = try self.cloneExpr(tuple[index]);
+                for (selection.kept_indices, args) |index, *out| out.* = try self.materialize(tuple.items[index]);
                 const jump = try self.addExpr(.{
                     .ty = break_ty,
                     .data = .{ .jump = .{
@@ -6207,6 +6206,8 @@ const Cloner = struct {
                 break :blk jump;
             },
         };
+
+        return try self.wrapBindings(bindings, projected);
     }
 
     fn inlineLoopExitAtSite(
@@ -7299,9 +7300,24 @@ const Cloner = struct {
         // actually holds, so drop those pre-loop values before cloning the body
         // and keep each slot's identity: the emitted params are installed under
         // it below, which is the only resolution path a reassigned copy has.
+        //
+        // That identity comes from the slot's initial value, which is only
+        // sound when that initial local is the pre-loop version of the slot's
+        // own variable. A variable initialized as a bare alias of another
+        // in-scope variable (`var $last_break = cluster_start`) carries the
+        // initializer's binder on its initial local instead; installing the
+        // slot's per-iteration value under that binder would make body reads
+        // of the initializer variable resolve to the loop-carried slot, which
+        // diverges from it after the first back edge. The body referencing the
+        // initial's exact local is the signature of that alias shape—a
+        // consumed pre-loop version is never read again—so claim (and drop)
+        // the carried binder only when the body does not.
         const carried_identities = try self.pass.allocator.alloc(?BinderIdentity, initial_values.len);
         defer self.pass.allocator.free(carried_identities);
         for (initial_values, carried_identities) |initial, *identity| {
+            identity.* = null;
+            const initial_local = localExpr(self.pass.program, initial) orelse continue;
+            if (exprReferencesLocal(self.pass.program, loop.body, initial_local)) continue;
             identity.* = try self.subst.dropCarriedBinder(self.pass.program, initial);
         }
 
@@ -11430,6 +11446,145 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
         .expect,
         .dbg,
         => |expr| exprContainsReturn(program, expr),
+        .uninitialized,
+        .crash,
+        => false,
+    };
+}
+
+/// Whether `expr_id` contains any reference to `local`, including through
+/// nested loops, join points, and closure capture operands. Lambda and
+/// function-definition leaves reach enclosing locals only through explicit
+/// capture operands, which `fn_ref` and `call_proc` spans carry.
+fn exprReferencesLocal(program: *const Ast.Program, expr_id: Ast.ExprId, local: Ast.LocalId) bool {
+    return switch (program.getExpr(expr_id).data) {
+        .local => |referenced| referenced == local,
+        .@"unreachable",
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => false,
+        .uninitialized_payload => |payload| payload.condition == local,
+        .fn_ref => |fn_ref| captureOperandSpanReferencesLocal(program, fn_ref.captures, local),
+        .return_ => |ret| exprReferencesLocal(program, ret.value, local),
+        .list,
+        .tuple,
+        => |items| exprSpanReferencesLocal(program, items, local),
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                if (exprReferencesLocal(program, field.value, local)) return true;
+            }
+            return false;
+        },
+        .record_update => |update| {
+            if (exprReferencesLocal(program, update.base, local)) return true;
+            const field_exprs = program.fieldExprSpan(update.fields);
+            for (0..field_exprs.len) |index| {
+                const field = GuardedList.at(field_exprs, index);
+                if (exprReferencesLocal(program, field.value, local)) return true;
+            }
+            return false;
+        },
+        .tag => |tag| exprSpanReferencesLocal(program, tag.payloads, local),
+        .static_data_candidate => |candidate| exprReferencesLocal(program, candidate.runtime_expr, local),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| exprReferencesLocal(program, child, local),
+        .expect_err => |expect_err| exprReferencesLocal(program, expect_err.msg, local),
+        .comptime_branch_taken => |taken| exprReferencesLocal(program, taken.body, local),
+        .let_ => |let_| exprReferencesLocal(program, let_.value, local) or exprReferencesLocal(program, let_.rest, local),
+        .call_value => |call| exprReferencesLocal(program, call.callee, local) or exprSpanReferencesLocal(program, call.args, local),
+        .call_proc => |call| exprSpanReferencesLocal(program, call.args, local) or captureOperandSpanReferencesLocal(program, call.captures, local),
+        .low_level => |call| exprSpanReferencesLocal(program, call.args, local),
+        .field_access => |field| exprReferencesLocal(program, field.receiver, local),
+        .tuple_access => |access| exprReferencesLocal(program, access.tuple, local),
+        .structural_eq => |eq| exprReferencesLocal(program, eq.lhs, local) or exprReferencesLocal(program, eq.rhs, local),
+        .structural_hash => |h| exprReferencesLocal(program, h.value, local) or exprReferencesLocal(program, h.hasher, local),
+        .match_ => |match| {
+            if (exprReferencesLocal(program, match.scrutinee, local)) return true;
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    if (stmtReferencesLocal(program, GuardedList.at(bindings, binding_index), local)) return true;
+                }
+                if (branch.guard) |guard| {
+                    if (exprReferencesLocal(program, guard, local)) return true;
+                }
+                if (exprReferencesLocal(program, branch.body, local)) return true;
+            }
+            return false;
+        },
+        .if_ => |if_| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (exprReferencesLocal(program, branch.cond, local)) return true;
+                if (exprReferencesLocal(program, branch.body, local)) return true;
+            }
+            return exprReferencesLocal(program, if_.final_else, local);
+        },
+        .block => |block| {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                const stmt = GuardedList.at(statements, index);
+                if (stmtReferencesLocal(program, stmt, local)) return true;
+            }
+            return exprReferencesLocal(program, block.final_expr, local);
+        },
+        .loop_ => |loop| exprSpanReferencesLocal(program, loop.initial_values, local) or exprReferencesLocal(program, loop.body, local),
+        .break_ => |maybe| if (maybe) |value| exprReferencesLocal(program, value, local) else false,
+        .continue_ => |continue_| exprSpanReferencesLocal(program, continue_.values, local),
+        .join_point => |join_point| exprReferencesLocal(program, join_point.body, local) or exprReferencesLocal(program, join_point.remainder, local),
+        .jump => |jump| exprSpanReferencesLocal(program, jump.args, local),
+        .if_initialized_payload => |payload_switch| exprReferencesLocal(program, payload_switch.cond, local) or
+            exprReferencesLocal(program, payload_switch.initialized, local) or
+            exprReferencesLocal(program, payload_switch.uninitialized, local),
+        .try_sequence => |sequence| exprReferencesLocal(program, sequence.try_expr, local) or exprReferencesLocal(program, sequence.ok_body, local),
+        .try_record_sequence => |sequence| exprReferencesLocal(program, sequence.try_expr, local) or exprReferencesLocal(program, sequence.ok_body, local),
+    };
+}
+
+fn exprSpanReferencesLocal(program: *const Ast.Program, span: Ast.Span(Ast.ExprId), local: Ast.LocalId) bool {
+    const exprs = program.exprSpan(span);
+    for (0..exprs.len) |index| {
+        const expr = GuardedList.at(exprs, index);
+        if (exprReferencesLocal(program, expr, local)) return true;
+    }
+    return false;
+}
+
+fn captureOperandSpanReferencesLocal(program: *const Ast.Program, span: Ast.Span(Ast.CaptureOperand), local: Ast.LocalId) bool {
+    const operands = program.captureOperandSpan(span);
+    for (0..GuardedList.borrowLen(operands)) |index| {
+        const operand = GuardedList.at(operands, index);
+        if (exprReferencesLocal(program, operand.value, local)) return true;
+    }
+    return false;
+}
+
+fn stmtReferencesLocal(program: *const Ast.Program, stmt_id: Ast.StmtId, local: Ast.LocalId) bool {
+    return switch (program.getStmt(stmt_id)) {
+        .return_ => |ret| exprReferencesLocal(program, ret.value, local),
+        .let_ => |let_| exprReferencesLocal(program, let_.value, local),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| exprReferencesLocal(program, expr, local),
         .uninitialized,
         .crash,
         => false,

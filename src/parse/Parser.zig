@@ -701,8 +701,8 @@ fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) std.
     for (self.store.exposedItemSlice(exposes)) |exposed_idx| {
         const exposed = self.store.getExposedItem(exposed_idx);
         const name_token: Token.Idx, const region: AST.TokenizedRegion = switch (exposed) {
-            .upper_ident => |ui| .{ ui.ident, ui.region },
-            .upper_ident_star => |ui| .{ ui.ident, ui.region },
+            .upper_ident => |ui| .{ firstQualifierOrFinal(&self.store, ui.qualifiers, ui.ident), ui.region },
+            .upper_ident_star => |ui| .{ firstQualifierOrFinal(&self.store, ui.qualifiers, ui.ident), ui.region },
             .lower_ident, .malformed => continue,
         };
         const module_name = self.tok_buf.resolveIdentifier(name_token) orelse continue;
@@ -711,6 +711,11 @@ fn recordPackageHeaderModules(self: *Parser, exposes: AST.ExposedItem.Span) std.
             .end = region.end,
         });
     }
+}
+
+fn firstQualifierOrFinal(store: *const NodeStore, qualifiers: AST.Token.Span, final_token: Token.Idx) Token.Idx {
+    const qualifier_tokens = store.tokenSlice(qualifiers);
+    return if (qualifier_tokens.len > 0) @intCast(qualifier_tokens[0]) else final_token;
 }
 
 fn typeIdentFromDeprecatedSuffix(self: *Parser, suffix: NumericLiteral.DeprecatedSuffix) std.mem.Allocator.Error!?base.Ident.Idx {

@@ -3558,6 +3558,12 @@ pub const InstGraph = struct {
     fn iteratorRelation(self: *InstGraph, left: InstNamed, right: InstNamed) Type.IteratorRelation {
         const base_relation = Type.iteratorRelation(left, right);
         if (base_relation != .ordinary) return base_relation;
+        if (left.def.iterator_representation == .forced_dynamic and
+            right.def.iterator_representation == .forced_dynamic and
+            !optionalInstDigestEql(left.def.generated, right.def.generated))
+        {
+            return .forced_dynamic;
+        }
         if (left.def.iterator_representation != .minted or right.def.iterator_representation != .minted) {
             return .ordinary;
         }

@@ -49,7 +49,7 @@ var allocator: Allocator = std.heap.wasm_allocator;
 const PlaygroundCompileError =
     Allocator.Error ||
     fmt.FormatAstError ||
-    eval.test_helpers.TestHelperError ||
+    eval.Inspected.Error ||
     check.CheckedArtifact.CompileTimeFinalizer.Error ||
     error{
         ErrFinalizingHTMLWriter,
@@ -971,7 +971,7 @@ fn buildReplModuleSource(
 }
 
 const ReplCompiledModule = struct {
-    lowered: eval.test_helpers.LoweredProgram,
+    lowered: eval.Inspected.LoweredProgram,
 
     fn deinit(self: *@This()) void {
         self.lowered.deinit(allocator);
@@ -1060,7 +1060,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1193,7 +1193,7 @@ fn runReplExpression(
     };
     defer compiled.deinit();
 
-    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+    const output = eval.Inspected.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
         return;
     };
@@ -1885,13 +1885,13 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
     );
-    defer eval.test_helpers.cleanupParseAndCanonical(allocator, resources);
+    defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 
     const test_roots = try collectPlaygroundTestRootRequests(allocator, &resources.checked_artifact);
     defer allocator.free(test_roots);
@@ -1929,10 +1929,11 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interpreter = try eval.LirInterpreter.init(
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         runtime_env.get_ops(),
         .preserve,
     );

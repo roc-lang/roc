@@ -7,7 +7,7 @@ const main = @import("main.zig");
 const base = @import("base");
 const eval = @import("eval");
 const lir = @import("lir");
-const test_helpers = eval.test_helpers;
+const test_helpers = eval.Inspected;
 const cli_context = @import("CliCtx.zig");
 const CliCtx = cli_context.CliCtx;
 const Io = cli_context.Io;
@@ -191,7 +191,8 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
-    const child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used, compiled.lowered.view.target_usize);
+    var child_view = try lir.LirImage.viewMappedImage(header, compiled.lowered.shm.base_ptr, used, compiled.lowered.view.target_usize);
+    defer child_view.deinit();
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
@@ -264,8 +265,10 @@ test "integration - one LIR image resolves layouts for both pointer widths" {
     const used = compiled.lowered.shm.getUsedSize();
 
     // View the very same image bytes for each pointer width.
-    const view32 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u32, arena);
-    const view64 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u64, arena);
+    var view32 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u32, arena);
+    defer view32.deinit();
+    var view64 = try lir.LirImage.viewMappedImageWithAllocator(header, image_base, used, .u64, arena);
+    defer view64.deinit();
     try testing.expectEqual(base.target.TargetUsize.u32, view32.target_usize);
     try testing.expectEqual(base.target.TargetUsize.u64, view64.target_usize);
 

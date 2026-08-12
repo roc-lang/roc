@@ -1341,6 +1341,7 @@ pub const Evaluator = struct {
             => self.evalStrOp(op, args, result_ty),
 
             .list_len,
+            .list_capacity,
             .list_get_unsafe,
             .list_append_unsafe,
             .list_concat,

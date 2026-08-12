@@ -2352,6 +2352,41 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    .{
+        .name = "inspect: generic nominal to_inspect receives hidden descriptor",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\    to_inspect : Wrap(a) -> Str
+        \\    to_inspect = |Wrap.W(value)| "Wrap(${Str.inspect(value)})"
+        \\}
+        \\
+        \\main = Str.inspect(Wrap.W(42)) == "Wrap(42.0)"
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: function-value Str.inspect preserves nominal method",
+        .source_kind = .module,
+        .source =
+        \\Color := [Red, Green].{
+        \\    to_inspect : Color -> Str
+        \\    to_inspect = |color| match color {
+        \\        Red => "Function::Red"
+        \\        Green => "Function::Green"
+        \\    }
+        \\}
+        \\
+        \\apply = |inspect, value| inspect(value)
+        \\
+        \\main = {
+        \\    red : Color
+        \\    red = Red
+        \\    apply(Str.inspect, red) == "Function::Red"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
     .{ .name = "inspect: arithmetic", .source = "2 + 3 * 4", .expected = .{ .inspect_str = "14.0" } },
     .{ .name = "inspect: subtraction", .source = "5 - 3", .expected = .{ .inspect_str = "2.0" } },
     .{ .name = "inspect: multiplication", .source = "4 * 5", .expected = .{ .inspect_str = "20.0" } },

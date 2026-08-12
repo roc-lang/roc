@@ -21,6 +21,9 @@ pub const LocalImport = struct {
 pub const PublicModule = struct {
     name: []const u8,
     target: []const u8,
+    /// Type selected from `target`, or null when the public entry exposes the
+    /// source module's main type.
+    nested_type: ?[]const u8,
 };
 
 /// Source-local declarations of a package or platform's public surface.
@@ -33,6 +36,7 @@ pub const PublicSurface = struct {
         for (self.modules.items) |module| {
             gpa.free(module.name);
             gpa.free(module.target);
+            if (module.nested_type) |nested_type| gpa.free(nested_type);
         }
         self.modules.deinit(gpa);
         for (self.root_names.items) |name| gpa.free(name);
@@ -69,9 +73,9 @@ pub fn extractPublicSurface(
 
     for (exposed_items) |item_idx| {
         const item = ast.store.getExposedItem(item_idx);
-        const token_idx = switch (item) {
-            .upper_ident => |upper| upper.ident,
-            .upper_ident_star => |upper| upper.ident,
+        const token_idx, const qualifiers, const alias_tok = switch (item) {
+            .upper_ident => |upper| .{ upper.ident, upper.qualifiers, upper.as },
+            .upper_ident_star => |upper| .{ upper.ident, upper.qualifiers, null },
             .lower_ident => |lower| {
                 if (kind == .platform) {
                     try appendRootName(&result, ast.resolve(lower.ident), gpa);
@@ -80,7 +84,18 @@ pub fn extractPublicSurface(
             },
             .malformed => continue,
         };
-        const exposed_name = ast.resolve(token_idx);
+
+        const qualifier_tokens = ast.store.tokenSlice(qualifiers);
+        const source_name_tok: AST.Token.Idx = if (qualifier_tokens.len > 0)
+            @intCast(qualifier_tokens[0])
+        else
+            token_idx;
+        const source_name = identifierTokenText(ast, source_name_tok);
+        const exposed_name = if (alias_tok) |alias|
+            identifierTokenText(ast, alias)
+        else
+            identifierTokenText(ast, token_idx);
+
         if (!imports_indexed) {
             for (ast.decl_index.imports.items, 0..) |import, import_idx| {
                 if (import.origin != .local) continue;
@@ -91,14 +106,14 @@ pub fn extractPublicSurface(
             }
             imports_indexed = true;
         }
-        const import_idx = module_imports.get(exposed_name);
+        const import_idx = module_imports.get(source_name);
 
         if (kind == .platform and import_idx == null) {
             try appendRootName(&result, exposed_name, gpa);
             continue;
         }
 
-        var target_text = exposed_name;
+        var target_text = source_name;
         if (import_idx) |idx| {
             const import = ast.decl_index.imports.items[idx];
             target_text = ast.env.getIdent(import.module_name);
@@ -109,9 +124,36 @@ pub fn extractPublicSurface(
             };
         }
 
-        try appendPublicModule(&result, exposed_name, target_text, gpa);
+        const nested_type = if (qualifier_tokens.len > 0)
+            try qualifiedNestedTypeText(ast, qualifier_tokens[1..], token_idx, gpa)
+        else
+            null;
+        try appendPublicModule(&result, exposed_name, target_text, nested_type, gpa);
     }
     return result;
+}
+
+fn identifierTokenText(ast: *const AST, token_idx: AST.Token.Idx) []const u8 {
+    const raw = ast.resolve(token_idx);
+    return if (raw.len > 0 and raw[0] == '.') raw[1..] else raw;
+}
+
+fn qualifiedNestedTypeText(
+    ast: *const AST,
+    intermediate_tokens: []const u32,
+    final_token: AST.Token.Idx,
+    gpa: Allocator,
+) Allocator.Error![]const u8 {
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(gpa);
+
+    for (intermediate_tokens) |raw_token| {
+        try result.appendSlice(gpa, identifierTokenText(ast, @intCast(raw_token)));
+        try result.append(gpa, '.');
+    }
+    try result.appendSlice(gpa, identifierTokenText(ast, final_token));
+
+    return result.toOwnedSlice(gpa);
 }
 
 fn appendRootName(surface: *PublicSurface, name: []const u8, gpa: Allocator) Allocator.Error!void {
@@ -120,12 +162,23 @@ fn appendRootName(surface: *PublicSurface, name: []const u8, gpa: Allocator) All
     try surface.root_names.append(gpa, owned_name);
 }
 
-fn appendPublicModule(surface: *PublicSurface, name: []const u8, target: []const u8, gpa: Allocator) Allocator.Error!void {
+fn appendPublicModule(
+    surface: *PublicSurface,
+    name: []const u8,
+    target: []const u8,
+    nested_type: ?[]const u8,
+    gpa: Allocator,
+) Allocator.Error!void {
+    errdefer if (nested_type) |nested| gpa.free(nested);
     const owned_name = try gpa.dupe(u8, name);
     errdefer gpa.free(owned_name);
     const owned_target = try gpa.dupe(u8, target);
     errdefer gpa.free(owned_target);
-    try surface.modules.append(gpa, .{ .name = owned_name, .target = owned_target });
+    try surface.modules.append(gpa, .{
+        .name = owned_name,
+        .target = owned_target,
+        .nested_type = nested_type,
+    });
 }
 
 /// Normalize one local source target into its package-root-relative logical
@@ -375,6 +428,30 @@ test "package public modules map explicit aliases to internal logical paths" {
     try std.testing.expectEqualStrings("Internal/Parsing/Parser", surface.modules.items[0].target);
     try std.testing.expectEqualStrings("Direct", surface.modules.items[1].name);
     try std.testing.expectEqualStrings("Direct", surface.modules.items[1].target);
+}
+
+test "qualified public type keeps its source module and nested selection" {
+    const gpa = std.testing.allocator;
+    var env = try @import("base").CommonEnv.init(gpa,
+        \\package [Container.Blub] {}
+        \\import Container
+    );
+    defer env.deinit(gpa);
+
+    const ast = try parse.file(gpa, &env);
+    defer ast.deinit();
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const header = ast.store.getHeader(ast.store.getFile().header);
+    try std.testing.expect(header == .package);
+    var surface = try extractPublicSurface(ast, header.package.exposes, .package, gpa);
+    defer surface.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), surface.modules.items.len);
+    try std.testing.expectEqualStrings("Blub", surface.modules.items[0].name);
+    try std.testing.expectEqualStrings("Container", surface.modules.items[0].target);
+    try std.testing.expectEqualStrings("Blub", surface.modules.items[0].nested_type.?);
 }
 
 test "package public module aliases cannot traverse above package root" {

@@ -4,6 +4,10 @@
 
 The Roc Playground provides a WebAssembly interface to the compiler, providing analysis of `.roc` code in web browsers and JavaScript environments. It implements a state machine architecture to support both single-file compilation analysis and interactive REPL (Read-Eval-Print Loop) sessions.
 
+This playground protocol remains available for compiler exploration. Embedders
+that only need a REPL should use the smaller-scope interface documented in
+`src/repl_wasm/README.md`; that module has no compiler-introspection modes.
+
 The playground supports:
 - **Single-file compilation**: Load and analyze complete Roc source files
 - **Interactive REPL**: Evaluate expressions and definitions incrementally

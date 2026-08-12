@@ -1144,6 +1144,10 @@ const Lowerer = struct {
         };
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const ret_layout = try self.layoutOfType(entry.ret);
+        const erased_arg_layouts = if (spec.abi == .erased)
+            try self.appendErasedArgumentLayouts(arg_locals[0..lifted_args.len])
+        else
+            LIR.BoxySpan.empty();
         const erased_reuse_arg = switch (spec.abi) {
             .erased => arg_locals[lifted_args.len + 1],
             .finite => if (spec.return_reuse.enabled())
@@ -1161,6 +1165,8 @@ const Lowerer = struct {
                 null,
             .body = null,
             .ret_layout = ret_layout,
+            .erased_arg_layouts = erased_arg_layouts,
+            .erased_capture_arg = if (spec.abi == .erased) arg_locals[lifted_args.len] else null,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
@@ -1173,6 +1179,19 @@ const Lowerer = struct {
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;
+    }
+
+    fn appendErasedArgumentLayouts(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.BoxySpan {
+        if (args.len == 0) return .{};
+        const start = self.result.boxy_erased_arg_layouts.items.len;
+        for (args) |arg| {
+            const local_layout = self.result.store.getLocal(arg).layout_idx;
+            try self.result.boxy_erased_arg_layouts.append(
+                self.allocator,
+                self.result.layouts.runtimeRepresentationLayoutIdx(local_layout),
+            );
+        }
+        return .{ .start = @intCast(start), .len = @intCast(args.len) };
     }
 
     fn sourceFnForSymbol(self: *Lowerer, symbol: Common.Symbol) Lifted.FnId {
@@ -4386,6 +4405,7 @@ const Lowerer = struct {
             .target = call_target,
             .closure = callee,
             .args = try self.result.store.addLocalSpan(args.ids),
+            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
             .arg_plan = try self.erasedCallArgsPlan(args.ids),
             .reuse_closure = reuse_closure,
             .reuse_source = if (reuse_closure) callee else null,

@@ -1135,6 +1135,13 @@ pub fn heapBase(self: *const Self) u32 {
     return self.data_offset;
 }
 
+/// Byte length of the module's initial linear memory. After finalization this
+/// is also the compiler stack's initial top, so host-managed heap allocations
+/// must begin at or above this address rather than inside the reserved stack.
+pub fn initialMemoryByteLen(self: *const Self) u32 {
+    return self.memory_min_pages * @as(u32, 65536);
+}
+
 /// Add a data segment to linear memory. Returns the offset where the data
 /// will be placed. The data is copied and aligned to `align_bytes`.
 pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) Allocator.Error!u32 {
@@ -1728,6 +1735,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         var matched: ?u32 = null;
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
+                if (self_imp.type_idx != remapped_type) return error.FunctionTypeMismatch;
                 matched = @intCast(self_idx);
                 break;
             }
@@ -1939,6 +1947,17 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                         if (self.findSymbolByNameAndKind(name, .global)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
                             continue;
+                        }
+                        if (mode == .final_link) {
+                            // PIC compilers represent the address of an external
+                            // data symbol as an imported GOT global. At a static
+                            // final link that global resolves directly to the
+                            // already-merged data definition; relocation patching
+                            // rewrites `global.get` to the absolute data address.
+                            if (self.findSymbolByNameAndKind(name, .data)) |existing| {
+                                symbol_remap[src_sym_idx] = existing;
+                                continue;
+                            }
                         }
                         if (mode == .relocatable_object) {
                             if (src_sym.index >= source.global_imports.items.len) return error.InvalidSection;
@@ -5374,6 +5393,18 @@ test "heapBase follows the complete static-data address space" {
     try std.testing.expectEqual(@as(u32, 1041), module.heapBase());
 }
 
+test "initial memory ends above static data and the reserved stack" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addDataSegment(&([_]u8{0} ** 32), 16);
+    try module.finalizeMemoryAndTable(1024 * 1024);
+
+    try std.testing.expectEqual(module.stack_pointer_init, module.initialMemoryByteLen());
+    try std.testing.expect(module.initialMemoryByteLen() >= module.heapBase() + 1024 * 1024);
+}
+
 test "setup—memory exported as 'memory'" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
@@ -5905,6 +5936,22 @@ test "mergeModule—type deduplication: identical signatures share index" {
     // Builtins had 2 types: (i32,i32)->void (dup), (i32)->i32 (new)
     // After merge: 3 types total (one deduplicated)
     try std.testing.expectEqual(host_types_before + 1, host.func_types.items.len);
+}
+
+test "mergeModule rejects same-name imports with different signatures" {
+    const allocator = std.testing.allocator;
+
+    var host = Self.init(allocator);
+    defer host.deinit();
+    const host_type = try host.addFuncType(&.{.i32}, &.{});
+    _ = try host.addImport("env", "roc_crashed", host_type);
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const source_type = try source.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try source.addImport("env", "roc_crashed", source_type);
+
+    try std.testing.expectError(error.FunctionTypeMismatch, host.mergeModule(&source));
 }
 
 test "mergeModule—function indices remapped correctly" {

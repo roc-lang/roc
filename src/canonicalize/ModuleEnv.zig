@@ -716,6 +716,50 @@ pub const SchemeUsePair = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One compiler-generated parser or encoder derivation validated by checking.
+/// The referenced vars remain checker-owned here; checked publication converts
+/// them to stable checked type ids before post-check compilation.
+pub const GeneratedCodecDerivation = extern struct {
+    kind: u32,
+    source_constraint_fn_var: u32,
+    source_runtime_fn_var: u32,
+    source_shape_var: u32,
+    source_encoding_var: u32,
+    source_state_var: u32,
+    source_error_var: u32,
+    constraint_fn_var: u32,
+    runtime_fn_var: u32,
+    shape_var: u32,
+    encoding_var: u32,
+    state_var: u32,
+    error_var: u32,
+    calls_start: u32,
+    calls_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Kind = enum(u32) {
+        parser,
+        encoder,
+    };
+};
+
+/// One exact method callable used inside a checked generated codec.
+pub const GeneratedCodecCall = extern struct {
+    method_ident: u32,
+    dispatcher_var: u32,
+    callable_var: u32,
+    /// Exact generated callable relation whose dispatch-target record owns the
+    /// selected method scheme's nested evidence.
+    evidence_var: u32,
+    /// The value shape this call handles, or `no_subject_var` when the method
+    /// has no shape-specific call contract.
+    subject_var: u32,
+
+    pub const no_subject_var = std.math.maxInt(u32);
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One static-dispatch obligation checking rejected. The raw constraint
 /// function variable is the obligation identity used by dispatch expressions,
 /// instantiated scheme evidence, and checked-artifact publication.
@@ -907,6 +951,11 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Generated codec derivations validated by checking and consumed by checked
+/// artifact publication.
+generated_codec_derivations: GeneratedCodecDerivation.SafeList,
+/// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
+generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
@@ -1126,6 +1175,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
+        .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
     };
@@ -1154,6 +1205,8 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
@@ -1254,6 +1307,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
 
@@ -3622,6 +3677,8 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
+    generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
@@ -3732,6 +3789,8 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
+        try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
 
@@ -3797,6 +3856,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
@@ -3862,6 +3923,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
@@ -3929,6 +3992,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
@@ -4160,6 +4225,67 @@ pub fn recordSchemeUse(
         .pairs_start = pairs_start,
         .pairs_len = @intCast(pairs.len),
     });
+}
+
+/// Record one successfully checked generated codec derivation and its exact
+/// internal method callables.
+pub fn recordGeneratedCodecDerivation(
+    self: *Self,
+    kind: GeneratedCodecDerivation.Kind,
+    source_constraint_fn_var: TypeVar,
+    source_runtime_fn_var: TypeVar,
+    source_shape_var: TypeVar,
+    source_encoding_var: TypeVar,
+    source_state_var: TypeVar,
+    source_error_var: TypeVar,
+    constraint_fn_var: TypeVar,
+    runtime_fn_var: TypeVar,
+    shape_var: TypeVar,
+    encoding_var: TypeVar,
+    state_var: TypeVar,
+    error_var: TypeVar,
+    calls: []const GeneratedCodecCall,
+) std.mem.Allocator.Error!void {
+    var existing_index: ?usize = null;
+    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+        if (existing.kind == @intFromEnum(kind) and
+            existing.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
+        {
+            existing_index = index;
+            break;
+        }
+    }
+    if (existing_index) |index| {
+        const existing = self.generated_codec_derivations.items.items[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
+            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        }
+    }
+
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const derivation = GeneratedCodecDerivation{
+        .kind = @intFromEnum(kind),
+        .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
+        .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
+        .source_shape_var = @intFromEnum(source_shape_var),
+        .source_encoding_var = @intFromEnum(source_encoding_var),
+        .source_state_var = @intFromEnum(source_state_var),
+        .source_error_var = @intFromEnum(source_error_var),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .runtime_fn_var = @intFromEnum(runtime_fn_var),
+        .shape_var = @intFromEnum(shape_var),
+        .encoding_var = @intFromEnum(encoding_var),
+        .state_var = @intFromEnum(state_var),
+        .error_var = @intFromEnum(error_var),
+        .calls_start = calls_start,
+        .calls_len = @intCast(calls.len),
+    };
+    if (existing_index) |index| {
+        self.generated_codec_derivations.items.items[index] = derivation;
+        return;
+    }
+    _ = try self.generated_codec_derivations.append(self.gpa, derivation);
 }
 
 /// Persist one checker-rejected static-dispatch obligation.

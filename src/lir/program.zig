@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const const_store = check.ConstStore;
+const dispatch = check.StaticDispatchRegistry;
 
 /// Layout requested for a checked value type digest.
 pub const RequestedLayout = struct {
@@ -100,6 +101,145 @@ pub const ErasedFns = struct {
 /// Identifier for a constant storage plan emitted with LIR.
 pub const ConstPlanId = enum(u32) { _ };
 
+/// Stable index of a Boxy type descriptor in the program side tables.
+pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
+/// Stable index of a Boxy method dictionary in the program side tables.
+pub const BoxyDictId = LIR.BoxyDictId;
+/// Stable index of an explicit Boxy representation adapter.
+pub const BoxyAdapterId = LIR.BoxyAdapterId;
+/// Stable index of a method slot within a Boxy dictionary.
+pub const BoxyMethodSlotId = enum(u32) { _ };
+/// Explicit source for resolving a Boxy type descriptor.
+pub const BoxyDescRef = LIR.BoxyDescRef;
+/// Explicit source for resolving a Boxy dictionary.
+pub const BoxyDictRef = LIR.BoxyDictRef;
+/// Compact start and length pair into a Boxy side table.
+pub const BoxySpan = LIR.BoxySpan;
+/// Ownership transfer applied by one Boxy adaptation step.
+pub const BoxyTransferMode = LIR.BoxyTransferMode;
+/// One descriptor-guided representation adaptation step.
+pub const BoxyAdaptStep = LIR.BoxyAdaptStep;
+/// Operation performed by one descriptor payload traversal step.
+pub const BoxyPayloadOp = LIR.BoxyPayloadOp;
+/// One explicit descriptor payload traversal step.
+pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
+
+/// Runtime metadata for one tag in a boxy tag-union descriptor.
+pub const BoxyTagVariant = struct {
+    name: base.StringLiteral.Idx,
+    discriminant: u16,
+    /// Number of source-language payloads carried by this tag. A single
+    /// aggregate payload is distinct from a multi-payload tag whose runtime
+    /// payload is also a struct.
+    payload_count: u32 = 0,
+    payload_layout: layout.Idx,
+    payload_descs: BoxySpan = .{},
+};
+
+/// Descriptor metadata for one dynamic payload in a boxy tag variant.
+pub const BoxyTagPayloadDesc = struct {
+    payload_index: u32,
+    desc: BoxyDescRef,
+};
+
+/// Purpose of one explicit boxy representation adapter.
+pub const BoxyAdapterKind = enum {
+    host_to_boxy,
+    boxy_to_host,
+    boxy_to_boxy,
+    hosted_arg,
+    hosted_ret,
+    container_element,
+    method_arg,
+    method_ret,
+};
+
+/// Runtime operation selected when an adapter is built after layout planning.
+pub const BoxyAdapterOperation = enum {
+    relabel,
+    materialize,
+};
+
+/// Explicit representation adaptation plan used by boxy LIR statements.
+pub const BoxyAdapter = struct {
+    kind: BoxyAdapterKind,
+    operation: BoxyAdapterOperation = .materialize,
+    source_layout: layout.Idx,
+    target_layout: layout.Idx,
+    steps: BoxySpan = .{},
+    consumes_source: bool,
+    produces_owned_result: bool,
+};
+
+/// Runtime data for representation and structural operations on a boxy value.
+pub const BoxyTypeDesc = struct {
+    payload_layout: layout.Idx,
+    contains_refcounted: bool,
+    nested_descs: BoxySpan = .{},
+    tag_variants: BoxySpan = .{},
+    tag_ext_desc: ?BoxyDescRef = null,
+    /// Record field names in payload field order, one per field. Empty for
+    /// non-record payloads (including tuples, which print positionally).
+    field_names: BoxySpan = .{},
+    /// The described value is an opaque nominal type: inspect must not
+    /// reveal its backing structure.
+    inspect_opaque: bool = false,
+    copy_plan: BoxySpan = .{},
+    drop_plan: BoxySpan = .{},
+    structural_eq: ?LIR.LirProcSpecId = null,
+    structural_hash: ?LIR.LirProcSpecId = null,
+    inspect_method: ?BoxyMethodSlotId = null,
+    debug_checked_type: ?checked.CheckedTypeId = null,
+};
+
+/// Adapter metadata for one dictionary method slot.
+pub const BoxyMethodAdapter = struct {
+    arg_layouts: BoxySpan = .{},
+    ret_layout: ?layout.Idx = null,
+    arg_descs: BoxySpan = .{},
+    /// Compact static descriptor references used by `call_desc_sources`.
+    call_descs: BoxySpan = .{},
+    /// Exact source for every descriptor-bearing position in the checked
+    /// method requirement, in requirement traversal order. Empty means the
+    /// legacy one-to-one static `call_descs` representation.
+    call_desc_sources: BoxySpan = .{},
+    ret_desc: ?BoxyDescRef = null,
+    nested_dicts: BoxySpan = .{},
+    hidden_desc_sources: BoxySpan = .{},
+};
+
+/// Origin of a hidden descriptor argument passed to a dictionary method.
+pub const BoxyMethodHiddenDescSource = union(enum) {
+    slot: u32,
+    call: u32,
+    argument: u32,
+};
+
+/// One callable slot in a boxy dictionary.
+pub const BoxyMethodSlot = struct {
+    /// False for an unimplemented program-wide method slot in a dictionary
+    /// that requires only a subset of the program's semantic methods.
+    present: bool = true,
+    method: names.MethodNameId,
+    proc: LIR.LirProcSpecId,
+    hidden_descs: BoxySpan = .{},
+    nested_dicts: BoxySpan = .{},
+    adapter: BoxyMethodAdapter = .{},
+    /// The slot is fulfilled by descriptor-guided structural equality of the
+    /// two explicit arguments; `proc` is unused. Anonymous structural types
+    /// have no method namespace, so their equality dictionary slots dispatch
+    /// to the runtime's structural comparison instead of a worker.
+    structural_eq: bool = false,
+};
+
+/// Runtime data for polymorphic behavior and static dispatch in boxy LIR.
+pub const BoxyDict = struct {
+    debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
+    method_slots: BoxySpan = .{},
+    hidden_descs: BoxySpan = .{},
+    nested_dicts: BoxySpan = .{},
+};
+
 /// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
     name: []const u8,
@@ -164,6 +304,23 @@ pub const Result = struct {
     const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
+    boxy_type_descs: std.ArrayList(BoxyTypeDesc),
+    boxy_dicts: std.ArrayList(BoxyDict),
+    boxy_adapters: std.ArrayList(BoxyAdapter),
+    boxy_desc_refs: std.ArrayList(BoxyDescRef),
+    boxy_dict_refs: std.ArrayList(BoxyDictRef),
+    boxy_tag_variants: std.ArrayList(BoxyTagVariant),
+    boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc),
+    boxy_field_names: std.ArrayList(base.StringLiteral.Idx),
+    boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
+    boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
+    boxy_method_slots: std.ArrayList(BoxyMethodSlot),
+    boxy_method_arg_layouts: std.ArrayList(layout.Idx),
+    boxy_method_hidden_desc_sources: std.ArrayList(BoxyMethodHiddenDescSource),
+    boxy_erased_arg_layouts: std.ArrayList(layout.Idx),
+    boxy_erased_arg_desc_keys: std.ArrayList(LIR.ErasedArgDescKey),
+    boxy_erased_arg_desc_offsets: std.ArrayList(LIR.ErasedArgDescOffset),
+    boxy_erased_arg_desc_params: std.ArrayList(LIR.ErasedArgDescParam),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     static_data_values: std.ArrayList(StaticDataValue),
@@ -180,6 +337,23 @@ pub const Result = struct {
             .const_type_names = names.NameStore.init(allocator),
             .fn_sets = .empty,
             .erased_fns = .empty,
+            .boxy_type_descs = .empty,
+            .boxy_dicts = .empty,
+            .boxy_adapters = .empty,
+            .boxy_desc_refs = .empty,
+            .boxy_dict_refs = .empty,
+            .boxy_tag_variants = .empty,
+            .boxy_tag_payload_descs = .empty,
+            .boxy_field_names = .empty,
+            .boxy_adapt_steps = .empty,
+            .boxy_payload_steps = .empty,
+            .boxy_method_slots = .empty,
+            .boxy_method_arg_layouts = .empty,
+            .boxy_method_hidden_desc_sources = .empty,
+            .boxy_erased_arg_layouts = .empty,
+            .boxy_erased_arg_desc_keys = .empty,
+            .boxy_erased_arg_desc_offsets = .empty,
+            .boxy_erased_arg_desc_params = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
             .static_data_values = .empty,
@@ -199,6 +373,23 @@ pub const Result = struct {
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
+        self.boxy_erased_arg_desc_params.deinit(allocator);
+        self.boxy_erased_arg_desc_offsets.deinit(allocator);
+        self.boxy_erased_arg_desc_keys.deinit(allocator);
+        self.boxy_erased_arg_layouts.deinit(allocator);
+        self.boxy_method_hidden_desc_sources.deinit(allocator);
+        self.boxy_method_arg_layouts.deinit(allocator);
+        self.boxy_method_slots.deinit(allocator);
+        self.boxy_payload_steps.deinit(allocator);
+        self.boxy_adapt_steps.deinit(allocator);
+        self.boxy_field_names.deinit(allocator);
+        self.boxy_tag_payload_descs.deinit(allocator);
+        self.boxy_tag_variants.deinit(allocator);
+        self.boxy_dict_refs.deinit(allocator);
+        self.boxy_desc_refs.deinit(allocator);
+        self.boxy_adapters.deinit(allocator);
+        self.boxy_dicts.deinit(allocator);
+        self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
         self.const_type_names.deinit();
@@ -290,6 +481,122 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }
+}
+
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
+test "boxy side tables initialize empty and use flat pools" {
+    const allocator = std.testing.allocator;
+    var result = try Result.init(allocator, .u64);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_type_descs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_dicts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapters.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_desc_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_dict_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapt_steps.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_payload_steps.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_slots.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_arg_layouts.items.len);
+    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
+
+    const desc_refs_start = result.boxy_desc_refs.items.len;
+    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    const desc_refs = BoxySpan{ .start = @intCast(desc_refs_start), .len = 1 };
+
+    const copy_plan_start = result.boxy_payload_steps.items.len;
+    try result.boxy_payload_steps.append(allocator, .{ .dynamic = .{
+        .op = .copy,
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+    } });
+    const copy_plan = BoxySpan{ .start = @intCast(copy_plan_start), .len = 1 };
+
+    const drop_plan_start = result.boxy_payload_steps.items.len;
+    try result.boxy_payload_steps.append(allocator, .{ .concrete = .{
+        .op = .drop,
+        .layout_idx = .zst,
+    } });
+    const drop_plan = BoxySpan{ .start = @intCast(drop_plan_start), .len = 1 };
+
+    try result.boxy_type_descs.append(allocator, .{
+        .payload_layout = .zst,
+        .contains_refcounted = true,
+        .nested_descs = desc_refs,
+        .copy_plan = copy_plan,
+        .drop_plan = drop_plan,
+    });
+
+    const arg_layouts_start = result.boxy_method_arg_layouts.items.len;
+    try result.boxy_method_arg_layouts.append(allocator, .zst);
+    const arg_layouts = BoxySpan{ .start = @intCast(arg_layouts_start), .len = 1 };
+
+    const arg_descs_start = result.boxy_desc_refs.items.len;
+    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    const arg_descs = BoxySpan{ .start = @intCast(arg_descs_start), .len = 1 };
+
+    const nested_dicts_start = result.boxy_dict_refs.items.len;
+    try result.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    const nested_dicts = BoxySpan{ .start = @intCast(nested_dicts_start), .len = 1 };
+
+    const hidden_desc_sources_start = result.boxy_method_hidden_desc_sources.items.len;
+    try result.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
+    const hidden_desc_sources = BoxySpan{ .start = @intCast(hidden_desc_sources_start), .len = 1 };
+
+    const method_slots_start = result.boxy_method_slots.items.len;
+    try result.boxy_method_slots.append(allocator, .{
+        .method = @enumFromInt(fixtureTableIndex(0)),
+        .proc = @enumFromInt(fixtureTableIndex(0)),
+        .adapter = .{
+            .arg_layouts = arg_layouts,
+            .arg_descs = arg_descs,
+            .nested_dicts = nested_dicts,
+            .hidden_desc_sources = hidden_desc_sources,
+        },
+    });
+    const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
+
+    const hidden_descs_start = result.boxy_desc_refs.items.len;
+    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    const hidden_descs = BoxySpan{ .start = @intCast(hidden_descs_start), .len = 1 };
+
+    try result.boxy_dicts.append(allocator, .{
+        .method_slots = method_slots,
+        .hidden_descs = hidden_descs,
+    });
+
+    const adapt_steps_start = result.boxy_adapt_steps.items.len;
+    try result.boxy_adapt_steps.append(allocator, .{ .dynamic_payload = .{
+        .source_offset = 0,
+        .target_offset = 8,
+        .source_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .mode = .copy,
+    } });
+    const adapt_steps = BoxySpan{ .start = @intCast(adapt_steps_start), .len = 1 };
+
+    try result.boxy_adapters.append(allocator, .{
+        .kind = .boxy_to_host,
+        .source_layout = .str,
+        .target_layout = .str,
+        .steps = adapt_steps,
+        .consumes_source = false,
+        .produces_owned_result = true,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_type_descs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_dicts.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapters.items.len);
+    try std.testing.expectEqual(@as(usize, 3), result.boxy_desc_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_dict_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapt_steps.items.len);
+    try std.testing.expectEqual(@as(usize, 2), result.boxy_payload_steps.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_slots.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_arg_layouts.items.len);
+    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_hidden_desc_sources.items.len);
 }
 
 test "program declarations are referenced" {
