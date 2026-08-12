@@ -2667,6 +2667,18 @@ walk and hash the same inputs again. Collision authority may compare the exact
 inputs reached by that digest, but registration may not independently repeat
 the lookup traversal.
 
+The same reserve-before-build rule applies to every compiler-generated runtime
+protocol nominal, including generated `Field`, `Fields`, and
+`ParseTagUnionSpec` values used by structural codecs. Each such declaration
+owns exactly one deterministic backing recipe. The declaration identity plus
+its exact public argument nodes are therefore the complete variable inputs to
+that recipe. Monotype first reserves the content-addressed identity from those
+inputs. An in-graph or durable hit returns the existing atomic nominal without
+scanning the argument shape or constructing any private record backing; only a
+vacant reservation evaluates the recipe and registers the resulting backing.
+The private backing is not itself a lookup input, because requiring it in order
+to ask the cache would perform precisely the work a cache hit must avoid.
+
 The same construction boundary appends a cache miss to an explicit dense
 generated-root registry. Sealing iterates only that registry so a completed root
 can enter the durable interner before a deferred nested body requests it. It
@@ -4274,6 +4286,19 @@ never materializes a provisional `TypeId`, including for a fully resolved node.
 There is therefore no active-snapshot cache, no transitive snapshot-dependency
 query, and no global snapshot invalidation. The graph freezes once; final
 sealing then assigns durable `TypeId`s exactly once.
+
+Type-driven generated bodies obey that boundary as two explicit phases.
+Before freeze, structural equality, inspection, parser/encoder derivation,
+call-site intrinsics, structural mapping, and restored parser/encoder constants
+lower each runtime operand once, retain its exact node, and reserve every
+checked method specialization their final body can call. They leave one draft
+expression reservation. After freeze, they consume only those retained
+operands, the final node sealer, and the already-reserved call slots to emit the
+body and fill that reservation. Frozen emission may not revisit a checked
+callable, add a graph relation, or create a new checked runtime-value demand.
+In particular, restoring a stored parser or encoder does not obtain a temporary
+`TypeId` for its encoding, state, value, result, or shape while their graph is
+live; those exact nodes cross the phase boundary directly.
 
 Anything that needs specialization identity before freezing consumes a
 graph-native identity view. That view reads the authoritative nodes through the

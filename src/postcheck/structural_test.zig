@@ -493,7 +493,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
     try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
-    try expectContains(generated_call_identity, "generatedIteratorNodeFromPublicSource(");
+    try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
+    try expectNotContains(generated_call_identity, "instNominalBackingNode(");
     try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
     try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");
 
@@ -519,6 +520,34 @@ test "Monotype lowering carries exact produced types without containment scans" 
     );
     try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(\n                plan,\n                slot,\n                selections.items,");
     try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
+
+    const generated_nominal_lookup = sourceSliceBetween(
+        solve_source,
+        "pub fn lookupGeneratedNominal(",
+        "pub fn registerGeneratedNominalAtDigest(",
+    );
+    try expectContains(generated_nominal_lookup, "implementation_args: []const NodeId");
+    try expectContains(generated_nominal_lookup, "writer.writeNodeSpan(implementation_args)");
+    try expectNotContains(generated_nominal_lookup, "backing: NodeId");
+    try expectNotContains(generated_nominal_lookup, "writeNode(backing)");
+
+    const generated_nominal_reservation = sourceSliceBetween(
+        lower_source,
+        "fn reserveGeneratedNominal(",
+        "fn completeGeneratedNominal(",
+    );
+    try expectContains(generated_nominal_reservation, "lookupGeneratedNominal(template.def, public_args)");
+    try expectContains(generated_nominal_reservation, ".existing = imported");
+    try expectNotContains(generated_nominal_reservation, "backing_node");
+
+    const parse_tag_union_preparation = sourceSliceBetween(
+        lower_source,
+        "fn prepareParseTagUnionCodecCall(",
+        "fn graphErrorIsExactUnitTag(",
+    );
+    try expectContains(parse_tag_union_preparation, "reserveGeneratedNominal(target.args[1], &spec_args)");
+    try expectContains(parse_tag_union_preparation, ".vacant => |identity|");
+    try expectContains(parse_tag_union_preparation, "generatedParseTagUnionSpecBackingNode(shape_node)");
 
     try expectContains(solve_source, "generated_iterators_by_item: collections.DenseMap(NodeId");
     try expectContains(solve_source, "direct_request_selections: std.ArrayList(DirectRequestSelection)");

@@ -15657,7 +15657,7 @@ const BodyContext = struct {
                     .self_node = self_node,
                 };
                 defer ctx.body.active_generated_iterator = previous_active;
-                const backing_node = try ctx.body.instNominalBackingNode(ctx.nominal, args);
+                const backing_node = try ctx.body.instGeneratedNominalBackingNode(ctx.nominal, args);
                 return .{ .named = .{
                     .named_type = .{
                         .module = ctx.body.builder.declaredModuleForNominal(ctx.body.view, ctx.nominal),
@@ -15733,6 +15733,28 @@ const BodyContext = struct {
         return try self.instNominalDeclarationBackingNode(source, args);
     }
 
+    /// Construct the producer-owned backing of a content-addressed generated
+    /// nominal. This deliberately bypasses the ordinary declaration-backing
+    /// cache: a public `Iter(item)` and its generated runtime identity have
+    /// different recursive self edges even though they share a declaration
+    /// and public arguments. The generated-identity interner is the cache for
+    /// this backing, and its reservation is already active before entry.
+    fn instGeneratedNominalBackingNode(
+        self: *BodyContext,
+        nominal: checked.CheckedNominalType,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        const source = self.nominalInstantiationSource(nominal) orelse
+            Common.invariant("generated nominal backing construction could not resolve its declaration");
+        self.builder.count("generated_nominal_backing_instantiations");
+        return try self.buildNominalDeclarationBackingNode(
+            source,
+            args,
+            false,
+            .produced_occurrence,
+        );
+    }
+
     fn instNominalDeclarationBackingNode(
         self: *BodyContext,
         source: NominalInstantiationSource,
@@ -15745,13 +15767,38 @@ const BodyContext = struct {
         }
         self.builder.count("nominal_backing_instantiations");
 
+        return try self.buildNominalDeclarationBackingNode(
+            source,
+            args,
+            true,
+            self.instantiation.authority,
+        );
+    }
+
+    fn buildNominalDeclarationBackingNode(
+        self: *BodyContext,
+        source: NominalInstantiationSource,
+        args: []NodeId,
+        cache_public_backing: bool,
+        authority: InstantiationAuthority,
+    ) Allocator.Error!NodeId {
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try self.graph.putNominalBackingNode(source.view.key.bytes, declaration_id, args, placeholder);
-        const authority = self.instantiation.authority;
-        if (authority == .checked_base) self.graph.beginCheckedBaseConstruction();
-        defer if (authority == .checked_base) self.graph.endCheckedBaseConstruction();
+        if (cache_public_backing) {
+            try self.graph.putNominalBackingNode(
+                source.view.key.bytes,
+                @intFromEnum(source.declaration.id),
+                args,
+                placeholder,
+            );
+        }
+        const constructs_checked_base = cache_public_backing and authority == .checked_base;
+        if (constructs_checked_base) self.graph.beginCheckedBaseConstruction();
+        defer if (constructs_checked_base) self.graph.endCheckedBaseConstruction();
 
         if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) {
+            const previous_authority = self.instantiation.authority;
+            self.instantiation.authority = authority;
+            defer self.instantiation.authority = previous_authority;
             try self.fillNominalDeclarationBackingNodeInCurrentView(source.declaration, args, placeholder);
         } else {
             const previous_view = self.view;
@@ -15770,7 +15817,7 @@ const BodyContext = struct {
             }
             try self.fillNominalDeclarationBackingNodeInCurrentView(source.declaration, args, placeholder);
         }
-        if (authority == .checked_base) {
+        if (constructs_checked_base) {
             self.graph.markCheckedBase(placeholder);
         }
         return placeholder;
@@ -25761,28 +25808,18 @@ const BodyContext = struct {
                     nominal.name,
                     nominal.source_decl,
                 );
-                const args = try self.graph.arena().dupe(NodeId, &.{item_node});
-                const backing_node = try self.instNominalBackingNode(nominal, args);
                 const owner = builtinOwner(nominal.builtin) orelse
                     Common.invariant("generated iterator slot had no builtin owner");
                 if (!static_dispatch.isIteratorOwner(owner)) {
                     Common.invariant("generated iterator slot had a non-iterator builtin owner");
                 }
-                break :blk try self.generatedIteratorNodeFromPublicSource(.{
-                    .named_type = .{
-                        .module = self.builder.declaredModuleForNominal(self.view, nominal),
-                        .ty = checked_ty,
-                    },
-                    .def = def,
-                    .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
-                    .builtin_owner = owner,
-                    .backing = .{
-                        .node = backing_node,
-                        .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
-                        .authority = .checked_public,
-                    },
-                    .declared_order = try self.instDeclaredOrderForNominal(nominal),
-                }, item_node);
+                break :blk try self.generatedIteratorNominalNode(
+                    checked_ty,
+                    nominal,
+                    item_node,
+                    def,
+                    try self.instDeclaredOrderForNominal(nominal),
+                );
             },
             .parse_tag_union_spec, .fields, .field => Common.invariant("non-iterator generated call slot requested iterator argument materialization"),
             .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("ordinary builtin reached generated call slot materialization"),
@@ -39177,26 +39214,48 @@ const BodyContext = struct {
         } });
     }
 
-    fn cloneGraphNamedWithGeneratedBacking(
+    const GeneratedNominalReservation = union(enum) {
+        existing: NodeId,
+        vacant: solve.GeneratedNominalLookup,
+    };
+
+    /// Reserve a compiler-generated nominal from the complete explicit inputs
+    /// to its declaration-owned backing recipe. This precedes backing
+    /// construction so an in-graph or durable hit is genuinely work-free.
+    fn reserveGeneratedNominal(
         self: *BodyContext,
         template_node: NodeId,
         public_args: []const NodeId,
-        backing_node: NodeId,
-    ) Allocator.Error!NodeId {
+    ) Allocator.Error!GeneratedNominalReservation {
         const template = switch (self.graph.content(template_node)) {
             .named => |named| named,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
         };
-        const lookup = try self.graph.lookupGeneratedNominal(
-            template.def,
-            public_args,
-            backing_node,
-        );
-        if (lookup.existing) |existing| return existing;
+        const lookup = try self.graph.lookupGeneratedNominal(template.def, public_args);
+        if (lookup.existing) |existing| return .{ .existing = existing };
         if (self.builder.generated_types_by_identity.get(lookup.digest)) |sealed| {
-            return try self.graph.importMono(sealed);
+            const imported = try self.graph.importMono(sealed);
+            try self.graph.registerGeneratedNominalAtDigest(imported, lookup.digest);
+            return .{ .existing = imported };
         }
+        return .{ .vacant = lookup };
+    }
 
+    fn completeGeneratedNominal(
+        self: *BodyContext,
+        template_node: NodeId,
+        public_args: []const NodeId,
+        backing_node: NodeId,
+        lookup: solve.GeneratedNominalLookup,
+    ) Allocator.Error!NodeId {
+        if (lookup.existing != null) {
+            Common.invariant("generated nominal completion received an occupied reservation");
+        }
+        self.builder.count("generated_nominal_backing_instantiations");
+        const template = switch (self.graph.content(template_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
+        };
         var def = template.def;
         def.generated = lookup.digest;
         const node = try self.graph.newNode(.{
@@ -39336,41 +39395,50 @@ const BodyContext = struct {
         const field_label = try self.builder.program.names.internRecordFieldLabel("field");
         const field_handle_template = try self.graph.recordFieldNode(field_tag.payloads[0], field_label);
         const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
-        const str_node = try self.graph.newNode(.{ .primitive = .str });
-        const field_handle_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = str_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node },
-        });
-        const field_handle = try self.cloneGraphNamedWithGeneratedBacking(
-            field_handle_template,
-            &.{shape_node},
-            field_handle_backing,
-        );
-
-        const record_fields = switch (self.graph.content(self.graphShapeNode(shape_node))) {
-            .zst, .empty_record => &.{},
-            .record => (try self.graph.recordNodes(self.graphShapeNode(shape_node))).fields,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated parse tag-union specification shape was not a record"),
+        const field_args = [_]NodeId{shape_node};
+        const field_handle = switch (try self.reserveGeneratedNominal(field_handle_template, &field_args)) {
+            .existing => |existing| existing,
+            .vacant => |identity| try self.completeGeneratedNominal(
+                field_handle_template,
+                &field_args,
+                try self.graphClosedRecord(&.{
+                    .{ .name = try self.builder.program.names.internRecordFieldLabel("index"), .ty = u64_node },
+                    .{ .name = try self.builder.program.names.internRecordFieldLabel("name"), .ty = try self.graph.newNode(.{ .primitive = .str }) },
+                    .{ .name = try self.builder.program.names.internRecordFieldLabel("name_len"), .ty = u64_node },
+                }),
+                identity,
+            ),
         };
-        const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
-        for (item_fields, 0..) |*field, index| {
-            field.* = .{
-                .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
-                .ty = field_handle,
-            };
-        }
-        const items = try self.graphClosedRecord(item_fields);
-        const fields_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node },
-            .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node },
-        });
-        const fields_node = try self.cloneGraphNamedWithGeneratedBacking(
-            target.args[1],
-            &.{shape_node},
-            fields_backing,
-        );
+
+        const fields_args = [_]NodeId{shape_node};
+        const fields_node = switch (try self.reserveGeneratedNominal(target.args[1], &fields_args)) {
+            .existing => |existing| existing,
+            .vacant => |identity| blk: {
+                const record_fields = switch (self.graph.content(self.graphShapeNode(shape_node))) {
+                    .zst, .empty_record => &.{},
+                    .record => (try self.graph.recordNodes(self.graphShapeNode(shape_node))).fields,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated Fields backing requested a non-record shape"),
+                };
+                const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
+                for (item_fields, 0..) |*field, index| {
+                    field.* = .{
+                        .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
+                        .ty = field_handle,
+                    };
+                }
+                const items = try self.graphClosedRecord(item_fields);
+                break :blk try self.completeGeneratedNominal(
+                    target.args[1],
+                    &fields_args,
+                    try self.graphClosedRecord(&.{
+                        .{ .name = try self.builder.program.names.internRecordFieldLabel("items"), .ty = items },
+                        .{ .name = try self.builder.program.names.internRecordFieldLabel("shortest_name"), .ty = u64_node },
+                        .{ .name = try self.builder.program.names.internRecordFieldLabel("longest_name"), .ty = u64_node },
+                    }),
+                    identity,
+                );
+            },
+        };
         const event_node = try self.graphParseRecordEvent(state_node, field_handle);
         const result_node = try self.graphTryLike(target.ret, event_node, outer_result.err);
         const request_node = try self.exactMethodTargetNode(
@@ -39456,11 +39524,16 @@ const BodyContext = struct {
         const target = try self.graph.functionNodes(target_template);
         if (target.args.len != 3) Common.invariant("parse_tag_union target did not have three arguments");
 
-        const private_spec = try self.cloneGraphNamedWithGeneratedBacking(
-            target.args[1],
-            &.{shape_node},
-            try self.generatedParseTagUnionSpecBackingNode(shape_node),
-        );
+        const spec_args = [_]NodeId{shape_node};
+        const private_spec = switch (try self.reserveGeneratedNominal(target.args[1], &spec_args)) {
+            .existing => |existing| existing,
+            .vacant => |identity| try self.completeGeneratedNominal(
+                target.args[1],
+                &spec_args,
+                try self.generatedParseTagUnionSpecBackingNode(shape_node),
+                identity,
+            ),
+        };
         const exact_ret = try self.graphParserResultLike(
             target.ret,
             shape_node,

@@ -53,6 +53,10 @@ pub const Counters = struct {
     /// so instantiation counts stay flat as unification merges argument cells.
     nominal_backing_reuses: u64 = 0,
     nominal_backing_instantiations: u64 = 0,
+    /// Producer-owned backing constructions for content-addressed generated
+    /// nominals. These never share the public declaration-backing cache,
+    /// because their recursive edge targets the generated identity itself.
+    generated_nominal_backing_instantiations: u64 = 0,
     /// Total-dispatch migration audit: requirements still resolved by owner
     /// derivation instead of checked evidence. Must reach zero before the
     /// derivation path is deleted.

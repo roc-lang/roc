@@ -914,20 +914,20 @@ pub const InstGraph = struct {
         self: *InstGraph,
         source_def: Type.TypeDef,
         implementation_args: []const NodeId,
-        backing: NodeId,
     ) Allocator.Error!GeneratedNominalLookup {
         const digest: names.TypeDigest = source_def.generated orelse digest: {
             var public_def = source_def;
             public_def.generated = null;
             var writer = GeneratedIdentityWriter.init(self);
             defer writer.deinit();
-            writer.writeBytes("roc.generated_nominal.runtime_implementation.v2");
+            writer.writeBytes("roc.generated_nominal.runtime_implementation.v3");
             writer.writeTypeDef(public_def);
-            // These inputs are consumed once to mint the atomic identity. They
-            // are intentionally absent from the resulting named node, so no
-            // downstream operation can traverse or reinterpret them.
+            // The compiler-defined backing recipe is uniquely owned by the
+            // generated declaration. Its exact public arguments are therefore
+            // the complete variable inputs to the runtime implementation.
+            // Lookup happens before the recipe is evaluated, so a hit avoids
+            // constructing or hashing the private backing altogether.
             try writer.writeNodeSpan(implementation_args);
-            try writer.writeNode(backing);
             break :digest .{ .bytes = writer.hasher.finalResult() };
         };
         if (self.generated_nominal_intern.get(digest)) |existing| {
