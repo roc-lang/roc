@@ -12165,6 +12165,11 @@ const ActiveCheckedSelections = struct {
     primary: ActiveCheckedSelectionColumn,
     additional: std.ArrayList(ActiveCheckedSelectionColumn) = .empty,
     parent: ?*ActiveCheckedSelections = null,
+    /// One exact mutation clock shared by this lexical chain. Call schedules
+    /// compare it with their last observation before consulting active slots;
+    /// a changed value means at least one direct selection or shadowing owner
+    /// was published since the preceding refinement.
+    change_clock: *u64,
 
     const Entry = struct {
         key_ptr: *const solve.CheckedBaseKey,
@@ -12194,11 +12199,28 @@ const ActiveCheckedSelections = struct {
         }
     };
 
-    fn init(allocator: Allocator, module_bytes: [32]u8) ActiveCheckedSelections {
+    fn init(
+        allocator: Allocator,
+        module_bytes: [32]u8,
+        parent: ?*ActiveCheckedSelections,
+    ) Allocator.Error!ActiveCheckedSelections {
+        const change_clock = if (parent) |inherited|
+            inherited.change_clock
+        else clock: {
+            const clock = try allocator.create(u64);
+            clock.* = 0;
+            break :clock clock;
+        };
         return .{
             .allocator = allocator,
             .primary = ActiveCheckedSelectionColumn.init(allocator, module_bytes),
+            .parent = parent,
+            .change_clock = change_clock,
         };
+    }
+
+    fn noteChange(self: *ActiveCheckedSelections) void {
+        self.change_clock.* += 1;
     }
 
     fn get(self: *const ActiveCheckedSelections, key: solve.CheckedBaseKey) ?NodeId {
@@ -12213,11 +12235,23 @@ const ActiveCheckedSelections = struct {
         self: *ActiveCheckedSelections,
         key: solve.CheckedBaseKey,
     ) Allocator.Error!collections.DenseMap(checked.CheckedTypeId, NodeId).GetOrPutResult {
-        return try (try self.columnForModule(key.module_bytes)).nodes.getOrPut(key.checked);
+        const result = try (try self.columnForModule(key.module_bytes)).nodes.getOrPut(key.checked);
+        if (!result.found_existing) self.noteChange();
+        return result;
+    }
+
+    fn setEntryValue(
+        self: *ActiveCheckedSelections,
+        entry: collections.DenseMap(checked.CheckedTypeId, NodeId).GetOrPutResult,
+        node: NodeId,
+    ) void {
+        if (entry.found_existing and entry.value_ptr.* != node) self.noteChange();
+        entry.value_ptr.* = node;
     }
 
     fn put(self: *ActiveCheckedSelections, key: solve.CheckedBaseKey, node: NodeId) Allocator.Error!void {
-        try (try self.columnForModule(key.module_bytes)).nodes.put(key.checked, node);
+        const entry = try self.getOrPut(key);
+        self.setEntryValue(entry, node);
     }
 
     fn count(self: *const ActiveCheckedSelections) usize {
@@ -12238,7 +12272,8 @@ const ActiveCheckedSelections = struct {
     }
 
     fn own(self: *ActiveCheckedSelections, key: solve.CheckedBaseKey) Allocator.Error!void {
-        try (try self.columnForModule(key.module_bytes)).owned_roots.put(key.checked, {});
+        const entry = try (try self.columnForModule(key.module_bytes)).owned_roots.getOrPut(key.checked);
+        if (!entry.found_existing) self.noteChange();
     }
 
     fn owns(self: *const ActiveCheckedSelections, key: solve.CheckedBaseKey) bool {
@@ -12283,6 +12318,26 @@ const ActiveGeneratedIterator = struct {
     public_def: Type.TypeDef,
     item_node: NodeId,
     self_node: NodeId,
+};
+
+const ActiveCheckedSelectionObservation = struct {
+    clock: ?*const u64 = null,
+    revision: u64 = 0,
+
+    fn needsRefresh(
+        self: ActiveCheckedSelectionObservation,
+        selections: *const ActiveCheckedSelections,
+    ) bool {
+        return self.clock != selections.change_clock or self.revision != selections.change_clock.*;
+    }
+
+    fn observe(
+        self: *ActiveCheckedSelectionObservation,
+        selections: *const ActiveCheckedSelections,
+    ) void {
+        self.clock = selections.change_clock;
+        self.revision = selections.change_clock.*;
+    }
 };
 
 const BodyContext = struct {
@@ -16301,10 +16356,11 @@ const BodyContext = struct {
         raw_fn_node: NodeId,
     ) Allocator.Error!*ActiveCheckedSelections {
         const selections = try self.graph.arena().create(ActiveCheckedSelections);
-        selections.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
-        if (self.active_checked_selections) |inherited| {
-            selections.parent = inherited;
-        }
+        selections.* = try ActiveCheckedSelections.init(
+            self.graph.arena(),
+            self.view.key.bytes,
+            self.active_checked_selections,
+        );
         // A procedure owns every checked identity in its published interface.
         // The same artifact-local ID may name a distinct exact occurrence in
         // an enclosing lexical request, so procedure-local bindings shadow
@@ -16328,7 +16384,7 @@ const BodyContext = struct {
             if (entry.found_existing and !self.graph.sameClass(entry.value_ptr.*, selection.produced)) {
                 Common.invariant("one procedure request published two exact nodes for one owned identity");
             }
-            entry.value_ptr.* = selection.produced;
+            selections.setEntryValue(entry, selection.produced);
         }
         // The checker has already flattened every interface equality
         // component into source-to-member selections. Copy each exact request
@@ -16348,7 +16404,7 @@ const BodyContext = struct {
             if (entry.found_existing and !self.graph.sameClass(entry.value_ptr.*, produced)) {
                 Common.invariant("one checked interface component received two exact runtime nodes");
             }
-            entry.value_ptr.* = produced;
+            selections.setEntryValue(entry, produced);
         }
         for (concrete_selections) |selection| {
             const dependent = solve.CheckedBaseKey{
@@ -16585,7 +16641,6 @@ const BodyContext = struct {
         }
         const previous_selections = self.active_checked_selections;
         const argument_selections = try self.newExactCheckedSelections();
-        argument_selections.parent = previous_selections;
         self.active_checked_selections = argument_selections;
         defer self.active_checked_selections = previous_selections;
         const saved_return_target = self.current_return_target;
@@ -16769,7 +16824,9 @@ const BodyContext = struct {
             var selected = argument_selections.iterator();
             while (selected.next()) |entry| {
                 const destination = try procedure_selections.getOrPut(entry.key_ptr.*);
-                if (!destination.found_existing) destination.value_ptr.* = entry.value_ptr.*;
+                if (!destination.found_existing) {
+                    procedure_selections.setEntryValue(destination, entry.value_ptr.*);
+                }
             }
         }
 
@@ -17430,7 +17487,11 @@ const BodyContext = struct {
 
     fn newExactCheckedSelections(self: *BodyContext) Allocator.Error!*ActiveCheckedSelections {
         const selections = try self.graph.arena().create(ActiveCheckedSelections);
-        selections.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
+        selections.* = try ActiveCheckedSelections.init(
+            self.graph.arena(),
+            self.view.key.bytes,
+            self.active_checked_selections,
+        );
         return selections;
     }
 
@@ -17457,7 +17518,9 @@ const BodyContext = struct {
             .checked = checked_ty,
         };
         const entry = try selections.getOrPut(key);
-        if (!entry.found_existing) entry.value_ptr.* = self.graph.rootNode(produced_node);
+        if (!entry.found_existing) {
+            selections.setEntryValue(entry, self.graph.rootNode(produced_node));
+        }
     }
 
     /// Whether this exact expression edge consumes at least one identity that
@@ -25477,6 +25540,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const solve.DirectRequestSelection {
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         try selections.appendSlice(self.allocator, current_selections);
         try self.refineDirectSelectionsForCall(
             plan,
@@ -25488,6 +25552,7 @@ const BodyContext = struct {
             target_signature_node,
             request_ret,
             include_result,
+            &active_observation,
         );
         return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
     }
@@ -25507,13 +25572,19 @@ const BodyContext = struct {
         target_signature_node: ?NodeId,
         request_ret: ?NodeId,
         include_result: bool,
+        active_observation: *ActiveCheckedSelectionObservation,
     ) Allocator.Error!void {
+        const refresh_active = if (self.active_checked_selections) |active|
+            active_observation.needsRefresh(active)
+        else
+            false;
         self.builder.countBodyDiagnosticBy("call_selection_slot_visits", plan.slots.len *
-            (2 + @as(usize, if (self.active_checked_selections != null) 1 else 0)));
+            (2 + @as(usize, if (refresh_active) 1 else 0)));
         // A call shape's slot ID is itself the explicit self-edge into the
         // current checked scope. Consume that exact value directly even for
         // shape-only synthetic calls that have no expression binding delta.
-        if (self.active_checked_selections) |active| {
+        if (refresh_active) {
+            const active = self.active_checked_selections.?;
             for (plan.slots) |slot| {
                 const key = solve.CheckedBaseKey{
                     .module_bytes = self.view.key.bytes,
@@ -25545,6 +25616,7 @@ const BodyContext = struct {
                     .produced = active_node,
                 });
             }
+            active_observation.observe(active);
         }
         try self.applyCallConsumerBindingsToSelections(plan.context_bindings, selections, true);
         const target_signature = if (target_signature_node) |node|
@@ -25841,8 +25913,11 @@ const BodyContext = struct {
         selections: []const solve.DirectRequestSelection,
     ) Allocator.Error!*ActiveCheckedSelections {
         const consumer = try self.graph.arena().create(ActiveCheckedSelections);
-        consumer.* = ActiveCheckedSelections.init(self.graph.arena(), self.view.key.bytes);
-        consumer.parent = self.active_checked_selections;
+        consumer.* = try ActiveCheckedSelections.init(
+            self.graph.arena(),
+            self.view.key.bytes,
+            self.active_checked_selections,
+        );
         if (bindings.len == 0) return consumer;
 
         for (bindings) |binding| {
@@ -25862,7 +25937,7 @@ const BodyContext = struct {
             if (entry.found_existing and !self.graph.sameClass(entry.value_ptr.*, produced)) {
                 Common.invariant("one contextual call operand received two exact runtime nodes");
             }
-            entry.value_ptr.* = produced;
+            consumer.setEntryValue(entry, produced);
         }
         return consumer;
     }
@@ -26010,6 +26085,7 @@ const BodyContext = struct {
         target_signature_node: ?NodeId,
         request_ret: NodeId,
         include_result: bool,
+        active_observation: *ActiveCheckedSelectionObservation,
     ) Allocator.Error!void {
         return try self.refineDirectSelectionsForCall(
             plan,
@@ -26021,6 +26097,7 @@ const BodyContext = struct {
             target_signature_node,
             request_ret,
             include_result,
+            active_observation,
         );
     }
 
@@ -26520,6 +26597,7 @@ const BodyContext = struct {
         const call_plan = self.view.templates.specializationCallPlanForExpr(expr_id);
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         try self.refineDirectCallSelectionsFromPublishedPlan(
             call_plan,
             call.source_fn_ty_payload,
@@ -26530,6 +26608,7 @@ const BodyContext = struct {
             null,
             request_ret,
             true,
+            &active_observation,
         );
         const preliminary_args = try self.graph.arena().alloc(NodeId, produced_args.len);
         for (preliminary_args, 0..) |*arg, index| {
@@ -26574,6 +26653,7 @@ const BodyContext = struct {
             null,
             request_ret,
             false,
+            &active_observation,
         );
         const request_fn_node = try self.materializeCallSelectionSpan(
             call_plan,
@@ -30235,6 +30315,7 @@ const BodyContext = struct {
         @memset(newly_available, false);
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         try self.refineDirectCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
@@ -30245,6 +30326,7 @@ const BodyContext = struct {
             null,
             request_ret,
             include_result,
+            &active_observation,
         );
         if (iterator_procedure) |procedure| {
             if (try self.applyIteratorProducerToSelectionSpan(
@@ -30324,6 +30406,7 @@ const BodyContext = struct {
                 null,
                 request_ret,
                 false,
+                &active_observation,
             );
             if (iterator_procedure) |procedure| {
                 if (try self.applyIteratorProducerToSelectionSpan(
@@ -30404,6 +30487,7 @@ const BodyContext = struct {
         @memset(newly_available, false);
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         try self.refineDirectCallSelectionsFromPublishedPlan(
             plan,
             checked_fn_ty,
@@ -30414,6 +30498,7 @@ const BodyContext = struct {
             target_signature_node,
             request_ret,
             include_result,
+            &active_observation,
         );
         if (iterator_procedure) |procedure| {
             if (try self.applyIteratorProducerToSelectionSpan(
@@ -30505,6 +30590,7 @@ const BodyContext = struct {
                 null,
                 request_ret,
                 false,
+                &active_observation,
             );
             if (iterator_procedure) |procedure| {
                 if (try self.applyIteratorProducerToSelectionSpan(
@@ -32531,6 +32617,7 @@ const BodyContext = struct {
         @memset(newly_available, false);
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         var remaining = record.fields.len;
         while (remaining != 0) {
             @memset(newly_available, false);
@@ -32600,6 +32687,7 @@ const BodyContext = struct {
                 null,
                 null,
                 false,
+                &active_observation,
             );
         }
 
@@ -35941,7 +36029,7 @@ const BodyContext = struct {
             if (entry.found_existing and !self.graph.sameClass(entry.value_ptr.*, exact)) {
                 Common.invariant("one dispatch target identity received two exact runtime nodes");
             }
-            entry.value_ptr.* = exact;
+            selections.setEntryValue(entry, exact);
         }
     }
 
@@ -45419,6 +45507,7 @@ const BodyContext = struct {
         @memset(newly_available, false);
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
+        var active_observation: ActiveCheckedSelectionObservation = .{};
         try self.refineDirectCallSelectionsFromPublishedPlan(
             call_plan,
             plan.callable_ty,
@@ -45429,6 +45518,7 @@ const BodyContext = struct {
             target_signature_node,
             request_ret,
             expected_ret_ty != null,
+            &active_observation,
         );
         const iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target);
         var remaining = plan_args.len;
@@ -45501,6 +45591,7 @@ const BodyContext = struct {
                 target_signature_node,
                 request_ret,
                 false,
+                &active_observation,
             );
             if (iterator_procedure) |procedure| {
                 if (try self.applyIteratorProducerToSelectionSpan(

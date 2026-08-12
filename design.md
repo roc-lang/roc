@@ -2877,6 +2877,13 @@ artifact-local `CheckedTypeId` directly indexes that namespace's live column.
 It does not hash the composite `(module digest, CheckedTypeId)` on every
 lookup. Lexically nested environments retain their parent explicitly, and an
 owned-but-unfilled local slot shadows the same numeric ID in that parent.
+Every lexical chain also owns one exact mutation clock. Publishing a selection
+or a new shadowing owner advances that clock. A call schedule records the
+clock value after consulting its active slots and consults them again only
+after a real mutation; repeated operand refinements against unchanged active
+state never rescan the plan's slots. Because every environment in the chain
+shares the clock, a mutation in any visible ancestor or descendant invalidates
+the observation directly rather than relying on a guessed dependency set.
 
 An ordinary nominal's identity is its declaration plus its exact public type
 arguments. Its declaration backing is a function of those arguments, not an
