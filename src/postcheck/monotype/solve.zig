@@ -207,6 +207,8 @@ pub const GraphDiagnostics = struct {
     generated_identity_intern_misses: u64 = 0,
     generated_type_store_hits: u64 = 0,
     generated_type_store_misses: u64 = 0,
+    permanent_inhabitedness_requests: u64 = 0,
+    permanent_inhabitedness_hits: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -352,6 +354,10 @@ pub const InstGraph = struct {
     row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
+    /// Roots already proven unable to finalize as uninhabited. This fact is
+    /// monotone: only permanent inhabited content can produce it. A root that
+    /// later redirects is looked up by its new root and therefore recomputed.
+    permanently_inhabited_nodes: collections.DenseMap(NodeId, void),
     /// Generated nominals keyed by the final content digest assigned by their
     /// producer. Identity, arguments, and backing are complete before entry.
     generated_nominal_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80),
@@ -420,6 +426,7 @@ pub const InstGraph = struct {
             .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .permanently_inhabited_nodes = collections.DenseMap(NodeId, void).init(allocator),
             .generated_nominal_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80).init(allocator),
             .named_nodes_by_identity_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .list_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
@@ -485,6 +492,7 @@ pub const InstGraph = struct {
         self.request_checked_sources.deinit(allocator);
         self.function_result_relations.deinit(allocator);
         self.row_parents.deinit();
+        self.permanently_inhabited_nodes.deinit();
         self.row_exts.deinit(allocator);
         self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
@@ -1017,9 +1025,17 @@ pub const InstGraph = struct {
     /// named type whose backing has not been recorded) answers `true`
     /// conservatively.
     pub fn mayFinalizeAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("permanent_inhabitedness_requests");
+        const root = self.find(raw_node);
+        if (self.permanently_inhabited_nodes.contains(root)) {
+            self.countDiagnostic("permanent_inhabitedness_hits");
+            return false;
+        }
         var visiting = collections.DenseMap(NodeId, void).init(self.allocator);
         defer visiting.deinit();
-        return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
+        const may_finalize = try self.mayFinalizeAsUninhabitedInner(root, &visiting);
+        if (!may_finalize) try self.permanently_inhabited_nodes.put(root, {});
+        return may_finalize;
     }
 
     fn mayFinalizeAsUninhabitedInner(
@@ -5100,4 +5116,29 @@ test "recursive nominal backing can meet an alias to that nominal" {
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     try std.testing.expectEqual(nominal, graph.find(nominal));
     try std.testing.expectEqual(alias, graph.find(alias));
+}
+
+test "permanently inhabited graph roots memoize only stable negative answers" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics = GraphDiagnostics{};
+    graph.setDiagnostics(&diagnostics);
+
+    const inhabited = try graph.newNode(.{ .primitive = .u64 });
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(inhabited));
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(inhabited));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.permanent_inhabitedness_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.permanent_inhabitedness_hits);
+
+    const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(unresolved));
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(unresolved));
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.permanent_inhabitedness_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.permanent_inhabitedness_hits);
 }

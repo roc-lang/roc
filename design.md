@@ -3235,6 +3235,13 @@ its checked result variable remains unconstrained, no result relation is
 created, and the expression carries the enclosing continuation's declared cell.
 An unobservable continuation type is not representation evidence.
 
+Runtime-demand proof construction may ask whether a live node could still
+finalize as uninhabited. A negative answer is monotone: it can be produced only
+by permanently inhabited content, so Monotype records that root in a dense
+`NodeId` column and answers later queries directly. A positive answer is not
+cached because explicit producer completion may resolve the open content. A
+redirect is always queried at its new root, so it cannot inherit a stale fact.
+
 Record, tuple, tag, list, and box constructors build their exact container type
 from the exact child cells they emit. They never first construct a
 checked-public container, scan it for private descendants, or emit a second
