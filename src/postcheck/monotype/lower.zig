@@ -26899,16 +26899,6 @@ const BodyContext = struct {
         return fn_node;
     }
 
-    fn instantiateTargetCallTypeFromMonoArgs(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const fn_node = try self.instantiateTargetCallNodeFromMonoArgs(source_fn_ty, arg_tys, ret_ty);
-        return try self.finalTypeForNode(fn_node);
-    }
-
     fn instantiateTargetCallNodeFromMonoArgs(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -34781,23 +34771,11 @@ const BodyContext = struct {
                 .view = lookup.view,
                 .callable_ty = lookup.target.callable_ty,
             };
-        var source_ctx = try BodyContext.initWithMethodScope(
-            self.allocator,
-            self.builder,
+        const signature = try self.typeOnlyCheckedNode(
             source.view,
-            self.method_scope,
-            self.owner_template,
-            self.graph,
-            self.draft,
+            source.callable_ty,
+            self.active_checked_selections,
         );
-        source_ctx.evidence = self.evidence;
-        source_ctx.active_checked_selections = self.active_checked_selections;
-        defer source_ctx.deinit();
-        source_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        source_ctx.current_fn_key = self.current_fn_key;
-        source_ctx.source_region_override = self.source_region_override;
-        source_ctx.current_entry_root = self.current_entry_root;
-        const signature = try source_ctx.instNode(source.callable_ty);
         if (self.graph.content(signature) != .func) {
             Common.invariant("checked method target had a non-function exact signature");
         }
@@ -34909,16 +34887,55 @@ const BodyContext = struct {
         };
     }
 
-    fn methodTargetContext(
+    const TypeOnlyInstantiationScope = struct {
+        ctx: *BodyContext,
+        previous_view: ModuleView,
+        previous_instantiation: TypeInstantiationContext,
+        previous_selections: ?*ActiveCheckedSelections,
+
+        fn leave(self: TypeOnlyInstantiationScope) void {
+            self.ctx.instantiation.deinit();
+            self.ctx.instantiation = self.previous_instantiation;
+            self.ctx.active_checked_selections = self.previous_selections;
+            self.ctx.view = self.previous_view;
+        }
+    };
+
+    /// Enter a fresh checked-type scope without constructing parallel body
+    /// lowering state. The scoped operation may instantiate types and apply an
+    /// explicit selection span, but it may not lower expressions or mutate
+    /// binders, evidence, helper caches, or owner state.
+    fn enterTypeOnlyInstantiation(
         self: *BodyContext,
-        lookup: MethodLookup,
-    ) Allocator.Error!BodyContext {
-        const owner_template = switch (lookup.target.kind) {
-            .procedure => |procedure| procedure.template,
-            .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
-            .structural => Common.invariant("structural method registry result has no callable body context"),
+        view: ModuleView,
+        selections: ?*ActiveCheckedSelections,
+    ) TypeOnlyInstantiationScope {
+        const scope = TypeOnlyInstantiationScope{
+            .ctx = self,
+            .previous_view = self.view,
+            .previous_instantiation = self.instantiation,
+            .previous_selections = self.active_checked_selections,
         };
-        return BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
+        self.view = view;
+        self.active_checked_selections = selections;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            view.key.bytes,
+            .checked_base,
+        );
+        return scope;
+    }
+
+    fn typeOnlyCheckedNode(
+        self: *BodyContext,
+        view: ModuleView,
+        ty: checked.CheckedTypeId,
+        selections: ?*ActiveCheckedSelections,
+    ) Allocator.Error!NodeId {
+        const scope = self.enterTypeOnlyInstantiation(view, selections);
+        defer scope.leave();
+        return try self.instNode(ty);
     }
 
     fn localMethodOwnerTemplate(
@@ -34945,13 +34962,11 @@ const BodyContext = struct {
         _: *BodyContext,
         _: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
         // The checked target is immutable source data. The exact request is
         // constructed later from this root and the operands already produced
         // by lowering; relating the target to the plan here would merge two
         // complete graphs before those values are available.
-        return try target_ctx.instNode(lookup.target.callable_ty);
+        return try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
     }
 
     fn generatedIteratorMethodRequestNode(
@@ -34996,13 +35011,11 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        if (self.frozen_sealed_emission) {
-            if (try self.frozenCodecCallableFromArgs(lookup, arg_tys, ret_ty)) |prepared| return prepared;
-            Common.invariant("sealed structural codec requested an unprepared callable");
+        if (!self.frozen_sealed_emission) {
+            Common.invariant("structural codec requested a sealed callable before graph freeze");
         }
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        return try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, arg_tys, ret_ty);
+        if (try self.frozenCodecCallableFromArgs(lookup, arg_tys, ret_ty)) |prepared| return prepared;
+        Common.invariant("sealed structural codec requested an unprepared callable");
     }
 
     fn methodLookupForTypeName(
@@ -35818,16 +35831,13 @@ const BodyContext = struct {
             Common.invariant("selected method target edge mask differed from its checked call site");
         }
         try self.publishMethodTargetSelections(lookup);
-        var target_ctx = try self.methodTargetContext(lookup);
-        target_ctx.evidence = self.evidence;
-        target_ctx.active_checked_selections = self.active_checked_selections;
-        defer target_ctx.deinit();
-        target_ctx.owner_context_fn_key = self.owner_context_fn_key;
-        target_ctx.current_fn_key = self.current_fn_key;
-        target_ctx.source_region_override = self.source_region_override;
-        target_ctx.current_entry_root = self.current_entry_root;
+        const type_scope = self.enterTypeOnlyInstantiation(
+            lookup.view,
+            self.active_checked_selections,
+        );
+        defer type_scope.leave();
 
-        const checked_target = try target_ctx.instNode(lookup.target.callable_ty);
+        const checked_target = try self.instNode(lookup.target.callable_ty);
         const checked_target_fn = try self.graph.functionNodes(checked_target);
         if (checked_target_fn.args.len != callsite.args.len) {
             Common.invariant("selected method target arity differed from its checked call site");
@@ -35840,7 +35850,7 @@ const BodyContext = struct {
         const no_new_callsite_arguments = try self.graph.arena().alloc(bool, callsite.args.len);
         @memset(no_new_callsite_arguments, false);
         const target_signature = try self.methodTargetSignatureNode(lookup);
-        const selections = try target_ctx.directCallSelectionsFromPublishedPlan(
+        const selections = try self.directCallSelectionsFromPublishedPlan(
             plan,
             lookup.target.callable_ty,
             &.{},
@@ -35851,7 +35861,7 @@ const BodyContext = struct {
             callsite.ret,
             include_result,
         );
-        const exact_request = try target_ctx.materializeCallSelectionSpan(
+        const exact_request = try self.materializeCallSelectionSpan(
             plan,
             lookup.target.callable_ty,
             checked_target,
@@ -35866,7 +35876,7 @@ const BodyContext = struct {
         // that exact node an explicit input to the selected procedure's
         // specialization identity. The target's checked callable ID is the
         // stable role for this edge across every source call site.
-        try target_ctx.recordExactRequestEdge(
+        try self.recordExactRequestEdge(
             exact_request,
             lookup.view,
             lookup.target.callable_ty,
@@ -38905,9 +38915,7 @@ const BodyContext = struct {
         // The custom method's declared error row is its own exact produced
         // value. It is injected into the already-checked enclosing parser row
         // by generated control flow; the two rows are never unified.
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const checked_target = try target_ctx.instNode(lookup.target.callable_ty);
+        const checked_target = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const checked_outer = try self.graph.functionNodes(checked_target);
         if (checked_outer.args.len != 1) Common.invariant("custom codec target did not have one encoding argument");
         const checked_runtime = try self.graph.functionNodes(checked_outer.ret);
@@ -39003,9 +39011,7 @@ const BodyContext = struct {
             Common.invariant("checked encoder registry was missing a container method"));
         if (self.preparedCodecCallExists(boundary_expr, .encoder, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len < 1) Common.invariant("container encoder target had no state argument");
         const exact_args = try self.graph.arena().dupe(NodeId, target_template_fn.args);
@@ -39378,9 +39384,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing parse_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target = try self.graph.functionNodes(target_template);
         if (target.args.len != 3) Common.invariant("parse_record_field target did not have three arguments");
         const target_try = try self.graphTryPayloads(target.ret);
@@ -39475,9 +39479,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing skip_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target = try self.graph.functionNodes(target_template);
         if (target.args.len != 2) Common.invariant("skip_record_field target did not have two arguments");
         const exact_ret = try self.graphTryLike(target.ret, state_node, outer_result.err);
@@ -39515,9 +39517,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing parse_tag_union"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target = try self.graph.functionNodes(target_template);
         if (target.args.len != 3) Common.invariant("parse_tag_union target did not have three arguments");
 
@@ -39701,9 +39701,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing a scalar parser method"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len != 2) Common.invariant("scalar parser target did not have two arguments");
         const exact_ret = try self.graphParserResultLike(
@@ -39749,9 +39747,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing a format-control method"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len != 2) Common.invariant("parser format-control target did not have encoding and state arguments");
         const target_try = try self.graphTryPayloads(target_template_fn.ret);
@@ -40048,9 +40044,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing a tuple format method"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len != 2 + arity_arg_count) Common.invariant("parser tuple format target had an unexpected arity");
         const call_args = try self.graph.arena().alloc(NodeId, target_template_fn.args.len);
@@ -40093,9 +40087,7 @@ const BodyContext = struct {
             Common.invariant("checked parser encoding registry was missing an object-key method"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, key_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len != 2) Common.invariant("object-key parser target did not have encoding and state arguments");
         const exact_ret = try self.graphParserResultLike(
@@ -40141,9 +40133,7 @@ const BodyContext = struct {
             Common.invariant("checked encoder registry was missing an object-key method"));
         if (self.preparedCodecCallExists(boundary_expr, .encoder, key_node, lookup)) return false;
 
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        const target_template = try target_ctx.instNode(lookup.target.callable_ty);
+        const target_template = try self.typeOnlyCheckedNode(lookup.view, lookup.target.callable_ty, null);
         const target_template_fn = try self.graph.functionNodes(target_template);
         if (target_template_fn.args.len != 3) Common.invariant("object-key encoder target did not have encoding, key, and state arguments");
         const exact_ret = try self.graphTryLike(target_template_fn.ret, state_node, outer_try.err);

@@ -956,6 +956,29 @@ test "Monotype prepared codec reuse requires the complete exact function request
     try expectNotContains(lookup, "sameDirectRequestSelections(prepared.callable_node, callable_node)");
 }
 
+test "Monotype method type instantiation does not construct body contexts" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    try expectNotContains(lower_source, "fn methodTargetContext(");
+
+    const type_only = sourceSliceBetween(
+        lower_source,
+        "const TypeOnlyInstantiationScope = struct",
+        "fn localMethodOwnerTemplate(",
+    );
+    try expectContains(type_only, "TypeInstantiationContext.init(");
+    try expectContains(type_only, "fn typeOnlyCheckedNode(");
+    try expectNotContains(type_only, "BodyContext.init");
+    try expectNotContains(type_only, "BinderMap.init");
+
+    const signature = sourceSliceBetween(
+        lower_source,
+        "fn methodTargetSignatureNode(",
+        "const DispatchCrashReason",
+    );
+    try expectContains(signature, "self.typeOnlyCheckedNode(");
+    try expectNotContains(signature, "BodyContext.init");
+}
+
 test "Monotype match lowering projects exact scrutinee cells without checked root relations" {
     const lower_source = @embedFile("monotype/lower.zig");
     const match_source = sourceSliceBetween(
