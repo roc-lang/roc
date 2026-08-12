@@ -477,17 +477,19 @@ test "Monotype lowering carries exact produced types without containment scans" 
     );
     try expectContains(generated_call_identity, "slot.generated_argument_source");
     try expectContains(generated_call_identity, ".exact_selection => selections.get(");
-    try expectContains(generated_call_identity, ".checked_substitution => try self.instantiateProducedOccurrenceWithSelections(");
+    try expectContains(generated_call_identity, ".checked_substitution => compound:");
+    try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
     try expectContains(generated_call_identity, "generatedIteratorNodeFromPublicSource(");
     try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
+    try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");
 
     const generated_call_slots = sourceSliceBetween(
         lower_source,
         "// Checking stores generated slots after every generated dependency.",
         "// Result-context identities may themselves be supplied by an operand",
     );
-    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(slot, table)");
+    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(plan, slot, table)");
     try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
 
     try expectContains(solve_source, "generated_iterators_by_item: collections.DenseMap(NodeId");
@@ -524,6 +526,7 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "projections"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "slots"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "projections"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallConsumerBinding, "source_kind"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
@@ -554,10 +557,15 @@ test "record literals request and retain only immediate exact field nodes" {
         "fn lowerRecordUpdateDirect(",
     );
     try expectContains(record_literal, "self.graph.recordConstructionFieldNode(");
-    try expectContains(record_literal, "self.checkedRecordLiteralFieldType(checked_expr, field.label)");
+    try expectContains(record_literal, "specializationRecordPlanForExpr(checked_expr)");
+    try expectContains(record_literal, "projectionSelectionArgumentNode(plan, selections, index)");
+    try expectContains(record_literal, "specializationProjectionOperandConsumerBindings(plan, index)");
+    try expectContains(record_literal, "self.directSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
     try expectContains(record_literal, ".ty = self.preLoweredChildNodeAt(children, field.value)");
-    try expectNotContains(record_literal, "self.view.bodies.expr(checked_expr).ty,\n                selections");
+    try expectNotContains(record_literal, "checkedRecordLiteralFieldType");
+    try expectNotContains(lower_source, "instantiateCheckedTypeWithSelectionsAtAuthority");
+    try expectNotContains(lower_source, "instantiateProducedOccurrenceWithSelections");
 }
 
 test "Monotype active snapshots reject unresolved rows and cannot be refilled" {

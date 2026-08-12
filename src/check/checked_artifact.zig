@@ -15285,8 +15285,9 @@ pub const SpecializationOccurrenceProduction = enum(u8) {
 /// One node in a checker-authored projection tree. Root steps select one
 /// explicit call edge. Every other step selects exactly one immediate child
 /// from the preceding projection node. The tree is stored in parent-before-
-/// child order, so Monotype evaluates every declared edge at most once into a
-/// dense parallel node column.
+/// child order, and each root's complete subtree is contiguous, so Monotype
+/// can evaluate only the requested subtree and every declared edge at most
+/// once into a dense parallel node column.
 pub const SpecializationProjectionStep = enum(u8) {
     argument,
     result,
@@ -15300,7 +15301,6 @@ pub const SpecializationProjectionStep = enum(u8) {
     /// this is the named node's direct backing when the constructor is
     /// retained, or the current node when an enclosing checked relation has
     /// already supplied the backing representation.
-    nominal_representation,
     function_argument,
     function_result,
     tuple_item,
@@ -15311,6 +15311,13 @@ pub const SpecializationProjectionStep = enum(u8) {
 };
 
 pub const no_specialization_projection_parent = std.math.maxInt(u32);
+
+/// The checker-authored source of a projection root when a runtime edge has
+/// not yet produced a node. Child projections always inherit their parent.
+pub const SpecializationProjectionRootSource = enum(u8) {
+    runtime_edge,
+    concrete_checked,
+};
 
 pub const SpecializationProjection = extern struct {
     /// The checked node reached by this projection. This is explicit checker
@@ -15323,7 +15330,8 @@ pub const SpecializationProjection = extern struct {
     /// Payload index for `tag_payload`; zero for every other step.
     payload_index: u32,
     step: SpecializationProjectionStep,
-    reserved: [3]u8 = .{ 0, 0, 0 },
+    root_source: SpecializationProjectionRootSource = .runtime_edge,
+    reserved: [2]u8 = .{ 0, 0 },
 };
 
 /// One exact checked occurrence within a function argument or result. Its
@@ -15355,6 +15363,16 @@ pub const SpecializationOperandFlow = enum(u8) {
 pub const SpecializationCallConsumerBinding = extern struct {
     source: CheckedTypeId,
     consumer: CheckedTypeId,
+    source_kind: SpecializationCallConsumerSource,
+    reserved: [3]u8 = .{ 0, 0, 0 },
+};
+
+/// The checker-authored operation that supplies a call-consumer binding.
+/// Concrete checked sources are immutable exact bases; every other source
+/// must already have been published by an explicit value edge.
+pub const SpecializationCallConsumerSource = enum(u8) {
+    exact_selection,
+    concrete_checked,
 };
 
 pub const SpecializationCallSlotKind = enum(u8) {
@@ -15419,7 +15437,21 @@ pub const SpecializationCallPlan = struct {
     operand_consumer_binding_spans: artifact_serialize.Span = .{},
 };
 
-pub const SpecializationCallPlanView = struct {
+/// One record literal's directional field interface. The shape's argument
+/// roots are the result record's fields in source order. Each completed field
+/// supplies exactly that root; a requested field consumes only its published
+/// formal-to-expression bindings.
+pub const SpecializationRecordPlan = struct {
+    shape: SpecializationCallShapeId = no_specialization_call_shape,
+    field_flows: artifact_serialize.Span = .{},
+    field_consumer_binding_spans: artifact_serialize.Span = .{},
+};
+
+/// Common read view for checker-authored exact projection interfaces. Calls
+/// and record literals have different serialized deltas, but Monotype applies
+/// their immutable slots and projection paths with the same directional
+/// operation.
+pub const SpecializationProjectionPlanView = struct {
     slots: []const SpecializationCallSlot,
     projections: []const SpecializationProjection,
     operand_flows: []const SpecializationOperandFlow,
@@ -15428,6 +15460,8 @@ pub const SpecializationCallPlanView = struct {
     callee_consumer_bindings: []const SpecializationCallConsumerBinding,
     operand_consumer_binding_spans: []const artifact_serialize.Span,
 };
+
+pub const SpecializationCallPlanView = SpecializationProjectionPlanView;
 
 /// One identity-bearing checked occurrence in a procedure's immutable base
 /// interface and its semantic path from that function root.
@@ -17716,31 +17750,6 @@ const SpecializationCallSlotBuild = struct {
     }
 };
 
-const SpecializationProjectionSubstitution = struct {
-    formal: CheckedTypeId,
-    actual: CheckedTypeId,
-};
-
-fn specializationProjectionSubstitute(
-    substitutions: []const SpecializationProjectionSubstitution,
-    root: CheckedTypeId,
-) CheckedTypeId {
-    var current = root;
-    var remaining = substitutions.len + 1;
-    while (remaining > 0) : (remaining -= 1) {
-        var index = substitutions.len;
-        while (index > 0) {
-            index -= 1;
-            const substitution = substitutions[index];
-            if (substitution.formal != current) continue;
-            if (substitution.actual == current) return current;
-            current = substitution.actual;
-            break;
-        } else return current;
-    }
-    checkedArtifactInvariant("specialization projection substitutions contained a cycle", .{});
-}
-
 fn checkedTypeIsGeneratedNominal(payload: CheckedTypePayload) bool {
     if (payload != .nominal) return false;
     const builtin_nominal = payload.nominal.builtin orelse return false;
@@ -17783,8 +17792,6 @@ fn compileSpecializationCallShape(
     }
     var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer active.deinit();
-    var substitutions = std.ArrayList(SpecializationProjectionSubstitution).empty;
-    defer substitutions.deinit(allocator);
     var projections = std.ArrayList(SpecializationProjection).empty;
     defer projections.deinit(allocator);
 
@@ -17813,12 +17820,12 @@ fn compileSpecializationCallShape(
                 .index = @intCast(index),
                 .payload_index = 0,
                 .step = .argument,
+                .root_source = if (try concrete_sources.isConcrete(arg)) .concrete_checked else .runtime_edge,
             },
             // Flow controls whether the operand needs a request before it is
             // lowered. After lowering, every operand has produced its exact
             // runtime node and may fill the checker-declared projections.
             true,
-            &substitutions,
             &active,
             &projections,
             &builds,
@@ -17834,9 +17841,9 @@ fn compileSpecializationCallShape(
             .index = 0,
             .payload_index = 0,
             .step = .result,
+            .root_source = if (try concrete_sources.isConcrete(function.ret)) .concrete_checked else .runtime_edge,
         },
         true,
-        &substitutions,
         &active,
         &projections,
         &builds,
@@ -17854,7 +17861,6 @@ fn compileSpecializationCallShape(
                 .step = .dispatcher,
             },
             false,
-            &substitutions,
             &active,
             &projections,
             &builds,
@@ -17899,7 +17905,6 @@ fn compileSpecializationCallShape(
                     .step = .target_argument,
                 },
                 true,
-                &substitutions,
                 &active,
                 &projections,
                 &builds,
@@ -17917,13 +17922,92 @@ fn compileSpecializationCallShape(
                 .step = .target_result,
             },
             true,
-            &substitutions,
             &active,
             &projections,
             &builds,
         );
     }
 
+    return try finishSpecializationProjectionShape(
+        allocator,
+        checked_types,
+        concrete_sources,
+        exact_identity_roots,
+        &builds,
+        &projections,
+        slots_out,
+        occurrences_out,
+        projections_out,
+    );
+}
+
+/// Compile an ordered set of value roots as producer arguments. Record
+/// literals use this exact interface: each field expression produces its own
+/// complete runtime node, and a later field may consume only the projection
+/// substitutions explicitly rooted at earlier fields.
+fn compileSpecializationRecordShape(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    field_roots: []const CheckedTypeId,
+    slots_out: *std.ArrayList(SpecializationCallSlot),
+    occurrences_out: *std.ArrayList(SpecializationOccurrence),
+    projections_out: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallShape {
+    var builds = std.ArrayList(SpecializationCallSlotBuild).empty;
+    defer {
+        for (builds.items) |*build| build.deinit(allocator);
+        builds.deinit(allocator);
+    }
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var projections = std.ArrayList(SpecializationProjection).empty;
+    defer projections.deinit(allocator);
+
+    for (field_roots, 0..) |field_root, index| {
+        _ = try collectSpecializationCallOccurrences(
+            allocator,
+            checked_types,
+            field_root,
+            .{
+                .checked = field_root,
+                .parent = no_specialization_projection_parent,
+                .index = @intCast(index),
+                .payload_index = 0,
+                .step = .argument,
+                .root_source = if (try concrete_sources.isConcrete(field_root)) .concrete_checked else .runtime_edge,
+            },
+            true,
+            &active,
+            &projections,
+            &builds,
+        );
+    }
+
+    return try finishSpecializationProjectionShape(
+        allocator,
+        checked_types,
+        concrete_sources,
+        &.{},
+        &builds,
+        &projections,
+        slots_out,
+        occurrences_out,
+        projections_out,
+    );
+}
+
+fn finishSpecializationProjectionShape(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    exact_identity_roots: []const CheckedTypeId,
+    builds: *std.ArrayList(SpecializationCallSlotBuild),
+    projections: *const std.ArrayList(SpecializationProjection),
+    slots_out: *std.ArrayList(SpecializationCallSlot),
+    occurrences_out: *std.ArrayList(SpecializationOccurrence),
+    projections_out: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallShape {
     for (exact_identity_roots) |exact_root| {
         for (builds.items) |*build| {
             if (build.checked != exact_root) continue;
@@ -18008,6 +18092,61 @@ const SpecializationCallShapeKey = struct {
     target_signature_source: bool,
     target_source_roots: bool,
 };
+
+const SpecializationRecordShapeKey = struct {
+    field_roots: []const CheckedTypeId,
+};
+
+const SpecializationRecordShapeKeyContext = struct {
+    pub fn hash(_: @This(), key: SpecializationRecordShapeKey) u64 {
+        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.field_roots));
+    }
+
+    pub fn eql(_: @This(), left: SpecializationRecordShapeKey, right: SpecializationRecordShapeKey) bool {
+        return std.mem.eql(CheckedTypeId, left.field_roots, right.field_roots);
+    }
+};
+
+const SpecializationRecordShapeMap = std.HashMap(
+    SpecializationRecordShapeKey,
+    SpecializationCallShapeId,
+    SpecializationRecordShapeKeyContext,
+    std.hash_map.default_max_load_percentage,
+);
+
+fn publishSpecializationRecordShape(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    field_roots: []const CheckedTypeId,
+    by_key: *SpecializationRecordShapeMap,
+    owned_keys: *std.ArrayList([]const CheckedTypeId),
+    shapes: *std.ArrayList(SpecializationCallShape),
+    slots: *std.ArrayList(SpecializationCallSlot),
+    occurrences: *std.ArrayList(SpecializationOccurrence),
+    projections: *std.ArrayList(SpecializationProjection),
+) Allocator.Error!SpecializationCallShapeId {
+    const lookup = SpecializationRecordShapeKey{ .field_roots = field_roots };
+    if (by_key.get(lookup)) |existing| return existing;
+
+    const owned_roots = try allocator.dupe(CheckedTypeId, field_roots);
+    errdefer allocator.free(owned_roots);
+    const shape: SpecializationCallShapeId = @enumFromInt(@as(u32, @intCast(shapes.items.len)));
+    try shapes.append(allocator, try compileSpecializationRecordShape(
+        allocator,
+        checked_types,
+        concrete_sources,
+        owned_roots,
+        slots,
+        occurrences,
+        projections,
+    ));
+    errdefer _ = shapes.pop();
+    try by_key.put(.{ .field_roots = owned_roots }, shape);
+    errdefer _ = by_key.remove(.{ .field_roots = owned_roots });
+    try owned_keys.append(allocator, owned_roots);
+    return shape;
+}
 
 fn publishSpecializationCallShape(
     allocator: Allocator,
@@ -18290,6 +18429,7 @@ fn appendSpecializationOperandFlowsForIteratorCall(
 fn compileCallConsumerBindings(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     source: CheckedTypeId,
     consumer: CheckedTypeId,
     pool: *std.ArrayList(SpecializationCallConsumerBinding),
@@ -18310,6 +18450,11 @@ fn compileCallConsumerBindings(
         } else try pool.append(allocator, .{
             .source = relation.source,
             .consumer = relation.dependent,
+            .source_kind = if (!checkedTypeIsGeneratedNominal(checked_types.store.payload(relation.source)) and
+                try concrete_sources.isConcrete(relation.source))
+                .concrete_checked
+            else
+                .exact_selection,
         });
     }
     return .{ .start = start, .len = @intCast(pool.items.len - start) };
@@ -18323,6 +18468,58 @@ fn appendEmptyCallConsumerBindingSpans(
     const start: u32 = @intCast(out.items.len);
     try out.appendNTimes(allocator, .{}, count);
     return .{ .start = start, .len = @intCast(count) };
+}
+
+fn checkedRecordLiteralStructuralRoot(
+    allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
+    raw_root: CheckedTypeId,
+) Allocator.Error!?CheckedTypeId {
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var root = raw_root;
+    while (true) {
+        const seen = try active.getOrPut(root);
+        if (seen.found_existing) {
+            checkedArtifactInvariant("record literal result type contained an alias cycle", .{});
+        }
+        switch (checked_types.store.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .record, .record_unbound => return root,
+            .nominal => return null,
+            .pending => checkedArtifactInvariant("record literal result type was unfinished during specialization publication", .{}),
+            .err => checkedArtifactInvariant("diagnostic record literal reached specialization publication", .{}),
+            .flex, .rigid, .function, .tuple, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("record literal had no checker-authored structural or nominal result type", .{}),
+        }
+    }
+}
+
+fn checkedRecordLiteralFieldType(
+    allocator: Allocator,
+    names: *const canonical.CanonicalNameStore,
+    checked_types: *const CheckedTypePublication,
+    raw_root: CheckedTypeId,
+    label: canonical.RecordFieldLabelId,
+) Allocator.Error!CheckedTypeId {
+    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    defer active.deinit();
+    var root = raw_root;
+    while (true) {
+        const seen = try active.getOrPut(root);
+        if (seen.found_existing) {
+            checkedArtifactInvariant("record literal result row contained a cycle before its field was found", .{});
+        }
+        switch (checked_types.store.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .record => |record| {
+                if (findRecordField(names, record.fields, label)) |field| return field.ty;
+                root = record.ext;
+            },
+            .record_unbound => |fields| return (findRecordField(names, fields, label) orelse
+                checkedArtifactInvariant("record literal field was absent from its checker-authored result type", .{})).ty,
+            else => checkedArtifactInvariant("record field lookup left its checker-authored structural row", .{}),
+        }
+    }
 }
 
 fn iteratorDispatchOperandType(
@@ -18339,6 +18536,7 @@ fn iteratorDispatchOperandType(
 fn publishIteratorCallBindings(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     checked_bodies: *const CheckedBodyStore,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     call: static_dispatch.IteratorDispatchCall,
@@ -18365,6 +18563,7 @@ fn publishIteratorCallBindings(
     _ = try compileCallConsumerBindings(
         allocator,
         checked_types,
+        concrete_sources,
         result_ty,
         function.ret,
         consumer_bindings,
@@ -18384,6 +18583,7 @@ fn publishIteratorCallBindings(
     _ = try compileCallConsumerBindings(
         allocator,
         checked_types,
+        concrete_sources,
         function.ret,
         result_ty,
         consumer_bindings,
@@ -18392,6 +18592,7 @@ fn publishIteratorCallBindings(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            concrete_sources,
             function.args[index],
             iteratorDispatchOperandType(checked_bodies, operand, loop_state_ty),
             consumer_bindings,
@@ -18413,6 +18614,7 @@ fn publishIteratorCallBindings(
         consumer_binding_spans.items[plan.operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            concrete_sources,
             function.args[index],
             iteratorDispatchOperandType(checked_bodies, operand, loop_state_ty),
             consumer_bindings,
@@ -18429,7 +18631,11 @@ fn appendCallConsumerSelfBindings(
     for (roots) |root| {
         for (pool.items[start..]) |existing| {
             if (existing.source == root and existing.consumer == root) break;
-        } else try pool.append(allocator, .{ .source = root, .consumer = root });
+        } else try pool.append(allocator, .{
+            .source = root,
+            .consumer = root,
+            .source_kind = .exact_selection,
+        });
     }
 }
 
@@ -18954,6 +19160,7 @@ fn publishSpecializationCallPlans(
     templates: *CheckedProcedureTemplateTable,
 ) Allocator.Error!void {
     if (templates.specialization_call_plans_by_expr.len != 0 or
+        templates.specialization_record_plans_by_expr.len != 0 or
         templates.specialization_target_relations_by_type.len != 0 or
         templates.specialization_target_relation_entries.len != 0 or
         templates.specialization_target_identity_relations.len != 0 or
@@ -19002,6 +19209,9 @@ fn publishSpecializationCallPlans(
     const by_expr = try allocator.alloc(SpecializationCallPlan, checked_bodies.exprCount());
     errdefer allocator.free(by_expr);
     @memset(by_expr, .{});
+    const record_by_expr = try allocator.alloc(SpecializationRecordPlan, checked_bodies.exprCount());
+    errdefer allocator.free(record_by_expr);
+    @memset(record_by_expr, .{});
     const procedure_alias_binders = try publishProcedureAliasBinderColumn(
         allocator,
         checked_bodies,
@@ -19031,6 +19241,13 @@ fn publishSpecializationCallPlans(
     errdefer shapes.deinit(allocator);
     var shape_by_key = std.AutoHashMap(SpecializationCallShapeKey, SpecializationCallShapeId).init(allocator);
     defer shape_by_key.deinit();
+    var record_shape_by_key = SpecializationRecordShapeMap.init(allocator);
+    defer record_shape_by_key.deinit();
+    var owned_record_shape_keys = std.ArrayList([]const CheckedTypeId).empty;
+    defer {
+        for (owned_record_shape_keys.items) |key| allocator.free(key);
+        owned_record_shape_keys.deinit(allocator);
+    }
     var occurrences = std.ArrayList(SpecializationOccurrence).empty;
     errdefer occurrences.deinit(allocator);
     var projections = std.ArrayList(SpecializationProjection).empty;
@@ -19083,6 +19300,7 @@ fn publishSpecializationCallPlans(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             expr.ty,
             ordinary_function.ret,
             &consumer_bindings,
@@ -19093,6 +19311,7 @@ fn publishSpecializationCallPlans(
             _ = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 callee_ty,
                 source_callable,
                 &consumer_bindings,
@@ -19101,6 +19320,7 @@ fn publishSpecializationCallPlans(
             by_expr[raw_expr].callee_consumer_bindings = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 source_callable,
                 callee_ty,
                 &consumer_bindings,
@@ -19120,6 +19340,7 @@ fn publishSpecializationCallPlans(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             source_callable,
             callee_ty,
             &consumer_bindings,
@@ -19127,6 +19348,7 @@ fn publishSpecializationCallPlans(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             ordinary_function.ret,
             expr.ty,
             &consumer_bindings,
@@ -19135,6 +19357,7 @@ fn publishSpecializationCallPlans(
             _ = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 ordinary_function.args[index],
                 checked_bodies.expr(arg).ty,
                 &consumer_bindings,
@@ -19154,6 +19377,7 @@ fn publishSpecializationCallPlans(
             consumer_binding_spans.items[by_expr[raw_expr].operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 ordinary_function.args[index],
                 checked_bodies.expr(arg).ty,
                 &consumer_bindings,
@@ -19173,6 +19397,80 @@ fn publishSpecializationCallPlans(
             &occurrences,
             &projections,
         );
+    }
+    var record_field_roots = std.ArrayList(CheckedTypeId).empty;
+    defer record_field_roots.deinit(allocator);
+    for (0..checked_bodies.exprCount()) |raw_expr| {
+        const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
+        const expr = checked_bodies.expr(expr_id);
+        if (expr.data != .record or expr.data.record.ext != null or
+            checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
+        var has_requested_field = false;
+        for (expr.data.record.fields) |field| {
+            if (value_flows_by_expr[@intFromEnum(field.value)] != .produced) {
+                has_requested_field = true;
+                break;
+            }
+        }
+        if (!has_requested_field) continue;
+        // A record syntax node used as a nominal's backing receives every
+        // exact field node from the nominal construction request. It never
+        // owns an independent structural interface.
+        const structural_root = (try checkedRecordLiteralStructuralRoot(
+            allocator,
+            checked_types,
+            expr.ty,
+        )) orelse continue;
+
+        record_field_roots.clearRetainingCapacity();
+        for (expr.data.record.fields) |field| try record_field_roots.append(
+            allocator,
+            try checkedRecordLiteralFieldType(
+                allocator,
+                names,
+                checked_types,
+                structural_root,
+                field.label,
+            ),
+        );
+        record_by_expr[raw_expr].shape = try publishSpecializationRecordShape(
+            allocator,
+            checked_types,
+            &concrete_sources,
+            record_field_roots.items,
+            &record_shape_by_key,
+            &owned_record_shape_keys,
+            &shapes,
+            &slots,
+            &occurrences,
+            &projections,
+        );
+
+        const field_flow_start: u32 = @intCast(operand_flows.items.len);
+        for (expr.data.record.fields) |field| try operand_flows.append(
+            allocator,
+            value_flows_by_expr[@intFromEnum(field.value)],
+        );
+        record_by_expr[raw_expr].field_flows = .{
+            .start = field_flow_start,
+            .len = @intCast(expr.data.record.fields.len),
+        };
+        record_by_expr[raw_expr].field_consumer_binding_spans = try appendEmptyCallConsumerBindingSpans(
+            allocator,
+            expr.data.record.fields.len,
+            &consumer_binding_spans,
+        );
+        for (expr.data.record.fields, record_field_roots.items, 0..) |field, formal, index| {
+            if (value_flows_by_expr[@intFromEnum(field.value)] == .produced) continue;
+            consumer_binding_spans.items[record_by_expr[raw_expr].field_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
+                allocator,
+                checked_types,
+                &concrete_sources,
+                formal,
+                checked_bodies.expr(field.value).ty,
+                &consumer_bindings,
+            );
+        }
     }
     for (static_dispatch_plans.plans) |plan| {
         if (checked_bodies.exprContainsDiagnosticError(plan.expr)) continue;
@@ -19217,6 +19515,7 @@ fn publishSpecializationCallPlans(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             checked_bodies.expr(plan.expr).ty,
             dispatch_function.ret,
             &consumer_bindings,
@@ -19244,6 +19543,7 @@ fn publishSpecializationCallPlans(
         _ = try compileCallConsumerBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             dispatch_function.ret,
             checked_bodies.expr(plan.expr).ty,
             &consumer_bindings,
@@ -19257,6 +19557,7 @@ fn publishSpecializationCallPlans(
             _ = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 dispatch_function.args[index],
                 actual,
                 &consumer_bindings,
@@ -19280,6 +19581,7 @@ fn publishSpecializationCallPlans(
             consumer_binding_spans.items[by_expr[raw_plan_expr].operand_consumer_binding_spans.start + index] = try compileCallConsumerBindings(
                 allocator,
                 checked_types,
+                &concrete_sources,
                 dispatch_function.args[index],
                 actual,
                 &consumer_bindings,
@@ -19406,6 +19708,7 @@ fn publishSpecializationCallPlans(
         try publishIteratorCallBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             checked_bodies,
             static_dispatch_plans,
             plan.iter,
@@ -19451,6 +19754,7 @@ fn publishSpecializationCallPlans(
         try publishIteratorCallBindings(
             allocator,
             checked_types,
+            &concrete_sources,
             checked_bodies,
             static_dispatch_plans,
             plan.next,
@@ -19494,6 +19798,7 @@ fn publishSpecializationCallPlans(
     }
 
     templates.specialization_call_plans_by_expr = by_expr;
+    templates.specialization_record_plans_by_expr = record_by_expr;
     templates.specialization_target_relations_by_type = target_relations.by_type;
     templates.specialization_target_relation_entries = target_relations.entries;
     templates.specialization_target_identity_relations = target_relations.relations;
@@ -19549,12 +19854,11 @@ fn collectSpecializationCallOccurrences(
     raw_root: CheckedTypeId,
     raw_projection: SpecializationProjection,
     produced: bool,
-    substitutions: *std.ArrayList(SpecializationProjectionSubstitution),
     active: *collections.DenseMap(CheckedTypeId, void),
     projections: *std.ArrayList(SpecializationProjection),
     builds: *std.ArrayList(SpecializationCallSlotBuild),
 ) Allocator.Error!?u32 {
-    const root = specializationProjectionSubstitute(substitutions.items, raw_root);
+    const root = raw_root;
     var projection = raw_projection;
     projection.checked = root;
     const projection_start = projections.items.len;
@@ -19579,7 +19883,6 @@ fn collectSpecializationCallOccurrences(
         .alias_argument,
         .alias_backing,
         .nominal_argument,
-        .nominal_representation,
         .function_argument,
         .function_result,
         .tuple_item,
@@ -19591,6 +19894,8 @@ fn collectSpecializationCallOccurrences(
     };
     const payload = checked_types.store.payload(root);
     const generated_nominal = checkedTypeIsGeneratedNominal(payload);
+    const required_concrete_root = projection.parent == no_specialization_projection_parent and
+        projection.root_source == .concrete_checked;
     var has_output = false;
     if (checkedTypePayloadIsIdentity(payload)) {
         try appendSpecializationCallOccurrence(
@@ -19627,8 +19932,8 @@ fn collectSpecializationCallOccurrences(
         if (generated_nominal) {
             checkedArtifactInvariant("content-addressed generated nominal construction contained a cycle", .{});
         }
-        if (!has_output) projections.shrinkRetainingCapacity(projection_start);
-        return if (has_output) projection_index else null;
+        if (!has_output and !required_concrete_root) projections.shrinkRetainingCapacity(projection_start);
+        return if (has_output or required_concrete_root) projection_index else null;
     }
     defer _ = active.remove(root);
 
@@ -19642,7 +19947,7 @@ fn collectSpecializationCallOccurrences(
                     .index = @intCast(index),
                     .payload_index = 0,
                     .step = .alias_argument,
-                }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }, produced, active, projections, builds)) != null or has_output;
             }
             has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, alias.backing, .{
                 .checked = alias.backing,
@@ -19650,47 +19955,9 @@ fn collectSpecializationCallOccurrences(
                 .index = 0,
                 .payload_index = 0,
                 .step = .alias_backing,
-            }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }, produced, active, projections, builds)) != null or has_output;
         },
-        .nominal => |nominal| nominal_blk: {
-            if (nominal.builtin) |builtin_nominal| {
-                if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal) {
-                    const declaration = checked_types.store.nominalDeclarationForPayload(nominal) orelse
-                        checkedArtifactInvariant("Try specialization projection had no checked declaration", .{});
-                    const backing = checked_types.store.nominalBackingTemplateForPayload(nominal) orelse
-                        checkedArtifactInvariant("Try specialization projection had no checked backing", .{});
-                    const formals = declaration.formalArgs(&checked_types.store);
-                    if (formals.len != nominal.args.len) {
-                        checkedArtifactInvariant("Try specialization projection backing arity did not match", .{});
-                    }
-                    const substitution_start = substitutions.items.len;
-                    defer substitutions.shrinkRetainingCapacity(substitution_start);
-                    for (formals, nominal.args) |formal, actual| {
-                        try substitutions.append(allocator, .{
-                            .formal = formal,
-                            .actual = specializationProjectionSubstitute(substitutions.items[0..substitution_start], actual),
-                        });
-                    }
-                    has_output = (try collectSpecializationCallOccurrences(
-                        allocator,
-                        checked_types,
-                        backing,
-                        .{
-                            .checked = backing,
-                            .parent = projection_index,
-                            .index = 0,
-                            .payload_index = 0,
-                            .step = .nominal_representation,
-                        },
-                        produced,
-                        substitutions,
-                        active,
-                        projections,
-                        builds,
-                    )) != null or has_output;
-                    break :nominal_blk;
-                }
-            }
+        .nominal => |nominal| {
             // A nominal is atomic once encountered. Only its explicitly
             // declared public arguments are legal outgoing projection edges;
             // generated backing is never traversed.
@@ -19701,7 +19968,7 @@ fn collectSpecializationCallOccurrences(
                     .index = @intCast(index),
                     .payload_index = 0,
                     .step = .nominal_argument,
-                }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }, produced, active, projections, builds)) != null or has_output;
             }
         },
         .function => |function| {
@@ -19712,7 +19979,7 @@ fn collectSpecializationCallOccurrences(
                     .index = @intCast(index),
                     .payload_index = 0,
                     .step = .function_argument,
-                }, false, substitutions, active, projections, builds)) != null or has_output;
+                }, false, active, projections, builds)) != null or has_output;
             }
             has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, function.ret, .{
                 .checked = function.ret,
@@ -19720,7 +19987,7 @@ fn collectSpecializationCallOccurrences(
                 .index = 0,
                 .payload_index = 0,
                 .step = .function_result,
-            }, true, substitutions, active, projections, builds)) != null or has_output;
+            }, true, active, projections, builds)) != null or has_output;
         },
         .tuple => |items| {
             for (items, 0..) |item, index| {
@@ -19730,7 +19997,7 @@ fn collectSpecializationCallOccurrences(
                     .index = @intCast(index),
                     .payload_index = 0,
                     .step = .tuple_item,
-                }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }, produced, active, projections, builds)) != null or has_output;
             }
         },
         .record, .record_unbound => {
@@ -19742,7 +20009,7 @@ fn collectSpecializationCallOccurrences(
                     .index = @intCast(index),
                     .payload_index = 0,
                     .step = .record_field,
-                }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }, produced, active, projections, builds)) != null or has_output;
             }
             if (parts.ext) |ext| {
                 has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, ext, .{
@@ -19751,7 +20018,7 @@ fn collectSpecializationCallOccurrences(
                     .index = 0,
                     .payload_index = 0,
                     .step = .record_remainder,
-                }, produced, substitutions, active, projections, builds)) != null or has_output;
+                }, produced, active, projections, builds)) != null or has_output;
             }
         },
         .tag_union => |tag_union| {
@@ -19763,7 +20030,7 @@ fn collectSpecializationCallOccurrences(
                         .index = @intCast(tag_index),
                         .payload_index = @intCast(payload_index),
                         .step = .tag_payload,
-                    }, produced, substitutions, active, projections, builds)) != null or has_output;
+                    }, produced, active, projections, builds)) != null or has_output;
                 }
             }
             has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, tag_union.ext, .{
@@ -19772,7 +20039,7 @@ fn collectSpecializationCallOccurrences(
                 .index = 0,
                 .payload_index = 0,
                 .step = .tag_remainder,
-            }, produced, substitutions, active, projections, builds)) != null or has_output;
+            }, produced, active, projections, builds)) != null or has_output;
         },
         .pending => checkedArtifactInvariant("call specialization occurrence reached an unfinished checked type", .{}),
         .err, .empty_record, .empty_tag_union => {},
@@ -19793,8 +20060,8 @@ fn collectSpecializationCallOccurrences(
         );
         has_output = true;
     }
-    if (!has_output) projections.shrinkRetainingCapacity(projection_start);
-    return if (has_output) projection_index else null;
+    if (!has_output and !required_concrete_root) projections.shrinkRetainingCapacity(projection_start);
+    return if (has_output or required_concrete_root) projection_index else null;
 }
 
 const CheckedTemplateRefCollector = struct {
@@ -20865,6 +21132,8 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Dense checked-expression column for ordinary and static-dispatch call
     /// plans.
     specialization_call_plans_by_expr: []SpecializationCallPlan = &.{},
+    /// Dense checked-expression column for record-literal field interfaces.
+    specialization_record_plans_by_expr: []SpecializationRecordPlan = &.{},
     /// Dense checked-type column. Each source callable indexes the concrete
     /// dispatch-target correspondences checking published for it.
     specialization_target_relations_by_type: []artifact_serialize.Span = &.{},
@@ -20922,6 +21191,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_identity_slots: SerializedSlice(SpecializationIdentitySlot) = .{},
         specialization_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
         specialization_call_plans_by_expr: SerializedSlice(SpecializationCallPlan) = .{},
+        specialization_record_plans_by_expr: SerializedSlice(SpecializationRecordPlan) = .{},
         specialization_target_relations_by_type: SerializedSlice(artifact_serialize.Span) = .{},
         specialization_target_relation_entries: SerializedSlice(SpecializationTargetRelationEntry) = .{},
         specialization_target_identity_relations: SerializedSlice(SpecializationTargetIdentityRelation) = .{},
@@ -21183,6 +21453,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_identity_slots);
         allocator.free(self.specialization_concrete_selections);
         allocator.free(self.specialization_call_plans_by_expr);
+        allocator.free(self.specialization_record_plans_by_expr);
         allocator.free(self.specialization_target_relations_by_type);
         allocator.free(self.specialization_target_relation_entries);
         allocator.free(self.specialization_target_identity_relations);
@@ -21276,6 +21547,31 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.specializationCallPlanView(self.specialization_call_plans_by_expr[@intFromEnum(expr)]);
     }
 
+    pub fn specializationRecordPlanForExpr(
+        self: *const CheckedProcedureTemplateTable,
+        expr: CheckedExprId,
+    ) SpecializationProjectionPlanView {
+        const raw = @intFromEnum(expr);
+        if (raw >= self.specialization_record_plans_by_expr.len) {
+            checkedArtifactInvariant("record expression exceeded its specialization-plan column", .{});
+        }
+        const plan = self.specialization_record_plans_by_expr[raw];
+        const raw_shape = @intFromEnum(plan.shape);
+        if (plan.shape == no_specialization_call_shape or raw_shape >= self.specialization_call_shapes.len) {
+            checkedArtifactInvariant("record expression had no checker-published field projection plan", .{});
+        }
+        const shape = self.specialization_call_shapes[raw_shape];
+        return .{
+            .slots = self.specialization_call_slots[shape.slots.start .. shape.slots.start + shape.slots.len],
+            .projections = self.specialization_call_projections[shape.projections.start .. shape.projections.start + shape.projections.len],
+            .operand_flows = self.specialization_call_operand_flows[plan.field_flows.start .. plan.field_flows.start + plan.field_flows.len],
+            .context_bindings = &.{},
+            .selection_bindings = &.{},
+            .callee_consumer_bindings = &.{},
+            .operand_consumer_binding_spans = self.specialization_call_consumer_binding_spans[plan.field_consumer_binding_spans.start .. plan.field_consumer_binding_spans.start + plan.field_consumer_binding_spans.len],
+        };
+    }
+
     pub fn specializationValueFlowForExpr(
         self: *const CheckedProcedureTemplateTable,
         expr: CheckedExprId,
@@ -21292,8 +21588,16 @@ pub const CheckedProcedureTemplateTable = struct {
         plan: SpecializationCallPlanView,
         index: usize,
     ) []const SpecializationCallConsumerBinding {
+        return self.specializationProjectionOperandConsumerBindings(plan, index);
+    }
+
+    pub fn specializationProjectionOperandConsumerBindings(
+        self: *const CheckedProcedureTemplateTable,
+        plan: SpecializationProjectionPlanView,
+        index: usize,
+    ) []const SpecializationCallConsumerBinding {
         if (index >= plan.operand_consumer_binding_spans.len) {
-            checkedArtifactInvariant("call operand exceeded its consumer-binding column", .{});
+            checkedArtifactInvariant("specialization operand exceeded its consumer-binding column", .{});
         }
         const span = plan.operand_consumer_binding_spans[index];
         return self.specialization_call_consumer_bindings[span.start .. span.start + span.len];
@@ -30897,7 +31201,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 227);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 228);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -31047,7 +31351,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 65;
+    const serialized_layout_version: u32 = 66;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36933,8 +37237,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x00, 0x3D, 0xC0, 0x66, 0x15, 0x70, 0x64, 0x76, 0xF1, 0xDB, 0x81, 0xBF, 0x28, 0x52, 0xA4, 0xC2,
-        0x00, 0x2B, 0x41, 0xCE, 0x29, 0x33, 0xD6, 0x4A, 0x1A, 0x07, 0xBA, 0x9A, 0x88, 0x1B, 0xA6, 0xF5,
+        0xF2, 0x22, 0x60, 0x10, 0x17, 0xC8, 0x65, 0x21, 0xDD, 0xCB, 0x42, 0xB5, 0x27, 0xAE, 0xE0, 0xD0,
+        0xEF, 0x13, 0xD5, 0x3F, 0xF0, 0xA8, 0xDF, 0x6A, 0x52, 0x24, 0x6B, 0xA7, 0xEE, 0xF3, 0x2C, 0xAC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

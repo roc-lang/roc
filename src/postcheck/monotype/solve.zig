@@ -2119,6 +2119,75 @@ pub const InstGraph = struct {
         } });
     }
 
+    /// Copy one record row while replacing exactly one named immediate field.
+    /// This is the reverse operation of a checker-authored `record_field`
+    /// projection; unrelated child nodes remain shared with the base row.
+    pub fn recordWithProjectedField(
+        self: *InstGraph,
+        raw_record: NodeId,
+        name: names.RecordFieldNameId,
+        child: NodeId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_record, "record projection rebuild", .inspectable);
+        if (self.content(structural) != .record) {
+            Common.invariant("record projection rebuild had a non-record node");
+        }
+        const row = try self.flattenRecordRow(structural);
+        const fields = try self.arena().dupe(InstField, row.fields);
+        const wanted = self.fieldLabelText(name);
+        var replaced = false;
+        for (fields) |*field| {
+            if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
+            field.ty = self.find(child);
+            replaced = true;
+            break;
+        }
+        if (!replaced) Common.invariant("record projection rebuild named an absent field");
+        return try self.newNode(.{ .record = .{ .fields = fields, .ext = row.ext } });
+    }
+
+    /// Copy one record row while replacing its checker-declared remainder.
+    /// Only the explicitly excluded head fields are retained from the base;
+    /// the supplied exact remainder contributes its fields and tail.
+    pub fn recordWithProjectedRemainder(
+        self: *InstGraph,
+        raw_record: NodeId,
+        excluded: []const names.RecordFieldNameId,
+        raw_remainder: NodeId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_record, "record remainder rebuild", .inspectable);
+        if (self.content(structural) != .record) {
+            Common.invariant("record remainder rebuild had a non-record node");
+        }
+        const base_row = try self.flattenRecordRow(structural);
+        var fields = std.ArrayList(InstField).empty;
+        defer fields.deinit(self.allocator);
+        for (excluded) |name| {
+            const wanted = self.fieldLabelText(name);
+            for (base_row.fields) |field| {
+                if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
+                try fields.append(self.allocator, field);
+                break;
+            } else Common.invariant("record remainder rebuild named an absent base field");
+        }
+
+        const remainder = self.find(raw_remainder);
+        const remainder_ext = switch (self.content(remainder)) {
+            .record => blk: {
+                const row = try self.flattenRecordRow(remainder);
+                try fields.appendSlice(self.allocator, row.fields);
+                break :blk row.ext;
+            },
+            .empty_record, .unresolved => remainder,
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("record remainder rebuild received a non-record remainder"),
+        };
+        if (fields.items.len == 0) return remainder_ext;
+        return try self.newNode(.{ .record = .{
+            .fields = try self.arena().dupe(InstField, fields.items),
+            .ext = remainder_ext,
+        } });
+    }
+
     /// Project the semantic open-tag-row remainder after the checker-published
     /// tags. The returned node contains only tags not owned by the enclosing
     /// checked row and preserves the exact produced tail node.
@@ -2157,6 +2226,76 @@ pub const InstGraph = struct {
         return try self.newNode(.{ .tag_union = .{
             .tags = try self.arena().dupe(InstTag, retained.items),
             .ext = row.ext,
+        } });
+    }
+
+    /// Copy one tag row while replacing one checker-declared payload edge.
+    pub fn tagUnionWithProjectedPayload(
+        self: *InstGraph,
+        raw_union: NodeId,
+        name: names.TagNameId,
+        payload_index: usize,
+        child: NodeId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_union, "tag payload rebuild", .inspectable);
+        if (self.content(structural) != .tag_union) {
+            Common.invariant("tag payload rebuild had a non-tag-union node");
+        }
+        const row = try self.flattenTagRow(structural);
+        const tags = try self.arena().dupe(InstTag, row.tags);
+        const wanted = self.tagLabelText(name);
+        var replaced = false;
+        for (tags) |*tag| {
+            if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
+            if (payload_index >= tag.payloads.len) {
+                Common.invariant("tag payload rebuild exceeded the checked payload arity");
+            }
+            tag.payloads = try self.arena().dupe(NodeId, tag.payloads);
+            tag.payloads[payload_index] = self.find(child);
+            replaced = true;
+            break;
+        }
+        if (!replaced) Common.invariant("tag payload rebuild named an absent tag");
+        return try self.newNode(.{ .tag_union = .{ .tags = tags, .ext = row.ext } });
+    }
+
+    /// Copy one tag row while replacing its checker-declared remainder.
+    pub fn tagUnionWithProjectedRemainder(
+        self: *InstGraph,
+        raw_union: NodeId,
+        excluded: []const names.TagNameId,
+        raw_remainder: NodeId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_union, "tag remainder rebuild", .inspectable);
+        if (self.content(structural) != .tag_union) {
+            Common.invariant("tag remainder rebuild had a non-tag-union node");
+        }
+        const base_row = try self.flattenTagRow(structural);
+        var tags = std.ArrayList(InstTag).empty;
+        defer tags.deinit(self.allocator);
+        for (excluded) |name| {
+            const wanted = self.tagLabelText(name);
+            for (base_row.tags) |tag| {
+                if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
+                try tags.append(self.allocator, tag);
+                break;
+            } else Common.invariant("tag remainder rebuild named an absent base tag");
+        }
+
+        const remainder = self.find(raw_remainder);
+        const remainder_ext = switch (self.content(remainder)) {
+            .tag_union => blk: {
+                const row = try self.flattenTagRow(remainder);
+                try tags.appendSlice(self.allocator, row.tags);
+                break :blk row.ext;
+            },
+            .empty_tag_union, .unresolved => remainder,
+            .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("tag remainder rebuild received a non-tag remainder"),
+        };
+        if (tags.items.len == 0) return remainder_ext;
+        return try self.newNode(.{ .tag_union = .{
+            .tags = try self.arena().dupe(InstTag, tags.items),
+            .ext = remainder_ext,
         } });
     }
 

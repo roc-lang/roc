@@ -2765,6 +2765,26 @@ calls avoid both duplicate storage and duplicate traversal. A composite
 interner key is appropriate here because the identity is a tuple; every table
 key that is itself an assigned ID remains a dense column.
 
+A structural record literal with a contextual field owns the same kind of
+explicit directional interface, scoped to that constructor. Checking records
+the result-row type of every source-order field as one producer root, the
+produced-or-requested direction of each field expression, and the direct
+formal-to-expression bindings for each requested field. Lowering first runs
+independent producers, appends only the projections rooted at the fields that
+just completed, and materializes a requested field by rebuilding only its
+changed projection paths. After a requested field returns, that exact node is
+itself a producer for later fields. Lowering never searches the record result
+row for a label and never instantiates a complete field type under an ambient
+substitution table.
+
+Record syntax used as the private backing expression of a nominal does not own
+an independent structural interface. The nominal constructor is the explicit
+parent operation: it supplies the exact backing record and immediate field
+destinations, and the record returns the parent formed from those exact child
+nodes. This is distinct from absence of a record plan as a runtime fallback;
+the nominal-construction route and structural-record route are separate
+checker-authored operations.
+
 There is no per-checked-type value plan and no precompiled projection tree for
 an arbitrary complete value. Exact destinations stay exact through transparent
 expressions such as blocks and control-flow wrappers. Compounds request or read
@@ -2814,6 +2834,17 @@ producer encounters it. No enclosing list, tuple, record, tag, nominal, or
 function asks whether any descendant is generated, and no edge descends into a
 generated nominal's backing. The checked plan names the generated slot itself;
 the producer records the exact node at that point.
+
+An ordinary nominal's identity is its declaration plus its exact public type
+arguments. Its declaration backing is a function of those arguments, not an
+additional identity input and not another substitution root. A directional
+projection may therefore enter the nominal's public arguments, rebuild the
+ordinary nominal from changed argument nodes, and construct the corresponding
+backing once. It never projects through the declaration backing. This applies
+to ordinary builtin nominals such as `Try` as well as user declarations. A
+content-addressed generated nominal is stricter still: it is atomic at the
+nominal occurrence, so even its public arguments are consumed only by the
+explicit generated-construction operation that precedes the slot.
 
 A checked-view mapping may relate an ordinary checked nominal view to its
 declared structural backing. This is not an inferred type relation: the
@@ -2927,10 +2958,11 @@ might eventually occur.
 One function specialization owns an immutable checked interface and a flat
 dense substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
-operands. Collecting ordinary polymorphic substitutions visits only the checked
-and produced operand structures that the call relates. Materialization then
-materializes only paths changed by those substitutions; it treats a generated
-generated nominal as an atomic leaf and never enters its private backing. The
+operands by evaluating only the checker-published producer projections whose
+root edge has just completed. It never walks a checked operand beside a
+produced operand. Materialization rebuilds only ancestors on projection paths
+whose flat selections changed; it treats a generated nominal as an atomic leaf
+and never enters its private backing. The
 specialization key reads the checked interface through the span, and the body
 uses the same span to return exact selected nodes directly from checked
 occurrences instead of copying the function graph. The body stores the
