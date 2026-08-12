@@ -64,4 +64,9 @@ test {
     std.testing.refAllDecls(@import("generalize.zig"));
     std.testing.refAllDecls(@import("numeral.zig"));
     std.testing.refAllDecls(@import("literal_defaulting.zig"));
+    // A file's tests are collected only once some analyzed declaration
+    // evaluates its import. `pub const TypeWriter` above is lazily analyzed
+    // and nothing inside this module references it, so naming the file here
+    // is what puts its tests in the `types` test binary.
+    std.testing.refAllDecls(@import("TypeWriter.zig"));
 }

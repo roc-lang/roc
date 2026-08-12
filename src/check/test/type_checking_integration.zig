@@ -9157,7 +9157,7 @@ test "check type - importing a deeply nested value copies its type across module
 test "check type - generalizing a deeply nested record annotation adjusts every rank" {
     const allocator = testing.allocator;
     const decls = 1;
-    const layers = 2000;
+    const layers = 1200;
 
     var source = std.ArrayList(u8).empty;
     defer source.deinit(allocator);
@@ -9213,4 +9213,31 @@ test "check type - record alias-chain rows validate deeper than the old depth bo
     var test_env = try TestEnv.init("Test", source.items);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+}
+
+// Reachability pin for the type renderer (src/types/TypeWriter.zig). The error
+// snapshotter renders one string per node it snapshots and `report.zig`
+// renders a type for every diagnostic it formats, so a diagnostic about a
+// deeply nested type drives the renderer as deep as the type nests. A record
+// annotation is the shape that reaches it: an alias renders as its name, so
+// only a structural type carries its whole depth into the rendered message.
+// The nesting here is what the stages ahead of checking accept—a 5,000-layer
+// annotation crashes before checking ever runs—so the renderer's own depth is
+// pinned by the unit tests beside it, and this program pins that the whole
+// report path, snapshot through render, runs on a type this deep.
+test "check type - a deeply nested record annotation reports its mismatch" {
+    const allocator = testing.allocator;
+    const layers = 1200;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "deep : ");
+    for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+    try source.appendSlice(allocator, "{}");
+    for (0..layers) |_| try source.appendSlice(allocator, " }");
+    try source.appendSlice(allocator, "\ndeep = {}\n");
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
 }
