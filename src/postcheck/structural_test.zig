@@ -499,11 +499,12 @@ test "Monotype lowering carries exact produced types without containment scans" 
     );
     try expectContains(generated_call_identity, "slot.generated_argument_source");
     try expectContains(generated_call_identity, ".exact_selection => self.exactSelectionForChecked(");
-    try expectContains(generated_call_identity, ".checked_substitution => try self.materializeCallProjectionSubtree(");
+    try expectContains(generated_call_identity, ".checked_substitution => blk:");
     try expectContains(generated_call_identity, "slot.generated_argument_projection");
+    try expectContains(generated_call_identity, "projection.checked != nominal.args[0]");
     try expectNotContains(generated_call_identity, "for (plan.projections");
     try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
-    try expectContains(generated_call_identity, "materializeCallProjectionSubtree(");
+    try expectContains(generated_call_identity, "self.materializeCheckedCallNode(");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentCheckedBaseNode(");
     try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
     try expectContains(generated_call_identity, "generatedFieldNominalNode(");

@@ -77,13 +77,13 @@ const FieldKindNode = struct {
     parent: FieldKindId,
     rank: u8 = 0,
     resolved: ?ResolvedFieldKind = null,
-    cells: ?FieldKindCells = null,
 };
 
 /// The exact cells whose representation is selected by one generalized field
 /// kind. Producers register these when they instantiate the field; relation
 /// freeze consumes them if no earlier specialization evidence selected a kind.
 const FieldKindCells = struct {
+    kind: FieldKindId,
     slot: NodeId,
     value: NodeId,
 };
@@ -384,11 +384,12 @@ pub const InstGraph = struct {
     allocator: Allocator,
     relation_state: RelationState,
     types: *Type.Store,
-    name_store: *const names.NameStore,
+    name_store: *names.NameStore,
     diagnostics: ?*GraphDiagnostics,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     field_kinds: std.ArrayList(FieldKindNode),
+    field_kind_cells: std.ArrayList(FieldKindCells),
     /// Ordinary primitive types are atomic identities. Reusing one node per
     /// primitive keeps independently encountered exact values identical
     /// without hashing or comparing any enclosing type graph.
@@ -465,7 +466,7 @@ pub const InstGraph = struct {
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
-        name_store: *const names.NameStore,
+        name_store: *names.NameStore,
     ) Allocator.Error!*InstGraph {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
@@ -477,6 +478,7 @@ pub const InstGraph = struct {
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
             .field_kinds = .empty,
+            .field_kind_cells = .empty,
             .primitive_nodes = @splat(null),
             .empty_tag_union_node = null,
             .empty_record_node = null,
@@ -565,6 +567,7 @@ pub const InstGraph = struct {
         self.versions.deinit(allocator);
         self.checked_base_nodes.deinit(allocator);
         self.nodes.deinit(allocator);
+        self.field_kind_cells.deinit(allocator);
         self.field_kinds.deinit(allocator);
         self.arena_impl.deinit();
         allocator.destroy(self);
@@ -585,30 +588,14 @@ pub const InstGraph = struct {
         raw: FieldKindId,
         slot: NodeId,
         value: NodeId,
-    ) void {
+    ) Allocator.Error!void {
         self.requireRelationProduction();
         const root = self.findFieldKind(raw);
-        const node = &self.field_kinds.items[@intFromEnum(root)];
-        if (node.cells != null) {
-            Common.invariant("instantiation field kind registered its representation cells more than once");
-        }
-        node.cells = .{ .slot = slot, .value = value };
-    }
-
-    /// Attach another occurrence of the checked value type governed by this
-    /// exact field-kind identity. The field-kind edge—not a post-hoc runtime
-    /// graph comparison—is the explicit reason these value cells relate.
-    pub fn relateUndeterminedFieldKindValue(
-        self: *InstGraph,
-        raw: FieldKindId,
-        value: NodeId,
-    ) Allocator.Error!NodeId {
-        self.requireRelationProduction();
-        const root = self.findFieldKind(raw);
-        const cells = self.field_kinds.items[@intFromEnum(root)].cells orelse
-            Common.invariant("instantiation field kind related a value before registering its representation cells");
-        try self.unify(cells.value, value);
-        return self.find(cells.value);
+        try self.field_kind_cells.append(self.allocator, .{
+            .kind = root,
+            .slot = slot,
+            .value = value,
+        });
     }
 
     fn findFieldKind(self: *InstGraph, raw: FieldKindId) FieldKindId {
@@ -664,13 +651,9 @@ pub const InstGraph = struct {
             std.mem.swap(FieldKindId, &left, &right);
         }
         const right_state = self.field_kinds.items[@intFromEnum(right)].resolved;
-        const right_cells = self.field_kinds.items[@intFromEnum(right)].cells;
         self.field_kinds.items[@intFromEnum(right)].parent = left;
         if (self.field_kinds.items[@intFromEnum(left)].rank == self.field_kinds.items[@intFromEnum(right)].rank) {
             self.field_kinds.items[@intFromEnum(left)].rank += 1;
-        }
-        if (self.field_kinds.items[@intFromEnum(left)].cells == null) {
-            self.field_kinds.items[@intFromEnum(left)].cells = right_cells;
         }
         if (right_state) |resolved| self.constrainUndeterminedFieldKind(left, resolved);
         return self.findFieldKind(left);
@@ -1180,10 +1163,28 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Commit every generalized field kind that received no concrete
-    /// specialization evidence. The field-kind producer recorded the exact
-    /// runtime-slot/source-value pair, so required defaulting relates those
-    /// cells directly without inspecting or reconstructing a row shape.
+    fn optionalFieldSlotNode(self: *InstGraph, value: NodeId) Allocator.Error!NodeId {
+        const missing = try self.name_store.internTagLabel("#Missing");
+        const present = try self.name_store.internTagLabel("#Present");
+        const tags = try self.arena().alloc(InstTag, 2);
+        tags[0] = .{ .name = missing, .checked_name = missing, .payloads = &.{} };
+        tags[1] = .{
+            .name = present,
+            .checked_name = present,
+            .payloads = try self.arena().dupe(NodeId, &.{value}),
+        };
+        return try self.newNode(.{
+            .tag_union = .{
+                .tags = tags,
+                .ext = try self.newNode(.empty_tag_union),
+            },
+        });
+    }
+
+    /// Commit every generalized field kind and complete each occurrence's
+    /// private forward slot from its own exact value node. Kind identity is
+    /// shared; runtime value identity is not. No checked-base node is merged
+    /// and no record graph is traversed.
     fn finalizeUndeterminedFieldKinds(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         for (0..self.field_kinds.items.len) |raw_index| {
@@ -1191,11 +1192,19 @@ pub const InstGraph = struct {
             const root = self.findFieldKind(id);
             if (root != id) continue;
             const node = &self.field_kinds.items[raw_index];
-            if (node.resolved != null) continue;
-            const cells = node.cells orelse
-                Common.invariant("unresolved instantiation field kind had no registered representation cells");
-            node.resolved = .required;
-            try self.unify(cells.slot, cells.value);
+            _ = node.resolved orelse resolved: {
+                node.resolved = .required;
+                break :resolved ResolvedFieldKind.required;
+            };
+        }
+        for (self.field_kind_cells.items) |cells| {
+            const resolved = self.resolvedFieldKind(.{ .undetermined = cells.kind }) orelse
+                Common.invariant("field-kind occurrence remained unresolved after defaulting");
+            const representation = switch (resolved) {
+                .required, .defaulted => cells.value,
+                .optional => try self.optionalFieldSlotNode(cells.value),
+            };
+            try self.completeProducedSelection(cells.slot, representation);
         }
     }
 
@@ -2659,15 +2668,9 @@ pub const InstGraph = struct {
                     // Optional/defaulted caller evidence, when present, has
                     // already constrained this same identity; otherwise the
                     // construction itself is the explicit required evidence.
-                    // Required means the runtime slot is exactly the source
-                    // value cell, so commit that relation together with the
-                    // kind instead of leaving an unrelated placeholder slot.
+                    // The occurrence's private slot is completed directionally
+                    // from its exact value when field-kind relations freeze.
                     self.constrainUndeterminedFieldKind(id, .required);
-                    try self.unify(
-                        field.ty,
-                        field.value_ty orelse
-                            Common.invariant("undetermined constructor field carried no source value type"),
-                    );
                     return .required;
                 },
                 .sealed => return if (field.default) |default|
@@ -2766,9 +2769,7 @@ pub const InstGraph = struct {
                 self.constrainUndeterminedFieldKind(id, .required);
             },
         }
-        const value = field.value_ty orelse field.ty;
-        try self.unify(field.ty, value);
-        return self.find(field.ty);
+        return self.find(field.value_ty orelse field.ty);
     }
 
     fn optionalRecordFieldNodesWithAccess(
@@ -4878,7 +4879,7 @@ test "undetermined record field freezes to its required inline representation" {
     const value_ty = try graph.newNode(.{ .primitive = .u64 });
     const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const kind = try graph.newUndeterminedFieldKind();
-    graph.registerUndeterminedFieldKindCells(kind, slot, value_ty);
+    try graph.registerUndeterminedFieldKindCells(kind, slot, value_ty);
     const fields = try graph.arena().alloc(InstField, 1);
     fields[0] = .{
         .name = field_name,

@@ -12424,8 +12424,6 @@ const InstantiationNodeState = union(enum) {
 
 const InstantiatedFieldKind = struct {
     id: solve.FieldKindId,
-    slot: NodeId,
-    value: NodeId,
 };
 
 /// The complete mutable state for one checked-type instantiation scope. Body
@@ -16229,29 +16227,19 @@ const BodyContext = struct {
                 .undetermined => blk: {
                     const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
                         Common.invariant("undetermined checked field kind carried no presence variable"));
-                    if (self.scopedFieldKind(checked_kind)) |existing| {
-                        const related_value = try self.graph.relateUndeterminedFieldKindValue(existing.id, value_node);
-                        break :blk .{
-                            .name = name,
-                            .ty = existing.slot,
-                            .value_ty = related_value,
-                            .kind = .{ .undetermined = existing.id },
-                            .default = null,
-                        };
-                    }
                     const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-                    const kind = try self.graph.newUndeterminedFieldKind();
-                    self.graph.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
-                    const instantiated = InstantiatedFieldKind{
-                        .id = kind,
-                        .slot = slot_node,
-                        .value = value_node,
+                    const instantiated = self.scopedFieldKind(checked_kind) orelse instantiated: {
+                        const fresh = InstantiatedFieldKind{
+                            .id = try self.graph.newUndeterminedFieldKind(),
+                        };
+                        try self.putScopedFieldKind(checked_kind, fresh);
+                        break :instantiated fresh;
                     };
-                    try self.putScopedFieldKind(checked_kind, instantiated);
+                    try self.graph.registerUndeterminedFieldKindCells(instantiated.id, slot_node, value_node);
                     break :blk .{
                         .name = name,
-                        .ty = instantiated.slot,
-                        .value_ty = instantiated.value,
+                        .ty = slot_node,
+                        .value_ty = value_node,
                         .kind = .{ .undetermined = instantiated.id },
                         .default = null,
                     };
@@ -16786,14 +16774,25 @@ const BodyContext = struct {
                     .return_,
                     .for_,
                     .run_low_level,
-                    => .{
-                        .args = .empty(),
-                        .body = try self.lowerExprAtTypeCell(body.root_expr, ret_cell),
-                        .ret = ret_cell,
+                    => body_root: {
+                        const result_relation = try self.functionRequestReturnRelation(fn_node);
+                        const body_expr = switch (result_relation) {
+                            .exact_request => try self.lowerExprAtExactRequest(body.root_expr, ret_cell),
+                            .checked_mapping, .exact_producer => try self.lowerExpr(body.root_expr),
+                        };
+                        break :body_root .{
+                            .args = .empty(),
+                            .body = body_expr,
+                            .ret = self.exprTypeCell(body_expr),
+                        };
                     },
                 };
             },
-            .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperAtCell(wrapper_id, ret_cell),
+            .entry_wrapper => |wrapper_id| try self.lowerEntryWrapperAtCell(
+                wrapper_id,
+                ret_cell,
+                try self.functionRequestReturnRelation(fn_node),
+            ),
             .intrinsic_wrapper => |wrapper_id| blk: {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
                 break :blk switch (wrapper.intrinsic) {
@@ -16938,6 +16937,7 @@ const BodyContext = struct {
         self: *BodyContext,
         wrapper_id: anytype,
         ret_cell: DraftTypeCell,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!LoweredTemplateBody {
         const wrapper = self.view.entry_wrappers.get(wrapper_id);
         const root = self.view.compile_time_roots.root(wrapper.root);
@@ -16968,7 +16968,11 @@ const BodyContext = struct {
             .callable_binding,
             .expect,
             .field_default,
-            => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
+            => try self.lowerComptimeRootExprAtCell(
+                wrapper.body_expr,
+                ret_cell,
+                destination_relation,
+            ),
         };
         const body_ret_cell = self.exprTypeCell(body);
         self.draft.exprs.items[@intFromEnum(body)].ty = body_ret_cell;
@@ -17845,10 +17849,14 @@ const BodyContext = struct {
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
         cell: DraftTypeCell,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const exhaustiveness_scope = self.comptime_exhaustiveness_context.enterCompileTimeRoot();
         defer exhaustiveness_scope.leave();
-        return try self.lowerExprAtTypeCell(expr_id, cell);
+        return switch (destination_relation) {
+            .exact_request => try self.lowerExprAtExactRequest(expr_id, cell),
+            .checked_mapping, .exact_producer => try self.lowerExpr(expr_id),
+        };
     }
 
     fn shouldRecordComptimeSite(self: *const BodyContext, kind: ExhaustivenessContext.SiteKind) bool {
@@ -18873,7 +18881,11 @@ const BodyContext = struct {
 
         const request_cell = DraftTypeCell.fromGraphNode(request_fn_node);
         const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
-        const lowered = try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
+        const lowered = try self.lowerComptimeRootExprAtCell(
+            body_expr,
+            request_cell,
+            .exact_request,
+        );
         return try self.finishCallableEvalBinding(view, root_id, request_cell, local, lowered);
     }
 
@@ -26012,8 +26024,8 @@ const BodyContext = struct {
         }
 
         const root = plan.projections[root_projection];
-        if (root.parent != checked.no_specialization_projection_parent) {
-            Common.invariant("call projection materialization received a non-root edge");
+        if (root.parent != checked.no_specialization_projection_parent and root_base.checked != null) {
+            Common.invariant("a call child projection cannot own a whole-root producer cell");
         }
         const materialized = try self.materializeCheckedCallNode(
             plan,
@@ -26409,15 +26421,28 @@ const BodyContext = struct {
                 selections,
                 nominal.args[0],
             ) orelse return null,
-            .checked_substitution => try self.materializeCallProjectionSubtree(
-                plan,
-                if (slot.generated_argument_projection != checked.no_specialization_projection_parent)
+            .checked_substitution => blk: {
+                const projection_index = if (slot.generated_argument_projection != checked.no_specialization_projection_parent)
                     slot.generated_argument_projection
                 else
-                    Common.invariant("exact-argument generated slot had no checker-authored public-argument edge"),
-                selections,
-                .{ .checked = null },
-            ),
+                    Common.invariant("exact-argument generated slot had no checker-authored public-argument edge");
+                if (projection_index >= plan.projections.len) {
+                    Common.invariant("exact-argument generated slot referenced a missing public-argument edge");
+                }
+                const projection = plan.projections[projection_index];
+                if (projection.checked != nominal.args[0]) {
+                    Common.invariant("exact-argument generated slot public-argument edge had the wrong checked type");
+                }
+                // This is deliberately the declared child edge, not the
+                // occurrence's whole call root. Construct the public argument
+                // once from the call's flat substitution span at the point
+                // where generated-nominal construction consumes that child.
+                break :blk try self.materializeCheckedCallNode(
+                    plan,
+                    selections,
+                    projection.checked,
+                );
+            },
             .concrete_checked => try self.persistentCheckedBaseNode(nominal.args[0]),
         };
         if (!try self.graph.typeIsResolved(public_arg)) {
@@ -28995,6 +29020,7 @@ const BodyContext = struct {
         const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
             DraftTypeCell.fromGraphNode(request_node),
+            .exact_producer,
         );
         if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
         return restored;
@@ -29438,10 +29464,18 @@ const BodyContext = struct {
         if (request_fields.len != fields.len) {
             Common.invariant("restored ConstStore record field count changed during exact construction");
         }
+        const ordered_request_fields = try self.allocator.dupe(InstField, request_fields);
+        defer self.allocator.free(ordered_request_fields);
+        std.mem.sort(
+            InstField,
+            ordered_request_fields,
+            &self.builder.program.names,
+            instRecordFieldLessThan,
+        );
 
         const produced_fields = try self.graph.arena().alloc(InstField, fields.len);
         var changed = false;
-        for (fields, request_fields, produced_fields) |field, request_field, *produced_field| {
+        for (fields, ordered_request_fields, produced_fields) |field, request_field, *produced_field| {
             if (field.name != request_field.name) {
                 Common.invariant("restored ConstStore record field order differed from its request");
             }
@@ -33941,13 +33975,15 @@ const BodyContext = struct {
         const named = self.graph.content(self.constructorRepresentationNode(nominal_node)).named;
         const backing_node = (named.backing orelse
             Common.invariant("nominal constructor had no exact backing request")).node;
-        const backing = switch (destination_relation) {
-            .exact_request => try self.lowerExprAtExactRequest(
-                nominal.backing_expr,
-                DraftTypeCell.fromGraphNode(backing_node),
-            ),
-            .checked_mapping, .exact_producer => try self.lowerExpr(nominal.backing_expr),
-        };
+        _ = destination_relation;
+        // Nominal syntax is the explicit parent operation for its private
+        // backing. The declaration-selected backing node is therefore the
+        // direct child request in every context, including when the nominal
+        // itself is producing its result without an outer destination.
+        const backing = try self.lowerExprAtExactRequest(
+            nominal.backing_expr,
+            DraftTypeCell.fromGraphNode(backing_node),
+        );
         const produced_backing = try self.exprTypeCell(backing).toGraphNode(self.graph);
         const produced_node = try self.producedConstructorNode(nominal_node, produced_backing);
         return try self.addExprWithTypeCell(

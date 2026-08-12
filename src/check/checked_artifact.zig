@@ -7839,35 +7839,60 @@ const SourceTypeGraphAnalysis = struct {
 };
 
 const CheckedSourceTypeRoots = struct {
+    const OccurrenceKey = struct {
+        var_: Var,
+        row_default: ?RowDefault,
+    };
+
     roots: std.AutoHashMap(Var, CheckedTypeId),
+    occurrences: std.AutoHashMap(OccurrenceKey, CheckedTypeId),
     graph_analysis: SourceTypeGraphAnalysis,
 
     fn init(allocator: Allocator) CheckedSourceTypeRoots {
         return .{
             .roots = std.AutoHashMap(Var, CheckedTypeId).init(allocator),
+            .occurrences = std.AutoHashMap(OccurrenceKey, CheckedTypeId).init(allocator),
             .graph_analysis = SourceTypeGraphAnalysis.init(allocator),
         };
     }
 
     fn deinit(self: *CheckedSourceTypeRoots) void {
         self.graph_analysis.deinit();
+        self.occurrences.deinit();
         self.roots.deinit();
     }
 
-    fn get(self: *const CheckedSourceTypeRoots, var_: Var) ?CheckedTypeId {
-        return self.roots.get(var_);
+    fn get(self: *const CheckedSourceTypeRoots, var_: Var, row_default: ?RowDefault) ?CheckedTypeId {
+        return self.occurrences.get(.{ .var_ = var_, .row_default = row_default });
     }
 
-    fn put(self: *CheckedSourceTypeRoots, var_: Var, root: CheckedTypeId) Allocator.Error!void {
-        try self.roots.put(var_, root);
+    fn put(
+        self: *CheckedSourceTypeRoots,
+        var_: Var,
+        row_default: ?RowDefault,
+        root: CheckedTypeId,
+    ) Allocator.Error!void {
+        try self.occurrences.put(.{ .var_ = var_, .row_default = row_default }, root);
+        if (!self.roots.contains(var_)) try self.roots.put(var_, root);
     }
 
     fn ensureUnusedCapacity(self: *CheckedSourceTypeRoots, additional_count: u32) Allocator.Error!void {
         try self.roots.ensureUnusedCapacity(additional_count);
+        try self.occurrences.ensureUnusedCapacity(additional_count);
     }
 
-    fn remove(self: *CheckedSourceTypeRoots, var_: Var) bool {
-        return self.roots.remove(var_);
+    fn putAssumeCapacityNoClobber(
+        self: *CheckedSourceTypeRoots,
+        var_: Var,
+        row_default: ?RowDefault,
+        root: CheckedTypeId,
+    ) void {
+        self.occurrences.putAssumeCapacityNoClobber(.{ .var_ = var_, .row_default = row_default }, root);
+        if (!self.roots.contains(var_)) self.roots.putAssumeCapacityNoClobber(var_, root);
+    }
+
+    fn remove(self: *CheckedSourceTypeRoots, var_: Var, row_default: ?RowDefault) bool {
+        return self.occurrences.remove(.{ .var_ = var_, .row_default = row_default });
     }
 
     fn analyze(self: *CheckedSourceTypeRoots, module: TypedCIR.Module, var_: Var) Allocator.Error!SourceTypeGraphFacts {
@@ -7899,13 +7924,14 @@ fn appendCheckedTypeRootWithRowDefault(
 ) Allocator.Error!CheckedTypeId {
     const resolved = module.typeStoreConst().resolveVar(var_);
     const resolved_var = resolved.var_;
+    const occurrence_default: ?RowDefault = row_default orelse
+        if (resolved.desc.flags.empty_tag_union_is_default) .empty_tag_union else null;
 
     // The checker explicitly marks an otherwise-unresolved identity when it
     // closes that identity to `[]`. Preserve the surviving root as a checked
     // variable and carry `[]` only as its row default.
     if (resolved.desc.flags.empty_tag_union_is_default) {
-        if (active.get(resolved_var)) |id| {
-            applyCheckedTypeRowDefault(store, id, row_default);
+        if (active.get(resolved_var, occurrence_default)) |id| {
             return id;
         }
 
@@ -7926,17 +7952,17 @@ fn appendCheckedTypeRootWithRowDefault(
         try store.payloads.append(allocator, .pending);
         errdefer _ = store.payloads.pop();
         try store.indexRoot(allocator, root);
-        try active.put(resolved_var, id);
-        errdefer _ = active.remove(resolved_var);
+        try active.put(resolved_var, occurrence_default, id);
+        errdefer _ = active.remove(resolved_var, occurrence_default);
 
         const stored = try store.commitPayload(allocator, .{ .flex = .{
-            .row_default = .empty_tag_union,
+            .row_default = occurrence_default,
         } });
         store.payloads.items[@intFromEnum(id)] = stored;
         return id;
     }
 
-    if (active.get(resolved_var)) |id| {
+    if (active.get(resolved_var, occurrence_default)) |id| {
         applyCheckedTypeRowDefault(store, id, row_default);
         return id;
     }
@@ -7965,7 +7991,7 @@ fn appendCheckedTypeRootWithRowDefault(
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
-            active.roots.putAssumeCapacityNoClobber(resolved_var, existing);
+            active.putAssumeCapacityNoClobber(resolved_var, occurrence_default, existing);
             return existing;
         }
 
@@ -7980,7 +8006,7 @@ fn appendCheckedTypeRootWithRowDefault(
             deinitCheckedTypePayloadBuild(allocator, &build_payload);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
-            active.roots.putAssumeCapacityNoClobber(resolved_var, existing);
+            active.putAssumeCapacityNoClobber(resolved_var, occurrence_default, existing);
             return existing;
         }
 
@@ -7999,7 +8025,7 @@ fn appendCheckedTypeRootWithRowDefault(
         applyCheckedTypeRowDefault(store, id, row_default);
         try store.indexRoot(allocator, root);
         try store.indexStructuralRoot(allocator, .source, id, fingerprint);
-        active.roots.putAssumeCapacityNoClobber(resolved_var, id);
+        active.putAssumeCapacityNoClobber(resolved_var, occurrence_default, id);
         return id;
     }
 
@@ -8012,7 +8038,7 @@ fn appendCheckedTypeRootWithRowDefault(
     if (!key_info.contains_identity_variables) {
         if (store.rootForKey(key_info.key)) |id| {
             applyCheckedTypeRowDefault(store, id, row_default);
-            try active.put(resolved_var, id);
+            try active.put(resolved_var, occurrence_default, id);
             return id;
         }
     }
@@ -8029,8 +8055,8 @@ fn appendCheckedTypeRootWithRowDefault(
     errdefer _ = store.payloads.pop();
     try store.indexRoot(allocator, root);
 
-    try active.put(resolved_var, id);
-    errdefer _ = active.remove(resolved_var);
+    try active.put(resolved_var, occurrence_default, id);
+    errdefer _ = active.remove(resolved_var, occurrence_default);
     var build_payload = try copyCheckedTypePayload(
         allocator,
         module,
@@ -8058,8 +8084,8 @@ fn applyCheckedTypeRowDefault(
     if (index >= store.payloads.items.len) checkedArtifactInvariant("checked row default referenced a missing type payload", .{});
     switch (store.payloads.items[index]) {
         .pending => {},
-        .flex => |*variable| setStoredTypeVariableRowDefault(variable, default),
-        .rigid => |*variable| setStoredTypeVariableRowDefault(variable, default),
+        .flex => |*variable| setStoredTypeVariableRowDefault(id, variable, default),
+        .rigid => |*variable| setStoredTypeVariableRowDefault(id, variable, default),
         .err,
         .alias,
         .record,
@@ -8074,12 +8100,15 @@ fn applyCheckedTypeRowDefault(
     }
 }
 
-fn setStoredTypeVariableRowDefault(variable: *StoredTypeVariable, row_default: RowDefault) void {
+fn setStoredTypeVariableRowDefault(id: CheckedTypeId, variable: *StoredTypeVariable, row_default: RowDefault) void {
     if (variable.constraints.len != 0) {
         checkedArtifactInvariant("checked row default was assigned to a constrained type variable", .{});
     }
     if (variable.row_default) |existing| {
-        if (existing != row_default) checkedArtifactInvariant("checked row variable received incompatible defaults", .{});
+        if (existing != row_default) checkedArtifactInvariant(
+            "checked row variable {d} received incompatible defaults {s} and {s}",
+            .{ @intFromEnum(id), @tagName(existing), @tagName(row_default) },
+        );
         return;
     }
     variable.row_default = row_default;
@@ -8137,14 +8166,11 @@ fn copyCheckedTypePayload(
                     .name = name,
                     .constraints = constraints,
                     .numeric_default_phase = numeric_default_phase,
-                    // Checking is the authority that knows this flexible source
-                    // variable has no remaining constraint. Publish its final
-                    // language default explicitly so post-check producers never
-                    // have to infer one from an unresolved graph node.
-                    .row_default = if (constraints.len == 0 and numeric_default_phase == null)
-                        .empty_tag_union
-                    else
-                        null,
+                    // Row defaults belong to a checked occurrence: the same
+                    // unconstrained source variable can occur as a record-row
+                    // tail and a tag-row tail. The caller attaches the explicit
+                    // contextual default after publishing this payload.
+                    .row_default = null,
                 },
             };
         },
@@ -20454,7 +20480,25 @@ fn checkedRecordLiteralStructuralRoot(
         switch (checked_types.store.payload(root)) {
             .alias => |alias| root = alias.backing,
             .record, .record_unbound => return root,
-            .nominal => return null,
+            .nominal => |nominal| switch (nominal.representation) {
+                // A local nominal record literal is itself the declaration's
+                // backing constructor; there is no separate `.nominal` syntax
+                // node around it. Publish the field schedule against that
+                // explicit checked backing template.
+                .local_declaration => |declaration_id| {
+                    const index = @intFromEnum(declaration_id);
+                    if (index >= checked_types.store.nominal_declarations.items.len) {
+                        checkedArtifactInvariant("record literal nominal referenced a missing local declaration", .{});
+                    }
+                    root = checked_types.store.nominal_declarations.items[index].backing;
+                },
+                .builtin,
+                .imported_declaration,
+                .local_box_payload_capability,
+                .imported_box_payload_capability,
+                .opaque_without_backing,
+                => return null,
+            },
             .pending => checkedArtifactInvariant("record literal result type was unfinished during specialization publication", .{}),
             .err => checkedArtifactInvariant("diagnostic record literal reached specialization publication", .{}),
             .flex, .rigid, .function, .tuple, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("record literal had no checker-authored structural or nominal result type", .{}),
@@ -21388,8 +21432,7 @@ fn publishSpecializationCallPlans(
     for (0..checked_bodies.exprCount()) |raw_expr| {
         const expr_id: CheckedExprId = @enumFromInt(@as(u32, @intCast(raw_expr)));
         const expr = checked_bodies.expr(expr_id);
-        if (expr.data != .record or expr.data.record.ext != null or
-            checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
+        if (expr.data != .record or expr.data.record.ext != null) continue;
         var has_requested_field = false;
         for (expr.data.record.fields) |field| {
             if (value_flows_by_expr[@intFromEnum(field.value)] != .produced) {
