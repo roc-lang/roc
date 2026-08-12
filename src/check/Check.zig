@@ -13024,15 +13024,29 @@ fn validateAliasRowsHelp(
                 frames.items.len -= 1;
                 try self.stepAliasRowNode(var_, visited);
             },
-            .record_row => |*frame| switch (try self.stepRecordRow(frame, env, region)) {
-                .suspended => {},
-                .finished => frames.items.len -= 1,
-                .failed => return false,
+            .record_row => |*frame| {
+                // Read the run's base before stepping: the step can push onto
+                // `frames` and move the frame this pointer refers to.
+                const row_names_base = frame.names_base;
+                switch (try self.stepRecordRow(frame, env, region)) {
+                    .suspended => {},
+                    .finished => {
+                        frames.items.len -= 1;
+                        self.alias_row_names.items.len = row_names_base;
+                    },
+                    .failed => return false,
+                }
             },
-            .tag_row => |*frame| switch (try self.stepTagRow(frame, env, region)) {
-                .suspended => {},
-                .finished => frames.items.len -= 1,
-                .failed => return false,
+            .tag_row => |*frame| {
+                const row_names_base = frame.names_base;
+                switch (try self.stepTagRow(frame, env, region)) {
+                    .suspended => {},
+                    .finished => {
+                        frames.items.len -= 1;
+                        self.alias_row_names.items.len = row_names_base;
+                    },
+                    .failed => return false,
+                }
             },
         }
     }
@@ -13104,6 +13118,12 @@ fn pushAliasRowVarsReversed(self: *Self, vars: []const Var) Allocator.Error!void
 /// Whether `name` already appears in the row run that starts at `names_base`,
 /// recording it when it does not. Names compare by identifier index, exactly
 /// as the row's duplicate map keyed them.
+///
+/// Duplicate names are per row: a field's own type may contain rows that reuse
+/// the enclosing row's names, and those are not duplicates of it. That holds
+/// because a finished row frame pops its run, so once every frame this row
+/// suspended on has drained, `alias_row_names[names_base..]` is exactly the
+/// names this row contributed.
 fn aliasRowNameIsDuplicate(self: *Self, names_base: u32, name: Ident.Idx) Allocator.Error!bool {
     for (self.alias_row_names.items[names_base..]) |seen| {
         if (seen == name) return true;
