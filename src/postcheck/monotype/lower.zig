@@ -1203,13 +1203,15 @@ const StoredConstFnEvidence = struct {
     nodes: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    digest: Ast.EvidenceDigest,
 };
 
 fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.EvidenceView {
-    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head };
+    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
+    if (!std.meta.eql(left.digest, right.digest)) return false;
     if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
     for (left.nodes, right.nodes) |left_node, right_node| {
         if (!std.meta.eql(left_node, right_node)) return false;
@@ -1225,6 +1227,7 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
         .nodes = program.constFnEvidence(template.const_evidence),
         .frames = program.constFnEvidenceFrames(template.const_evidence_frames),
         .head = template.const_evidence_frame_head,
+        .digest = template.evidence_digest,
     };
 }
 
@@ -1255,6 +1258,7 @@ fn retainedFnEvidence(
         .nodes = evidence[template.const_evidence.start..evidence_end],
         .frames = frames[template.const_evidence_frames.start..frames_end],
         .head = template.const_evidence_frame_head,
+        .digest = template.evidence_digest,
     };
 }
 
@@ -2691,10 +2695,12 @@ const Builder = struct {
             ));
             parent = @intCast(frames.items.len - 1);
         }
+        const digest = Ast.fnEvidenceDigest(nodes.items, frames.items, parent);
         return .{
             .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             .head = parent,
+            .digest = digest,
         };
     }
 
@@ -2806,7 +2812,7 @@ const Builder = struct {
             rootEvidence(template_ref, spec_evidence);
         const identity_topology = source_topology orelse rootEvidence(template_ref, spec_evidence);
         const identity_evidence = try self.constFnEvidence(identity_topology);
-        const evidence_digest = Ast.fnEvidenceDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head);
+        const evidence_digest = identity_evidence.digest;
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         if (try self.spec_store.findLocal(
@@ -3241,7 +3247,7 @@ const Builder = struct {
         _ = evidence_mode;
 
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const evidence_digest = stored_evidence.digest;
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
             specEvidenceContainsStructural(evidence);
@@ -3462,7 +3468,7 @@ const Builder = struct {
         fn_id: Ast.FnId,
         status: Ast.SpecStatus,
     ) Allocator.Error!Ast.SpecId {
-        const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
+        const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
             templateSpecIdentity(template_ref, method_scope, source_fn_key, evidence_digest, request_fn_ty, request_fn_ty_digest),
             evidence,
@@ -3482,7 +3488,7 @@ const Builder = struct {
         request_fn_ty_digest: names.TypeDigest,
         fn_id: Ast.FnId,
     ) Allocator.Error!Ast.SpecId {
-        const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
+        const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
             nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, request_fn_ty, request_fn_ty_digest),
             evidence,
@@ -4746,7 +4752,7 @@ const Builder = struct {
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
         const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(requested_evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const evidence_digest = stored_evidence.digest;
         const request_key = draftSelectionRequestKey(source_ctx.graph, request_fn_node);
         const lookup_address = DraftNestedLookupAddress{
             .family = family,
@@ -5740,7 +5746,7 @@ const Builder = struct {
             };
 
             const stored_evidence = try self.constFnEvidence(ctx.evidence);
-            const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+            const evidence_digest = stored_evidence.digest;
             const runtime_fn_id = try body_draft.addFn(.{ .source = .{
                 .fn_def = switch (boundary.kind) {
                     .parser => .{ .parser_runtime = switch (boundary.fn_value.fn_def) {
@@ -6240,6 +6246,7 @@ const Builder = struct {
                 .nodes = self.program.constFnEvidence(draft_fn.source.const_evidence),
                 .frames = self.program.constFnEvidenceFrames(draft_fn.source.const_evidence_frames),
                 .head = draft_fn.source.const_evidence_frame_head,
+                .digest = draft_fn.source.evidence_digest,
             };
             const request_digest = self.specializationTypeDigest(fn_ty);
             const identity = templateSpecIdentity(
@@ -6367,6 +6374,7 @@ const Builder = struct {
                 .nodes = self.program.constFnEvidence(sealed_template.const_evidence),
                 .frames = self.program.constFnEvidenceFrames(sealed_template.const_evidence_frames),
                 .head = sealed_template.const_evidence_frame_head,
+                .digest = sealed_template.evidence_digest,
             };
             var identity: ?Ast.SpecIdentity = null;
             var lexical_owner: ?DraftOwner = null;
@@ -6430,6 +6438,7 @@ const Builder = struct {
                             .nodes = self.program.constFnEvidence(prior_template.const_evidence),
                             .frames = self.program.constFnEvidenceFrames(prior_template.const_evidence_frames),
                             .head = prior_template.const_evidence_frame_head,
+                            .digest = prior_template.evidence_digest,
                         };
                         if (!storedConstFnEvidenceEql(prior_evidence, requested_evidence)) continue;
                         if (!try self.draftSpecIdentityEql(prior_entry.identity, wanted)) continue;
@@ -13499,7 +13508,7 @@ const BodyContext = struct {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
         const stored_evidence = try self.builder.constFnEvidence(self.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const evidence_digest = stored_evidence.digest;
         return try self.draft.addFn(.{
             .source = .{
                 .fn_def = source.fn_def,
@@ -13523,7 +13532,7 @@ const BodyContext = struct {
         mono_fn_node: NodeId,
     ) Allocator.Error!DraftFnId {
         const stored_evidence = try self.builder.constFnEvidence(self.evidence);
-        const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
+        const evidence_digest = stored_evidence.digest;
         return try self.draft.addFn(.{
             .source = .{
                 .fn_def = fn_def,

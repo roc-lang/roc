@@ -4766,6 +4766,13 @@ callable identity, method scope, exact evidence topology, and exact structural
 equality of the closed Monotype function type. Digest collisions are therefore
 harmless.
 
+The producer that materializes a retained dispatch-evidence topology computes
+its digest exactly once and stores the digest beside that topology. Every
+borrowed or owned evidence view carries the producer-computed digest into the
+specialization store. Lookup may compare that digest to select or reject a
+bucket, but must not hash the evidence topology again; an equal digest still
+requires exact topology equality inside the collision bucket.
+
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
 a second synchronized entry. Later refinements are data on the record. The

@@ -89,12 +89,14 @@ pub const EvidenceView = struct {
     nodes: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    digest: Ast.EvidenceDigest,
 };
 
 const OwnedEvidence = struct {
     nodes: []check.ConstStore.ConstFnEvidence,
     frames: []check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    digest: Ast.EvidenceDigest,
 
     fn init(allocator: std.mem.Allocator, source: EvidenceView) std.mem.Allocator.Error!OwnedEvidence {
         const nodes = try allocator.dupe(check.ConstStore.ConstFnEvidence, source.nodes);
@@ -103,6 +105,7 @@ const OwnedEvidence = struct {
             .nodes = nodes,
             .frames = try allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, source.frames),
             .head = source.head,
+            .digest = source.digest,
         };
     }
 
@@ -112,11 +115,12 @@ const OwnedEvidence = struct {
     }
 
     fn view(self: OwnedEvidence) EvidenceView {
-        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head };
+        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head, .digest = self.digest };
     }
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
+    if (!std.meta.eql(left.digest, right.digest)) return false;
     if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
     for (left.nodes, right.nodes) |a, b| if (!std.meta.eql(a, b)) return false;
     for (left.frames, right.frames) |a, b| if (!std.meta.eql(a, b)) return false;
@@ -124,7 +128,7 @@ fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
 }
 
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {
-    return std.meta.eql(identity.evidence_digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
+    return std.meta.eql(identity.evidence_digest, evidence.digest);
 }
 
 /// Existing specialization found by a lookup: either a record lowered in this
@@ -1259,7 +1263,7 @@ fn testSpecIdentityWithModule(
         } },
         .method_scope = .{},
         .source_fn_ty_digest = source_digest,
-        .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
+        .evidence_digest = evidence.digest,
         .request_fn_ty_digest = request_digest,
         .request_fn_ty = request_fn_ty,
     };
@@ -1270,7 +1274,22 @@ const test_evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
 };
 
 fn testEvidenceView() EvidenceView {
-    return .{ .nodes = &.{}, .frames = &test_evidence_frames, .head = 0 };
+    return .{
+        .nodes = &.{},
+        .frames = &test_evidence_frames,
+        .head = 0,
+        .digest = Ast.fnEvidenceDigest(&.{}, &test_evidence_frames, 0),
+    };
+}
+
+test "specialization evidence views carry their producer digest" {
+    const evidence = testEvidenceView();
+    const identity = testSpecIdentity(@enumFromInt(0), .{}, .{});
+    try std.testing.expect(evidenceDigestMatches(identity, evidence));
+
+    var wrong = evidence;
+    wrong.digest.bytes[0] ^= 1;
+    try std.testing.expect(!evidenceDigestMatches(identity, wrong));
 }
 
 fn testSpecRecordReady(identity: Ast.SpecIdentity, fn_id: Ast.FnId) Ast.SpecRecord {
