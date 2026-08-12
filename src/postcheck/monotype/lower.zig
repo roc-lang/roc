@@ -24970,24 +24970,64 @@ const BodyContext = struct {
         }
     }
 
-    /// A producer occurrence owns its exact node. A consumer occurrence may
-    /// also publish when its entire root is explicit authoritative input: an
-    /// exact result destination, dispatcher, or selected target signature.
-    /// Ordinary argument consumers never claim identities from independently
-    /// produced values.
-    fn callOccurrenceSuppliesExactSelection(
+    fn callOccurrenceRootProjection(
+        _: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
         occurrence: checked.SpecializationOccurrence,
+    ) checked.SpecializationProjection {
+        if (occurrence.projection >= plan.projections.len or
+            occurrence.root_projection >= plan.projections.len)
+        {
+            Common.invariant("call occurrence exceeded its checker-authored edge plan");
+        }
+        const root = plan.projections[occurrence.root_projection];
+        if (root.parent != checked.no_specialization_projection_parent) {
+            Common.invariant("call occurrence named a non-root source edge");
+        }
+        return root;
+    }
+
+    /// Process an occurrence only when its exact checker-published source edge
+    /// arrived in this refinement. A producer occurrence owns that edge. A
+    /// consumer occurrence may publish only when the whole source is explicit
+    /// authoritative input: an exact result destination, dispatcher, or
+    /// selected target signature. Ordinary argument consumers never claim
+    /// identities from independently produced values.
+    fn callOccurrenceHasNewExactSource(
+        self: *BodyContext,
+        plan: checked.SpecializationProjectionPlanView,
+        occurrence: checked.SpecializationOccurrence,
+        newly_available: []const bool,
         include_result: bool,
         has_dispatcher: bool,
         has_target_signature: bool,
     ) bool {
-        if (occurrence.production == .producer) return true;
-        return switch (occurrence.root) {
-            .argument => false,
+        const root = self.callOccurrenceRootProjection(plan, occurrence);
+        const source_available = switch (root.step) {
+            .argument => blk: {
+                if (root.index >= newly_available.len) {
+                    Common.invariant("call occurrence argument root exceeded call arity");
+                }
+                break :blk newly_available[root.index];
+            },
             .result => include_result,
             .dispatcher => has_dispatcher,
             .target_argument, .target_result => has_target_signature,
+            .alias_argument,
+            .alias_backing,
+            .nominal_argument,
+            .function_argument,
+            .function_result,
+            .tuple_item,
+            .record_field,
+            .record_remainder,
+            .tag_payload,
+            .tag_remainder,
+            => Common.invariant("call occurrence source used a child edge"),
         };
+        if (!source_available) return false;
+        if (occurrence.production == .producer) return true;
+        return root.step != .argument;
     }
 
     /// Add one complete exact producer edge to a request's flat identity.
@@ -25146,8 +25186,7 @@ const BodyContext = struct {
                 break;
             }
             try reverse_path.append(self.allocator, edge);
-            const parent = plan.projections[edge].parent;
-            if (parent == checked.no_specialization_projection_parent) {
+            if (edge == occurrence.root_projection) {
                 current = self.callRootEdgeNode(
                     plan,
                     edge,
@@ -25161,6 +25200,10 @@ const BodyContext = struct {
                 try evaluated.append(self.allocator, .{ .edge = edge, .node = current });
                 _ = reverse_path.pop();
                 break;
+            }
+            const parent = plan.projections[edge].parent;
+            if (parent == checked.no_specialization_projection_parent) {
+                Common.invariant("call occurrence path did not reach its checker-published root");
             }
             if (parent >= edge) {
                 Common.invariant("checker-authored call edge was not parent-first");
@@ -25529,8 +25572,10 @@ const BodyContext = struct {
                 }
             }
             if (selected == null or self.graph.content(selected.?.produced) == .unresolved) for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (!callOccurrenceSuppliesExactSelection(
+                if (!self.callOccurrenceHasNewExactSource(
+                    plan,
                     occurrence,
+                    newly_available,
                     include_result,
                     dispatcher_node != null,
                     target_signature != null,
@@ -26245,7 +26290,7 @@ const BodyContext = struct {
             if (slot.kind != .generated_nominal) continue;
             var produces_result = false;
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.root == .result) {
+                if (self.callOccurrenceRootProjection(plan, occurrence).step == .result) {
                     produces_result = true;
                     break;
                 }
@@ -26280,7 +26325,7 @@ const BodyContext = struct {
             if (slot.kind != .generated_nominal) continue;
             var produced_result = false;
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (occurrence.root == .result) {
+                if (self.callOccurrenceRootProjection(plan, occurrence).step == .result) {
                     produced_result = true;
                     break;
                 }

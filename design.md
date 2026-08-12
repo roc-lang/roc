@@ -3042,7 +3042,11 @@ One function specialization owns an immutable checked interface and a small
 flat substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
 operands by following only the checker-published root-to-child paths whose
-producer edge has just completed. Lowering keeps only that flat span; it never
+producer edge has just completed. Every occurrence stores that exact root edge
+alongside its final projection, so a refinement rejects occurrences from
+unchanged roots before doing any path or graph work; it never walks parent
+projections merely to rediscover which operand owns an occurrence. Lowering
+keeps only that flat span; it never
 allocates demand, result, or base columns sized to every descendant in the
 shared call shape, and it never walks a checked operand beside a produced
 operand. One call schedule owns and refines one mutable sparse list; completing

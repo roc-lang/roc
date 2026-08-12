@@ -15264,18 +15264,6 @@ const SpecializationConcreteSourceIndex = struct {
     }
 };
 
-/// The function-interface edge that owns one specialization occurrence.
-pub const SpecializationOccurrenceRoot = enum(u8) {
-    argument,
-    result,
-    dispatcher,
-    /// Selected dispatch targets are ordinary producers too. These roots
-    /// project an exact component from the checker-recorded target callable
-    /// before any contextual call operand is lowered.
-    target_argument,
-    target_result,
-};
-
 /// Whether a checked occurrence consumes or produces its exact node.
 pub const SpecializationOccurrenceProduction = enum(u8) {
     consumer,
@@ -15285,9 +15273,9 @@ pub const SpecializationOccurrenceProduction = enum(u8) {
 /// One node in a checker-authored projection tree. Root steps select one
 /// explicit call edge. Every other step selects exactly one immediate child
 /// from the preceding projection node. The tree is stored in parent-before-
-/// child order, and each root's complete subtree is contiguous, so Monotype
-/// can evaluate only the requested subtree and every declared edge at most
-/// once into a dense parallel node column.
+/// child order. Each occurrence names its root directly, so Monotype evaluates
+/// only a newly completed root's requested paths and shares their prefixes in
+/// a small sparse cache.
 pub const SpecializationProjectionStep = enum(u8) {
     argument,
     result,
@@ -15297,10 +15285,7 @@ pub const SpecializationProjectionStep = enum(u8) {
     alias_argument,
     alias_backing,
     nominal_argument,
-    /// Enter the declaration backing at this nominal occurrence. At runtime
-    /// this is the named node's direct backing when the constructor is
-    /// retained, or the current node when an enclosing checked relation has
-    /// already supplied the backing representation.
+    /// Read one public function argument from the exact callable node.
     function_argument,
     function_result,
     tuple_item,
@@ -15340,9 +15325,12 @@ pub const SpecializationProjection = extern struct {
 pub const SpecializationOccurrence = extern struct {
     checked: CheckedTypeId,
     projection: u32,
-    root: SpecializationOccurrenceRoot,
+    /// Exact root projection that supplies this occurrence. Checking records
+    /// it once so lowering neither walks parent edges to rediscover the source
+    /// nor evaluates this occurrence before that source becomes available.
+    root_projection: u32,
     production: SpecializationOccurrenceProduction,
-    reserved: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
+    reserved: [3]u8 = .{ 0, 0, 0 },
 };
 
 /// Direction of one checked call operand's runtime type flow. A produced
@@ -17926,7 +17914,7 @@ fn compileSpecializationCallShape(
             dispatcher,
             null,
             true,
-            .dispatcher,
+            projection,
             projection,
             true,
             &builds,
@@ -18731,19 +18719,11 @@ fn specializationRecordOccurrenceArgumentIndex(
     projections: []const SpecializationProjection,
     occurrence: SpecializationOccurrence,
 ) usize {
-    if (occurrence.root != .argument or occurrence.projection >= projections.len) {
+    if (occurrence.projection >= projections.len or occurrence.root_projection >= projections.len) {
         checkedArtifactInvariant("record specialization occurrence had no field root", .{});
     }
-    var projection_index = occurrence.projection;
-    while (projections[projection_index].parent != no_specialization_projection_parent) {
-        const parent = projections[projection_index].parent;
-        if (parent >= projection_index) {
-            checkedArtifactInvariant("record specialization projection was not parent-first", .{});
-        }
-        projection_index = parent;
-    }
-    const root = projections[projection_index];
-    if (root.step != .argument) {
+    const root = projections[occurrence.root_projection];
+    if (root.parent != no_specialization_projection_parent or root.step != .argument) {
         checkedArtifactInvariant("record specialization occurrence had a non-field root", .{});
     }
     return root.index;
@@ -20349,8 +20329,8 @@ fn appendSpecializationCallOccurrence(
     checked_ty: CheckedTypeId,
     maybe_kind: ?SpecializationCallSlotKind,
     exact_identity: bool,
-    occurrence_root: SpecializationOccurrenceRoot,
     projection: u32,
+    root_projection: u32,
     produced: bool,
     builds: *std.ArrayList(SpecializationCallSlotBuild),
 ) Allocator.Error!void {
@@ -20372,7 +20352,7 @@ fn appendSpecializationCallOccurrence(
     try build.occurrences.append(allocator, .{
         .checked = checked_ty,
         .projection = projection,
-        .root = occurrence_root,
+        .root_projection = root_projection,
         .production = if (produced) .producer else .consumer,
     });
 }
@@ -20393,7 +20373,7 @@ fn collectSpecializationCallOccurrences(
     const projection_start = projections.items.len;
     const projection_index: u32 = @intCast(projection_start);
     try projections.append(allocator, projection);
-    const root_projection = blk: {
+    const root_projection_index = blk: {
         var index = projection_index;
         while (projections.items[index].parent != no_specialization_projection_parent) {
             if (projections.items[index].parent >= index) {
@@ -20401,14 +20381,10 @@ fn collectSpecializationCallOccurrences(
             }
             index = projections.items[index].parent;
         }
-        break :blk projections.items[index];
+        break :blk index;
     };
-    const occurrence_root: SpecializationOccurrenceRoot = switch (root_projection.step) {
-        .argument => .argument,
-        .result => .result,
-        .dispatcher => .dispatcher,
-        .target_argument => .target_argument,
-        .target_result => .target_result,
+    switch (projections.items[root_projection_index].step) {
+        .argument, .result, .dispatcher, .target_argument, .target_result => {},
         .alias_argument,
         .alias_backing,
         .nominal_argument,
@@ -20420,7 +20396,7 @@ fn collectSpecializationCallOccurrences(
         .tag_payload,
         .tag_remainder,
         => checkedArtifactInvariant("specialization projection root was not a call edge", .{}),
-    };
+    }
     const payload = checked_types.store.payload(root);
     const generated_nominal = checkedTypeIsGeneratedNominal(payload);
     // Every explicit call edge is retained even when it has no identity slot
@@ -20434,8 +20410,8 @@ fn collectSpecializationCallOccurrences(
             root,
             @as(?SpecializationCallSlotKind, .identity),
             false,
-            occurrence_root,
             projection_index,
+            root_projection_index,
             produced,
             builds,
         );
@@ -20449,8 +20425,8 @@ fn collectSpecializationCallOccurrences(
                 root,
                 null,
                 true,
-                occurrence_root,
                 projection_index,
+                root_projection_index,
                 produced,
                 builds,
             );
@@ -20584,8 +20560,8 @@ fn collectSpecializationCallOccurrences(
             root,
             @as(?SpecializationCallSlotKind, .generated_nominal),
             false,
-            occurrence_root,
             projection_index,
+            root_projection_index,
             produced,
             builds,
         );
@@ -31914,7 +31890,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 68;
+    const serialized_layout_version: u32 = 69;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -36259,9 +36235,9 @@ test "record specialization schedule publishes explicit source-order component s
         .{ .checked = c, .parent = no_specialization_projection_parent, .index = 2, .payload_index = 0, .step = .argument },
     };
     const occurrences = [_]SpecializationOccurrence{
-        .{ .checked = a, .projection = 0, .root = .argument, .production = .producer },
-        .{ .checked = b, .projection = 1, .root = .argument, .production = .producer },
-        .{ .checked = c, .projection = 2, .root = .argument, .production = .producer },
+        .{ .checked = a, .projection = 0, .root_projection = 0, .production = .producer },
+        .{ .checked = b, .projection = 1, .root_projection = 1, .production = .producer },
+        .{ .checked = c, .projection = 2, .root_projection = 2, .production = .producer },
     };
     const slots = [_]SpecializationCallSlot{
         .{ .checked = a, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
@@ -36406,7 +36382,7 @@ test "record specialization shape publishes only an explicitly requested exact c
         try std.testing.expect(slot.exact_identity);
         try std.testing.expectEqual(@as(u32, 1), slot.occurrences.len);
         const occurrence = occurrences.items[slot.occurrences.start];
-        try std.testing.expectEqual(SpecializationOccurrenceRoot.argument, occurrence.root);
+        try std.testing.expectEqual(root_edges.items[shape.argument_roots.start], occurrence.root_projection);
         try std.testing.expectEqual(SpecializationOccurrenceProduction.producer, occurrence.production);
     }
     try std.testing.expect(found_compound);
@@ -37963,8 +37939,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x66, 0x34, 0xC7, 0xF9, 0x5F, 0x0E, 0x9C, 0x3C, 0xE3, 0x09, 0x05, 0x3D, 0x6A, 0x85, 0x70, 0x7D,
-        0xB6, 0x6D, 0x57, 0xBB, 0xBE, 0xB1, 0x9F, 0x88, 0x74, 0xEE, 0xB2, 0x3F, 0x48, 0xD9, 0x0B, 0xBC,
+        0x45, 0x06, 0xCC, 0x1C, 0xF9, 0xA3, 0xFD, 0xDB, 0x05, 0xBC, 0x03, 0x47, 0xFC, 0xB3, 0x15, 0xCA,
+        0xA6, 0x91, 0xD2, 0x76, 0x49, 0x8D, 0x98, 0xF4, 0xB6, 0x54, 0xB2, 0x0F, 0xB3, 0x5F, 0x6E, 0x6B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
