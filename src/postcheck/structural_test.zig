@@ -99,7 +99,7 @@ test "post-check row entries carry checked label ids until LIR indices" {
 
 test "Monotype record expression lowering does not keep mutable field-store slices across child lowering" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr", "fn recordUpdateFieldValue");
+    const lower_record_expr = sourceSliceBetween(lower_source, "fn lowerRecordExpr(", "fn lowerRecordExprAtNode(");
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");
@@ -455,6 +455,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "applyCheckedTemplateInterfaceRelations");
     try expectNotContains(lower_source, "applyCheckedTemplateInterfaceScopeRelations");
     try expectNotContains(solve_source, "pub fn provisionalTypeViewForNode");
+    try expectNotContains(solve_source, "typeIsSpecializationDefaultable");
+    try expectNotContains(@embedFile("monotype/type.zig"), "FieldKindState");
     try expectNotContains(lower_source, "isNestedCallableExpr");
     try expectNotContains(lower_source, "isContextualValueExpr");
     try expectNotContains(lower_source, "reassignedPatternStorageCell");
@@ -514,9 +516,15 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn materializeCallProjectionSubtree(",
         "fn checkedCallRootEdge(",
     );
-    try expectContains(projection_application, "self.appendDirectSelectionMaterializationNodes(");
-    try expectContains(projection_application, "const scope = self.enterDirectSelectionInstantiation(");
-    try expectContains(projection_application, "try self.instNode(root.checked)");
+    try expectContains(projection_application, "self.materializeCheckedCallNode(");
+    const checked_materialization = sourceSliceBetween(
+        lower_source,
+        "fn materializeCheckedCallNode(",
+        "fn materializeCallProjectionSubtree(",
+    );
+    try expectContains(checked_materialization, "self.appendDirectSelectionMaterializationNodes(");
+    try expectContains(checked_materialization, "const scope = self.enterDirectSelectionInstantiation(");
+    try expectContains(checked_materialization, "try self.instNode(checked_node)");
     try expectNotContains(lower_source, "SparseProjectionSelection");
     try expectNotContains(lower_source, "applySparseProjectionSelection");
     try expectNotContains(lower_source, "rebuildSpecializationProjectionParent");
@@ -607,8 +615,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(target_request, "callsite.args,\n            no_new_callsite_arguments,");
     try expectContains(target_request, "callsite.args,\n            available,");
     try expectContains(target_request, "const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty)");
-    try expectContains(target_request, "const target_signature = try self.methodTargetSignatureNode(lookup)");
-    try expectContains(target_request, "target_signature,\n            callsite.ret,");
+    try expectContains(target_request, "const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty)");
+    try expectContains(target_request, "null,\n            null,\n            callsite.ret,");
+    try expectNotContains(target_request, "methodTargetSignatureNode(lookup)");
     try expectNotContains(target_request, "const checked_target = try self.instNode(");
 }
 
@@ -696,14 +705,22 @@ test "record literals request and retain only immediate exact field nodes" {
         "fn lowerRecordLiteralDirect(",
         "fn lowerRecordUpdateDirect(",
     );
-    try expectContains(record_literal, "self.graph.recordConstructionFieldNode(");
+    const exact_record = sourceSliceBetween(
+        lower_source,
+        "fn lowerRecordExprAtNode(",
+        "fn lowerTagConstructorAtNode(",
+    );
+    try expectContains(record_literal, "self.graph.recordConstructionFieldValueNode(");
     try expectContains(record_literal, "specializationRecordPlanForExpr(checked_expr)");
     try expectContains(record_literal, "projectionSelectionArgumentNode(plan, selections.items, index)");
     try expectContains(record_literal, "specializationProjectionOperandConsumerBindings(plan, index)");
     try expectContains(record_literal, "var selections = std.ArrayList(solve.DirectRequestSelection).empty;");
     try expectContains(record_literal, "self.refineDirectSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
-    try expectContains(record_literal, ".ty = self.preLoweredChildNodeAt(children, field.value)");
+    try expectContains(exact_record, "const produced_value_node = try self.exprTypeCell(value).toGraphNode(self.graph);");
+    try expectContains(exact_record, "produced_fields[index].ty = produced_value_node;");
+    try expectContains(exact_record, "optionalSlotPresentExprFromExactValue(pre)");
+    try expectContains(exact_record, "try self.producedConstructorNode(record_node, node)");
     try expectNotContains(record_literal, "checkedRecordLiteralFieldType");
     try expectNotContains(lower_source, "instantiateCheckedTypeWithSelectionsAtAuthority");
     try expectNotContains(lower_source, "instantiateProducedOccurrenceWithSelections");
@@ -765,7 +782,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerTagConstructorAtNodeWithRelation(",
         "fn lowerNominalConstructorAtNode(",
     );
-    try expectContains(tag, "produced_payload.* = try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
+    try expectContains(tag, "produced_payload.* = try self.builder.completePendingProducedNode(");
+    try expectContains(tag, "try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
     try expectContains(tag, "self.graph.newNode(.{ .tag_union");
 
     const low_level = sourceSliceBetween(
@@ -1896,7 +1914,7 @@ test "Monotype lowering never reconciles complete runtime type graphs" {
     );
     try expectNotContains(runtime_lowering, ".graph.unify(");
     try expectContains(runtime_lowering, "completeProducedSelection(");
-    try expectContains(runtime_lowering, "completeOpenTagRowExtension(");
+    try expectNotContains(runtime_lowering, "completeOpenTagRowExtension(");
 }
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {

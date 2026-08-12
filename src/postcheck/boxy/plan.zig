@@ -10748,8 +10748,8 @@ const Builder = struct {
             try self.plan.call_operands.append(self.allocator, switch (operand) {
                 .checked_expr => |expr| .{ .checked_expr = expr },
                 .generated_interpolation_iter => |expr| .{ .generated_interpolation_iter = expr },
-                .generated_numeral => |literal| .{ .generated_numeral = literal },
-                .generated_quote => |literal| .{ .generated_quote = literal },
+                .generated_numeral => |generated| .{ .generated_numeral = generated.literal },
+                .generated_quote => |generated| .{ .generated_quote = generated.literal },
             });
         }
         return .{ .start = start, .len = @intCast(operands.len) };

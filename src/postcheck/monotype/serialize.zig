@@ -544,9 +544,9 @@ pub const MappedProgramView = struct {
         loaded_shards: []const LoadedShard,
         resolved_imports: []ResolvedImportedFn,
     ) CacheError![]const ResolvedImportedFn {
-        if (self.types.verify(name_store) != null) return error.CorruptSpecializationCacheFile;
+        if (self.types.verify(name_store)) |_| return error.CorruptSpecializationCacheFile;
         if (!self.verifyStorage()) return error.CorruptSpecializationCacheFile;
-        if (self.verifyCallTargets() != null) return error.CorruptSpecializationCacheFile;
+        if (self.verifyCallTargets()) |_| return error.CorruptSpecializationCacheFile;
         return try self.resolveImportTable(loaded_shards, resolved_imports);
     }
 
@@ -708,7 +708,9 @@ pub const MappedProgramView = struct {
             .call_proc => |call| self.exprIdSpanInBounds(call.args) and captureOperandSpanInBounds(call.captures),
             .low_level => |call| self.exprIdSpanInBounds(call.args) and
                 (call.produced_type_source == null or self.exprRefInBounds(call.produced_type_source.?)),
-            .field_access => |field| self.exprRefInBounds(field.receiver),
+            .field_access => |field| self.exprRefInBounds(field.receiver) and
+                field.segments.len != 0 and
+                self.fieldAccessSegmentSpanInBounds(field.segments),
             .tuple_access => |tuple| self.exprRefInBounds(tuple.tuple),
             .structural_eq => |eq| self.exprRefInBounds(eq.lhs) and self.exprRefInBounds(eq.rhs),
             .structural_hash => |hash| self.exprRefInBounds(hash.value) and self.exprRefInBounds(hash.hasher),

@@ -388,6 +388,7 @@ pub const InstGraph = struct {
     diagnostics: ?*GraphDiagnostics,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
+    field_kinds: std.ArrayList(FieldKindNode),
     /// Ordinary primitive types are atomic identities. Reusing one node per
     /// primitive keeps independently encountered exact values identical
     /// without hashing or comparing any enclosing type graph.
@@ -475,6 +476,7 @@ pub const InstGraph = struct {
             .diagnostics = null,
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
+            .field_kinds = .empty,
             .primitive_nodes = @splat(null),
             .empty_tag_union_node = null,
             .empty_record_node = null,
@@ -570,6 +572,179 @@ pub const InstGraph = struct {
 
     pub fn arena(self: *InstGraph) Allocator {
         return self.arena_impl.allocator();
+    }
+
+    pub fn newUndeterminedFieldKind(self: *InstGraph) Allocator.Error!FieldKindId {
+        const id: FieldKindId = @enumFromInt(self.field_kinds.items.len);
+        try self.field_kinds.append(self.allocator, .{ .parent = id });
+        return id;
+    }
+
+    pub fn registerUndeterminedFieldKindCells(
+        self: *InstGraph,
+        raw: FieldKindId,
+        slot: NodeId,
+        value: NodeId,
+    ) void {
+        self.requireRelationProduction();
+        const root = self.findFieldKind(raw);
+        const node = &self.field_kinds.items[@intFromEnum(root)];
+        if (node.cells != null) {
+            Common.invariant("instantiation field kind registered its representation cells more than once");
+        }
+        node.cells = .{ .slot = slot, .value = value };
+    }
+
+    /// Attach another occurrence of the checked value type governed by this
+    /// exact field-kind identity. The field-kind edge—not a post-hoc runtime
+    /// graph comparison—is the explicit reason these value cells relate.
+    pub fn relateUndeterminedFieldKindValue(
+        self: *InstGraph,
+        raw: FieldKindId,
+        value: NodeId,
+    ) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const root = self.findFieldKind(raw);
+        const cells = self.field_kinds.items[@intFromEnum(root)].cells orelse
+            Common.invariant("instantiation field kind related a value before registering its representation cells");
+        try self.unify(cells.value, value);
+        return self.find(cells.value);
+    }
+
+    fn findFieldKind(self: *InstGraph, raw: FieldKindId) FieldKindId {
+        var root = raw;
+        while (self.field_kinds.items[@intFromEnum(root)].parent != root) {
+            root = self.field_kinds.items[@intFromEnum(root)].parent;
+        }
+        var current = raw;
+        while (current != root) {
+            const next = self.field_kinds.items[@intFromEnum(current)].parent;
+            self.field_kinds.items[@intFromEnum(current)].parent = root;
+            current = next;
+        }
+        return root;
+    }
+
+    fn mergeResolvedFieldKinds(left: ResolvedFieldKind, right: ResolvedFieldKind) ResolvedFieldKind {
+        return switch (left) {
+            .required => switch (right) {
+                .required => .required,
+                .defaulted => |default| .{ .defaulted = default },
+                .optional => Common.invariant("instantiation unified required and optional record field kinds"),
+            },
+            .optional => switch (right) {
+                .optional => .optional,
+                .required, .defaulted => Common.invariant("instantiation unified optional and inline record field kinds"),
+            },
+            .defaulted => |left_default| switch (right) {
+                .required => .{ .defaulted = left_default },
+                .optional => Common.invariant("instantiation unified defaulted and optional record field kinds"),
+                .defaulted => |right_default| if (instFieldDefaultEql(left_default, right_default))
+                    ResolvedFieldKind{ .defaulted = left_default }
+                else
+                    Common.invariant("instantiation unified record field kinds with different defaults"),
+            },
+        };
+    }
+
+    fn constrainUndeterminedFieldKind(self: *InstGraph, raw: FieldKindId, resolved: ResolvedFieldKind) void {
+        const root = self.findFieldKind(raw);
+        const node = &self.field_kinds.items[@intFromEnum(root)];
+        node.resolved = if (node.resolved) |existing|
+            mergeResolvedFieldKinds(existing, resolved)
+        else
+            resolved;
+    }
+
+    fn unionUndeterminedFieldKinds(self: *InstGraph, left_raw: FieldKindId, right_raw: FieldKindId) FieldKindId {
+        var left = self.findFieldKind(left_raw);
+        var right = self.findFieldKind(right_raw);
+        if (left == right) return left;
+        if (self.field_kinds.items[@intFromEnum(left)].rank < self.field_kinds.items[@intFromEnum(right)].rank) {
+            std.mem.swap(FieldKindId, &left, &right);
+        }
+        const right_state = self.field_kinds.items[@intFromEnum(right)].resolved;
+        const right_cells = self.field_kinds.items[@intFromEnum(right)].cells;
+        self.field_kinds.items[@intFromEnum(right)].parent = left;
+        if (self.field_kinds.items[@intFromEnum(left)].rank == self.field_kinds.items[@intFromEnum(right)].rank) {
+            self.field_kinds.items[@intFromEnum(left)].rank += 1;
+        }
+        if (self.field_kinds.items[@intFromEnum(left)].cells == null) {
+            self.field_kinds.items[@intFromEnum(left)].cells = right_cells;
+        }
+        if (right_state) |resolved| self.constrainUndeterminedFieldKind(left, resolved);
+        return self.findFieldKind(left);
+    }
+
+    pub fn resolvedFieldKind(self: *InstGraph, kind: InstFieldKind) ?ResolvedFieldKind {
+        return switch (kind) {
+            .sealed => null,
+            .required => .required,
+            .optional => .optional,
+            .defaulted => |default| .{ .defaulted = default },
+            .undetermined => |id| self.field_kinds.items[@intFromEnum(self.findFieldKind(id))].resolved,
+        };
+    }
+
+    fn unifyFieldKinds(
+        self: *InstGraph,
+        left: InstFieldKind,
+        left_default: ?Type.FieldDefault,
+        right: InstFieldKind,
+        right_default: ?Type.FieldDefault,
+    ) InstFieldKind {
+        if (left == .sealed and right == .sealed) {
+            if (!instFieldDefaultEql(left_default, right_default)) {
+                Common.invariant("instantiation unified sealed record fields with different defaults");
+            }
+            return .sealed;
+        }
+
+        const left_resolved = self.resolvedFieldKind(left) orelse if (left_default) |default|
+            ResolvedFieldKind{ .defaulted = default }
+        else
+            null;
+        const right_resolved = self.resolvedFieldKind(right) orelse if (right_default) |default|
+            ResolvedFieldKind{ .defaulted = default }
+        else
+            null;
+
+        switch (left) {
+            .undetermined => |left_id| switch (right) {
+                .undetermined => |right_id| {
+                    const root = self.unionUndeterminedFieldKinds(left_id, right_id);
+                    if (left_resolved) |resolved| self.constrainUndeterminedFieldKind(root, resolved);
+                    if (right_resolved) |resolved| self.constrainUndeterminedFieldKind(root, resolved);
+                    return .{ .undetermined = root };
+                },
+                .sealed => {
+                    if (right_resolved) |resolved| self.constrainUndeterminedFieldKind(left_id, resolved);
+                    return left;
+                },
+                .required, .optional, .defaulted => {
+                    self.constrainUndeterminedFieldKind(left_id, right_resolved.?);
+                    return left;
+                },
+            },
+            .sealed => return right,
+            .required, .optional, .defaulted => switch (right) {
+                .undetermined => |right_id| {
+                    self.constrainUndeterminedFieldKind(right_id, left_resolved.?);
+                    return right;
+                },
+                .sealed => return left,
+                .required, .optional, .defaulted => return switch (mergeResolvedFieldKinds(left_resolved.?, right_resolved.?)) {
+                    .required => .required,
+                    .optional => .optional,
+                    .defaulted => |default| .{ .defaulted = default },
+                },
+            },
+        }
+    }
+
+    pub fn relateRecordFieldKind(self: *InstGraph, left: InstField, right: InstField) void {
+        self.requireRelationProduction();
+        _ = self.unifyFieldKinds(left.kind, left.default, right.kind, right.default);
     }
 
     pub fn registerRequestCheckedSource(
@@ -750,31 +925,6 @@ pub const InstGraph = struct {
             .left = left,
             .right = right,
         });
-    }
-
-    /// Complete the one open tag-row extension owned by a generated producer.
-    /// The caller supplies the exact new tags and tail; no enclosing row is
-    /// compared, copied, or reconciled.
-    pub fn completeOpenTagRowExtension(
-        self: *InstGraph,
-        raw_extension: NodeId,
-        tags: []InstTag,
-        tail: NodeId,
-    ) Allocator.Error!void {
-        const extension = self.find(raw_extension);
-        const content_ = self.nodes.items[@intFromEnum(extension)];
-        if (content_ != .unresolved or content_.unresolved.numeric_default_phase != null) {
-            Common.invariant("tag-row producer attempted to complete a non-row extension");
-        }
-        if (content_.unresolved.row_default) |default| {
-            if (default != .empty_tag_union) {
-                Common.invariant("tag-row producer attempted to complete a record-row extension");
-            }
-        }
-        try self.setContent(extension, .{ .tag_union = .{
-            .tags = tags,
-            .ext = self.find(tail),
-        } });
     }
 
     pub fn lookupGeneratedIteratorFromNamed(
@@ -1054,6 +1204,7 @@ pub const InstGraph = struct {
     /// transition.
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
+        try self.finalizeUndeterminedFieldKinds();
         for (self.required_exact_value_pairs.items) |pair| {
             if (self.find(pair.left) != self.find(pair.right)) {
                 Common.invariant("runtime-value boundary received two different exact produced nodes");
@@ -1418,6 +1569,22 @@ pub const InstGraph = struct {
             hasher.update(std.mem.asBytes(&name));
             var child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(field.ty)));
             hasher.update(std.mem.asBytes(&child));
+            hasher.update(&.{@intFromBool(field.value_ty != null)});
+            if (field.value_ty) |value_ty| {
+                var value_child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(value_ty)));
+                hasher.update(std.mem.asBytes(&value_child));
+            }
+            hasher.update(&.{@intFromEnum(std.meta.activeTag(field.kind))});
+            switch (field.kind) {
+                .undetermined => |kind| {
+                    var kind_id = std.mem.nativeToLittle(u32, @intFromEnum(kind));
+                    hasher.update(std.mem.asBytes(&kind_id));
+                },
+                .defaulted => |default| updateFieldDefaultHash(&hasher, default),
+                .sealed, .required, .optional => {},
+            }
+            hasher.update(&.{@intFromBool(field.default != null)});
+            if (field.default) |default| updateFieldDefaultHash(&hasher, default);
         }
         return hasher.final();
     }
@@ -1428,6 +1595,11 @@ pub const InstGraph = struct {
         if (left_row.fields.len != right_row.fields.len or self.find(left_row.ext) != self.find(right_row.ext)) return false;
         for (left_row.fields, right_row.fields) |left_field, right_field| {
             if (left_field.name != right_field.name or self.find(left_field.ty) != self.find(right_field.ty)) return false;
+            if (left_field.value_ty != null and right_field.value_ty != null) {
+                if (self.find(left_field.value_ty.?) != self.find(right_field.value_ty.?)) return false;
+            } else if (left_field.value_ty != right_field.value_ty) return false;
+            if (!std.meta.eql(left_field.kind, right_field.kind)) return false;
+            if (!instFieldDefaultEql(left_field.default, right_field.default)) return false;
         }
         return true;
     }
@@ -1889,22 +2061,10 @@ pub const InstGraph = struct {
     /// variable or row default. Open requests remain graph-local until
     /// explicit recursive-edge identity or final body sealing resolves them.
     pub fn typeIsResolved(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, false);
+        return try self.typeIsResolvedInner(root);
     }
 
-    /// Whether every unresolved part of a specialization request is an
-    /// undetermined field-kind cell. Those cells have the language-defined
-    /// required default at relation freeze, so specialization lookup may take
-    /// a read-only view with that default without mutating the live graph.
-    pub fn typeIsSpecializationDefaultable(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, true);
-    }
-
-    fn typeIsResolvedInner(
-        self: *InstGraph,
-        root: NodeId,
-        allow_field_kind_defaults: bool,
-    ) Allocator.Error!bool {
+    fn typeIsResolvedInner(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
@@ -1932,15 +2092,7 @@ pub const InstGraph = struct {
                 .record => |row| {
                     if (!try self.rowExtensionChainResolved(node, .record)) return false;
                     for (row.fields) |field| {
-                        if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) {
-                            if (!allow_field_kind_defaults) return false;
-                            try pending.append(
-                                self.allocator,
-                                field.value_ty orelse
-                                    Common.invariant("undetermined field kind carried no source value cell"),
-                            );
-                            continue;
-                        }
+                        if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) return false;
                         try pending.append(self.allocator, field.ty);
                         if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
                     }
@@ -2202,6 +2354,12 @@ pub const InstGraph = struct {
     /// evidence.
     pub fn recordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
         return self.recordFieldNodeWithAccess(raw_record, name, .inspectable, "record field access");
+    }
+
+    /// Apply one checked required-access judgment to the field-kind cell and
+    /// return the inline value slot selected by that judgment.
+    pub fn requiredRecordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
+        return self.requiredRecordFieldNodeWithAccess(raw_record, name, .inspectable, "required record field access");
     }
 
     /// Project the semantic open-row remainder after the checker-published
@@ -2477,9 +2635,10 @@ pub const InstGraph = struct {
         Common.invariant("instantiation record constructor requested an absent field value");
     }
 
-    /// Return checker-originated field-kind evidence after specialization has
-    /// resolved any generalized presence variable. Construction consumes this
-    /// instead of re-reading the generalized checked scheme.
+    /// Return the exact field representation already carried by the requested
+    /// record. Live checked fields retain their specialization evidence;
+    /// completed producer fields have consumed that evidence into the stable
+    /// `value_ty`/`default` representation stored on a sealed field.
     pub fn recordConstructionFieldKind(
         self: *InstGraph,
         raw_record: NodeId,
@@ -2511,7 +2670,13 @@ pub const InstGraph = struct {
                     );
                     return .required;
                 },
-                .sealed, .required, .optional, .defaulted => Common.invariant("record constructor field kind carried no specialization evidence"),
+                .sealed => return if (field.default) |default|
+                    .{ .defaulted = default }
+                else if (field.value_ty != null)
+                    .optional
+                else
+                    .required,
+                .required, .optional, .defaulted => unreachable,
             }
         }
         Common.invariant("instantiation record constructor requested an absent field kind");
@@ -3857,9 +4022,6 @@ pub const InstGraph = struct {
                 const inst_fields = try self.arena().alloc(InstField, span.len);
                 for (0..span.len) |index| {
                     const field = GuardedList.at(span, index);
-                    if (field.kind_state == .undetermined) {
-                        Common.invariant("finished Monotype import received a provisional record field");
-                    }
                     const value_ty = if (field.value_ty) |value_ty|
                         try self.importMono(value_ty)
                     else
@@ -3867,6 +4029,14 @@ pub const InstGraph = struct {
                     inst_fields[index] = .{
                         .name = field.name,
                         .ty = try self.importMonoInner(field.ty),
+                        .value_ty = value_ty,
+                        .kind = if (value_ty != null)
+                            .optional
+                        else if (field.default) |default|
+                            .{ .defaulted = default }
+                        else
+                            .required,
+                        .default = field.default,
                     };
                 }
                 break :blk .{ .record = .{
@@ -3946,21 +4116,13 @@ pub const InstGraph = struct {
 /// Shared finalization state for materializing graph nodes into immutable
 /// Monotype type ids.
 pub const GraphTypeFinals = struct {
-    const Mode = enum {
-        final,
-        active_snapshot,
-        provisional_snapshot,
-        specialization_snapshot,
-    };
-
     graph: *InstGraph,
-    mode: Mode,
     sealed: collections.DenseMap(NodeId, Type.TypeId),
     generated_types_by_identity: ?*std.AutoHashMap(names.TypeDigest, Type.TypeId),
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
-        return initUnchecked(graph, .final);
+        return initUnchecked(graph);
     }
 
     pub fn initWithGeneratedTypeInterner(
@@ -3973,20 +4135,9 @@ pub const GraphTypeFinals = struct {
         return finals;
     }
 
-    fn initProvisionalSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph, .provisional_snapshot);
-    }
-
-    fn initSpecializationSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph, .specialization_snapshot);
-    }
-
-    fn initUnchecked(graph: *InstGraph, mode: Mode) GraphTypeFinals {
+    fn initUnchecked(graph: *InstGraph) GraphTypeFinals {
         return .{
             .graph = graph,
-            .mode = mode,
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
             .generated_types_by_identity = null,
         };
@@ -4108,31 +4259,7 @@ pub const GraphTypeFinals = struct {
         defer self.graph.allocator.free(fields);
         for (flat.fields, 0..) |field, index| {
             if (field.kind == .undetermined and self.graph.resolvedFieldKind(field.kind) == null) {
-                const source_node = field.value_ty orelse
-                    Common.invariant("undetermined graph field carried no source value type");
-                const source_ty = try self.sealNode(source_node);
-                fields[index] = switch (self.mode) {
-                    .provisional_snapshot => .{
-                        .name = field.name,
-                        // No runtime slot exists yet. The explicit kind state
-                        // makes this a provisional structural cell, so mirror
-                        // the source type instead of materializing the
-                        // unresolved slot node.
-                        .ty = source_ty,
-                        .value_ty = source_ty,
-                        .kind_state = .undetermined,
-                        .default = null,
-                    },
-                    .specialization_snapshot => .{
-                        .name = field.name,
-                        .ty = source_ty,
-                        .value_ty = null,
-                        .kind_state = .resolved,
-                        .default = null,
-                    },
-                    .final, .active_snapshot => Common.invariant("unresolved record field kind reached Monotype sealing"),
-                };
-                continue;
+                Common.invariant("unresolved record field kind reached Monotype sealing");
             }
             fields[index] = .{
                 .name = field.name,
@@ -4145,7 +4272,6 @@ pub const GraphTypeFinals = struct {
                     try self.sealNode(value_ty)
                 else
                     null,
-                .kind_state = .resolved,
                 .default = field.default,
             };
         }
@@ -4513,6 +4639,13 @@ fn instFieldDefaultEql(left: ?Type.FieldDefault, right: ?Type.FieldDefault) bool
     return left_default.module == right_default.module and left_default.expr_node == right_default.expr_node;
 }
 
+fn updateFieldDefaultHash(hasher: *std.hash.Wyhash, default: Type.FieldDefault) void {
+    var module = std.mem.nativeToLittle(u32, @intFromEnum(default.module));
+    hasher.update(std.mem.asBytes(&module));
+    var expr_node = std.mem.nativeToLittle(u32, default.expr_node);
+    hasher.update(std.mem.asBytes(&expr_node));
+}
+
 fn instNamedEql(left: InstNamed, right: InstNamed) bool {
     return std.meta.eql(left.named_type, right.named_type) and
         std.meta.eql(left.def, right.def) and
@@ -4729,7 +4862,7 @@ test "exact produced boundary pairs converge without structural relation work" {
     try std.testing.expect(graph.sameClass(left, right));
 }
 
-test "provisional Monotype view preserves an undetermined record field" {
+test "undetermined record field freezes to its required inline representation" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -4745,6 +4878,7 @@ test "provisional Monotype view preserves an undetermined record field" {
     const value_ty = try graph.newNode(.{ .primitive = .u64 });
     const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const kind = try graph.newUndeterminedFieldKind();
+    graph.registerUndeterminedFieldKindCells(kind, slot, value_ty);
     const fields = try graph.arena().alloc(InstField, 1);
     fields[0] = .{
         .name = field_name,
@@ -4758,11 +4892,61 @@ test "provisional Monotype view preserves an undetermined record field" {
         .ext = try graph.newNode(.empty_record),
     } });
 
-    const provisional = try graph.provisionalTypeViewForNode(record);
-    const provisional_fields = type_store.fieldSpan(type_store.get(provisional).record);
-    try std.testing.expectEqual(@as(usize, 1), provisional_fields.len);
-    const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(provisional_value_ty));
+    try std.testing.expect(graph.resolvedFieldKind(fields[0].kind) == null);
+    try graph.freezeRelations();
+    try std.testing.expectEqual(ResolvedFieldKind.required, graph.resolvedFieldKind(fields[0].kind).?);
+
+    const sealed = try graph.sealNode(record);
+    const sealed_fields = type_store.fieldSpan(type_store.get(sealed).record);
+    try std.testing.expectEqual(@as(usize, 1), sealed_fields.len);
+    const sealed_field = GuardedList.at(sealed_fields, 0);
+    try std.testing.expect(sealed_field.value_ty == null);
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(sealed_field.ty));
+}
+
+test "record interning preserves field specialization evidence" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const value_ty = try graph.newNode(.{ .primitive = .u64 });
+    const empty_record = try graph.newNode(.empty_record);
+
+    const required_fields = try graph.arena().alloc(InstField, 1);
+    required_fields[0] = .{
+        .name = field_name,
+        .ty = value_ty,
+        .kind = .required,
+        .default = null,
+    };
+    const required_record = try graph.newNode(.{ .record = .{
+        .fields = required_fields,
+        .ext = empty_record,
+    } });
+
+    const sealed_fields = try graph.arena().alloc(InstField, 1);
+    sealed_fields[0] = .{
+        .name = field_name,
+        .ty = value_ty,
+        .kind = .sealed,
+        .default = null,
+    };
+    const sealed_record = try graph.newNode(.{ .record = .{
+        .fields = sealed_fields,
+        .ext = empty_record,
+    } });
+
+    try std.testing.expect(!graph.sameClass(required_record, sealed_record));
+    try std.testing.expectEqual(ResolvedFieldKind.required, try graph.recordConstructionFieldKind(required_record, field_name));
+    try std.testing.expectEqual(ResolvedFieldKind.required, try graph.recordConstructionFieldKind(sealed_record, field_name));
 }
 
 test "record field node carries contextual row evidence into receiver" {
@@ -5371,6 +5555,7 @@ test "ordinary nominal reservation checks exact roots before normalizing row dec
     fields[0] = .{
         .name = label,
         .ty = try graph.newNode(.{ .primitive = .u64 }),
+        .default = null,
     };
     const flat_argument = try graph.newNode(.{ .record = .{
         .fields = fields,

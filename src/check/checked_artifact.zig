@@ -33,6 +33,34 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 
+fn statementRunsAtRuntime(statement: CIR.Statement) bool {
+    return switch (statement) {
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_runtime_error,
+        => true,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        => false,
+    };
+}
+
 fn typeDispatchOwnerVar(module: anytype, stmt_idx: CIR.Statement.Idx) Var {
     return switch (module.getStatement(stmt_idx)) {
         .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
@@ -13444,7 +13472,7 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .e_empty_record => .empty_record,
             .e_block => |block| .{ .block = .{
-                .statements = try self.copyStatementSpan(block.stmts),
+                .statements = try self.copyRuntimeStatementSpan(block.stmts),
                 .final_expr = self.checkedExpr(block.final_expr),
             } },
             .e_tag => |tag| .{ .tag = .{
@@ -13880,11 +13908,28 @@ const CheckedBodyPayloadCopier = struct {
         return out;
     }
 
-    fn copyStatementSpan(self: *@This(), span: CIR.Statement.Span) Allocator.Error![]const CheckedStatementId {
+    /// Publish only executable statements on a checked block's runtime edge.
+    /// Type declarations remain addressable in the statement store because
+    /// checker-authored dispatch plans can name them as static owners, but
+    /// post-check lowering must never rediscover that distinction while
+    /// walking a runtime body.
+    fn copyRuntimeStatementSpan(self: *@This(), span: CIR.Statement.Span) Allocator.Error![]const CheckedStatementId {
         const source = self.module.sliceStatements(span);
         if (source.len == 0) return &.{};
-        const out = try self.allocator.alloc(CheckedStatementId, source.len);
-        for (source, 0..) |statement, i| out[i] = self.checkedStatement(statement);
+
+        var runtime_len: usize = 0;
+        for (source) |statement| {
+            if (statementRunsAtRuntime(self.module.getStatement(statement))) runtime_len += 1;
+        }
+        if (runtime_len == 0) return &.{};
+
+        const out = try self.allocator.alloc(CheckedStatementId, runtime_len);
+        var runtime_index: usize = 0;
+        for (source) |statement| {
+            if (!statementRunsAtRuntime(self.module.getStatement(statement))) continue;
+            out[runtime_index] = self.checkedStatement(statement);
+            runtime_index += 1;
+        }
         return out;
     }
 
@@ -19510,8 +19555,28 @@ fn finishSpecializationProjectionShape(
         } else checkedArtifactInvariant("exact target identity had no callable projection", .{});
     }
 
-    const slot_start: u32 = @intCast(slots_out.items.len);
+    // Atomic leaves must be available before an exact ordinary compound is
+    // constructed from them. Preserve checker traversal order within both
+    // groups, while emitting compound identity requests last.
+    var ordered_builds = std.ArrayList(*SpecializationCallSlotBuild).empty;
+    defer ordered_builds.deinit(allocator);
     for (builds.items) |*build| {
+        const payload = checked_types.store.payload(build.checked);
+        const exact_compound = build.exact_identity and
+            !checkedTypePayloadIsIdentity(payload) and
+            !checkedTypeIsGeneratedNominal(payload);
+        if (!exact_compound) try ordered_builds.append(allocator, build);
+    }
+    for (builds.items) |*build| {
+        const payload = checked_types.store.payload(build.checked);
+        const exact_compound = build.exact_identity and
+            !checkedTypePayloadIsIdentity(payload) and
+            !checkedTypeIsGeneratedNominal(payload);
+        if (exact_compound) try ordered_builds.append(allocator, build);
+    }
+
+    const slot_start: u32 = @intCast(slots_out.items.len);
+    for (ordered_builds.items) |build| {
         const occurrence_start: u32 = @intCast(occurrences_out.items.len);
         try occurrences_out.appendSlice(allocator, build.occurrences.items);
         var has_produced_value_position = false;
@@ -19968,10 +20033,12 @@ fn collectDirectionalCallIdentityRelations(
     );
 }
 
-/// Checked semantic rule for value direction at a call boundary. Numerals and
-/// empty lists receive their exact runtime type from correlated produced
-/// operands. Callable literals likewise consume the complete function request
-/// so their nested ABI is never specialized from an isolated checked default.
+/// Checked semantic rule for value direction at a call boundary. Numerals,
+/// empty lists, and tag constructors receive their exact runtime type from the
+/// call request: their syntax does not produce the numeral representation,
+/// element type, or unconstructed tag-row variants/remainder, respectively.
+/// Callable literals likewise consume the complete function request so their
+/// nested ABI is never specialized from an isolated checked default.
 /// A lookup of a let-bound procedure alias consumes that request too: there is
 /// intentionally no shared runtime local for a polymorphic procedure value.
 fn specializationOperandFlowForExpr(
@@ -19983,7 +20050,25 @@ fn specializationOperandFlowForExpr(
     const expr = checked_bodies.expr(expr_id);
     return switch (expr.data) {
         .lambda, .closure => .requested_callable,
-        .numeral, .empty_list => .requested_value,
+        .numeral, .empty_list, .tag, .zero_argument_tag => .requested_value,
+        .nominal => |nominal| specializationOperandFlowForExpr(
+            checked_bodies,
+            resolved_value_refs,
+            procedure_alias_binders,
+            nominal.backing_expr,
+        ),
+        .block => |block| specializationOperandFlowForExpr(
+            checked_bodies,
+            resolved_value_refs,
+            procedure_alias_binders,
+            block.final_expr,
+        ),
+        .dbg, .expect => |inner| specializationOperandFlowForExpr(
+            checked_bodies,
+            resolved_value_refs,
+            procedure_alias_binders,
+            inner,
+        ),
         .lookup_local => |lookup| specializationLookupFlow(
             resolved_value_refs,
             procedure_alias_binders,
@@ -33276,7 +33361,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 230);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 236);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -33426,7 +33511,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 69;
+    const serialized_layout_version: u32 = 70;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -39706,8 +39791,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x45, 0x06, 0xCC, 0x1C, 0xF9, 0xA3, 0xFD, 0xDB, 0x05, 0xBC, 0x03, 0x47, 0xFC, 0xB3, 0x15, 0xCA,
-        0xA6, 0x91, 0xD2, 0x76, 0x49, 0x8D, 0x98, 0xF4, 0xB6, 0x54, 0xB2, 0x0F, 0xB3, 0x5F, 0x6E, 0x6B,
+        0x17, 0xA6, 0x45, 0x32, 0xCA, 0xD7, 0x71, 0xEA, 0x82, 0x71, 0xC1, 0x7D, 0xA9, 0x53, 0x97, 0x6F,
+        0x18, 0x64, 0x6D, 0x09, 0x15, 0x6A, 0xA0, 0x05, 0xB6, 0xC6, 0x55, 0x94, 0xE4, 0x23, 0xB7, 0x3C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

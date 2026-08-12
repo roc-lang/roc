@@ -29516,10 +29516,11 @@ const ProcBodyBuilder = struct {
         if (operands.len != 1) {
             boxyLowerInvariant("from_numeral plan did not carry exactly one operand");
         }
-        const literal = switch (operands[0]) {
+        const operand = switch (operands[0]) {
             .generated_numeral => |lit| lit,
             .checked_expr, .generated_interpolation_iter, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
         };
+        const literal = operand.literal;
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const exact = self.module.module_env.exactNumeral(literal);
             const value: LIR.LiteralValue = if (exact.is_fractional) .{ .boxy_dynamic_frac_literal = .{
