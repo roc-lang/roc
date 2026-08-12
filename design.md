@@ -6114,6 +6114,15 @@ operand provides evidence. The request-to-produced-to-request chain preserves
 the checked equality relation directly, and the emitted expression retains
 source operand order regardless of lowering order.
 
+Homogeneous value sequences use the same directional rule. For a non-empty
+list literal, checking's value-flow column selects the first item that can
+produce an exact runtime node. If no item is a producer, the first requested
+item consumes the checked element request as the explicit seed. Every other
+item then consumes the seed's exact produced node. This lowering schedule never
+changes the source order stored in the list expression, and there is no set of
+independently lowered element graphs to compare or merge afterward. An empty
+list has no runtime element producer and retains its declared element request.
+
 The reason this is the long-term design rather than a local implementation
 detail is that it makes specialization, dispatch, lambda lowering, and equality
 all obey the same ownership rule:

@@ -779,9 +779,11 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerListConstructorAtNodeWithRelation(",
         "fn lowerRecordConstructorAtNode(",
     );
-    try expectContains(list, "const produced_element = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph)");
+    try expectContains(list, "specializationValueFlowForExpr(item) == .produced");
+    try expectContains(list, "const produced_element = try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph)");
+    try expectContains(list, "DraftTypeCell.fromGraphNode(produced_element)");
     try expectContains(list, "self.graph.newNode(.{ .list = produced_element })");
-    try expectContains(list, "requireSameExactProducedValue(");
+    try expectNotContains(list, "requireSameExactProducedValue(");
 
     const tag = sourceSliceBetween(
         lower_source,

@@ -34413,30 +34413,51 @@ const BodyContext = struct {
         const element_node = try self.graph.listElementNode(list_node);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = switch (destination_relation) {
-                .exact_request => try self.lowerExprAtExactRequest(
-                    item,
+        if (items.len == 0) return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(list_node),
+            .{ .list = try self.addExprSpan(lowered) },
+        );
+
+        // A homogeneous runtime sequence has one element producer. Checking's
+        // explicit value-flow column chooses a real producer when one exists;
+        // otherwise the first requested value consumes the checked element
+        // request as the component's seed. Once that value returns its exact
+        // node, every other item consumes that node directly. Source order in
+        // the emitted list is independent of this lowering schedule.
+        const producer_index = switch (destination_relation) {
+            .exact_request => 0,
+            .checked_mapping, .exact_producer => producer: {
+                for (items, 0..) |item, index| {
+                    if (self.view.templates.specializationValueFlowForExpr(item) == .produced) {
+                        break :producer index;
+                    }
+                }
+                break :producer 0;
+            },
+        };
+        const producer = items[producer_index];
+        lowered[producer_index] = switch (destination_relation) {
+            .exact_request => try self.lowerExprAtExactRequest(
+                producer,
+                DraftTypeCell.fromGraphNode(element_node),
+            ),
+            .checked_mapping, .exact_producer => if (self.view.templates.specializationValueFlowForExpr(producer) == .produced)
+                try self.lowerExpr(producer)
+            else
+                try self.lowerExprAtExactRequest(
+                    producer,
                     DraftTypeCell.fromGraphNode(element_node),
                 ),
-                .checked_mapping, .exact_producer => try self.lowerExpr(item),
-            };
-        }
-        // A non-empty list stores the exact node produced by its first item.
-        // Every later item meets that same flat storage boundary. Record the
-        // exact-root obligation directly; neither item graph is traversed or
-        // related to the checked element graph. An empty list has no element
-        // value and retains its checker-selected element cell.
-        const produced_node = if (lowered.len == 0) list_node else blk: {
-            const produced_element = try self.exprTypeCell(lowered[0]).toGraphNode(self.graph);
-            for (lowered[1..]) |item| {
-                try self.graph.requireSameExactProducedValue(
-                    produced_element,
-                    try self.exprTypeCell(item).toGraphNode(self.graph),
-                );
-            }
-            break :blk try self.graph.newNode(.{ .list = produced_element });
         };
+        const produced_element = try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph);
+        for (items, 0..) |item, index| {
+            if (index == producer_index) continue;
+            lowered[index] = try self.lowerExprAtExactRequest(
+                item,
+                DraftTypeCell.fromGraphNode(produced_element),
+            );
+        }
+        const produced_node = try self.graph.newNode(.{ .list = produced_element });
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
             .{ .list = try self.addExprSpan(lowered) },
