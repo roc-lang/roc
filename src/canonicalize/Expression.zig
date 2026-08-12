@@ -371,15 +371,21 @@ pub const Expr = union(enum) {
     /// !True           # Unary not on literal
     /// ```
     e_unary_not: UnaryNot,
-    /// Field access expression.
+    /// A maximal contiguous record-field access path.
     ///
     /// ```roc
     /// person.name
+    /// person.?address.city.?zip
     /// ```
+    ///
+    /// Each segment preserves whether source selected required or optional
+    /// access. Its auxiliary node identity owns the successful payload type of
+    /// that path prefix; this expression owns the observable result type.
+    /// Checking therefore consumes the complete path and can wrap its final
+    /// successful payload in one flat `Try` when any segment is optional.
     e_field_access: struct {
         receiver: Expr.Idx,
-        field_name: Ident.Idx,
-        field_name_region: base.Region,
+        segments: Expr.FieldAccessSegment.Span,
     },
     /// Method call expression.
     ///
@@ -633,6 +639,33 @@ pub const Expr = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
+
+    /// The source operation selected for one record-field access segment.
+    /// This is syntax-level access intent, distinct from the field's solved
+    /// required/optional presence in its record type.
+    pub const FieldAccessMode = enum(u8) {
+        required,
+        optional,
+    };
+
+    /// One segment in a flattened record-field path.
+    ///
+    /// Its source region is stored alongside the auxiliary node in NodeStore.
+    pub const FieldAccessSegment = struct {
+        name: Ident.Idx,
+        mode: FieldAccessMode,
+
+        pub const Idx = enum(u32) { _ };
+
+        /// A source-ordered, contiguous range of auxiliary segment nodes.
+        ///
+        /// Unlike ordinary CIR spans, `start` is a node identity rather than
+        /// an offset into `NodeStore.index_data`.
+        pub const Span = extern struct {
+            start: FieldAccessSegment.Idx,
+            len: u32,
+        };
+    };
 
     /// A single branch of an if expression.
     /// Contains a condition expression and the body to execute if the condition is true.
@@ -1335,7 +1368,6 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-field-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("field", ir.getIdentText(e.field_name));
                 const attrs = tree.beginNode();
 
                 const receiver_begin = tree.beginNode();
@@ -1343,6 +1375,24 @@ pub const Expr = union(enum) {
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
+
+                const segments_begin = tree.beginNode();
+                try tree.pushStaticAtom("segments");
+                const segments_attrs = tree.beginNode();
+                var segment_position: u32 = 0;
+                while (segment_position < e.segments.len) : (segment_position += 1) {
+                    const segment_idx = ir.store.fieldAccessSegmentAt(e.segments, segment_position);
+                    const segment = ir.store.getFieldAccessSegment(segment_idx);
+                    const segment_begin = tree.beginNode();
+                    try tree.pushStaticAtom("segment");
+                    const segment_region = ir.store.getFieldAccessSegmentRegion(segment_idx);
+                    try ir.appendRegionInfoToSExprTreeFromRegion(tree, segment_region);
+                    try tree.pushStringPair("name", ir.getIdentText(segment.name));
+                    try tree.pushStringPair("mode", @tagName(segment.mode));
+                    const segment_attrs = tree.beginNode();
+                    try tree.endNode(segment_begin, segment_attrs);
+                }
+                try tree.endNode(segments_begin, segments_attrs);
 
                 try tree.endNode(begin, attrs);
             },

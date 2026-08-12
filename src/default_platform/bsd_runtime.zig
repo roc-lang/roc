@@ -9,6 +9,7 @@ const default_platform_options = @import("default_platform_options");
 
 const RocStr = @import("roc_str_view").RocStr;
 const RocList = @import("roc_str_view").RocList;
+const raw_pages = @import("raw_pages");
 const roc_args = @import("roc_args");
 const shim_symbols = @import("shim_symbols");
 
@@ -32,14 +33,10 @@ const syscall_number = switch (bsd_os) {
     .freebsd => struct {
         const exit: usize = 1;
         const write: usize = 4;
-        const munmap: usize = 73;
-        const mmap: usize = 477;
     },
     .netbsd => struct {
         const exit: usize = 1;
         const write: usize = 4;
-        const munmap: usize = 73;
-        const mmap: usize = 197;
     },
 };
 
@@ -101,18 +98,6 @@ comptime {
             \\.ascii "NetBSD"
             \\.byte 0, 0
             \\.long 800000000
-            \\.text
-            \\.globl roc_default_netbsd_mmap
-            \\.hidden roc_default_netbsd_mmap
-            \\.type roc_default_netbsd_mmap,@function
-            \\roc_default_netbsd_mmap:
-            \\movq %rcx, %r10
-            \\movq $197, %rax
-            \\syscall
-            \\jnc 1f
-            \\negq %rax
-            \\1: retq
-            \\.size roc_default_netbsd_mmap, .-roc_default_netbsd_mmap
             \\.section .note.GNU-stack,"",@progbits
         ),
     }
@@ -216,10 +201,7 @@ fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const byte_alignment = normalizedAlignment(alignment);
     const prefix = alignForward(allocation_header_size, byte_alignment);
     const total = pageAlign(prefix + length);
-    const raw_addr = rawMmap(total);
-    if (isSyscallError(raw_addr)) return null;
-
-    const raw: [*]u8 = @ptrFromInt(raw_addr);
+    const raw = raw_pages.map(total) orelse return null;
     const user = raw + prefix;
     storeAllocationHeader(user, prefix, total, length);
     return @ptrCast(user);
@@ -242,28 +224,7 @@ fn rocDealloc(ptr: *anyopaque, _: usize) callconv(.c) void {
     const user: [*]u8 = @ptrCast(ptr);
     const prefix = allocationHeaderValue(user, 0);
     const total = allocationHeaderValue(user, 1);
-    _ = rawSyscall2(syscall_number.munmap, @intFromPtr(user - prefix), total);
-}
-
-fn rawMmap(length: usize) usize {
-    const map_private_anonymous: usize = 0x0002 | 0x1000;
-    const fd: usize = @bitCast(@as(isize, -1));
-    return switch (bsd_os) {
-        .freebsd => rawSyscall6(syscall_number.mmap, 0, length, 0x01 | 0x02, map_private_anonymous, fd, 0),
-        .netbsd => rawNetBsdMmap(length, map_private_anonymous, fd),
-    };
-}
-
-/// NetBSD's mmap ABI has an explicit padding slot before its seventh `off_t`
-/// argument. The assembly symbol uses the C ABI so that seventh slot is at
-/// `rsp + 8`, exactly where the x86_64 kernel reads syscall arguments beyond
-/// the sixth.
-fn rawNetBsdMmap(length: usize, flags: usize, fd: usize) usize {
-    const mmap_fn = @extern(
-        *const fn (usize, usize, usize, usize, usize, usize, usize) callconv(.c) usize,
-        .{ .name = "roc_default_netbsd_mmap" },
-    );
-    return mmap_fn(0, length, 0x01 | 0x02, flags, fd, 0, 0);
+    raw_pages.unmap(user - prefix, total);
 }
 
 fn rawSyscall1(number: usize, arg1: usize) usize {
@@ -278,19 +239,6 @@ fn rawSyscall1(number: usize, arg1: usize) usize {
         : .{ .rcx = true, .r11 = true, .memory = true });
 }
 
-fn rawSyscall2(number: usize, arg1: usize, arg2: usize) usize {
-    return asm volatile (
-        \\syscall
-        \\jnc 1f
-        \\negq %%rax
-        \\1:
-        : [ret] "={rax}" (-> usize),
-        : [number] "{rax}" (number),
-          [arg1] "{rdi}" (arg1),
-          [arg2] "{rsi}" (arg2),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-}
-
 fn rawSyscall3(number: usize, arg1: usize, arg2: usize, arg3: usize) usize {
     return asm volatile (
         \\syscall
@@ -302,31 +250,6 @@ fn rawSyscall3(number: usize, arg1: usize, arg2: usize, arg3: usize) usize {
           [arg1] "{rdi}" (arg1),
           [arg2] "{rsi}" (arg2),
           [arg3] "{rdx}" (arg3),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-}
-
-fn rawSyscall6(
-    number: usize,
-    arg1: usize,
-    arg2: usize,
-    arg3: usize,
-    arg4: usize,
-    arg5: usize,
-    arg6: usize,
-) usize {
-    return asm volatile (
-        \\syscall
-        \\jnc 1f
-        \\negq %%rax
-        \\1:
-        : [ret] "={rax}" (-> usize),
-        : [number] "{rax}" (number),
-          [arg1] "{rdi}" (arg1),
-          [arg2] "{rsi}" (arg2),
-          [arg3] "{rdx}" (arg3),
-          [arg4] "{r10}" (arg4),
-          [arg5] "{r8}" (arg5),
-          [arg6] "{r9}" (arg6),
         : .{ .rcx = true, .r11 = true, .memory = true });
 }
 

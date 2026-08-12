@@ -151,13 +151,13 @@ test "record-tail evidence path is normalized to its logical row field" {
     const head_name = try env.insertIdent(@import("base").Ident.for_text("head"));
     const tail_name = try env.insertIdent(@import("base").Ident.for_text("tail"));
 
-    const tail_fields = try env.types.appendRecordFields(&.{.{ .name = tail_name, .var_ = dispatcher }});
+    const tail_fields = try env.types.appendRecordFields(&.{.{ .name = tail_name, .presence = .required(dispatcher) }});
     const tail_row = try env.types.freshFromContent(.{ .structure = .{ .record = .{
         .fields = tail_fields,
         .ext = empty_tail,
     } } });
     const aliased_tail = try transparentAlias(env, "TailFields", tail_row, &.{dispatcher});
-    const head_fields = try env.types.appendRecordFields(&.{.{ .name = head_name, .var_ = head_value }});
+    const head_fields = try env.types.appendRecordFields(&.{.{ .name = head_name, .presence = .required(head_value) }});
     const root = try env.types.freshFromContent(.{ .structure = .{ .record = .{
         .fields = head_fields,
         .ext = aliased_tail,

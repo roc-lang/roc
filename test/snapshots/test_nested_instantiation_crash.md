@@ -98,8 +98,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "r")))
 				(e-field-access
-					(e-ident (raw "r"))
-					(e-ident (raw "value")))))
+					(receiver
+						(e-ident (raw "r")))
+					(segment (mode "required") (field "value")))))
 		(s-type-anno (name "composed")
 			(ty-fn
 				(ty-apply
@@ -169,10 +170,12 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-field-access (field "value")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "r"))))))
+						(p-assign (ident "r"))))
+				(segments
+					(segment (name "value") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record
@@ -183,10 +186,7 @@ answer = composed([42])
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
-		(e-lambda
-			(args
-				(p-assign (ident "n")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -194,7 +194,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 316)
+		(e-call (constraint-fn-var 322)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

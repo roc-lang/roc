@@ -6,12 +6,18 @@
 //! entrypoint wrapper directly from the shared mapping.
 
 const std = @import("std");
+const lir = @import("lir");
 const Relocation = @import("Relocation.zig").Relocation;
 const DataRelocationKind = @import("Relocation.zig").DataRelocationKind;
 const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 
 const Allocator = std.mem.Allocator;
+
+/// Boxy runtime sidecar embedded in a dev run image: descriptor tables, the
+/// committed layout store, and the string store the descriptors index. Its
+/// offsets are relative to the run image's boxy blob region.
+pub const BoxySidecar = lir.LirImage.BoxySidecar;
 
 /// Magic number identifying a dev backend run image ("RDEV" in little-endian bytes).
 pub const MAGIC: u32 = 0x56454452;
@@ -69,6 +75,10 @@ pub const Header = extern struct {
     symbol_names: ArrayRef,
     data: ArrayRef,
     data_symbols: ArrayRef,
+    /// Raw bytes of the boxy sidecar blob (empty when the program has no boxy
+    /// tables). `boxy_sidecar` offsets are relative to this region's base.
+    boxy_blob: ArrayRef,
+    boxy_sidecar: BoxySidecar,
 };
 
 /// Entry wrapper exported by the generated dev code image.
@@ -159,6 +169,8 @@ pub const ProgramView = struct {
     data: []u8,
     data_symbols: []const DataSymbol,
     page_size: usize,
+    boxy_blob: []u8,
+    boxy_sidecar: BoxySidecar,
 
     pub fn symbolName(self: *const ProgramView, ref: StringRef) ImageError![]const u8 {
         const start = try asBoundedOffset(ref.offset, self.symbol_names.len);
@@ -187,6 +199,8 @@ pub fn writeToSharedMemory(
     code_symbol_inputs: []const CodeSymbolInput,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    boxy_blob: []const u8,
+    boxy_sidecar: BoxySidecar,
 ) WriteError!*Header {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
 
@@ -337,6 +351,9 @@ pub fn writeToSharedMemory(
     );
     @memcpy(data_copy, data_bytes.items);
 
+    const boxy_blob_copy = try allocRuntimeAlignedBytes(image_allocator, .@"16", boxy_blob.len);
+    @memcpy(boxy_blob_copy, boxy_blob);
+
     const executable_end = if (function_stubs.len == 0)
         @intFromPtr(code_copy.ptr) + code_copy.len
     else
@@ -354,6 +371,7 @@ pub fn writeToSharedMemory(
         bytesOfSlice(data_symbols_copy),
         executable,
         data_copy,
+        boxy_blob_copy,
     }), page_size);
 
     header.* = .{
@@ -371,6 +389,8 @@ pub fn writeToSharedMemory(
         .symbol_names = try arrayRef(base_ptr, symbol_names_copy),
         .data = try arrayRef(base_ptr, data_copy),
         .data_symbols = try arrayRef(base_ptr, bytesOfSlice(data_symbols_copy)),
+        .boxy_blob = try arrayRef(base_ptr, boxy_blob_copy),
+        .boxy_sidecar = boxy_sidecar,
     };
 
     return header;
@@ -384,8 +404,9 @@ pub fn requiredCapacity(
     code_symbol_inputs: []const CodeSymbolInput,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    boxy_blob: []const u8,
 ) WriteError!usize {
-    return requiredCapacityFromOffset(page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocations, data_exports);
+    return requiredCapacityFromOffset(page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocations, data_exports, boxy_blob);
 }
 
 /// Return the exact allocator offset after serializing this run image starting
@@ -398,6 +419,7 @@ pub fn requiredCapacityFromOffset(
     code_symbol_inputs: []const CodeSymbolInput,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    boxy_blob: []const u8,
 ) WriteError!usize {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
 
@@ -462,6 +484,7 @@ pub fn requiredCapacityFromOffset(
     capacity = try addAllocationCapacity(capacity, 16, function_stub_len);
     capacity = std.mem.alignForward(usize, capacity, page_size);
     capacity = try addAllocationCapacity(capacity, @max(page_size, max_data_alignment), data_len);
+    capacity = try addAllocationCapacity(capacity, 16, boxy_blob.len);
     return std.mem.alignForward(usize, capacity, page_size);
 }
 
@@ -487,6 +510,8 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_s
         .data = try bytesFromRef(base_ptr, image_size, header.data),
         .data_symbols = try sliceFromRef(DataSymbol, base_ptr, image_size, header.data_symbols),
         .page_size = page_size,
+        .boxy_blob = try bytesFromRef(base_ptr, image_size, header.boxy_blob),
+        .boxy_sidecar = header.boxy_sidecar,
     };
 }
 
@@ -696,7 +721,7 @@ test "writeToSharedMemory serializes only executable image sections" {
             .alignment = 1,
         },
     };
-    const capacity = try requiredCapacity(page_size, &code, &entrypoint_inputs, &code_symbol_inputs, &relocations, &data_exports);
+    const capacity = try requiredCapacity(page_size, &code, &entrypoint_inputs, &code_symbol_inputs, &relocations, &data_exports, &.{});
     const image_bytes = try scratch.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(page_size), capacity);
     defer scratch.free(image_bytes);
 
@@ -713,6 +738,8 @@ test "writeToSharedMemory serializes only executable image sections" {
         &code_symbol_inputs,
         &relocations,
         &data_exports,
+        &.{},
+        std.mem.zeroes(BoxySidecar),
     );
 
     try std.testing.expectEqual(MAGIC, header.magic);

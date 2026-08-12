@@ -8,8 +8,9 @@ const host_alloc = @import("host_alloc");
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 pub const std_options_debug_io = shim_io.io();
 pub const std_options_debug_threaded_io = null;
-// See `shim_io.std_options_no_stack_tracing` for why stack tracing is disabled.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+// See `shim_io.std_options_static_archive` for why these settings matter to a
+// static archive that roc links into a program.
+pub const std_options = shim_io.std_options_static_archive;
 
 const RocOps = builtins.host_abi.RocOps;
 const RocStr = builtins.str.RocStr;

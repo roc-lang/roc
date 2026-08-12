@@ -248,6 +248,7 @@ const listSublist = list.listSublist;
 const listSublistBorrowed = list.listSublistBorrowed;
 const listDropAt = list.listDropAt;
 const listReplace = list.listReplace;
+const listSet = list.listSet;
 const listSwap = list.listSwap;
 const listReserve = list.listReserve;
 const listReleaseExcessCapacity = list.listReleaseExcessCapacity;
@@ -956,6 +957,25 @@ pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: us
     }
 }
 
+/// Wrapper for list_set. The displaced element is released because it is not
+/// returned to Roc code.
+pub fn roc_builtins_list_set(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (elements_refcounted) {
+        var inc_ctx = CallbackElementIncrefContext{
+            .callback = element_incref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        var dec_ctx = CallbackElementDecrefContext{
+            .callback = element_decref orelse unreachable,
+            .roc_ops = roc_ops,
+        };
+        out.* = listSet(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+    } else {
+        out.* = listSet(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
+    }
+}
+
 /// Wrapper: listSwap for list_swap. The update mode is forwarded to the
 /// builtin's uniqueness check; `.InPlace` skips it.
 pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index_1: u64, index_2: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
@@ -1355,7 +1375,6 @@ pub fn roc_builtins_box_decref_with(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     const payload_has_refcounted_children = payload_decref != null;
-
     if (payload_decref) |callback| {
         if (utils.isUnique(payload_ptr, roc_ops)) {
             callback(payload_ptr, roc_ops);
@@ -1493,10 +1512,22 @@ pub fn roc_builtins_hot_reload_retain_current(_: *RocOps) callconv(.c) ?*anyopaq
 /// hot-reload capture prefix.
 pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
+    const root = @import("root");
+    const previous_runtime = if (comptime @hasDecl(root, "roc_hot_reload_activate_retained"))
+        root.roc_hot_reload_activate_retained(header.code_ref)
+    else
+        null;
     if (header.original_on_drop) |original_on_drop| {
         original_on_drop(erased_callable.hotReloadAdjustedCapturePtr(capture_ptr), roc_ops);
     }
-    roc_builtins_hot_reload_leave(header.code_ref);
+    if (comptime @hasDecl(root, "roc_hot_reload_deactivate_retained")) {
+        root.roc_hot_reload_deactivate_retained(previous_runtime);
+    }
+    if (comptime @hasDecl(root, "roc_hot_reload_release_retained")) {
+        root.roc_hot_reload_release_retained(header.code_ref);
+    } else {
+        roc_builtins_hot_reload_leave(header.code_ref);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1656,6 +1687,16 @@ fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
 
 fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
     return numeric_conversions.u128FitsTarget(val, target_bits, target_signed);
+}
+
+// The conversion wrappers below move results between widths assuming a value's
+// low-order bytes come first in memory: narrowing copies the value's first
+// bytes, and widening writes it into the first bytes of a larger slot. That
+// assumption holds only on a little-endian target.
+comptime {
+    if (@import("builtin").cpu.arch.endian() == .big) {
+        @compileError("the conversion wrappers assume a value's low-order bytes come first, which is false on big-endian targets");
+    }
 }
 
 /// i128 try convert

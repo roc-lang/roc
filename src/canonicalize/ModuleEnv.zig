@@ -227,6 +227,12 @@ pub const CommonIdents = extern struct {
     question_err: Ident.Idx,
     // Synthetic identifier for .. implicit rigids in open tag unions or records
     open_ext: Ident.Idx,
+    // Synthetic identifier naming the rigid presence variable minted when
+    // checking a definition's body against its own `?:` optional-field signature.
+    optional_presence: Ident.Idx,
+    // Error tag produced by optional field access (`r.?x`) when the field is
+    // absent: the Err side of `Try(field_type, [MissingField])`.
+    missing_field: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -354,6 +360,10 @@ pub const CommonIdents = extern struct {
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
+            // Error tag for optional field access on an absent field
+            .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
         };
     }
 
@@ -484,6 +494,10 @@ pub const CommonIdents = extern struct {
             .question_err = common.findIdent("#err") orelse unreachable,
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = common.findIdent("#others") orelse unreachable,
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = common.findIdent("#optional") orelse unreachable,
+            // Error tag for optional field access on an absent field
+            .missing_field = common.findIdent("MissingField") orelse unreachable,
         };
     }
 };
@@ -705,6 +719,50 @@ pub const SchemeUsePair = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One compiler-generated parser or encoder derivation validated by checking.
+/// The referenced vars remain checker-owned here; checked publication converts
+/// them to stable checked type ids before post-check compilation.
+pub const GeneratedCodecDerivation = extern struct {
+    kind: u32,
+    source_constraint_fn_var: u32,
+    source_runtime_fn_var: u32,
+    source_shape_var: u32,
+    source_encoding_var: u32,
+    source_state_var: u32,
+    source_error_var: u32,
+    constraint_fn_var: u32,
+    runtime_fn_var: u32,
+    shape_var: u32,
+    encoding_var: u32,
+    state_var: u32,
+    error_var: u32,
+    calls_start: u32,
+    calls_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Kind = enum(u32) {
+        parser,
+        encoder,
+    };
+};
+
+/// One exact method callable used inside a checked generated codec.
+pub const GeneratedCodecCall = extern struct {
+    method_ident: u32,
+    dispatcher_var: u32,
+    callable_var: u32,
+    /// Exact generated callable relation whose dispatch-target record owns the
+    /// selected method scheme's nested evidence.
+    evidence_var: u32,
+    /// The value shape this call handles, or `no_subject_var` when the method
+    /// has no shape-specific call contract.
+    subject_var: u32,
+
+    pub const no_subject_var = std.math.maxInt(u32);
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One static-dispatch obligation checking rejected. The raw constraint
 /// function variable is the obligation identity used by dispatch expressions,
 /// instantiated scheme evidence, and checked-artifact publication.
@@ -757,6 +815,19 @@ pub const NumericSuffixTarget = extern struct {
             .invalid => .invalid,
         };
     }
+};
+
+/// Checker-produced construction evidence for one field omitted by a record
+/// literal through defaulted-field width absorption. The field's default is
+/// construction-site data; it must survive even when later value unification
+/// normalizes the shared runtime row to `required`.
+pub const RecordOmittedDefault = extern struct {
+    expr: CIR.Expr.Idx,
+    field_name: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
+    default_expr_node: u32,
+
+    pub const SafeList = collections.SafeList(@This());
 };
 
 gpa: std.mem.Allocator,
@@ -883,9 +954,16 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Generated codec derivations validated by checking and consumed by checked
+/// artifact publication.
+generated_codec_derivations: GeneratedCodecDerivation.SafeList,
+/// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
+generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
+/// Exact default identities selected at record-literal omission sites.
+record_omitted_defaults: RecordOmittedDefault.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1005,6 +1083,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
+    self.record_omitted_defaults.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1099,7 +1178,10 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
+        .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
+        .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -1126,7 +1208,10 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1225,7 +1310,10 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -2791,6 +2879,80 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .record_default_not_literal => |data| blk: {
+            const field_name = self.getIdent(data.field_name);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            const owned_field_name = try report.addOwnedString(field_name);
+            try report.headline.addReflowingText("The default value for the ");
+            try report.headline.addRecordField(owned_field_name);
+            try report.headline.addReflowingText(" field is not a literal.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("A field default (");
+            try report.document.addInlineCode("??");
+            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+
+            break :blk report;
+        },
+        .optional_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Optional Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("A field cannot be both optional (");
+            try report.headline.addInlineCode("?:");
+            try report.headline.addReflowingText(") and defaulted (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText("): a default fills the field whenever construction omits it, so the field can never be missing. Use ");
+            try report.headline.addInlineCode(":");
+            try report.headline.addReflowingText(" with ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" instead.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .unnamed_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Unnamed Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("Unnamed fields (");
+            try report.headline.addInlineCode("_");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("_name");
+            try report.headline.addReflowingText(") reserve padding in a nominal record layout, so they cannot have a ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .unnamed_field_not_allowed_in_structural_record => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3518,7 +3680,10 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
+    generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
+    record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3627,7 +3792,10 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
+        try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
+        try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3691,7 +3859,10 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
         return env;
@@ -3755,7 +3926,10 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
     }
 
@@ -3821,7 +3995,10 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -4053,6 +4230,67 @@ pub fn recordSchemeUse(
     });
 }
 
+/// Record one successfully checked generated codec derivation and its exact
+/// internal method callables.
+pub fn recordGeneratedCodecDerivation(
+    self: *Self,
+    kind: GeneratedCodecDerivation.Kind,
+    source_constraint_fn_var: TypeVar,
+    source_runtime_fn_var: TypeVar,
+    source_shape_var: TypeVar,
+    source_encoding_var: TypeVar,
+    source_state_var: TypeVar,
+    source_error_var: TypeVar,
+    constraint_fn_var: TypeVar,
+    runtime_fn_var: TypeVar,
+    shape_var: TypeVar,
+    encoding_var: TypeVar,
+    state_var: TypeVar,
+    error_var: TypeVar,
+    calls: []const GeneratedCodecCall,
+) std.mem.Allocator.Error!void {
+    var existing_index: ?usize = null;
+    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+        if (existing.kind == @intFromEnum(kind) and
+            existing.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
+        {
+            existing_index = index;
+            break;
+        }
+    }
+    if (existing_index) |index| {
+        const existing = self.generated_codec_derivations.items.items[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
+            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        }
+    }
+
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const derivation = GeneratedCodecDerivation{
+        .kind = @intFromEnum(kind),
+        .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
+        .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
+        .source_shape_var = @intFromEnum(source_shape_var),
+        .source_encoding_var = @intFromEnum(source_encoding_var),
+        .source_state_var = @intFromEnum(source_state_var),
+        .source_error_var = @intFromEnum(source_error_var),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .runtime_fn_var = @intFromEnum(runtime_fn_var),
+        .shape_var = @intFromEnum(shape_var),
+        .encoding_var = @intFromEnum(encoding_var),
+        .state_var = @intFromEnum(state_var),
+        .error_var = @intFromEnum(error_var),
+        .calls_start = calls_start,
+        .calls_len = @intCast(calls.len),
+    };
+    if (existing_index) |index| {
+        self.generated_codec_derivations.items.items[index] = derivation;
+        return;
+    }
+    _ = try self.generated_codec_derivations.append(self.gpa, derivation);
+}
+
 /// Persist one checker-rejected static-dispatch obligation.
 pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std.mem.Allocator.Error!void {
     _ = try self.rejected_static_dispatches.append(self.gpa, .{
@@ -4217,6 +4455,36 @@ pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Er
     const expr_idx = try self.store.addExpr(expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
+}
+
+/// Reserve one contiguous field-access path plus its enclosing expression.
+pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
+    return self.store.startFieldAccessPath(segment_count);
+}
+
+/// Append one source-ordered field-access segment to a reserved path.
+pub fn appendFieldAccessPathSegmentAssumeCapacity(
+    self: *Self,
+    builder: NodeStore.FieldAccessPathBuilder,
+    segment: CIR.Expr.FieldAccessSegment,
+    region: Region,
+) CIR.Expr.FieldAccessSegment.Idx {
+    const segment_idx = self.store.appendFieldAccessPathSegmentAssumeCapacity(builder, segment, region);
+    self.debugAssertArraysInSync();
+    return segment_idx;
+}
+
+/// Finish a fully populated field-access path.
+pub fn finishFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) CIR.Expr.FieldAccessSegment.Span {
+    const span = self.store.finishFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
+    return span;
+}
+
+/// Roll back a field-access path whose construction did not finish.
+pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) void {
+    self.store.rollbackFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
 }
 
 /// Add a new capture to the node store.
@@ -4727,7 +4995,26 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    var type_writer = try TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    type_writer.setDefaultSourceResolver(self, typeWriterDefaultSource);
+    return type_writer;
+}
+
+/// Resolve a defaulted field's identity to its default's source snippet for
+/// type rendering (design.md "Defaulted Fields"): renderable exactly when
+/// the default was declared in THIS module and its source text is a short
+/// single line; a foreign or unwieldy default renders as `?? …`.
+pub fn typeWriterDefaultSource(ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8 {
+    const env: *const Self = @ptrCast(@alignCast(ctx));
+    if (id.origin_module != env.selfModuleIdentity()) return null;
+    const region = env.store.getExprRegion(@as(CIR.Expr.Idx, @enumFromInt(id.expr_node)));
+    const source = env.getSourceAll();
+    if (region.start.offset > region.end.offset or region.end.offset > source.len) return null;
+    const snippet = source[region.start.offset..region.end.offset];
+    // Keep type strings readable: long or multi-line defaults render `…`.
+    if (snippet.len == 0 or snippet.len > 40) return null;
+    if (std.mem.findScalar(u8, snippet, '\n') != null) return null;
+    return snippet;
 }
 
 /// Inserts an identifier into the common environment and returns its index.

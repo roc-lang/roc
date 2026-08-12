@@ -495,8 +495,9 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.decode"))
 								(e-field-access
-									(e-ident (raw "req"))
-									(e-ident (raw "body")))))
+									(receiver
+										(e-ident (raw "req")))
+									(segment (mode "required") (field "body")))))
 						(e-match
 							(e-ident (raw "result"))
 							(branches
@@ -573,8 +574,9 @@ EndOfFile,
 					(p-ident (raw "response")))
 				(e-match
 					(e-field-access
-						(e-ident (raw "response"))
-						(e-ident (raw "status")))
+						(receiver
+							(e-ident (raw "response")))
+						(segment (mode "required") (field "status")))
 					(branches
 						(branch
 							(p-tag (raw "Ok")
@@ -687,10 +689,7 @@ combineTrys = |jsonTry, httpStatus|
 (can-ir
 	(d-let
 		(p-assign (ident "parseJson"))
-		(e-lambda
-			(args
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -699,21 +698,14 @@ combineTrys = |jsonTry, httpStatus|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "handleRequest"))
-		(e-lambda
-			(args
-				(p-assign (ident "req")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
-		(e-lambda
-			(args
-				(p-assign (ident "config"))
-				(p-assign (ident "values")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -725,49 +717,21 @@ combineTrys = |jsonTry, httpStatus|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "createClient"))
-		(e-lambda
-			(args
-				(p-assign (ident "config")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "handleResponse"))
-		(e-lambda
-			(args
-				(p-assign (ident "response")))
-			(e-match
-				(match
-					(cond
-						(e-field-access (field "status")
-							(receiver
-								(e-runtime-error (tag "erroneous_value_use")))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-lambda
-			(args
-				(p-assign (ident "jsonTry"))
-				(p-assign (ident "httpStatus")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

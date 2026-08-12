@@ -93,6 +93,16 @@ const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const 
     .{ .name = "Dec", .owner = "Num" },  .{ .name = "Numeral", .owner = "Num" },
 };
 
+/// The `name`↔`type` separator for a record field: `?:` marks an optional
+/// field, plain `:` a required or defaulted one (a defaulted field's `??`
+/// default is written as a suffix after the type).
+fn fieldSeparator(kind: DocType.Field.Kind) []const u8 {
+    return switch (kind) {
+        .optional => " ?: ",
+        .required, .defaulted => " : ",
+    };
+}
+
 /// Writes the published URL for a builtin type referenced from another package's
 /// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
 fn writeBuiltinTypeUrl(w: Writer, type_name: []const u8) (Allocator.Error || error{WriteFailed})!void {
@@ -2311,12 +2321,16 @@ fn renderDocTypeHtml(
                                 i -= 1;
                                 const field = rec.fields[i];
                                 try frames.append(gpa, .{ .html = ",\n" });
+                                if (field.kind == .defaulted) {
+                                    try frames.append(gpa, .{ .escaped = field.kind.defaulted orelse "…" });
+                                    try frames.append(gpa, .{ .html = " ?? " });
+                                }
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = field.type,
                                     .needs_parens = false,
                                     .indent = item.indent + 1,
                                 } });
-                                try frames.append(gpa, .{ .html = " : " });
+                                try frames.append(gpa, .{ .html = fieldSeparator(field.kind) });
                                 try frames.append(gpa, .{ .escaped = field.name });
                                 try frames.append(gpa, .{ .indent = item.indent + 1 });
                             }
@@ -2327,12 +2341,16 @@ fn renderDocTypeHtml(
                             while (i > 0) {
                                 i -= 1;
                                 const field = rec.fields[i];
+                                if (field.kind == .defaulted) {
+                                    try frames.append(gpa, .{ .escaped = field.kind.defaulted orelse "…" });
+                                    try frames.append(gpa, .{ .html = " ?? " });
+                                }
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = field.type,
                                     .needs_parens = false,
                                     .indent = item.indent,
                                 } });
-                                try frames.append(gpa, .{ .html = " : " });
+                                try frames.append(gpa, .{ .html = fieldSeparator(field.kind) });
                                 try frames.append(gpa, .{ .escaped = field.name });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
                             }
@@ -3141,6 +3159,91 @@ test "renderDocTypeHtml renders where clause single-line when single_line_signat
         "<span class=\"type\">Bool</span> <span class=\"kw\">where</span> [" ++
             "<span class=\"type-var\">k</span>.is_eq : <span class=\"type-var\">k</span>, " ++
             "<span class=\"type-var\">v</span>.to_hash : <span class=\"type-var\">v</span>]",
+        output.written(),
+    );
+}
+
+fn buildOptionalFieldsRecordFixture(gpa: Allocator) Allocator.Error!*const DocType {
+    const u8_req = try gpa.create(DocType);
+    u8_req.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "U8"),
+    } };
+    const str_opt = try gpa.create(DocType);
+    str_opt.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "Str"),
+    } };
+    const u8_def = try gpa.create(DocType);
+    u8_def.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "U8"),
+    } };
+
+    const fields = try gpa.alloc(DocType.Field, 3);
+    fields[0] = .{ .name = try gpa.dupe(u8, "req"), .type = u8_req, .kind = .required };
+    fields[1] = .{ .name = try gpa.dupe(u8, "opt"), .type = str_opt, .kind = .optional };
+    fields[2] = .{ .name = try gpa.dupe(u8, "def"), .type = u8_def, .kind = .{ .defaulted = try gpa.dupe(u8, "3") } };
+
+    const root = try gpa.create(DocType);
+    root.* = .{ .record = .{
+        .fields = fields,
+        .ext = null,
+        .is_open = false,
+        .layout = .compact,
+    } };
+    return root;
+}
+
+test "renderDocTypeHtml renders required, optional, and defaulted record fields" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const root = try buildOptionalFieldsRecordFixture(gpa);
+    defer {
+        root.deinit(gpa);
+        gpa.destroy(root);
+    }
+
+    const package_docs = DocModel.PackageDocs{
+        .name = "Test",
+        .modules = &[_]DocModel.ModuleDocs{},
+    };
+    var ctx = try RenderContext.init(&package_docs, gpa);
+    defer ctx.deinit(gpa);
+    ctx.suppress_type_links = true;
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try renderDocTypeHtml(&output.writer, &ctx, gpa, root, false);
+    try testing.expectEqualStrings(
+        "{ req : <span class=\"type\">U8</span>, " ++
+            "opt ?: <span class=\"type\">Str</span>, " ++
+            "def : <span class=\"type\">U8</span> ?? 3 }",
+        output.written(),
+    );
+}
+
+test "record field kinds round-trip through writeToSExpr" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const root = try buildOptionalFieldsRecordFixture(gpa);
+    defer {
+        root.deinit(gpa);
+        gpa.destroy(root);
+    }
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try root.writeToSExpr(&output.writer, 0);
+    try testing.expectEqualStrings(
+        "(record" ++
+            " (field \"req\" (type-ref (name \"U8\")))" ++
+            " (field-optional \"opt\" (type-ref (name \"Str\")))" ++
+            " (field-defaulted \"def\" (type-ref (name \"U8\")) \"3\"))",
         output.written(),
     );
 }

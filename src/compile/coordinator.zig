@@ -2417,6 +2417,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => {},
             }
         }
@@ -2438,6 +2439,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => continue,
             }
             const source_expr = switch (root.source) {
@@ -4328,6 +4330,23 @@ pub const Coordinator = struct {
         return null;
     }
 
+    /// Index of `env` in the type-check environment list, appending it if this
+    /// is the first import that names it. Registering by environment keeps the
+    /// list one entry per source module, which is what `CheckedModules` keys on.
+    fn resolveImportedEnvIndex(
+        allocator: Allocator,
+        imported_envs: *std.ArrayList(*ModuleEnv),
+        env_indices: *std.AutoHashMapUnmanaged(*ModuleEnv, u32),
+        env: *ModuleEnv,
+    ) Allocator.Error!u32 {
+        const entry = try env_indices.getOrPut(allocator, env);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(imported_envs.items.len);
+            try imported_envs.append(allocator, env);
+        }
+        return entry.value_ptr.*;
+    }
+
     fn buildTypecheckImportedEnvsForEnv(
         self: *Coordinator,
         pkg: *PackageState,
@@ -4338,10 +4357,19 @@ pub const Coordinator = struct {
         const expected_capacity = 1 + mod.imports.items.len + mod.external_imports.items.len;
         var imported_envs = try std.ArrayList(*ModuleEnv).initCapacity(allocator, expected_capacity);
         errdefer imported_envs.deinit(allocator);
-        var local_module_indices = collections.DenseMap(ModuleId, u32).init(allocator);
-        defer local_module_indices.deinit();
+
+        // `imported_envs` is the list of distinct source modules this module is
+        // checked against, so each environment appears exactly once and every
+        // import that names it resolves to that one index. Several import names
+        // can denote the same source module -- two nested types exposed from one
+        // module (`Container.Request`/`Container.Response`) are imported under
+        // separate names but share `Container`'s environment -- so identity here
+        // is the environment, not the import name.
+        var env_indices: std.AutoHashMapUnmanaged(*ModuleEnv, u32) = .empty;
+        defer env_indices.deinit(allocator);
 
         try imported_envs.append(allocator, self.builtin_modules.builtin_module.env);
+        try env_indices.put(allocator, self.builtin_modules.builtin_module.env, 0);
         module_env.imports.clearResolvedModules();
 
         const direct_imports = module_env.imports.imports.items.items;
@@ -4363,16 +4391,9 @@ pub const Coordinator = struct {
                         .{ mod.name, imp.name, @tagName(imp.phase), @tagName(imp.completion) },
                     );
                 }
-                const resolved_module_idx = if (local_module_indices.get(imp_id)) |existing_idx|
-                    existing_idx
-                else new_idx: {
-                    const env = imp.moduleEnv() orelse
-                        coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
-                    const new_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(allocator, env);
-                    try local_module_indices.put(imp_id, new_idx);
-                    break :new_idx new_idx;
-                };
+                const env = imp.moduleEnv() orelse
+                    coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
+                const resolved_module_idx = try resolveImportedEnvIndex(allocator, &imported_envs, &env_indices, env);
                 module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 continue;
             }
@@ -4382,8 +4403,7 @@ pub const Coordinator = struct {
                 .succeeded => {
                     const ext_env = self.getExternalEnv(pkg.name, import_name) orelse
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{import_name});
-                    const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(allocator, ext_env);
+                    const resolved_module_idx = try resolveImportedEnvIndex(allocator, &imported_envs, &env_indices, ext_env);
                     module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 },
                 .waiting, .failed => |readiness| coordinatorInvariant(

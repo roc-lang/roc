@@ -1494,6 +1494,7 @@ fn expectCompileTimeRootKindsPresent(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => {},
         }
     }
@@ -1575,7 +1576,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant, .hoisted_constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
-        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
     };
 }
 
@@ -1886,6 +1887,8 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
+                .boxy_dynamic_num_literal,
+                .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
                 .null_ptr,
@@ -1897,6 +1900,18 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,

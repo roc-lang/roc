@@ -69,7 +69,7 @@ pub fn instantiateNominalBacking(
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
             .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
-            .flex, .alias, .structure, .err => {},
+            .flex, .alias, .field_presence, .structure, .err => {},
         }
     }
 
@@ -262,7 +262,7 @@ pub const Instantiator = struct {
 
                 return fresh_var;
             },
-            .flex, .alias, .structure, .err => {
+            .flex, .alias, .field_presence, .structure, .err => {
                 // Generate the content
 
                 // Remember this substitution for recursive references
@@ -298,6 +298,12 @@ pub const Instantiator = struct {
             .alias => |alias| {
                 // Instantiate the structure recursively
                 return try self.instantiateAlias(alias);
+            },
+            .field_presence => |field_presence| {
+                // A resolved presence fact carries no inner variables; copy it
+                // through unchanged. Presence *variables* are flex/rigid and are
+                // handled by `instantiateVar` before this point.
+                return Content{ .field_presence = field_presence };
             },
             .structure => |flat_type| blk: {
                 // Instantiate the structure recursively
@@ -458,14 +464,28 @@ pub const Instantiator = struct {
         for (0..fields.count) |i| {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
-            const fresh_type = try self.instantiateVar(field.var_);
             fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
-                .var_ = fresh_type,
+                .presence = try self.instantiateFieldPresence(field.presence),
             });
         }
 
         return try self.store.appendRecordFields(fresh_fields.items);
+    }
+
+    /// Instantiate both axes of a record field's presence: the value type and,
+    /// for an as-yet-undetermined field, the presence variable. Each axis is a
+    /// fresh variable exactly like any other instantiated position. A concrete
+    /// kind (`present`/`optional`) copies as the same concrete kind; only an
+    /// undetermined kind yields a fresh flex presence per instantiation.
+    fn instantiateFieldPresence(self: *Self, presence: RecordField.Presence) std.mem.Allocator.Error!RecordField.Presence {
+        return switch (presence.decode()) {
+            .required => |type_var| .required(try self.instantiateVar(type_var)),
+            .unknown => |unknown| .unknown(
+                try self.instantiateVar(unknown.presence),
+                try self.instantiateVar(unknown.var_),
+            ),
+        };
     }
 
     fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
@@ -489,10 +509,9 @@ pub const Instantiator = struct {
         for (0..record.fields.count) |i| {
             // Re-fetch the field data on each iteration since the backing array may have moved
             const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
-            const fresh_type = try self.instantiateVar(field.var_);
             fresh_fields.appendAssumeCapacity(RecordField{
                 .name = field.name,
-                .var_ = fresh_type,
+                .presence = try self.instantiateFieldPresence(field.presence),
             });
         }
 

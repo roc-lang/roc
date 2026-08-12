@@ -2066,6 +2066,46 @@ pub fn listReplace(
     );
 }
 
+/// Replace an element and release the displaced value.
+///
+/// `listReplace` transfers the displaced element to its caller. `listSet`
+/// instead implements the ownership contract for `List.set`, whose result does
+/// not contain the old element.
+pub fn listSet(
+    list: RocList,
+    alignment: u32,
+    index: u64,
+    element: Opaque,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    copy: CopyFallbackFn,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const output = if (update_mode == .InPlace)
+        list
+    else
+        list.makeUnique(
+            alignment,
+            element_width,
+            elements_refcounted,
+            inc_context,
+            inc,
+            dec_context,
+            dec,
+            roc_ops,
+        );
+
+    const element_at_index = (output.bytes orelse unreachable) + (@as(usize, @intCast(index)) * element_width);
+    if (elements_refcounted) dec(dec_context, element_at_index);
+    copy(element_at_index, element orelse unreachable, element_width);
+    return output;
+}
+
 inline fn listReplaceInPlaceHelp(
     list: RocList,
     index: usize,
@@ -3583,6 +3623,161 @@ test "listReplace basic functionality" {
     try std.testing.expectEqual(@as(u8, 40), elements[3]);
 }
 
+test "listSet releases displaced refcounted element after copy-on-write" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const Counters = struct {
+        increments: usize = 0,
+        decrements: usize = 0,
+
+        fn incref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            self.increments += 1;
+        }
+
+        fn decref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            self.decrements += 1;
+        }
+    };
+
+    var counters = Counters{};
+    const data = [_]usize{ 10, 20, 30 };
+    const list = RocList.fromSlice(usize, data[0..], true, test_env.getOps());
+    list.incref(1, true, test_env.getOps());
+
+    const replacement: usize = 99;
+    const result = listSet(
+        list,
+        @alignOf(usize),
+        1,
+        @ptrCast(@constCast(&replacement)),
+        @sizeOf(usize),
+        true,
+        @ptrCast(&counters),
+        &Counters.incref,
+        @ptrCast(&counters),
+        &Counters.decref,
+        .Immutable,
+        &copy_fallback,
+        test_env.getOps(),
+    );
+    defer list.decref(@alignOf(usize), @sizeOf(usize), true, @ptrCast(&counters), &Counters.decref, test_env.getOps());
+    defer result.decref(@alignOf(usize), @sizeOf(usize), true, @ptrCast(&counters), &Counters.decref, test_env.getOps());
+
+    try std.testing.expect(result.bytes != list.bytes);
+    try std.testing.expectEqual(@as(usize, data.len), counters.increments);
+    try std.testing.expectEqual(@as(usize, 1), counters.decrements);
+    try std.testing.expectEqual(replacement, result.elements(usize).?[1]);
+}
+
+test "listReplace first element" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for i32 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Create a list with multiple elements
+    const data = [_]i32{ 100, 200, 300 };
+    const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
+
+    // Replace first element (index 0)
+    const new_element: i32 = -999;
+    var out_element: i32 = 0;
+    const result = listReplace(list, @alignOf(i32), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(i32), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 3), result.len());
+    try std.testing.expectEqual(@as(i32, 100), out_element); // original value
+
+    const elements_ptr = result.elements(i32);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(i32, -999), elements[0]); // replaced value
+    try std.testing.expectEqual(@as(i32, 200), elements[1]);
+    try std.testing.expectEqual(@as(i32, 300), elements[2]);
+}
+
+test "listReplace last element" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u16 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Create a list with multiple elements
+    const data = [_]u16{ 1, 2, 3, 4 };
+    const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
+
+    // Replace last element (index 3)
+    const new_element: u16 = 9999;
+    var out_element: u16 = 0;
+    const result = listReplace(list, @alignOf(u16), 3, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u16), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 4), result.len());
+    try std.testing.expectEqual(@as(u16, 4), out_element); // original value
+
+    const elements_ptr = result.elements(u16);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u16, 1), elements[0]);
+    try std.testing.expectEqual(@as(u16, 2), elements[1]);
+    try std.testing.expectEqual(@as(u16, 3), elements[2]);
+    try std.testing.expectEqual(@as(u16, 9999), elements[3]); // replaced value
+}
+
+test "listReplace single element list" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // Copy function for u8 elements
+    const copy_fn = struct {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
+            if (dest != null and src != null) {
+                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
+                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
+                dest_ptr.* = src_ptr.*;
+            }
+        }
+    }.copy;
+
+    // Create a list with a single element
+    const data = [_]u8{42};
+    const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
+
+    // Replace the only element (index 0)
+    const new_element: u8 = 84;
+    var out_element: u8 = 0;
+    const result = listReplace(list, @alignOf(u8), 0, @as(?[*]u8, @ptrCast(@constCast(&new_element))), @sizeOf(u8), false, null, rcNone, null, rcNone, @as(?[*]u8, @ptrCast(&out_element)), copy_fn, test_env.getOps());
+    defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
+
+    try std.testing.expectEqual(@as(usize, 1), result.len());
+    try std.testing.expectEqual(@as(u8, 42), out_element); // original value
+
+    const elements_ptr = result.elements(u8);
+    try std.testing.expect(elements_ptr != null);
+    const elements = elements_ptr.?[0..result.len()];
+    try std.testing.expectEqual(@as(u8, 84), elements[0]); // replaced value
+}
 // Regression: prior to threading element_width through CopyFn, listReplace via
 // the dev wrappers cast a 3-arg copy_fallback into a 2-arg pointer, leaving
 // `width` to read garbage from an unpopulated argument register. Wide element

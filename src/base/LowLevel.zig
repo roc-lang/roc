@@ -89,6 +89,7 @@ pub const LowLevel = enum(u16) {
 
     // List operations
     list_len,
+    list_capacity,
     list_get_unsafe,
     list_append_unsafe,
     list_concat,
@@ -1065,6 +1066,7 @@ pub const LowLevel = enum(u16) {
             .str_count_utf8_bytes,
             .str_get_utf8_byte_unsafe,
             .list_len,
+            .list_capacity,
             .list_slack_unique,
             .list_owned_unique,
             .bool_not,

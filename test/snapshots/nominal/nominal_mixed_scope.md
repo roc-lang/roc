@@ -162,38 +162,7 @@ processColor = |color| {
 (can-ir
 	(d-let
 		(p-assign (ident "processColor"))
-		(e-lambda
-			(args
-				(p-assign (ident "color")))
-			(e-block
-				(s-expr
-					(e-runtime-error (tag "undeclared_type")))
-				(e-match
-					(match
-						(cond
-							(e-runtime-error (tag "erroneous_value_use")))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Pending")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Complete")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Pending"))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

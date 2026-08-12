@@ -57,14 +57,15 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-arrow-call
-						(e-apply
-							(e-int (raw "0"))
-							(e-arrow-call
+					(receiver
+						(e-arrow-call
+							(e-apply
 								(e-int (raw "0"))
-								(e-tag (raw "X"))))
-						(e-tag (raw "X")))
-					(e-ident (raw ".a")))))))
+								(e-arrow-call
+									(e-int (raw "0"))
+									(e-tag (raw "X"))))
+							(e-tag (raw "X"))))
+					(segment (mode "required") (field "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -79,21 +80,13 @@ a = (
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "a")
-			(receiver
-				(e-tag (name "X")
-					(args
-						(e-call (constraint-fn-var 215)
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-tag (name "X")
-								(args
-									(e-num (value "0")))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_b")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_b"))))
+		(expr (type "Error"))))
 ~~~

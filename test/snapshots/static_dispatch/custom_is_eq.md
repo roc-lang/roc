@@ -70,18 +70,22 @@ EndOfFile,
 						(e-binop (op "and")
 							(e-binop (op "==")
 								(e-field-access
-									(e-ident (raw "a"))
-									(e-ident (raw "x")))
+									(receiver
+										(e-ident (raw "a")))
+									(segment (mode "required") (field "x")))
 								(e-field-access
-									(e-ident (raw "b"))
-									(e-ident (raw "x"))))
+									(receiver
+										(e-ident (raw "b")))
+									(segment (mode "required") (field "x"))))
 							(e-binop (op "==")
 								(e-field-access
-									(e-ident (raw "a"))
-									(e-ident (raw "y")))
+									(receiver
+										(e-ident (raw "a")))
+									(segment (mode "required") (field "y")))
 								(e-field-access
-									(e-ident (raw "b"))
-									(e-ident (raw "y")))))))))
+									(receiver
+										(e-ident (raw "b")))
+									(segment (mode "required") (field "y")))))))))
 		(s-type-anno (name "p1")
 			(ty (name "Point")))
 		(s-decl
@@ -148,26 +152,34 @@ main2 = p1 != p2
 					(if-branch
 						(e-method-eq (negated "false")
 							(lhs
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "x") (mode "required")))))
 							(rhs
-								(e-field-access (field "x")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b")))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "x") (mode "required"))))))
 						(e-method-eq (negated "false")
 							(lhs
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "a"))))))
+											(p-assign (ident "a"))))
+									(segments
+										(segment (name "y") (mode "required")))))
 							(rhs
-								(e-field-access (field "y")
+								(e-field-access
 									(receiver
 										(e-lookup-local
-											(p-assign (ident "b")))))))))
+											(p-assign (ident "b"))))
+									(segments
+										(segment (name "y") (mode "required"))))))))
 				(if-else
 					(e-nominal-external
 						(builtin)

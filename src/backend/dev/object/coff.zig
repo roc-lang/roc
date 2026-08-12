@@ -172,7 +172,76 @@ pub const FunctionInfo = struct {
     frame_size: u32 = 0, // Full AArch64 frame size
     callee_saved_mask: u32 = 0, // AArch64 callee-saved register mask
     epilogue_offset: u32 = 0, // AArch64 epilogue offset from function start
+    has_epilogue: bool = true, // Whether `epilogue_offset` names an epilogue inside this range
 };
+
+fn functionRangeLessThan(_: void, lhs: FunctionInfo, rhs: FunctionInfo) bool {
+    if (lhs.start_offset != rhs.start_offset) return lhs.start_offset < rhs.start_offset;
+    // An enclosing range sorts ahead of the ranges nested inside it.
+    return lhs.end_offset > rhs.end_offset;
+}
+
+/// Rewrite `functions` so no two ranges overlap, which is what Windows unwind
+/// tables require: every code address must map to exactly one entry.
+///
+/// Code generation emits some functions inside an enclosing function's byte
+/// range (a helper compiled partway through a procedure body lands between
+/// that body's instructions), so an enclosing range is cut into the fragments
+/// it actually owns. The fragment holding the entry point keeps the real
+/// prologue; a later fragment runs with the frame already established, which
+/// a zero prologue size describes exactly. The epilogue scope travels to
+/// whichever fragment contains it, rebased onto that fragment's start.
+///
+/// The result is sorted by start offset. Caller owns the returned slice.
+pub fn splitNestedFunctions(
+    allocator: Allocator,
+    functions: []const FunctionInfo,
+) Allocator.Error![]FunctionInfo {
+    const sorted = try allocator.dupe(FunctionInfo, functions);
+    defer allocator.free(sorted);
+    std.mem.sort(FunctionInfo, sorted, {}, functionRangeLessThan);
+
+    var result: std.ArrayList(FunctionInfo) = .empty;
+    errdefer result.deinit(allocator);
+
+    for (sorted, 0..) |function, i| {
+        // Every range that starts inside this one is nested in it: the sort
+        // puts enclosing ranges first, and ranges only ever nest or sit apart.
+        var cursor = function.start_offset;
+        for (sorted[i + 1 ..]) |inner| {
+            if (inner.start_offset >= function.end_offset) break;
+            if (inner.end_offset <= cursor) continue;
+            try appendFunctionFragment(allocator, &result, function, cursor, inner.start_offset);
+            cursor = inner.end_offset;
+        }
+        try appendFunctionFragment(allocator, &result, function, cursor, function.end_offset);
+    }
+
+    std.mem.sort(FunctionInfo, result.items, {}, functionRangeLessThan);
+    return result.toOwnedSlice(allocator);
+}
+
+fn appendFunctionFragment(
+    allocator: Allocator,
+    out: *std.ArrayList(FunctionInfo),
+    function: FunctionInfo,
+    start: u32,
+    end: u32,
+) Allocator.Error!void {
+    if (start >= end) return;
+
+    const holds_entry = start == function.start_offset;
+    const epilogue_start = function.start_offset + function.epilogue_offset;
+    const holds_epilogue = function.has_epilogue and epilogue_start >= start and epilogue_start < end;
+
+    var fragment = function;
+    fragment.start_offset = start;
+    fragment.end_offset = end;
+    fragment.prologue_size = if (holds_entry) function.prologue_size else 0;
+    fragment.has_epilogue = holds_epilogue;
+    fragment.epilogue_offset = if (holds_epilogue) epilogue_start - start else 0;
+    try out.append(allocator, fragment);
+}
 
 /// Section types
 pub const Section = enum {
@@ -513,6 +582,7 @@ pub const CoffWriter = struct {
     const Arm64UnwindData = struct {
         codes: std.ArrayList(u8),
         epilogue_index: u32,
+        has_epilogue: bool,
 
         fn codeWords(self: *const Arm64UnwindData) u32 {
             return @intCast((self.codes.items.len + 3) / 4);
@@ -521,7 +591,8 @@ pub const CoffWriter = struct {
         fn recordSize(self: *const Arm64UnwindData) u32 {
             const words = self.codeWords();
             const extended: u32 = if (words > 31) 4 else 0;
-            return 4 + extended + 4 + words * 4;
+            const epilogue_scope: u32 = if (self.has_epilogue) 4 else 0;
+            return 4 + extended + epilogue_scope + words * 4;
         }
     };
 
@@ -536,7 +607,8 @@ pub const CoffWriter = struct {
 
         try self.appendArm64BodySequence(&codes, func);
         const epilogue_index: u32 = @intCast(codes.items.len);
-        try self.appendArm64EpilogueSequence(&codes, func);
+        // A fragment with no epilogue scope references no epilogue codes.
+        if (func.has_epilogue) try self.appendArm64EpilogueSequence(&codes, func);
 
         const code_words = @as(u32, @intCast((codes.items.len + 3) / 4));
         if (builtin.mode == .Debug and code_words > 255) {
@@ -547,6 +619,7 @@ pub const CoffWriter = struct {
         return .{
             .codes = codes,
             .epilogue_index = epilogue_index,
+            .has_epilogue = func.has_epilogue,
         };
     }
 
@@ -668,6 +741,15 @@ pub const CoffWriter = struct {
 
     /// Write the COFF object file to a buffer
     pub fn write(self: *Self, output: *std.ArrayList(u8)) Allocator.Error!void {
+        // .pdata entries may not overlap, so an enclosing function is cut into
+        // the fragments it owns before any of the unwind sections are sized.
+        {
+            const split = try splitNestedFunctions(self.allocator, self.functions.items);
+            self.functions.clearRetainingCapacity();
+            defer self.allocator.free(split);
+            try self.functions.appendSlice(self.allocator, split);
+        }
+
         // Section indices (1-based in COFF)
         const SECT_TEXT: i16 = 1;
         const has_rdata = self.rdata.items.len > 0;
@@ -1142,4 +1224,95 @@ test "coff aarch64 unwind sections" {
     try std.testing.expectEqual(@as(u32, 8), pdata_size);
     try std.testing.expectEqual(@as(u16, 2), pdata_relocs);
     try std.testing.expect(xdata_size > 0);
+}
+
+fn testFunction(start: u32, end: u32, prologue_size: u32, epilogue_offset: u32) FunctionInfo {
+    return .{
+        .start_offset = start,
+        .end_offset = end,
+        .prologue_size = prologue_size,
+        .frame_reg_offset = 0,
+        .uses_frame_pointer = true,
+        .stack_alloc = 0,
+        .frame_size = 96,
+        .callee_saved_mask = 0,
+        .epilogue_offset = epilogue_offset,
+    };
+}
+
+fn expectDisjointAscending(functions: []const FunctionInfo) error{TestUnexpectedResult}!void {
+    var previous_end: u32 = 0;
+    for (functions) |function| {
+        try std.testing.expect(function.start_offset < function.end_offset);
+        try std.testing.expect(function.start_offset >= previous_end);
+        previous_end = function.end_offset;
+    }
+}
+
+test "splitNestedFunctions leaves disjoint ranges alone" {
+    const input = [_]FunctionInfo{
+        testFunction(0, 64, 12, 40),
+        testFunction(64, 128, 12, 40),
+    };
+
+    const split = try splitNestedFunctions(std.testing.allocator, &input);
+    defer std.testing.allocator.free(split);
+
+    try std.testing.expectEqual(@as(usize, 2), split.len);
+    try expectDisjointAscending(split);
+    try std.testing.expectEqual(@as(u32, 12), split[0].prologue_size);
+    try std.testing.expectEqual(@as(u32, 12), split[1].prologue_size);
+    try std.testing.expect(split[0].has_epilogue and split[1].has_epilogue);
+}
+
+test "splitNestedFunctions cuts an enclosing range around a nested one" {
+    const input = [_]FunctionInfo{
+        testFunction(0, 128, 12, 100),
+        testFunction(48, 80, 8, 24),
+    };
+
+    const split = try splitNestedFunctions(std.testing.allocator, &input);
+    defer std.testing.allocator.free(split);
+
+    try std.testing.expectEqual(@as(usize, 3), split.len);
+    try expectDisjointAscending(split);
+
+    // The fragment holding the entry point keeps the prologue, and the
+    // epilogue lands on the fragment that contains it.
+    try std.testing.expectEqual(@as(u32, 0), split[0].start_offset);
+    try std.testing.expectEqual(@as(u32, 48), split[0].end_offset);
+    try std.testing.expectEqual(@as(u32, 12), split[0].prologue_size);
+    try std.testing.expect(!split[0].has_epilogue);
+
+    try std.testing.expectEqual(@as(u32, 48), split[1].start_offset);
+    try std.testing.expectEqual(@as(u32, 80), split[1].end_offset);
+    try std.testing.expectEqual(@as(u32, 8), split[1].prologue_size);
+    try std.testing.expect(split[1].has_epilogue);
+    try std.testing.expectEqual(@as(u32, 24), split[1].epilogue_offset);
+
+    try std.testing.expectEqual(@as(u32, 80), split[2].start_offset);
+    try std.testing.expectEqual(@as(u32, 128), split[2].end_offset);
+    try std.testing.expectEqual(@as(u32, 0), split[2].prologue_size);
+    try std.testing.expect(split[2].has_epilogue);
+    try std.testing.expectEqual(@as(u32, 20), split[2].epilogue_offset);
+}
+
+test "splitNestedFunctions handles several nested ranges and shared edges" {
+    const input = [_]FunctionInfo{
+        testFunction(0, 200, 12, 180),
+        testFunction(0, 40, 8, 32),
+        testFunction(40, 90, 8, 80),
+        testFunction(150, 200, 8, 40),
+    };
+
+    const split = try splitNestedFunctions(std.testing.allocator, &input);
+    defer std.testing.allocator.free(split);
+
+    try expectDisjointAscending(split);
+
+    // A range nested against either edge of its enclosing range produces no
+    // empty fragment there.
+    try std.testing.expectEqual(@as(usize, 4), split.len);
+    try std.testing.expectEqual(@as(u32, 0), split[0].start_offset);
+    try std.testing.expectEqual(@as(u32, 200), split[split.len - 1].end_offset);
 }

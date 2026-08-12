@@ -297,7 +297,7 @@ broken_fn3 : a -> b
 				(malformed))))
 	(d-let
 		(p-assign (ident "broken_fn3"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

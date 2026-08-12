@@ -28,10 +28,11 @@ EndOfFile,
 						(e-record
 							(field (field "d")
 								(e-field-access
-									(e-block
-										(statements
-											(e-int (raw "0"))))
-									(e-ident (raw "c"))))))))))
+									(receiver
+										(e-block
+											(statements
+												(e-int (raw "0")))))
+									(segment (mode "required") (field "c"))))))))))
 	(statements))
 ~~~
 # FORMATTED

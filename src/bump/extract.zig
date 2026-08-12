@@ -48,6 +48,10 @@ pub const OriginMap = struct {
         /// they stay stable when the root package renames a dependency alias.
         /// Platform roots use an empty name because their items are unqualified.
         module_name: []const u8,
+        /// Checked artifact for this compilation, used only while extracting a
+        /// default literal from the identity that owns it. PackageApi copies
+        /// canonical source into its arena and never retains this pointer.
+        artifact: ?*const CheckedModuleArtifact = null,
 
         pub const Kind = union(enum) {
             /// A module of the package being extracted.
@@ -349,6 +353,7 @@ const Extractor = struct {
                     fields[i] = .{
                         .name = try alloc.dupe(u8, names.recordFieldLabelText(field.name)),
                         .ty = try self.convertType(view, names, field.ty, memo),
+                        .kind = try self.convertFieldKind(view, names, field.kind, memo),
                     };
                 }
                 const ext = try self.convertExt(view, names, record.ext, .empty_record, memo);
@@ -408,6 +413,67 @@ const Extractor = struct {
                 return api_id;
             },
         }
+    }
+
+    fn convertFieldKind(
+        self: *Extractor,
+        view: CheckedTypeStoreView,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        kind: CheckedArtifact.CheckedFieldKind,
+        memo: *ConvertMemo,
+    ) ExtractError!PackageApi.Field.Kind {
+        return switch (kind.tag) {
+            .required => .required,
+            .optional => .optional,
+            .defaulted => .{ .defaulted = try self.defaultLiteralSource(names, kind) },
+            .undetermined => blk: {
+                const checked_var = kind.undeterminedVariable() orelse
+                    return self.fail(.unpublished_public_type, "generalized record field kind has no published presence variable");
+                const api_var = try self.convertType(view, names, checked_var, memo);
+                if (self.api.getType(api_var).* != .variable) {
+                    return self.fail(.unpublished_public_type, "generalized record field kind does not reference a checked variable");
+                }
+                break :blk .{ .undetermined = api_var };
+            },
+            .err => return self.fail(.unpublished_public_type, "record field presence failed type checking"),
+        };
+    }
+
+    /// Translate a compiler-local default identity into deterministic Roc
+    /// source emitted from the declaring module's canonical IR. This keeps
+    /// PackageApi independent of content hashes and source-node indices: an
+    /// unrelated edit in the declaring module does not change the public API,
+    /// while a changed literal does.
+    fn defaultLiteralSource(
+        self: *Extractor,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        kind: CheckedArtifact.CheckedFieldKind,
+    ) ExtractError![]const u8 {
+        const default = kind.defaultIdentity() orelse
+            return self.fail(.unpublished_public_type, "defaulted record field has no default identity");
+        const origin_id = default.origin() orelse
+            return self.fail(.unpublished_public_type, "defaulted record field has no declaring module identity");
+        const origin_hash = names.moduleIdentityBytes(origin_id);
+        const origin = self.origins.identity_map.get(origin_hash.*) orelse {
+            const origin_hex = std.fmt.bytesToHex(origin_hash.*, .lower);
+            const detail = try std.fmt.allocPrint(self.gpa, "0x{s}", .{origin_hex[0..]});
+            defer self.gpa.free(detail);
+            return self.fail(.unknown_origin_module, detail);
+        };
+        const artifact = origin.artifact orelse
+            return self.fail(.unpublished_public_type, "default literal's declaring module has no checked artifact");
+        const module_env = artifact.moduleEnvConst();
+        if (default.expr_node >= module_env.store.nodes.len()) {
+            return self.fail(.unpublished_public_type, "default literal's source node is outside its declaring module");
+        }
+
+        var emitter = can.RocEmitter.init(self.gpa, module_env);
+        defer emitter.deinit();
+        emitter.emitExprWithLexicographicRecords(@enumFromInt(default.expr_node)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoSpaceLeft => return self.fail(.unpublished_public_type, "default literal could not be rendered canonically"),
+        };
+        return try self.api.allocator().dupe(u8, emitter.getOutput());
     }
 
     /// A row extension that is the matching empty row means "closed" and is

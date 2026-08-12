@@ -258,9 +258,9 @@ test "instantiate - record with multiple fields" {
 
     try std.testing.expectEqual(3, fields.len);
 
-    const x_var = fields.items(.var_)[0];
-    const y_var = fields.items(.var_)[1];
-    const z_var = fields.items(.var_)[2];
+    const x_var = fields.items(.presence)[0].typeVar();
+    const y_var = fields.items(.presence)[1].typeVar();
+    const z_var = fields.items(.presence)[2].typeVar();
 
     // x and z should be the same (both were rigid_a)
     try std.testing.expectEqual(x_var, z_var);
@@ -519,7 +519,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordFieldFromIdent(ident_idx: Ident.Idx, var_: Var) RecordField {
-        return RecordField{ .name = ident_idx, .var_ = var_ };
+        return RecordField{ .name = ident_idx, .presence = .required(var_) };
     }
 
     const RecordInfo = struct { record: Record, content: Content };

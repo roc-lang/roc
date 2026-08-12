@@ -1,10 +1,7 @@
-//! Build helper: compress `echo.wasm` into a `.zst` archive, reusing the same
+//! Build helper: compress a WebAssembly module into a `.zst` archive using the
 //! zstd streaming compressor that powers `roc bundle` (see `src/bundle/`).
 //!
-//! Usage: echo_wasm_archive <input.wasm> <output.wasm.zst>
-//!
-//! Invoked by `zig build build-echo-wasm-archive`, which builds `echo.wasm`
-//! first and then runs this tool to emit `zig-out/lib/echo.wasm.zst`.
+//! Usage: wasm_archive <input.wasm> <output.wasm.zst>
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -33,7 +30,7 @@ pub fn main(init: std.process.Init) ArchiveError!void {
 
     const args = try init.minimal.args.toSlice(arena);
     if (args.len != 3) {
-        stderr_file.writeStreamingAll(io, "Usage: echo_wasm_archive <input.wasm> <output.wasm.zst>\n") catch {};
+        stderr_file.writeStreamingAll(io, "Usage: wasm_archive <input.wasm> <output.wasm.zst>\n") catch {};
         std.process.exit(2);
     }
 

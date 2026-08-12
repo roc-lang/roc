@@ -266,7 +266,7 @@ modu :
 (can-ir
 	(d-let
 		(p-assign (ident "modu"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed))))
 ~~~

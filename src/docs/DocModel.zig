@@ -1036,6 +1036,22 @@ pub const DocType = union(enum) {
     pub const Field = struct {
         name: []const u8,
         type: *const DocType,
+        /// How the field is declared, so docs render the source form:
+        /// a plain required field (`name : Type`), an optional field
+        /// (`name ?: Type`), or a defaulted field (`name : Type ?? default`).
+        kind: Kind = .required,
+
+        /// A record field's declared kind for documentation rendering.
+        pub const Kind = union(enum) {
+            /// Plain required field: `name : Type`.
+            required,
+            /// Optional field: `name ?: Type`.
+            optional,
+            /// Defaulted field: `name : Type ?? default`. Carries the default
+            /// expression's owned source snippet when available, else null
+            /// (rendered as `?? …`, mirroring TypeWriter's fallback).
+            defaulted: ?[]const u8,
+        };
     };
 
     pub const TagUnion = struct {
@@ -1166,10 +1182,23 @@ pub const DocType = union(enum) {
                     try writer.writeAll(")");
                 }
                 for (rec.fields) |field| {
-                    try writer.writeAll(" (field \"");
+                    switch (field.kind) {
+                        .required => try writer.writeAll(" (field \""),
+                        .optional => try writer.writeAll(" (field-optional \""),
+                        .defaulted => try writer.writeAll(" (field-defaulted \""),
+                    }
                     try writeEscaped(writer, field.name);
                     try writer.writeAll("\" ");
                     try field.type.writeToSExpr(writer, depth);
+                    if (field.kind == .defaulted) {
+                        try writer.writeAll(" \"");
+                        if (field.kind.defaulted) |snippet| {
+                            try writeEscaped(writer, snippet);
+                        } else {
+                            try writer.writeAll("…");
+                        }
+                        try writer.writeAll("\"");
+                    }
                     try writer.writeAll(")");
                 }
                 try writer.writeAll(")");
@@ -1333,6 +1362,9 @@ pub const DocType = union(enum) {
                     }
                     for (rec.fields) |field| {
                         gpa.free(field.name);
+                        if (field.kind == .defaulted) {
+                            if (field.kind.defaulted) |snippet| gpa.free(snippet);
+                        }
                         gpa.destroy(field.type);
                     }
                     gpa.free(rec.fields);

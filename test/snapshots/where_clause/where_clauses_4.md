@@ -66,7 +66,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "decodeThings"))
-		(e-not-implemented)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
