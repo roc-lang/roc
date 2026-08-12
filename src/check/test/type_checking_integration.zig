@@ -9215,6 +9215,32 @@ test "check type - record alias-chain rows validate deeper than the old depth bo
     try test_env.assertNoErrors();
 }
 
+// Scope pin for alias row duplicate-name checking. A row's duplicate set is
+// its own head fields plus its extension chain; the rows reachable through a
+// field's TYPE are separate rows and share no names with it. Here `Outer`
+// declares `value` after a field whose type reaches `Inner`, which declares
+// `value` too, and the tag union repeats the shape with `Same` — both are
+// legal. A checker that lets a nested row's names outlive it reports a
+// duplicate field, poisons the declaration, and cascades that erroneous type
+// into every annotation naming it.
+test "check type - a nested row's field names do not collide with the row containing it" {
+    const source =
+        \\Inner : { name : Str, value : U64 }
+        \\Outer : { bindings : List(Inner), value : Str }
+        \\InnerTags : [Same, Other(Str)]
+        \\OuterTags : [Wrapped(InnerTags), Same]
+        \\
+        \\use_record : Outer -> Str
+        \\use_record = |outer| outer.value
+        \\
+        \\use_tags : OuterTags -> OuterTags
+        \\use_tags = |tags| tags
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 // Reachability pin for the type renderer (src/types/TypeWriter.zig). The error
 // snapshotter renders one string per node it snapshots and `report.zig`
 // renders a type for every diagnostic it formats, so a diagnostic about a
