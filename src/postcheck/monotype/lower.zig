@@ -1065,14 +1065,13 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
-/// Pattern binders are dense IDs allocated by `CheckedBodyStore`. Most
-/// short-lived contexts only instantiate types and never bind a pattern, so
-/// defer materializing the dense table until the first binding is installed.
+/// Pattern binders are dense IDs allocated by `CheckedBodyStore`. Body
+/// contexts are short-lived scopes over that larger ID domain, so the paged
+/// dense map keeps lookup direct while making allocation, copying, and
+/// iteration proportional to binders that are actually live in the scope.
 const BinderMap = struct {
-    allocator: Allocator,
     binder_count: usize,
-    locals: ?[]?DraftLocalId = null,
-    active_count: usize = 0,
+    locals: collections.DenseMap(checked.PatternBinderId, DraftLocalId),
 
     const Entry = struct {
         binder: checked.PatternBinderId,
@@ -1080,28 +1079,23 @@ const BinderMap = struct {
     };
 
     const Iterator = struct {
-        locals: []const ?DraftLocalId,
-        index: usize = 0,
+        inner: collections.DenseMap(checked.PatternBinderId, DraftLocalId).Iterator,
 
         fn next(self: *Iterator) ?Entry {
-            while (self.index < self.locals.len) {
-                const binder_index = self.index;
-                self.index += 1;
-                if (self.locals[binder_index]) |local| {
-                    return .{ .binder = @enumFromInt(@as(u32, @intCast(binder_index))), .local = local };
-                }
-            }
-            return null;
+            const entry = self.inner.next() orelse return null;
+            return .{ .binder = entry.key_ptr.*, .local = entry.value_ptr.* };
         }
     };
 
     fn init(allocator: Allocator, binder_count: usize) Allocator.Error!BinderMap {
-        return .{ .allocator = allocator, .binder_count = binder_count };
+        return .{
+            .binder_count = binder_count,
+            .locals = collections.DenseMap(checked.PatternBinderId, DraftLocalId).init(allocator),
+        };
     }
 
     fn deinit(self: *BinderMap) void {
-        if (self.locals) |locals| self.allocator.free(locals);
-        self.* = undefined;
+        self.locals.deinit();
     }
 
     fn index(self: *const BinderMap, binder: checked.PatternBinderId) usize {
@@ -1111,31 +1105,18 @@ const BinderMap = struct {
     }
 
     fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
-        const index_ = self.index(binder);
-        const locals = self.locals orelse return null;
-        return locals[index_];
+        _ = self.index(binder);
+        return self.locals.get(binder);
     }
 
     fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
-        const index_ = self.index(binder);
-        if (self.locals == null) {
-            const locals = try self.allocator.alloc(?DraftLocalId, self.binder_count);
-            @memset(locals, null);
-            self.locals = locals;
-        }
-        const slot = &self.locals.?[index_];
-        if (slot.* == null) self.active_count += 1;
-        slot.* = local;
+        _ = self.index(binder);
+        try self.locals.put(binder, local);
     }
 
     fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
-        const index_ = self.index(binder);
-        const locals = self.locals orelse return false;
-        const slot = &locals[index_];
-        if (slot.* == null) return false;
-        slot.* = null;
-        self.active_count -= 1;
-        return true;
+        _ = self.index(binder);
+        return self.locals.remove(binder);
     }
 
     fn contains(self: *const BinderMap, binder: checked.PatternBinderId) bool {
@@ -1143,11 +1124,11 @@ const BinderMap = struct {
     }
 
     fn count(self: *const BinderMap) usize {
-        return self.active_count;
+        return self.locals.count();
     }
 
-    fn iterator(self: *const BinderMap) Iterator {
-        return .{ .locals = self.locals orelse &.{} };
+    fn iterator(self: *BinderMap) Iterator {
+        return .{ .inner = self.locals.iterator() };
     }
 };
 const TypedBinder = struct {
@@ -49855,21 +49836,31 @@ test "record parser presence words cover fields wider than one u64" {
     try std.testing.expectEqual(@as(u64, 1), BodyContext.recordPresenceMask(128));
 }
 
-test "binder map materializes dense storage only on first binding" {
+test "binder map materializes and iterates only live dense bindings" {
     var binders = try BinderMap.init(std.testing.allocator, 4);
     defer binders.deinit();
 
     const binder: checked.PatternBinderId = @enumFromInt(2);
     const local: DraftLocalId = @enumFromInt(7);
-    try std.testing.expect(binders.locals == null);
+    try std.testing.expectEqual(@as(usize, 0), binders.locals.sparse_chunks.items.len);
     try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
     try std.testing.expect(!binders.remove(binder));
-    try std.testing.expect(binders.locals == null);
+    try std.testing.expectEqual(@as(usize, 0), binders.locals.sparse_chunks.items.len);
 
     try binders.put(binder, local);
-    try std.testing.expect(binders.locals != null);
     try std.testing.expectEqual(@as(?DraftLocalId, local), binders.get(binder));
     try std.testing.expectEqual(@as(usize, 1), binders.count());
+
+    var iter = binders.iterator();
+    const entry = iter.next().?;
+    try std.testing.expectEqual(binder, entry.binder);
+    try std.testing.expectEqual(local, entry.local);
+    try std.testing.expect(iter.next() == null);
+
+    try std.testing.expect(binders.remove(binder));
+    try std.testing.expectEqual(@as(usize, 0), binders.count());
+    var empty_iter = binders.iterator();
+    try std.testing.expect(empty_iter.next() == null);
 }
 
 test "checked string literal cache is shared only within one draft owner" {

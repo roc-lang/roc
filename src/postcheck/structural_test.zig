@@ -1364,8 +1364,9 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         "const BinderMap = struct",
         "const TypedBinder = struct",
     );
-    try expectContains(binder_map, "locals: ?[]?DraftLocalId = null");
-    try expectContains(binder_map, "if (self.locals == null)");
+    try expectContains(binder_map, "locals: collections.DenseMap(checked.PatternBinderId, DraftLocalId)");
+    try expectContains(binder_map, ".inner = self.locals.iterator()");
+    try expectNotContains(binder_map, "[]?DraftLocalId");
     try expectNotContains(binder_map, "AutoHashMap");
 
     const inst_node = sourceSliceBetween(

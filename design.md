@@ -4307,14 +4307,17 @@ Creating a fresh checked-type instance swaps only its exact scope, checked-node
 cache, and nominal declaration-scope stack; it does not construct a parallel
 body-lowering context. Type-only instantiation contexts do not materialize
 module-sized body tables.
-The dense checked-binder-to-draft-local table is allocated only when a body
-actually installs its first binding. Checked string literals are shared under
-the exact `(draft owner, checked module id, checked literal id)` address, so
-child and call contexts lowering the same retained body neither allocate
-parallel literal tables nor append duplicate draft literals. A draft value is
-never reused across body owners: suppressing one owner must suppress all of the
-content referenced only by that owner. Generated strings remain ordinary
-distinct draft entries because they have no checked literal identity.
+The checked-binder-to-draft-local map is a paged dense-ID scope: it allocates
+only pages touched by live bindings and keeps the live binder/value pairs in a
+compact column. Child contexts copy by iterating that live column, never by
+scanning or initializing the module-wide binder domain. Checked string
+literals are shared under the exact `(draft owner, checked module id, checked
+literal id)` address, so child and call contexts lowering the same retained
+body neither allocate parallel literal tables nor append duplicate draft
+literals. A draft value is never reused across body owners: suppressing one
+owner must suppress all of the content referenced only by that owner.
+Generated strings remain ordinary distinct draft entries because they have no
+checked literal identity.
 
 Checked output does not classify a complete root by whether its descendants
 contain identity variables. Such a transitive property would make unrelated
