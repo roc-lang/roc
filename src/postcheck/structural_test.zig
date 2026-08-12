@@ -1091,6 +1091,9 @@ test "Monotype prepared codec reuse requires the complete exact function request
         "fn methodTargetCalleeAtNode(",
     );
     try expectContains(lookup, "sameExactFunctionRequest(prepared.callable_node, callable_node)");
+    try expectContains(lookup, "prepared_codec_calls_by_lookup.get(PreparedCodecLookupAddress.init(lookup))");
+    try expectContains(lookup, "for (ids.items) |id|");
+    try expectNotContains(lookup, "for (self.draft.prepared_codec_calls.items)");
     try expectNotContains(lookup, "sameFunctionInterface(prepared.callable_node, callable_node)");
     try expectNotContains(lookup, "sameDirectRequestSelections(prepared.callable_node, callable_node)");
 }

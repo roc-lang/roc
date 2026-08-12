@@ -9639,6 +9639,33 @@ const DraftPreparedCodecCall = struct {
     callee: DraftFnSlot,
 };
 
+const PreparedCodecLookupInstantiationAddress = struct {
+    module: [32]u8,
+    callable_ty: checked.CheckedTypeId,
+};
+
+/// Stable structural address for one resolved method lookup. Prepared codec
+/// calls remain dense `PreparedCodecCallId`s; this address only interns the
+/// composite cross-module lookup identity that selects their candidate bucket.
+const PreparedCodecLookupAddress = struct {
+    module: [32]u8,
+    target: static_dispatch.MethodTarget,
+    instantiation: ?PreparedCodecLookupInstantiationAddress,
+    local_proc_context: ?DraftLocalProcContextId,
+
+    fn init(lookup: MethodLookup) PreparedCodecLookupAddress {
+        return .{
+            .module = lookup.view.key.bytes,
+            .target = lookup.target,
+            .instantiation = if (lookup.instantiation) |instantiation| .{
+                .module = instantiation.view.key.bytes,
+                .callable_ty = instantiation.callable_ty,
+            } else null,
+            .local_proc_context = lookup.local_proc_context,
+        };
+    }
+};
+
 const FrozenPreparedCodecCall = struct {
     kind: CodecKind,
     purpose: CodecCallPurpose,
@@ -10057,6 +10084,7 @@ const BodyDraftStore = struct {
     deferred_restored_codec_runtimes: std.ArrayList(DraftDeferredRestoredCodecRuntime),
     deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
+    prepared_codec_calls_by_lookup: std.AutoHashMap(PreparedCodecLookupAddress, std.ArrayList(PreparedCodecCallId)),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
@@ -10146,6 +10174,7 @@ const BodyDraftStore = struct {
             .deferred_restored_codec_runtimes = .empty,
             .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
+            .prepared_codec_calls_by_lookup = std.AutoHashMap(PreparedCodecLookupAddress, std.ArrayList(PreparedCodecCallId)).init(allocator),
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
             .prepared_inspect_methods = .empty,
@@ -10278,6 +10307,9 @@ const BodyDraftStore = struct {
         self.deferred_restored_codec_runtimes.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
         self.deferred_callsite_intrinsics.deinit(self.allocator);
+        var prepared_codec_buckets = self.prepared_codec_calls_by_lookup.valueIterator();
+        while (prepared_codec_buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.prepared_codec_calls_by_lookup.deinit();
         self.prepared_codec_calls.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
@@ -35564,7 +35596,14 @@ const BodyContext = struct {
         lookup: MethodLookup,
         callable_node: NodeId,
     ) Allocator.Error!?DraftFnSlot {
-        for (self.draft.prepared_codec_calls.items) |prepared| {
+        const ids = self.draft.prepared_codec_calls_by_lookup.get(PreparedCodecLookupAddress.init(lookup)) orelse
+            return null;
+        for (ids.items) |id| {
+            const index = @intFromEnum(id);
+            if (index >= self.draft.prepared_codec_calls.items.len) {
+                Common.invariant("prepared codec lookup contained an invalid call id");
+            }
+            const prepared = self.draft.prepared_codec_calls.items[index];
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (self.graph.sameExactFunctionRequest(prepared.callable_node, callable_node)) {
                 return prepared.callee;
@@ -38679,12 +38718,37 @@ const BodyContext = struct {
         shape_node: NodeId,
         lookup: MethodLookup,
     ) bool {
-        for (self.draft.prepared_codec_calls.items) |prepared| {
+        const ids = self.draft.prepared_codec_calls_by_lookup.get(PreparedCodecLookupAddress.init(lookup)) orelse
+            return false;
+        for (ids.items) |id| {
+            const index = @intFromEnum(id);
+            if (index >= self.draft.prepared_codec_calls.items.len) {
+                Common.invariant("prepared codec lookup contained an invalid call id");
+            }
+            const prepared = self.draft.prepared_codec_calls.items[index];
             if (prepared.boundary_expr != boundary_expr or prepared.kind != kind) continue;
             if (!self.methodLookupEql(prepared.lookup, lookup)) continue;
             if (self.graph.sameClass(prepared.shape_node, shape_node)) return true;
         }
         return false;
+    }
+
+    fn appendPreparedCodecCall(
+        self: *BodyContext,
+        prepared: DraftPreparedCodecCall,
+    ) Allocator.Error!void {
+        const raw_id = self.draft.prepared_codec_calls.items.len;
+        if (raw_id > std.math.maxInt(u32)) {
+            Common.invariant("prepared codec call count exceeded its dense identity range");
+        }
+        try self.draft.prepared_codec_calls.append(self.allocator, prepared);
+        errdefer _ = self.draft.prepared_codec_calls.pop();
+
+        const entry = try self.draft.prepared_codec_calls_by_lookup.getOrPut(
+            PreparedCodecLookupAddress.init(prepared.lookup),
+        );
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, @enumFromInt(raw_id));
     }
 
     fn prepareStructuralCodecCallsAtNode(
@@ -38850,7 +38914,7 @@ const BodyContext = struct {
         const exact_runtime = try self.graphFunctionNode(exact_runtime_args, exact_runtime_ret);
         const target_node = try self.exactMethodTargetNode(lookup, shape_node, &.{encoding_node}, exact_runtime);
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .purpose = .custom,
@@ -38884,7 +38948,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("rename_field target did not have two arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .shape_node = shape_node,
@@ -38931,7 +38995,7 @@ const BodyContext = struct {
         );
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
             .shape_node = shape_node,
@@ -39352,7 +39416,7 @@ const BodyContext = struct {
             result_node,
         );
         const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39389,7 +39453,7 @@ const BodyContext = struct {
         const target_node = try self.exactMethodTargetNode(lookup, encoding_node, &.{ encoding_node, state_node }, exact_ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39447,7 +39511,7 @@ const BodyContext = struct {
             exact_ret,
         );
         const callee = try self.methodTargetCalleeAtNode(lookup, request_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39618,7 +39682,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("scalar parser target did not have two arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39664,7 +39728,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("parser format-control target did not have encoding and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39699,7 +39763,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("invalid_value target did not have encoding and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -39733,7 +39797,7 @@ const BodyContext = struct {
         if (target.args.len != 1) Common.invariant("encode_null target did not have one state argument");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
             .shape_node = shape_node,
@@ -39816,7 +39880,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("encode_key_start target did not have encoding and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
             .shape_node = key_node,
@@ -39958,7 +40022,7 @@ const BodyContext = struct {
         const target_node = try self.exactMethodTargetNode(lookup, encoding_node, call_args, exact_ret);
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = shape_node,
@@ -40004,7 +40068,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("object-key parser target did not have encoding and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .parser,
             .shape_node = key_node,
@@ -40045,7 +40109,7 @@ const BodyContext = struct {
         if (target.args.len != 3) Common.invariant("object-key encoder target did not have encoding, key, and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
             .shape_node = key_node,
@@ -40080,7 +40144,7 @@ const BodyContext = struct {
         if (target.args.len != 2) Common.invariant("scalar encoder target did not have value and state arguments");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = .encoder,
             .shape_node = shape_node,
@@ -40112,7 +40176,7 @@ const BodyContext = struct {
         if (target.args.len != arg_nodes.len) Common.invariant("generated codec helper target had an unexpected arity");
 
         const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
-        try self.draft.prepared_codec_calls.append(self.allocator, .{
+        try self.appendPreparedCodecCall(.{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .shape_node = shape_node,
