@@ -15207,7 +15207,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [7]p
     };
 }
 
-fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [7]progress.Counter {
+fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [8]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Generated identity input nodes hashed", .count = graph.generated_identity_input_nodes_hashed },
@@ -15217,6 +15217,7 @@ fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnosti
         .{ .name = "Generated type-store misses", .count = graph.generated_type_store_misses },
         .{ .name = "Permanent inhabitedness requests", .count = graph.permanent_inhabitedness_requests },
         .{ .name = "Permanent inhabitedness hits", .count = graph.permanent_inhabitedness_hits },
+        .{ .name = "Closed-empty finalization requests", .count = graph.closed_empty_finalization_requests },
     };
 }
 

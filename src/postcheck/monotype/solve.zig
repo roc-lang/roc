@@ -209,6 +209,7 @@ pub const GraphDiagnostics = struct {
     generated_type_store_misses: u64 = 0,
     permanent_inhabitedness_requests: u64 = 0,
     permanent_inhabitedness_hits: u64 = 0,
+    closed_empty_finalization_requests: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -981,6 +982,8 @@ pub const InstGraph = struct {
     }
 
     pub fn finalizesAsClosedEmptyTagUnion(self: *InstGraph, raw_node: NodeId) bool {
+        self.requireFrozenRelations();
+        self.countDiagnostic("closed_empty_finalization_requests");
         var node = self.find(raw_node);
         var remaining = self.nodes.items.len;
         while (remaining > 0) : (remaining -= 1) {
@@ -4195,10 +4198,14 @@ test "graph diagnostics count authoritative operations" {
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const str = try graph.newNode(.{ .primitive = .str });
     try graph.unify(unresolved, str);
+    try graph.freezeRelations();
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(str));
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(unresolved));
 
     try std.testing.expectEqual(@as(u64, 3), diagnostics.nodes_created);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.class_unions);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.closed_empty_finalization_requests);
 }
 
 test "completed monotype program view does not expose instantiation graph nodes" {
@@ -4580,6 +4587,7 @@ test "nominal unification with its own backing preserves a distinct backing node
     const retained_backing = named.backing orelse return error.TestExpectedEqual;
     try std.testing.expect(!graph.sameClass(nominal, retained_backing.node));
     try std.testing.expectEqual(InstNode{ .primitive = .u64 }, graph.content(retained_backing.node));
+    try graph.freezeRelations();
     try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(nominal));
 }
 

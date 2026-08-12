@@ -6526,13 +6526,16 @@ const Builder = struct {
         try graph.freezeRelations();
         var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
         defer impossibility_evaluator.deinit(self.allocator);
-        for (body_draft.runtime_value_demands.items) |demand| {
+        var closed_empty_demands = std.ArrayList(u32).empty;
+        defer closed_empty_demands.deinit(self.allocator);
+        for (body_draft.runtime_value_demands.items, 0..) |demand, raw_index| {
             if (graph.finalizesAsClosedEmptyTagUnion(demand.node)) {
+                try closed_empty_demands.append(self.allocator, @intCast(raw_index));
                 if (try impossibility_evaluator.holds(demand.impossibility_proof)) continue;
                 Common.invariant("runtime-value demand finalized as a closed empty tag-union type");
             }
         }
-        try verifySpecReuseDemands(body_draft, graph, &impossibility_evaluator);
+        try verifySpecReuseDemands(body_draft, &impossibility_evaluator, closed_empty_demands.items);
         var sealer = GraphTypeFinals.initWithGeneratedTypeInterner(
             graph,
             &self.generated_types_by_identity,
@@ -9183,23 +9186,23 @@ fn registerNestedSpecLookup(
 /// context's proof standing in for the creation context's inherited frames.
 fn verifySpecReuseDemands(
     body_draft: *const BodyDraftStore,
-    graph: *InstGraph,
     evaluator: *FrozenRuntimeImpossibilityProofEvaluator,
+    closed_empty_demands: []const u32,
 ) Allocator.Error!void {
     for (body_draft.template_spec_reuses.items) |reuse| {
         const spec = body_draft.template_specs.items[reuse.spec];
-        try verifyReusedDemandRange(body_draft, graph, evaluator, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
+        try verifyReusedDemandRange(body_draft, evaluator, closed_empty_demands, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
     }
     for (body_draft.nested_spec_reuses.items) |reuse| {
         const spec = body_draft.nested_specs.items[reuse.spec];
-        try verifyReusedDemandRange(body_draft, graph, evaluator, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
+        try verifyReusedDemandRange(body_draft, evaluator, closed_empty_demands, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
     }
 }
 
 fn verifyReusedDemandRange(
     body_draft: *const BodyDraftStore,
-    graph: *InstGraph,
     evaluator: *FrozenRuntimeImpossibilityProofEvaluator,
+    closed_empty_demands: []const u32,
     reuse: DraftSpecReuse,
     start: u32,
     end: u32,
@@ -9208,8 +9211,16 @@ fn verifyReusedDemandRange(
     if (start > end or end > body_draft.runtime_value_demands.items.len) {
         Common.invariant("reused specialization demand range was out of bounds");
     }
-    demand_loop: for (body_draft.runtime_value_demands.items[start..end]) |demand| {
-        if (!graph.finalizesAsClosedEmptyTagUnion(demand.node)) continue;
+    const Compare = struct {
+        fn compare(boundary: u32, index: u32) std.math.Order {
+            return std.math.order(boundary, index);
+        }
+    };
+    var position = std.sort.lowerBound(u32, closed_empty_demands, start, Compare.compare);
+    demand_loop: while (position < closed_empty_demands.len) : (position += 1) {
+        const demand_index = closed_empty_demands[position];
+        if (demand_index >= end) break;
+        const demand = body_draft.runtime_value_demands.items[demand_index];
         // The creation context's certification covers the one emitted body:
         // statement-position guard frames are not monotonic across call sites
         // in one block, so a reusing context can legitimately lack a frame

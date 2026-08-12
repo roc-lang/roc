@@ -3252,6 +3252,12 @@ by permanently inhabited content, so Monotype records that root in a dense
 cached because explicit producer completion may resolve the open content. A
 redirect is always queried at its new root, so it cannot inherit a stale fact.
 
+After relation production freezes, runtime-demand validation classifies each
+recorded demand once. It stores the indices that finalized as the closed empty
+tag union in source order. Reuse validation searches that sparse ordered list
+for its demand interval; it never scans every demand in the interval and never
+repeats a graph query for each reusing context.
+
 Record, tuple, tag, list, and box constructors build their exact container type
 from the exact child cells they emit. They never first construct a
 checked-public container, scan it for private descendants, or emit a second
