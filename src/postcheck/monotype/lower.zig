@@ -32464,7 +32464,10 @@ const BodyContext = struct {
         errdefer self.draft.expr_ids.shrinkRetainingCapacity(reserved.span.start);
         for (checked_args, 0..) |checked_arg, index| {
             const lowered = try self.lowerExpr(checked_arg);
-            arg_nodes[index] = try self.exprTypeCell(lowered).toGraphNode(self.graph);
+            arg_nodes[index] = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(lowered).toGraphNode(self.graph),
+            );
             self.draft.setReservedExprSpanItem(reserved, index, lowered);
         }
 
@@ -33949,7 +33952,10 @@ const BodyContext = struct {
             const backing_expr = try self.lowerRecordExprAtNode(checked_expr, record, backing.node, pre_lowered);
             const produced_node = try self.producedConstructorNode(
                 representation_node,
-                try self.exprTypeCell(backing_expr).toGraphNode(self.graph),
+                try self.builder.completePendingProducedNode(
+                    self,
+                    try self.exprTypeCell(backing_expr).toGraphNode(self.graph),
+                ),
             );
             return try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(produced_node),
@@ -34101,7 +34107,10 @@ const BodyContext = struct {
                     .required => Common.invariant("closed record graph constructor was missing a required field value"),
                 };
             };
-            const produced_value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+            const produced_value_node = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(value).toGraphNode(self.graph),
+            );
             produced_fields[index].ty = produced_value_node;
             produced_fields[index] = self.completedProducedRecordField(produced_fields[index]);
             lowered[index] = .{ .name = field.name, .value = value };
@@ -34333,7 +34342,10 @@ const BodyContext = struct {
             nominal.backing_expr,
             DraftTypeCell.fromGraphNode(backing_node),
         );
-        const produced_backing = try self.exprTypeCell(backing).toGraphNode(self.graph);
+        const produced_backing = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(backing).toGraphNode(self.graph),
+        );
         const produced_node = try self.producedConstructorNode(nominal_node, produced_backing);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
@@ -34370,7 +34382,10 @@ const BodyContext = struct {
         }
         const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
         for (lowered, produced_items) |item, *produced_item| {
-            produced_item.* = try self.exprTypeCell(item).toGraphNode(self.graph);
+            produced_item.* = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(item).toGraphNode(self.graph),
+            );
         }
         const structural_node = try self.graph.newNode(.{ .tuple = produced_items });
         // Tuple syntax can construct a nominal whose declaration backing is a
@@ -34510,7 +34525,10 @@ const BodyContext = struct {
                 try children.append(self.allocator, .{
                     .checked_expr = field.value,
                     .expr = value,
-                    .node = try self.exprTypeCell(value).toGraphNode(self.graph),
+                    .node = try self.builder.completePendingProducedNode(
+                        self,
+                        try self.exprTypeCell(value).toGraphNode(self.graph),
+                    ),
                 });
             }
             return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
@@ -34529,7 +34547,10 @@ const BodyContext = struct {
                 try children.append(self.allocator, .{
                     .checked_expr = field.value,
                     .expr = value,
-                    .node = try self.exprTypeCell(value).toGraphNode(self.graph),
+                    .node = try self.builder.completePendingProducedNode(
+                        self,
+                        try self.exprTypeCell(value).toGraphNode(self.graph),
+                    ),
                 });
             }
             return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
@@ -34671,7 +34692,10 @@ const BodyContext = struct {
             try children.append(self.allocator, .{
                 .checked_expr = field.value,
                 .expr = value,
-                .node = try self.exprTypeCell(value).toGraphNode(self.graph),
+                .node = try self.builder.completePendingProducedNode(
+                    self,
+                    try self.exprTypeCell(value).toGraphNode(self.graph),
+                ),
             });
         }
         const result_request = switch (destination_relation) {
@@ -34717,7 +34741,10 @@ const BodyContext = struct {
         const capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
         const capture_nodes = try self.graph.arena().alloc(NodeId, capture_span.len);
         for (self.fnDefCaptureSpan(capture_span), capture_nodes) |capture, *node| {
-            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
+            node.* = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(capture.value).toGraphNode(self.graph),
+            );
         }
         const fn_id = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, capture_nodes);
         const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);

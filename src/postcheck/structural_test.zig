@@ -721,7 +721,8 @@ test "record literals request and retain only immediate exact field nodes" {
     try expectContains(record_literal, "var selections = std.ArrayList(solve.DirectRequestSelection).empty;");
     try expectContains(record_literal, "self.refineDirectSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
-    try expectContains(exact_record, "const produced_value_node = try self.exprTypeCell(value).toGraphNode(self.graph);");
+    try expectContains(exact_record, "const produced_value_node = try self.builder.completePendingProducedNode(");
+    try expectContains(exact_record, "try self.exprTypeCell(value).toGraphNode(self.graph),");
     try expectContains(exact_record, "produced_fields[index].ty = produced_value_node;");
     try expectContains(exact_record, "optionalSlotPresentExprFromExactValue(pre)");
     try expectContains(exact_record, "self.graph.newProducedRecord(");
@@ -771,7 +772,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerTupleConstructorAtNodeWithRelation(",
         "fn lowerListConstructorAtNode(",
     );
-    try expectContains(tuple, "produced_item.* = try self.exprTypeCell(item).toGraphNode(self.graph)");
+    try expectContains(tuple, "produced_item.* = try self.builder.completePendingProducedNode(");
+    try expectContains(tuple, "try self.exprTypeCell(item).toGraphNode(self.graph),");
     try expectContains(tuple, "self.graph.newNode(.{ .tuple = produced_items })");
 
     const list = sourceSliceBetween(

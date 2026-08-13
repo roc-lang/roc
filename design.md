@@ -4040,7 +4040,12 @@ repeats a graph query for each reusing context.
 Record, tuple, tag, list, and box constructors build their exact container type
 from the exact child cells they emit. They never first construct a
 checked-public container, scan it for private descendants, or emit a second
-witness related to that container.
+witness related to that container. A child expression that has emitted a call
+but still owns a queued specialization has produced only a stable forward cell,
+not completed runtime structure. Before an acyclic parent stores that child,
+lowering completes the queued producer and stores the resulting exact node.
+Recursive children retain their one stable forward cell, which their active
+producer completes; no checked child recipe is substituted for it.
 
 Every element of a non-empty list meets one flat exact-root storage obligation;
 the list node stores the first element's exact root and final validation proves
