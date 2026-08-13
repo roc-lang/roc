@@ -3855,19 +3855,23 @@ completed specialization.
 
 Every explicit `return` and the ordinary fall-through value contribute to one
 stable exact result-selection cell owned by the active function
-specialization. Return expressions name that cell directly; they do not seal
-the checker-public return and leave the final body to choose a different type.
+specialization. The first scheduled reachable producer completes that cell.
+Every return or fall-through value lowered afterward consumes the completed
+cell as its exact request; it is never lowered independently and compared with
+the result afterward. Return expressions name that cell directly; they do not
+seal the checker-public return and leave the final body to choose a different
+type.
 Synthetic argument-destructuring `let` expressions sequence work around the
 already-lowered body and retain that body's exact result cell.
 
-Match and conditional branches likewise lower to their own completed exact
-cells before the control-flow selection relates or joins them with the declared
-destination. A branch is never lowered into the checker-public destination and
-then asked to determine again the representation it would have produced.
-The declared destination and each completed branch meet through the same
-explicit common-representation operation used by stored arguments, so an
-empty compound branch can adopt the selected nested representation while a
-named branch root remains immutable.
+Match and conditional branches use the same single exact result cell. Checking's
+value-flow column schedules producer branches before requested branches. The
+first reachable producer completes the cell; requested branches and all later
+producers consume that exact cell directly. If no branch is a producer, the
+first requested branch consumes the declared result request as the explicit
+seed and completes the cell. Lowering order does not change source branch order
+in the emitted IR. No branch result is joined, merged, or reconciled after
+independent lowering.
 
 When an exact-producing call is itself specialization input, Monotype completes
 that one call before selecting the consumer specialization and uses the
@@ -3997,22 +4001,21 @@ ConstStore preserves that exact output beside the stored value, and restoration
 uses it directly.
 
 A value-producing `if` or `match` owns one explicit exact result selection for
-all of its inhabited branches. Each branch is lowered exactly once and returns
-its exact graph cell. Produced compounds are canonicalized from their immediate
-exact children, and generated nominals are atomic content identities, so valid
-branches converge to one exact root without comparing their structures. If a
-branch producer is still open, the boundary records one flat root-equality
-obligation and validates it after producer completion. Two already-resolved
-different roots are immediately a compiler invariant. The boundary never walks
-either value, creates a pair memo, combines children from different roots, or
-relates the selection back to a checked-public graph.
+all of its inhabited branches. Checker-published value flow identifies the
+producer candidates. Monotype lowers those candidates first until one reachable
+branch returns an exact node, redirects the one result selection to that node,
+and lowers every remaining branch at the selection as an exact request. If no
+producer candidate is reachable, the first requested branch receives the
+declared result request as the component's checked seed. Match patterns first
+project their exact binder cells from the exact scrutinee, so branch-local
+lookups produce from those cells directly. The emitted branch order stays in
+source order even though the compile-time lowering schedule is producer-first.
 
-The emitted branch IR retains those live graph cells until the selection is
-complete and types are sealed, so the canonical exact root is visible to every
-branch without a producer-discovery pre-pass, re-lowering, or rewriting emitted
-code. Match patterns first project their exact binder cells from the exact
-scrutinee, so branch-local lookups produce from those cells directly. Source
-order cannot change the selected identity.
+There is no list of completed branch roots, no root-equality obligation, and no
+freeze-time result comparison. A branch that did not consume the selected exact
+request is an immediate compiler invariant at that branch boundary. The
+boundary never walks either value, creates a pair memo, combines children from
+different roots, or relates the selection back to a checked-public graph.
 
 Branches that provably terminate do not participate in result selection. If
 every branch terminates, the control-flow expression produces no runtime value:

@@ -1813,7 +1813,7 @@ test "Monotype lambda argument patterns retain graph provenance" {
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
     try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
     try expectContains(lambda_args, ".ty = arg_cell");
-    try expectContains(lambda_args, "} }, body_ret_cell);");
+    try expectContains(lambda_args, "} }, return_selection.selected);");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
     try expectNotContains(lambda_args, "activeTypeFromNode(ret_node)");
     try expectNotContains(lambda_args, "lowerPatternAtType(pattern_id");
@@ -1821,6 +1821,7 @@ test "Monotype lambda argument patterns retain graph provenance" {
 
 test "Monotype returns share the active specialization result selection" {
     const lower_source = @embedFile("monotype/lower.zig");
+    const solve_source = @embedFile("monotype/solve.zig");
     const lower_return = sourceSliceBetween(
         lower_source,
         "fn lowerReturn(",
@@ -1828,11 +1829,22 @@ test "Monotype returns share the active specialization result selection" {
     );
     try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .selection = &return_selection }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
-    try expectContains(lower_return, "self.lowerExprAtExactRequest(ret.expr, target.selection.declared)");
-    try expectContains(lower_return, ".checked_mapping, .exact_producer => try self.lowerExpr(ret.expr)");
-    try expectContains(lower_return, "self.includeControlFlowResult(target.selection, value)");
+    try expectContains(lower_return, "self.lowerControlFlowResultValue(target.selection, ret.expr)");
     try expectContains(lower_return, ".target = target.selection.selected");
     try expectNotContains(lower_source, "returnTargetTypeCell");
+
+    const result_selection = sourceSliceBetween(
+        lower_source,
+        "fn initControlFlowResultSelection(",
+        "fn stateMergeBinders(",
+    );
+    try expectContains(result_selection, "selection.has_exact_producer");
+    try expectContains(result_selection, "self.lowerBranchValueAtTypeCell(");
+    try expectContains(result_selection, ".exact_request");
+    try expectContains(result_selection, "self.graph.completeProducedSelection(selected_node, value_node)");
+    try expectNotContains(result_selection, "requireSameExactProducedValue");
+    try expectNotContains(lower_source, "const ControlFlowResultValue = struct");
+    try expectNotContains(solve_source, "pub fn requireSameExactProducedValue");
 
     const lambda_node = sourceSliceBetween(
         lower_source,

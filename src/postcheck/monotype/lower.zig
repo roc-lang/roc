@@ -12410,15 +12410,7 @@ const ControlFlowResultSelection = struct {
     declared: DraftTypeCell,
     selected: DraftTypeCell,
     destination_relation: ControlFlowDestinationRelation,
-    first_value: ?*ControlFlowResultValue = null,
-    last_value: ?*ControlFlowResultValue = null,
-    target_required: bool = false,
-};
-
-const ControlFlowResultValue = struct {
-    expr: DraftExprId,
-    cell: DraftTypeCell,
-    next: ?*ControlFlowResultValue = null,
+    has_exact_producer: bool,
 };
 
 const ActiveReturnTarget = struct {
@@ -13290,6 +13282,7 @@ const BodyContext = struct {
             args: []const MaterializedArg,
             index: usize,
             body: checked.CheckedExprId,
+            result_selection: *ControlFlowResultSelection,
         },
         iterator_body: struct {
             body: checked.CheckedExprId,
@@ -17497,16 +17490,14 @@ const BodyContext = struct {
         else
             ret_cell;
         var body = if (materialized_args.items.len == 0)
-            switch (ret_destination_relation) {
-                .exact_request => try self.lowerExprAtExactRequest(checked_body, body_ret_cell),
-                .checked_mapping, .exact_producer => try self.lowerExpr(checked_body),
-            }
+            try self.lowerControlFlowResultValue(&return_selection, checked_body)
         else
             try self.lowerBindingContinuation(.{ .materialized_args = .{
                 .args = materialized_args.items,
                 .index = 0,
                 .body = checked_body,
-            } }, body_ret_cell);
+                .result_selection = &return_selection,
+            } }, return_selection.selected);
         if (arg_literal_guards.items.len != 0) {
             const miss = try self.addExprWithTypeCell(
                 body_ret_cell,
@@ -17542,7 +17533,6 @@ const BodyContext = struct {
             } });
         }
 
-        try self.includeControlFlowResult(&return_selection, body);
         const produced_ret_cell = try self.finishControlFlowResultSelection(return_selection);
         self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
         try self.publishExactExpressionRoot(
@@ -18058,12 +18048,7 @@ const BodyContext = struct {
         if (ret.lambda != target.lambda) {
             Common.invariant("checked return target disagreed with the active lambda specialization");
         }
-        const value = switch (target.selection.destination_relation) {
-            .exact_request => try self.lowerExprAtExactRequest(ret.expr, target.selection.declared),
-            .checked_mapping, .exact_producer => try self.lowerExpr(ret.expr),
-        };
-        target.selection.target_required = true;
-        try self.includeControlFlowResult(target.selection, value);
+        const value = try self.lowerControlFlowResultValue(target.selection, ret.expr);
         return .{
             .value = value,
             .target = target.selection.selected,
@@ -45012,7 +44997,10 @@ const BodyContext = struct {
             .expr => |expr| expr,
             .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, result_cell),
             .materialized_args => |args| blk: {
-                if (args.index >= args.args.len) break :blk try self.lowerExprAtTypeCell(args.body, result_cell);
+                if (args.index >= args.args.len) break :blk try self.lowerControlFlowResultValue(
+                    args.result_selection,
+                    args.body,
+                );
                 const arg = args.args[args.index];
                 const miss = try self.addExprWithTypeCell(result_cell, .{ .crash = try self.addStringLiteral("pattern match failed") });
                 break :blk try self.lowerMaterializedPatternThen(
@@ -45024,6 +45012,7 @@ const BodyContext = struct {
                         .args = args.args,
                         .index = args.index + 1,
                         .body = args.body,
+                        .result_selection = args.result_selection,
                     } },
                     miss,
                 );
@@ -45750,16 +45739,25 @@ const BodyContext = struct {
                 scrutinee_node,
             );
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
-            const branch_output: MatchOutput = if (value_selection) |selection|
-                .{ .value = .{
-                    .cell = selection.declared,
-                    .destination_relation = selection.destination_relation,
-                } }
-            else
-                output;
-            entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, branch_output);
-            if (value_selection) |selection| {
-                try self.includeControlFlowResult(selection, entry.body);
+        }
+        if (value_selection) |selection| {
+            // Lower all checker-designated producers before requested values.
+            // The first reachable producer completes the result slot; every
+            // remaining body then consumes that exact slot. The pending array
+            // and final branch emission stay in source order.
+            for ([_]bool{ true, false }) |produced_pass| {
+                for (pending.items) |*entry| {
+                    const produced = entry.ctx.view.templates.specializationValueFlowForExpr(entry.checked_body) == .produced;
+                    if (produced != produced_pass) continue;
+                    entry.body = try entry.ctx.lowerControlFlowResultValue(
+                        selection,
+                        entry.checked_body,
+                    );
+                }
+            }
+        } else {
+            for (pending.items) |*entry| {
+                entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, output);
             }
         }
 
@@ -46215,9 +46213,8 @@ const BodyContext = struct {
     }
 
     /// A value-producing control-flow expression owns one result selection.
-    /// Each branch is lowered exactly once and returns its exact graph cell;
-    /// those cells join before sealing, so already-emitted branch IR observes
-    /// the deterministic joined root without being lowered or rewritten again.
+    /// One reachable branch completes that selection with its exact graph
+    /// cell; every later branch consumes the completed selection directly.
     fn initControlFlowResultSelection(
         self: *BodyContext,
         _: checked.CheckedTypeId,
@@ -46229,13 +46226,42 @@ const BodyContext = struct {
             .selected = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{
                 .unresolved = InstVariable.placeholder(),
             })),
-            // A producer control-flow expression accepts the exact node each
-            // branch returns. Only an explicit contextual destination is
-            // forwarded into branch lowering; a checked result description is
-            // never promoted into runtime authority merely because branches
-            // meet here.
             .destination_relation = destination_relation,
+            .has_exact_producer = false,
         };
+    }
+
+    /// Lower one reachable result on the directional edge owned by its
+    /// control-flow selection. Before a producer exists, a checker-designated
+    /// producer lowers independently (or against an explicit outer request),
+    /// while a requested value uses the declared request as the component
+    /// seed. Once the selection is complete, every result consumes it.
+    fn lowerControlFlowResultValue(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        checked_expr: checked.CheckedExprId,
+    ) Allocator.Error!DraftExprId {
+        const value = if (selection.has_exact_producer)
+            try self.lowerBranchValueAtTypeCell(
+                checked_expr,
+                selection.selected,
+                .exact_request,
+            )
+        else if (self.view.templates.specializationValueFlowForExpr(checked_expr) == .produced and
+            selection.destination_relation != .exact_request)
+            try self.lowerBranchValueAtTypeCell(
+                checked_expr,
+                selection.declared,
+                .exact_producer,
+            )
+        else
+            try self.lowerBranchValueAtTypeCell(
+                checked_expr,
+                selection.declared,
+                .exact_request,
+            );
+        try self.includeControlFlowResult(selection, value);
+        return value;
     }
 
     fn includeControlFlowResult(
@@ -46244,46 +46270,30 @@ const BodyContext = struct {
         value: DraftExprId,
     ) Allocator.Error!void {
         if (self.exprImpossibilityProof(value) != null) return;
-        const entry = try self.graph.arena().create(ControlFlowResultValue);
-        entry.* = .{
-            .expr = value,
-            .cell = self.exprTypeCell(value),
-        };
-        if (selection.last_value) |last| {
-            last.next = entry;
-        } else {
-            selection.first_value = entry;
+        const selected_node = try selection.selected.toGraphNode(self.graph);
+        const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+        if (!selection.has_exact_producer) {
+            try self.graph.completeProducedSelection(selected_node, value_node);
+            selection.has_exact_producer = true;
+        } else if (!self.graph.sameClass(
+            try self.graph.canonicalizeProducedNode(selected_node),
+            try self.graph.canonicalizeProducedNode(value_node),
+        )) {
+            Common.invariant("control-flow result did not consume its exact produced request");
         }
-        selection.last_value = entry;
+        self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
     }
 
     fn finishControlFlowResultSelection(
         self: *BodyContext,
         selection: ControlFlowResultSelection,
     ) Allocator.Error!DraftTypeCell {
+        _ = self;
         // A control-flow expression whose every branch terminates never
         // produces a runtime result. Its checked result variable may therefore
         // remain unconstrained, and cannot supply representation evidence for
         // the enclosing continuation's declared result cell.
-        const first = selection.first_value orelse return selection.declared;
-        // Every reachable branch is an exact producer. Immediate-child
-        // interning and atomic generated identities make equal checked
-        // branches converge to one root. Keep a flat equality obligation for
-        // any still-open producer cells; neither side is traversed and no
-        // checked graph participates.
-        if (first.next == null and !selection.target_required) return first.cell;
-        const selected_value = try first.cell.toGraphNode(self.graph);
-        const selected_node = try selection.selected.toGraphNode(self.graph);
-        try self.graph.completeProducedSelection(selected_node, selected_value);
-        var current: ?*ControlFlowResultValue = first;
-        while (current) |entry| : (current = entry.next) {
-            try self.graph.requireSameExactProducedValue(
-                selected_value,
-                try entry.cell.toGraphNode(self.graph),
-            );
-            self.draft.exprs.items[@intFromEnum(entry.expr)].ty = selection.selected;
-        }
-        return selection.selected;
+        return if (selection.has_exact_producer) selection.selected else selection.declared;
     }
 
     fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {
@@ -46368,54 +46378,43 @@ const BodyContext = struct {
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
         for (if_.branches, 0..) |branch, index| {
-            const cond = try self.lowerExpr(branch.cond);
-            var branch_ctx = try self.childContext(self.current_fn_key);
-            defer branch_ctx.deinit();
-            const requested_result_cell = if (value_selection) |selection| selection.declared else result_cell;
-            const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
-            const destination_relation = if (value_selection) |selection|
-                selection.destination_relation
-            else
-                .exact_producer;
-            branches[index] = .{
-                .cond = cond,
-                .body = try branch_ctx.wrapComptimeBranch(
+            branches[index].cond = try self.lowerExpr(branch.cond);
+        }
+        var final_else: DraftExprId = undefined;
+        const pass_count: usize = if (value_selection != null) 2 else 1;
+        for (0..pass_count) |pass| {
+            for (0..if_.branches.len + 1) |index| {
+                const checked_body = if (index < if_.branches.len)
+                    if_.branches[index].body
+                else
+                    if_.final_else;
+                if (value_selection != null) {
+                    const produced = self.view.templates.specializationValueFlowForExpr(checked_body) == .produced;
+                    if (produced != (pass == 0)) continue;
+                }
+                var branch_ctx = try self.childContext(self.current_fn_key);
+                defer branch_ctx.deinit();
+                const body = if (value_selection) |selection|
+                    try branch_ctx.lowerControlFlowResultValue(selection, checked_body)
+                else
+                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
+                        checked_body,
+                        result_cell,
+                        branch_cell,
+                        merge_binders,
+                        .exact_producer,
+                    );
+                const wrapped = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
                     index,
-                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
-                        branch.body,
-                        requested_result_cell,
-                        requested_branch_cell,
-                        merge_binders,
-                        destination_relation,
-                    ),
-                ),
-            };
-            if (value_selection) |selection| {
-                try self.includeControlFlowResult(selection, branches[index].body);
+                    body,
+                );
+                if (index < if_.branches.len) {
+                    branches[index].body = wrapped;
+                } else {
+                    final_else = wrapped;
+                }
             }
-        }
-        var else_ctx = try self.childContext(self.current_fn_key);
-        defer else_ctx.deinit();
-        const requested_result_cell = if (value_selection) |selection| selection.declared else result_cell;
-        const requested_branch_cell = if (value_selection != null) requested_result_cell else branch_cell;
-        const destination_relation = if (value_selection) |selection|
-            selection.destination_relation
-        else
-            .exact_producer;
-        const final_else = try else_ctx.wrapComptimeBranch(
-            comptime_site,
-            if_.branches.len,
-            try else_ctx.lowerIfBranchBodyAtTypeCells(
-                if_.final_else,
-                requested_result_cell,
-                requested_branch_cell,
-                merge_binders,
-                destination_relation,
-            ),
-        );
-        if (value_selection) |selection| {
-            try self.includeControlFlowResult(selection, final_else);
         }
         return .{ .if_ = .{
             .branches = try self.addIfBranchSpan(branches),
