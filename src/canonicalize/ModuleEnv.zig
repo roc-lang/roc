@@ -152,6 +152,7 @@ pub const CommonIdents = extern struct {
 
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_iter: Ident.Idx,
+    builtin_range: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
@@ -286,6 +287,7 @@ pub const CommonIdents = extern struct {
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
             .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
+            .builtin_range = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Range")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -419,6 +421,7 @@ pub const CommonIdents = extern struct {
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
             .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
+            .builtin_range = common.findIdent("Builtin.Num.Range") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,

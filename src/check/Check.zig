@@ -5625,13 +5625,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
         };
         break :blk try self.copyVar(ModuleEnv.varFrom(indices.range_type), builtin_env, region);
     } else blk: {
-        const range_ident = self.cir.common.findIdent("Builtin.Num.Range") orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Builtin.Num.Range ident was not interned while checking Builtin", .{});
-            }
-            unreachable;
-        };
-        const range_stmt_idx = self.findLocalTypeDeclByName(range_ident) orelse {
+        const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
             }
