@@ -239,10 +239,11 @@ pub const FunctionNodes = struct {
     ret: NodeId,
 };
 
-/// Authority for a function request's result edge. An exact destination is
-/// supplied by an enclosing storage or control-flow boundary. A produced
-/// result has no destination yet; the callee body owns the exact node that
-/// will complete its reserved forward cell.
+/// Input authority for lowering a function body. An exact destination is
+/// supplied by an enclosing storage or control-flow boundary and guides the
+/// body's contextual producers. A produced result has no destination yet.
+/// In both cases the function value owns a separate forward result cell that
+/// the body completes with the exact node it returns.
 pub const FunctionResultRelation = enum(u8) {
     exact_destination,
     produced,

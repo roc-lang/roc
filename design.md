@@ -3739,6 +3739,16 @@ has not yet restored its operands carries checked formal shells with every
 operand marked unavailable; only its explicit result destination and checked
 target signature may affect that preliminary request.
 
+A requested lambda keeps that destination as immutable input while lowering
+its body, but the function value owns a distinct forward result cell. The body
+completes that cell with the authoritative exact node it actually returns, and
+the completed function is constructed from the requested argument nodes plus
+that produced result node. Requesting a lambda never requires the body's final
+compound result root to be identical to the checker-public destination root;
+such a requirement would reconcile two complete graphs after production.
+Recursive references observe the one forward result cell and therefore acquire
+the same produced identity when the body completes.
+
 Compound construction does not apply one complete type graph to another. It
 lowers each runtime child once, constructs the parent directly from those exact
 child `NodeId`s and the checker-authored constructor identity, and returns that

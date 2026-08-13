@@ -17269,9 +17269,9 @@ const BodyContext = struct {
     }
 
     /// Reserve the one function/result identity that every caller, including
-    /// recursive callers, observes. An exact destination keeps the enclosing
-    /// producer's result node. A produced result reserves a forward cell that
-    /// the function body will resolve to the exact node it returns.
+    /// recursive callers, observes. The request's result remains an immutable
+    /// input to contextual body lowering; this separate forward cell is the
+    /// function value's output and resolves to the exact node the body returns.
     fn reserveFunctionResult(
         self: *BodyContext,
         body_request_fn_node: NodeId,
@@ -17281,10 +17281,7 @@ const BodyContext = struct {
             body_request_fn_node;
         const result_relation = self.graph.functionResultRelation(body_request_fn_node) orelse
             Common.invariant("function result reservation had no explicit authority");
-        const produced_ret = switch (result_relation) {
-            .exact_destination => body_request.ret,
-            .produced => try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
-        };
+        const produced_ret = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
         const result_fn = try self.graphFunctionNode(body_request.args, produced_ret);
         try self.graph.registerRequestCheckedSource(result_fn, checked_source);
         self.graph.registerFunctionResultRelation(result_fn, result_relation);
@@ -17311,16 +17308,9 @@ const BodyContext = struct {
             }
         }
         const lowered_ret_node = try lowered_ret.toGraphNode(self.graph);
-        switch (self.graph.functionResultRelation(result_fn_node) orelse
-            Common.invariant("completed function had no explicit result authority")) {
-            .exact_destination => if (!self.graph.sameClass(
-                try self.graph.canonicalizeProducedNode(function.ret),
-                try self.graph.canonicalizeProducedNode(lowered_ret_node),
-            )) {
-                Common.invariant("lowered procedure result differed from its exact destination");
-            },
-            .produced => try self.graph.completeFunctionResult(result_fn_node, lowered_ret_node),
-        }
+        _ = self.graph.functionResultRelation(result_fn_node) orelse
+            Common.invariant("completed function had no explicit result authority");
+        try self.graph.completeFunctionResult(result_fn_node, lowered_ret_node);
         return result_fn_node;
     }
 
