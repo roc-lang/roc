@@ -25987,7 +25987,7 @@ const BodyContext = struct {
         // available. In particular, a selected declaration's result remains
         // output-only until its body (or an enclosing exact destination)
         // supplies that edge.
-        if (root.root_source == .concrete_checked) return true;
+        if (root.root_source == .concrete_checked or root.root_source == .fixed_concrete_checked) return true;
         if (occurrence.production == .producer) return true;
         // A checker-designated seed is the explicit request producer for its
         // whole dependency component. Its declared descendant selections are
@@ -26132,17 +26132,13 @@ const BodyContext = struct {
             // however, is only a request. When checking published a concrete
             // source for this root, that source produces the request instead
             // of letting the open cell mask a fixed declaration type.
-            const fixed_checked_root = root.root_source == .concrete_checked and switch (checkedPayload(self.view, root.checked)) {
-                .nominal => |nominal| nominal.args.len == 0,
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
-            };
-            if (self.graph.content(node) != .unresolved or !fixed_checked_root) {
+            if (self.graph.content(node) != .unresolved or root.root_source != .fixed_concrete_checked) {
                 return node;
             }
         }
         return switch (root.root_source) {
             .runtime_edge => null,
-            .concrete_checked => try self.persistentConcreteCheckedNode(root.checked),
+            .concrete_checked, .fixed_concrete_checked => try self.persistentConcreteCheckedNode(root.checked),
         };
     }
 
@@ -26864,10 +26860,7 @@ const BodyContext = struct {
                 // completed runtime edge records that node itself; rebuilding
                 // the same checked compound from selected descendants would
                 // create a second value and discard producer identity.
-                const concrete_checked_produced = occurrence_root.root_source == .concrete_checked and switch (checkedPayload(self.view, occurrence_root.checked)) {
-                    .nominal => |nominal| nominal.args.len == 0,
-                    .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
-                } and switch (occurrence_root.step) {
+                const concrete_checked_produced = occurrence_root.root_source == .fixed_concrete_checked and switch (occurrence_root.step) {
                     .result => self.graph.content(request_ret orelse
                         Common.invariant("concrete result occurrence had no result node")) == .unresolved,
                     .argument => self.graph.content(produced_args[occurrence_root.index]) == .unresolved,

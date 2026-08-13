@@ -16638,8 +16638,38 @@ pub const no_specialization_selection_edge_parent = std.math.maxInt(u32);
 /// not yet produced a node. Child selection edges always inherit their parent.
 pub const SpecializationSelectionEdgeRootSource = enum(u8) {
     runtime_edge,
+    /// A substitution-free checked recipe can supply the root when no runtime
+    /// edge is present, but an available runtime edge remains authoritative.
     concrete_checked,
+    /// A zero-argument nominal declaration is itself the exact produced type.
+    /// It replaces an unresolved positional request instead of inheriting
+    /// that request's authority.
+    fixed_concrete_checked,
 };
+
+fn specializationSelectionEdgeRootSource(
+    checked_types: *const CheckedTypePublication,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    checked_root: CheckedTypeId,
+) Allocator.Error!SpecializationSelectionEdgeRootSource {
+    if (!try concrete_sources.isConcrete(checked_root)) return .runtime_edge;
+    return switch (checked_types.store.payload(checked_root)) {
+        .nominal => |nominal| if (nominal.args.len == 0) .fixed_concrete_checked else .concrete_checked,
+        .pending,
+        .err,
+        .flex,
+        .rigid,
+        .empty_record,
+        .empty_tag_union,
+        .alias,
+        .record_unbound,
+        .record,
+        .tuple,
+        .function,
+        .tag_union,
+        => .concrete_checked,
+    };
+}
 
 /// One direct path step in a checker-authored call shape.
 pub const SpecializationSelectionEdge = extern struct {
@@ -19501,7 +19531,11 @@ fn compileSpecializationCallShape(
                 .index = @intCast(index),
                 .payload_index = 0,
                 .step = .argument,
-                .root_source = if (try concrete_sources.isConcrete(arg)) .concrete_checked else .runtime_edge,
+                .root_source = try specializationSelectionEdgeRootSource(
+                    checked_types,
+                    concrete_sources,
+                    arg,
+                ),
             },
             // Flow controls whether the operand needs a request before it is
             // lowered. After lowering, every operand has produced its exact
@@ -19522,7 +19556,11 @@ fn compileSpecializationCallShape(
             .index = 0,
             .payload_index = 0,
             .step = .result,
-            .root_source = if (try concrete_sources.isConcrete(function.ret)) .concrete_checked else .runtime_edge,
+            .root_source = try specializationSelectionEdgeRootSource(
+                checked_types,
+                concrete_sources,
+                function.ret,
+            ),
         },
         true,
         &active,
@@ -19636,7 +19674,11 @@ fn compileSpecializationRecordShape(
                 .index = @intCast(index),
                 .payload_index = 0,
                 .step = .argument,
-                .root_source = if (try concrete_sources.isConcrete(field_root)) .concrete_checked else .runtime_edge,
+                .root_source = try specializationSelectionEdgeRootSource(
+                    checked_types,
+                    concrete_sources,
+                    field_root,
+                ),
             },
             true,
             &active,
@@ -34557,7 +34599,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 73;
+    const serialized_layout_version: u32 = 74;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -39057,6 +39099,120 @@ test "target source kind distinguishes exact values from ordinary output request
     );
 }
 
+test "selection root sources distinguish fixed declarations from runtime edges" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var publication = CheckedTypePublication{ .store = .{} };
+    defer publication.deinit(allocator);
+
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x91} ** 32));
+    const type_name = try names.internTypeName("Fixed");
+    const fixed = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(91),
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+    } });
+    const concrete_arg = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+    const nominal_args = try allocator.alloc(CheckedTypeId, 1);
+    nominal_args[0] = concrete_arg;
+    const constructed = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(91),
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+        .args = nominal_args,
+    } });
+    const contextual = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(92),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, contextual, .{ .flex = .{} });
+
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, &publication);
+    defer concrete_sources.deinit();
+    try std.testing.expectEqual(
+        SpecializationSelectionEdgeRootSource.fixed_concrete_checked,
+        try specializationSelectionEdgeRootSource(&publication, &concrete_sources, fixed),
+    );
+    try std.testing.expectEqual(
+        SpecializationSelectionEdgeRootSource.concrete_checked,
+        try specializationSelectionEdgeRootSource(&publication, &concrete_sources, constructed),
+    );
+    try std.testing.expectEqual(
+        SpecializationSelectionEdgeRootSource.runtime_edge,
+        try specializationSelectionEdgeRootSource(&publication, &concrete_sources, contextual),
+    );
+}
+
+test "Iter.next publishes input identity for every returned rest iterator" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var publication = CheckedTypePublication{ .store = .{} };
+    defer publication.deinit(allocator);
+
+    const item = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(93),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, item, .{ .flex = .{} });
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x94} ** 32));
+    const type_name = try names.internTypeName("Iter");
+    var iter_roots: [3]CheckedTypeId = undefined;
+    for (&iter_roots) |*root| {
+        const args = try allocator.alloc(CheckedTypeId, 1);
+        args[0] = item;
+        root.* = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
+            .name = type_name,
+            .origin_module = module_identity,
+            .owner_module = testCheckedModuleKey(94),
+            .source_decl = 7,
+            .builtin = .iter,
+            .is_opaque = true,
+            .representation = .{ .builtin = .iter },
+            .args = args,
+        } });
+    }
+
+    const occurrences = [_]SpecializationOccurrence{
+        .{ .checked = iter_roots[0], .selection_edge = 0, .root_selection_edge = 0, .production = .producer },
+        .{ .checked = iter_roots[1], .selection_edge = 1, .root_selection_edge = 1, .production = .producer },
+        .{ .checked = iter_roots[2], .selection_edge = 1, .root_selection_edge = 1, .production = .consumer },
+    };
+    const selection_edges = [_]SpecializationSelectionEdge{
+        .{ .checked = iter_roots[0], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .argument },
+        .{ .checked = iter_roots[1], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .result },
+    };
+    var slots = [_]SpecializationCallSlot{
+        .{ .checked = iter_roots[0], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
+        .{ .checked = iter_roots[1], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
+        .{ .checked = iter_roots[2], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
+    };
+    const shape = SpecializationCallShape{
+        .slots = .{ .start = 0, .len = slots.len },
+        .selection_edges = .{ .start = 0, .len = selection_edges.len },
+    };
+
+    publishIteratorOperationSources(
+        &publication,
+        .iter_next,
+        shape,
+        &slots,
+        &occurrences,
+        &selection_edges,
+    );
+
+    try std.testing.expectEqual(no_specialization_operation_source, slots[0].operation_source);
+    try std.testing.expectEqual(iter_roots[0], slots[1].operation_source);
+    try std.testing.expectEqual(iter_roots[0], slots[2].operation_source);
+}
+
 test "target source roots exclude explicit concrete checked sources" {
     const concrete = testIndexId(CheckedTypeId, 0);
     const runtime = testIndexId(CheckedTypeId, 1);
@@ -40943,8 +41099,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x2A, 0x70, 0x07, 0xE4, 0x81, 0xBF, 0x95, 0xBA, 0x63, 0xA2, 0x55, 0x14, 0xF6, 0xF3, 0xC7, 0x19,
-        0x8F, 0xFA, 0x49, 0xC3, 0x1B, 0x5C, 0xBB, 0x03, 0x74, 0x61, 0x9A, 0x40, 0xDA, 0xD2, 0xB9, 0x44,
+        0x4A, 0x98, 0x4B, 0x6A, 0xA9, 0xD8, 0x79, 0xBC, 0x41, 0x19, 0x79, 0xC1, 0x68, 0x48, 0x93, 0x46,
+        0x5A, 0x6A, 0x4F, 0x33, 0x19, 0xC6, 0xD0, 0xC3, 0x6F, 0x69, 0x0E, 0x8B, 0x9F, 0x13, 0x72, 0x72,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -5012,6 +5012,8 @@ test "function request identity distinguishes request seeds from produced edges"
     const ret = try graph.newNode(.{ .primitive = .bool });
     const left = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
     const right = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+    graph.registerFunctionResultRelation(left, .produced);
+    graph.registerFunctionResultRelation(right, .produced);
     const key = CheckedBaseKey{
         .module_bytes = [_]u8{0xA5} ** 32,
         .checked = testCheckedTypeId(7),

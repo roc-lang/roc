@@ -523,12 +523,21 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(generated_call_identity, "self.materializeCheckedCallNode(");
     try expectContains(generated_call_identity, ".request_occurrence,");
     try expectNotContains(generated_call_identity, ".produced_occurrence,");
-    try expectContains(generated_call_identity, ".concrete_checked => try self.persistentConcreteCheckedNode(");
+    try expectContains(generated_call_identity, ".concrete_checked => .{");
+    try expectContains(generated_call_identity, ".produced = try self.persistentConcreteCheckedNode(nominal.args[0])");
     try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
     try expectContains(generated_call_identity, "generatedFieldNominalNode(");
     try expectNotContains(generated_call_identity, "instNominalBackingNode(");
     try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
     try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");
+
+    const root_edge = sourceSliceBetween(
+        lower_source,
+        "fn callRootEdgeNode(",
+        "fn callArgumentSelection(",
+    );
+    try expectContains(root_edge, ".concrete_checked, .fixed_concrete_checked => try self.persistentConcreteCheckedNode(root.checked)");
+    try expectNotContains(root_edge, "checkedPayload(");
 
     const selection_edge_application = sourceSliceBetween(
         lower_source,
@@ -934,7 +943,7 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
-test "Monotype procedure results come directly from producer completion" {
+test "Monotype procedure calls consume exact requests without forcing bodies" {
     const lower_source = @embedFile("monotype/lower.zig");
     const resolved_dispatch = sourceSliceBetween(
         lower_source,
@@ -946,8 +955,10 @@ test "Monotype procedure results come directly from producer completion" {
         "fn lowerResolvedDirectDispatchAtNode(",
         "fn lowerStructuralEqualityAtNode(",
     );
-    try expectContains(resolved_dispatch, "completeDraftFnSlotTypeNode(callee, prepared_callable)");
-    try expectContains(direct_dispatch, "completeDraftFnSlotTypeNode(callee, prepared_callable)");
+    try expectContains(resolved_dispatch, "draftFnSlotTypeNode(callee, prepared_callable)");
+    try expectContains(direct_dispatch, "draftFnSlotTypeNode(callee, prepared_callable)");
+    try expectNotContains(resolved_dispatch, "completeDraftFnSlotTypeNode");
+    try expectNotContains(direct_dispatch, "completeDraftFnSlotTypeNode");
     try expectNotContains(lower_source, "lowerAndCompleteIteratorMethodResultAtNode");
     try expectNotContains(lower_source, "containsIteratorInterface");
 }
@@ -1409,7 +1420,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn recordCallSelection(",
         "fn recordActiveCheckedSelection(",
     );
-    try expectNotContains(selection, "internProduced");
+    try expectContains(selection, "internProducedIdentity(candidate.produced)");
 
     const active_selection = sourceSliceBetween(
         lower_source,
@@ -2141,7 +2152,8 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(full_request, "functionRequestNode(");
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
     try expectNotContains(lower_source, "methodTargetMonoTypeFromArgAtIndexIsolated");
-    try expectContains(iterator, "produced_nodes[operand_index] = try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph)");
+    try expectContains(iterator, "produced_nodes[operand_index] = try self.builder.completePendingProducedNode(");
+    try expectContains(iterator, "try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph)");
     try expectContains(iterator, "refineDirectCallSelectionsFromRecordedPlan(");
     try expectContains(iterator, "materializeCallSelectionSpan(");
     try expectNotContains(iterator, "functionRequestNode(");

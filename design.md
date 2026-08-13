@@ -3530,6 +3530,16 @@ binding. Monotype applies only those recorded edges. It never walks a checked
 type beside a produced type, constructs a relation graph, computes a transitive
 closure, or retries bindings to a fixed point.
 
+Every argument, result, and dispatcher root in that plan also records its source
+operation. A `runtime_edge` root can be supplied only by the corresponding
+completed value. A `concrete_checked` root is an immutable substitution-free
+recipe used only when no completed value is available. A
+`fixed_concrete_checked` root is a zero-argument nominal declaration which is
+itself the exact produced type and therefore replaces an unresolved positional
+request. Checking makes this distinction once from checked data. Monotype must
+not inspect the root payload to rediscover it, and the presence of a concrete
+recipe never permits a completed runtime value to be replaced.
+
 The checker compiles the immutable slot and direct-child structure once for
 each distinct tuple of checker-authored call inputs and interns it behind a
 dense `SpecializationCallShapeId`. Each expression edge stores only that dense
@@ -3609,6 +3619,14 @@ has not run at the current operand-scheduling point, the generated slot remains
 absent; the next refinement that records that producer executes the same
 checker-authored operation. This is scheduling, not a fallback: no alternative
 source is tried and no checked or produced graph is inspected to discover one.
+
+Operations that preserve an already-generated identity record that source
+directly on every generated output slot. In particular, `Iter.next` records its
+iterator input as the operation source for every returned `rest` iterator,
+including consumer occurrences nested beneath the step result. Lowering copies
+that one atomic input identity to those slots when the input completes. It does
+not construct a second iterator from the result recipe, compare the two
+iterators, or search the result for iterator descendants.
 
 Constructing a compound public argument from checked substitutions uses request
 authority. It preserves every unresolved selected child as the exact forward
@@ -3935,9 +3953,11 @@ producer-assigned digest is its complete durable type identity for exact
 equality, specialization lookup, interning, and serialization. Those operations
 read the digest and stop: they do not compare or hash the nominal's checked
 arguments, public/private view, iterator metadata, declared layout order, or
-private backing. Generated-private evidence that has no producer-assigned
-digest remains backing-sensitive, because in that older representation the
-backing itself is still the explicit identity-bearing data.
+private backing. Every generated-private nominal must carry its
+producer-assigned digest. Reaching interning, equality, import, sealing, or
+serialization without that digest is a compiler invariant violation; there is
+no backing-sensitive compatibility operation for an unstamped generated
+nominal.
 
 Transparent aliases are not runtime compounds. Checking records only the
 alias backing route; it does not also record the declared alias arguments as
