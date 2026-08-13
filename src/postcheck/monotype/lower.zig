@@ -34434,7 +34434,10 @@ const BodyContext = struct {
                     DraftTypeCell.fromGraphNode(element_node),
                 ),
         };
-        const produced_element = try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph);
+        const produced_element = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph),
+        );
         for (items, 0..) |item, index| {
             if (index == producer_index) continue;
             lowered[index] = try self.lowerExprAtExactRequest(
@@ -44102,7 +44105,10 @@ const BodyContext = struct {
         ret_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const value = try self.lowerExpr(h.value);
-        const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(value).toGraphNode(self.graph),
+        );
         const hasher = try self.lowerExprAtTypeCell(h.hasher, DraftTypeCell.fromGraphNode(ret_node));
         return try self.deferStructuralDerivationOperandsAtNode(
             ret_node,
@@ -46276,7 +46282,10 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         if (self.exprImpossibilityProof(value) != null) return;
         const selected_node = try selection.selected.toGraphNode(self.graph);
-        const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(value).toGraphNode(self.graph),
+        );
         if (!selection.has_exact_producer) {
             try self.graph.completeProducedSelection(selected_node, value_node);
             selection.has_exact_producer = true;

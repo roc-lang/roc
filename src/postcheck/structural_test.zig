@@ -780,7 +780,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerRecordConstructorAtNode(",
     );
     try expectContains(list, "specializationValueFlowForExpr(item) == .produced");
-    try expectContains(list, "const produced_element = try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph)");
+    try expectContains(list, "const produced_element = try self.builder.completePendingProducedNode(");
+    try expectContains(list, "try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph)");
     try expectContains(list, "DraftTypeCell.fromGraphNode(produced_element)");
     try expectContains(list, "self.graph.newNode(.{ .list = produced_element })");
     try expectNotContains(list, "requireSameExactProducedValue(");
@@ -1844,6 +1845,7 @@ test "Monotype returns share the active specialization result selection" {
     try expectContains(result_selection, "self.lowerBranchValueAtTypeCell(");
     try expectContains(result_selection, ".exact_request");
     try expectContains(result_selection, "self.graph.completeProducedSelection(selected_node, value_node)");
+    try expectContains(result_selection, "self.builder.completePendingProducedNode(");
     try expectNotContains(result_selection, "requireSameExactProducedValue");
     try expectNotContains(lower_source, "const ControlFlowResultValue = struct");
     try expectNotContains(solve_source, "pub fn requireSameExactProducedValue");

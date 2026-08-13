@@ -4003,8 +4003,9 @@ uses it directly.
 A value-producing `if` or `match` owns one explicit exact result selection for
 all of its inhabited branches. Checker-published value flow identifies the
 producer candidates. Monotype lowers those candidates first until one reachable
-branch returns an exact node, redirects the one result selection to that node,
-and lowers every remaining branch at the selection as an exact request. If no
+branch completes and returns an exact node, redirects the one result selection
+to that node, and lowers every remaining branch at the selection as an exact
+request. If no
 producer candidate is reachable, the first requested branch receives the
 declared result request as the component's checked seed. Match patterns first
 project their exact binder cells from the exact scrutinee, so branch-local
@@ -6108,8 +6109,11 @@ that permits derived `is_eq` to lower as structural equality or rewritten the
 expression to an explicit structural equality node. Monotype lowering
 uses checker-published value flow to identify an operand that produces its
 exact runtime node independently. That operand produces first, and the other
-operand is lowered at its exact node. If neither operand is a producer, source
-order chooses the first requested operand and the checked equality relation is
+operand is lowered at its exact node. If the producer reserved a forward result
+cell (for example, a queued procedure call), lowering completes that producer
+before the consumer receives the node. Merely emitting the call expression does
+not make its result exact. If neither operand is a producer, source order
+chooses the first requested operand and the checked equality relation is
 its explicit seed; the second operand consumes the first value's result. It must
 not independently lower the left and right operand types and then attempt to
 reconcile the results. Independent operand lowering is order-sensitive: an
@@ -6120,8 +6124,9 @@ source operand order regardless of lowering order.
 
 Homogeneous value sequences use the same directional rule. For a non-empty
 list literal, checking's value-flow column selects the first item that can
-produce an exact runtime node. If no item is a producer, the first requested
-item consumes the checked element request as the explicit seed. Every other
+produce an exact runtime node. A forward result is completed before it becomes
+the element request. If no item is a producer, the first requested item
+consumes the checked element request as the explicit seed. Every other
 item then consumes the seed's exact produced node. This lowering schedule never
 changes the source order stored in the list expression, and there is no set of
 independently lowered element graphs to compare or merge afterward. An empty
