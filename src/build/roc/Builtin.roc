@@ -6384,7 +6384,7 @@ Builtin :: [].{
 		## A reusable numeric range description. Range syntax constructs one of these
 		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
 		##
-		## `lower` anchors the range's members even when `direction` is [From]. The
+		## `lower` anchors the range's members even when `direction` is `From`. The
 		## `upper_bound` therefore always applies to `upper`, and [Range.step_by]
 		## replaces `step` rather than composing it with the previous step.
 		Range(num) :: {
@@ -6397,7 +6397,7 @@ Builtin :: [].{
 		}.{
 
 			## Construct a range description for a builtin or third-party numeric type.
-			## A [Known] length must be the exact number of values the range will yield.
+			## A `Known` length must be the exact number of values the range will yield.
 			custom : {
 				lower : num,
 				upper : num,
@@ -7361,8 +7361,7 @@ Builtin :: [].{
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
 				} else {
-					Ok(step_u64) = step.to_u64_try()
-					range_len_u64(lower.abs_diff(upper).to_u64(), step_u64, upper_bound)
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
 			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I8)
@@ -8855,8 +8854,7 @@ Builtin :: [].{
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
 				} else {
-					Ok(step_u64) = step.to_u64_try()
-					range_len_u64(lower.abs_diff(upper).to_u64(), step_u64, upper_bound)
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
 			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I16)
@@ -10422,8 +10420,7 @@ Builtin :: [].{
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
 				} else {
-					Ok(step_u64) = step.to_u64_try()
-					range_len_u64(lower.abs_diff(upper).to_u64(), step_u64, upper_bound)
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
 			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I32)
@@ -12069,8 +12066,7 @@ Builtin :: [].{
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
 				} else {
-					Ok(unsigned_step) = step.to_u64_try()
-					range_len_u64(lower.abs_diff(upper), unsigned_step, upper_bound)
+					range_len_u64(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
 				}
 
 			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I64)
@@ -13752,8 +13748,7 @@ Builtin :: [].{
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
 				} else {
-					Ok(unsigned_step) = step.to_u128_try()
-					range_len_u128(lower.abs_diff(upper), unsigned_step, upper_bound)
+					range_len_u128(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
 				}
 
 			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I128)
