@@ -3659,11 +3659,16 @@ bypass producer conversion merely because it does not need evidence lookup.
 
 Selecting a concrete procedure copies only the exact nodes named by the
 checker's direct source-to-target bindings into the target procedure's checked
-identity span. It cannot consult an ambient substitution table when a source
-edge is absent; absence is an invariant violation in checked data. At body
-entry, Monotype consumes that immutable span directly. It does not compare the
-caller's complete function graph with the target's complete checked function,
-and it does not reconstruct substitutions from either graph.
+identity span. Each binding explicitly classifies its source as either an
+`exact_selection` supplied by a runtime projection or a `concrete_checked`
+root that checking proved needs no runtime substitution. Only the former is a
+call-plan slot; Monotype materializes the latter directly from the exact checked
+root named by the binding. It cannot consult an ambient substitution table when
+an `exact_selection` source edge is absent; absence is an invariant violation
+in checked data. At body entry, Monotype consumes that immutable span directly.
+It does not compare the caller's complete function graph with the target's
+complete checked function, and it does not reconstruct substitutions from
+either graph.
 
 The same rule constructs a selected method's callable signature. Monotype
 enters one fresh type-only instantiation with only the target slots named by

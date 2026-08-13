@@ -26971,6 +26971,16 @@ const BodyContext = struct {
         return self.constructorRepresentationNode(try self.instNode(checked_ty));
     }
 
+    fn persistentConcreteCheckedNodeInView(
+        self: *BodyContext,
+        view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!NodeId {
+        const scope = self.enterTypeOnlyInstantiation(view, null);
+        defer scope.leave();
+        return try self.persistentConcreteCheckedNode(checked_ty);
+    }
+
     /// Refine the flat substitutions of an unmaterialized call request. The
     /// immutable checked function is the request's base; no function graph
     /// node is allocated merely to carry this span between operand producers.
@@ -29049,8 +29059,13 @@ const BodyContext = struct {
                     break;
                 }
             }
-            const exact = produced orelse
-                Common.invariant("procedure target source had no explicit exact call edge");
+            const exact = produced orelse switch (relation.source_kind) {
+                .exact_selection => Common.invariant("procedure target source had no explicit exact call edge"),
+                .concrete_checked => try self.persistentConcreteCheckedNodeInView(
+                    source_view,
+                    relation.source,
+                ),
+            };
             const dependent = solve.CheckedBaseKey{
                 .module_bytes = target_view.key.bytes,
                 .checked = relation.dependent,
@@ -36679,16 +36694,25 @@ const BodyContext = struct {
                         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
                         defer selections.deinit(self.allocator);
                         try selections.appendSlice(self.allocator, self.graph.directRequestSelections(request_fn_node));
-                        const active = self.active_checked_selections orelse
-                            Common.invariant("dispatch evidence target was bound without active checked selections");
                         var all_sources_available = true;
                         for (relations) |relation| {
-                            const produced = active.get(.{
+                            const source_key = solve.CheckedBaseKey{
                                 .module_bytes = instantiation.view.key.bytes,
                                 .checked = relation.source,
-                            }) orelse {
-                                all_sources_available = false;
-                                continue;
+                            };
+                            const produced = if (self.active_checked_selections) |active|
+                                active.get(source_key)
+                            else
+                                null;
+                            const exact = produced orelse switch (relation.source_kind) {
+                                .concrete_checked => try self.persistentConcreteCheckedNodeInView(
+                                    instantiation.view,
+                                    relation.source,
+                                ),
+                                .exact_selection => {
+                                    all_sources_available = false;
+                                    continue;
+                                },
                             };
                             const dependent = solve.CheckedBaseKey{
                                 .module_bytes = target.view.key.bytes,
@@ -36696,13 +36720,13 @@ const BodyContext = struct {
                             };
                             for (selections.items) |*selection| {
                                 if (!directRequestBaseEql(selection.base, dependent)) continue;
-                                if (!self.graph.sameClass(selection.produced, produced)) {
+                                if (!self.graph.sameClass(selection.produced, exact)) {
                                     Common.invariant("dispatch evidence target identity received two exact runtime selections");
                                 }
                                 break;
                             } else try selections.append(self.allocator, .{
                                 .base = dependent,
-                                .produced = produced,
+                                .produced = exact,
                             });
                         }
                         try self.graph.recordDirectRequestSelections(request_fn_node, selections.items);
@@ -38035,7 +38059,6 @@ const BodyContext = struct {
         {
             return;
         }
-        const selections = self.active_checked_selections orelse return;
         const relations = instantiation.view.templates.specializationTargetIdentityRelations(
             instantiation.callable_ty,
             .{ .bytes = lookup.view.key.bytes },
@@ -38046,8 +38069,22 @@ const BodyContext = struct {
                 .module_bytes = instantiation.view.key.bytes,
                 .checked = relation.source,
             };
-            const produced = selections.get(source_key);
-            const exact = produced orelse continue;
+            const produced = if (self.active_checked_selections) |selections|
+                selections.get(source_key)
+            else
+                null;
+            const exact = produced orelse switch (relation.source_kind) {
+                .concrete_checked => try self.persistentConcreteCheckedNodeInView(
+                    instantiation.view,
+                    relation.source,
+                ),
+                .exact_selection => continue,
+            };
+            const selections = self.active_checked_selections orelse selections: {
+                const created = try self.newExactCheckedSelections();
+                self.active_checked_selections = created;
+                break :selections created;
+            };
             const dependent = solve.CheckedBaseKey{
                 .module_bytes = lookup.view.key.bytes,
                 .checked = relation.dependent,

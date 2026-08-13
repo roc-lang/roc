@@ -16397,6 +16397,8 @@ pub const SpecializationIdentityRelation = extern struct {
 pub const SpecializationTargetIdentityRelation = extern struct {
     source: CheckedTypeId,
     dependent: CheckedTypeId,
+    source_kind: SpecializationCallConsumerSource,
+    reserved: [3]u8 = .{ 0, 0, 0 },
 };
 
 /// Checker-authored correspondence for one concrete dispatch-target
@@ -19862,7 +19864,7 @@ fn publishSpecializationSlotMaterializations(
     var pairs = std.ArrayList(SpecializationMaterializationPair).empty;
     defer pairs.deinit(allocator);
 
-    for (shapes) |shape| {
+    for (shapes, 0..) |shape, shape_index| {
         pairs.clearRetainingCapacity();
         const shape_projections = projections[shape.projections.start .. shape.projections.start + shape.projections.len];
         for (shape_projections, 0..) |candidate, raw_projection| {
@@ -19905,7 +19907,16 @@ fn publishSpecializationSlotMaterializations(
                 previous_ancestor = ancestor;
             }
             if (previous_ancestor == null) {
-                checkedArtifactInvariant("specialization slot had no materialization path", .{});
+                checkedArtifactInvariant(
+                    "specialization shape {d} slot {d} ({s}, exact={}, {d} occurrences) had no materialization path",
+                    .{
+                        shape_index,
+                        @intFromEnum(slot.checked),
+                        @tagName(slot.kind),
+                        slot.exact_identity,
+                        slot.occurrences.len,
+                    },
+                );
             }
             slot.materialization_nodes = .{
                 .start = node_start,
@@ -20816,6 +20827,7 @@ fn appendPublishedTargetSourceRoots(
     for (entries) |entry| {
         const relations = published.relations[entry.relations.start .. entry.relations.start + entry.relations.len];
         for (relations) |relation| {
+            if (relation.source_kind == .concrete_checked) continue;
             for (out.items) |existing| {
                 if (existing == relation.source) break;
             } else try out.append(allocator, relation.source);
@@ -20961,6 +20973,7 @@ fn appendSpecializationTargetRelationBuild(
     direct_imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     relation_artifacts: []const ImportedModuleView,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     builds: *std.ArrayList(SpecializationTargetRelationBuild),
     source_callable: CheckedTypeId,
     target_artifact: CheckedModuleArtifactKey,
@@ -20995,6 +21008,7 @@ fn appendSpecializationTargetRelationBuild(
         for (local_relations.items) |relation| try build.relations.append(allocator, .{
             .source = relation.source,
             .dependent = relation.dependent,
+            .source_kind = if (try concrete_sources.isConcrete(relation.source)) .concrete_checked else .exact_selection,
         });
     } else {
         const imported = importedTargetView(
@@ -21029,6 +21043,7 @@ fn appendSpecializationTargetRelationBuild(
             try build.relations.append(allocator, .{
                 .source = relation.source,
                 .dependent = target_dependent,
+                .source_kind = if (try concrete_sources.isConcrete(relation.source)) .concrete_checked else .exact_selection,
             });
         }
     }
@@ -21045,6 +21060,7 @@ fn appendProcedureUseTargetRelationBuild(
     relation_artifacts: []const ImportedModuleView,
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     templates: *const CheckedProcedureTemplateTable,
+    concrete_sources: *SpecializationConcreteSourceIndex,
     builds: *std.ArrayList(SpecializationTargetRelationBuild),
     source_callable: CheckedTypeId,
     procedure: ProcedureUseTemplate,
@@ -21076,6 +21092,7 @@ fn appendProcedureUseTargetRelationBuild(
         direct_imports,
         available_artifacts,
         relation_artifacts,
+        concrete_sources,
         builds,
         source_callable,
         target_artifact,
@@ -21102,8 +21119,10 @@ fn specializationTargetRelationBuildLessThan(
 /// identity correspondence. Cross-module target types are projected only in
 /// this checker-owned publication pass so canonical labels can be compared in
 /// one store; every dependent endpoint is translated back to its owning
-/// artifact before serialization. Monotype consumes the resulting flat edges
-/// and never compares the two callable graphs.
+/// artifact before serialization. Each edge also says whether its source comes
+/// from a runtime selection or is a checker-proven concrete checked root.
+/// Monotype consumes the resulting flat edges and never compares the two
+/// callable graphs.
 fn publishSpecializationTargetRelations(
     allocator: Allocator,
     names: *canonical.CanonicalNameStore,
@@ -21118,6 +21137,8 @@ fn publishSpecializationTargetRelations(
     local_procedure_bindings: *const TopLevelProcedureBindingTable,
     templates: *const CheckedProcedureTemplateTable,
 ) Allocator.Error!PublishedSpecializationTargetRelations {
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, checked_types);
+    defer concrete_sources.deinit();
     var builds = std.ArrayList(SpecializationTargetRelationBuild).empty;
     defer {
         for (builds.items) |*build| build.deinit(allocator);
@@ -21139,6 +21160,7 @@ fn publishSpecializationTargetRelations(
             direct_imports,
             available_artifacts,
             relation_artifacts,
+            &concrete_sources,
             &builds,
             source_callable,
             target_artifact,
@@ -21160,6 +21182,7 @@ fn publishSpecializationTargetRelations(
             relation_artifacts,
             local_procedure_bindings,
             templates,
+            &concrete_sources,
             &builds,
             source_callable,
             procedure,
@@ -21184,6 +21207,7 @@ fn publishSpecializationTargetRelations(
             relation_artifacts,
             local_procedure_bindings,
             templates,
+            &concrete_sources,
             &builds,
             source_callable,
             procedure,
@@ -38160,6 +38184,42 @@ test "checked module keeps current compile-time ownership tables" {
 
 fn testIndexId(comptime Id: type, index: usize) Id {
     return @enumFromInt(index);
+}
+
+test "target source roots exclude explicit concrete checked sources" {
+    const concrete = testIndexId(CheckedTypeId, 0);
+    const runtime = testIndexId(CheckedTypeId, 1);
+    const dependent = testIndexId(CheckedTypeId, 2);
+    const relations = [_]SpecializationTargetIdentityRelation{
+        .{ .source = concrete, .dependent = dependent, .source_kind = .concrete_checked },
+        .{ .source = runtime, .dependent = dependent, .source_kind = .exact_selection },
+    };
+    const entries = [_]SpecializationTargetRelationEntry{.{
+        .target_artifact = .{},
+        .target_callable = dependent,
+        .relations = .{ .start = 0, .len = relations.len },
+    }};
+    const by_type = [_]artifact_serialize.Span{
+        .{ .start = 0, .len = entries.len },
+        .{},
+        .{},
+    };
+    const published = PublishedSpecializationTargetRelations{
+        .by_type = &by_type,
+        .entries = &entries,
+        .relations = &relations,
+    };
+    var roots = std.ArrayList(CheckedTypeId).empty;
+    defer roots.deinit(std.testing.allocator);
+
+    try appendPublishedTargetSourceRoots(
+        std.testing.allocator,
+        &published,
+        concrete,
+        &roots,
+    );
+
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{runtime}, roots.items);
 }
 
 test "record specialization schedule publishes explicit source-order component seeds" {
