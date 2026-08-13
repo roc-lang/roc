@@ -593,8 +593,10 @@ test "Monotype dispatch result modes retain graph-backed result types" {
         "fn typeCellHasBuiltinOwner(",
     );
     try expectContains(result_mode, "self.exprTypeCell(expr)");
+    try expectContains(result_mode, "self.addExprWithTypeCell(result_cell");
     try expectNotContains(result_mode, "Type.TypeId");
     try expectNotContains(result_mode, "activeTypeFrom");
+    try expectNotContains(result_mode, "primitiveType(.bool)");
 }
 
 test "Monotype const type lookup remains graph-native" {

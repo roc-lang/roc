@@ -34350,14 +34350,14 @@ const BodyContext = struct {
             .map => expr,
             .map_effectful => expr,
             .equality => |eq| if (eq.negated) blk: {
-                if (!self.typeCellHasBuiltinOwner(self.exprTypeCell(expr), .bool)) {
+                const result_cell = self.exprTypeCell(expr);
+                if (!self.typeCellHasBuiltinOwner(result_cell, .bool)) {
                     Common.invariant("checked equality dispatch returned a non-Bool value");
                 }
-                break :blk try self.lowLevelExpr(
-                    .bool_not,
-                    &.{expr},
-                    try self.builder.primitiveType(.bool),
-                );
+                break :blk try self.addExprWithTypeCell(result_cell, .{ .low_level = .{
+                    .op = .bool_not,
+                    .args = try self.addExprSpan(&.{expr}),
+                } });
             } else expr,
             // A resolved `to_hash` dispatch returns its Hasher result directly.
             .hash => expr,
