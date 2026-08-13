@@ -36,6 +36,14 @@ pub const ProducedTypeFlow = union(enum) {
     }
 };
 
+test "only primitives without a representation-producing operand consume the result request" {
+    const testing = @import("std").testing;
+
+    try testing.expect(LowLevel.list_with_capacity.consumesResultTypeRequest());
+    try testing.expect(!LowLevel.list_reserve.consumesResultTypeRequest());
+    try testing.expect(!LowLevel.str_with_capacity.consumesResultTypeRequest());
+}
+
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
     // String operations
@@ -648,6 +656,18 @@ pub const LowLevel = enum(u16) {
             break :blk result;
         };
         return flows[@intFromEnum(self)];
+    }
+
+    /// Whether the operation's result representation is supplied by its
+    /// explicit destination rather than by any runtime operand. For example,
+    /// `list_with_capacity` allocates an empty list, so no argument value can
+    /// determine the list's element representation. Checking publishes this
+    /// semantic direction and post-check lowering consumes it directly.
+    pub fn consumesResultTypeRequest(self: LowLevel) bool {
+        return switch (self) {
+            .list_with_capacity => true,
+            else => false,
+        };
     }
 
     /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one

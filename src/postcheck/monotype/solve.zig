@@ -456,6 +456,11 @@ pub const InstGraph = struct {
     /// the result edge; completion canonicalizes the one finished shape once.
     function_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     record_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Produced equivalent of an immutable checked structural recipe. A
+    /// concrete recipe is converted bottom-up only when an exact producer
+    /// actually stores it as a child; subsequent producers reuse this dense
+    /// result directly.
+    checked_base_produced_equivalents: collections.DenseMap(NodeId, NodeId),
     /// Fast producer lookup by the already-completed dense item node. Buckets
     /// distinguish declarations without re-hashing the item type graph.
     generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
@@ -515,6 +520,7 @@ pub const InstGraph = struct {
             .tuple_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .function_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .record_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .checked_base_produced_equivalents = collections.DenseMap(NodeId, NodeId).init(allocator),
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .generated_nominal_nodes = .empty,
             .request_checked_sources = .empty,
@@ -565,6 +571,7 @@ pub const InstGraph = struct {
         var record_shape_buckets = self.record_nodes_by_shape_hash.valueIterator();
         while (record_shape_buckets.next()) |bucket| bucket.deinit(allocator);
         self.record_nodes_by_shape_hash.deinit();
+        self.checked_base_produced_equivalents.deinit();
         self.generated_nominal_nodes.deinit(allocator);
         self.direct_request_selections.deinit(allocator);
         self.direct_request_selection_spans.deinit(allocator);
@@ -1856,9 +1863,77 @@ pub const InstGraph = struct {
         try bucket.value_ptr.append(self.allocator, node);
     }
 
+    /// Convert one immutable concrete checked recipe into the produced
+    /// interner domain. This follows the recipe once, at the producer that
+    /// actually needs it, and memoizes every structural node by dense ID.
+    /// Nominals and primitives are atomic exact identities; an unresolved
+    /// checked recipe is not concrete and therefore cannot cross this edge.
+    fn producedEquivalentOfCheckedBase(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        if (!self.checked_base_nodes.items[@intFromEnum(node)]) return node;
+        if (self.checked_base_produced_equivalents.get(node)) |existing| return self.find(existing);
+
+        const produced = switch (self.nodes.items[@intFromEnum(node)]) {
+            .redirect => unreachable,
+            .unresolved => Common.invariant("an unresolved checked recipe reached an exact producer child"),
+            .primitive, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
+            .list => |element| try self.newProducedList(
+                try self.producedEquivalentOfCheckedBase(element),
+            ),
+            .box => |element| try self.newProducedBox(
+                try self.producedEquivalentOfCheckedBase(element),
+            ),
+            .tuple => |items| blk: {
+                const produced_items = try self.arena().alloc(NodeId, items.len);
+                for (items, produced_items) |item, *produced_item| {
+                    produced_item.* = try self.producedEquivalentOfCheckedBase(item);
+                }
+                break :blk try self.newProducedTuple(produced_items);
+            },
+            .func => |function| blk: {
+                const produced_args = try self.arena().alloc(NodeId, function.args.len);
+                for (function.args, produced_args) |arg, *produced_arg| {
+                    produced_arg.* = try self.producedEquivalentOfCheckedBase(arg);
+                }
+                break :blk try self.newProducedFunction(
+                    produced_args,
+                    try self.producedEquivalentOfCheckedBase(function.ret),
+                );
+            },
+            .record => |record| blk: {
+                const row = try self.flattenRecordRow(node);
+                const produced_fields = try self.arena().dupe(InstField, row.fields);
+                for (produced_fields) |*field| {
+                    field.ty = try self.producedEquivalentOfCheckedBase(field.ty);
+                    if (field.value_ty) |value_ty| {
+                        field.value_ty = try self.producedEquivalentOfCheckedBase(value_ty);
+                    }
+                }
+                _ = record;
+                break :blk try self.newProducedRecord(produced_fields, row.ext);
+            },
+            .tag_union => |tag_union| blk: {
+                const row = try self.flattenTagRow(node);
+                const produced_tags = try self.arena().dupe(InstTag, row.tags);
+                for (produced_tags) |*tag| {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *produced_payload| {
+                        produced_payload.* = try self.producedEquivalentOfCheckedBase(payload);
+                    }
+                    tag.payloads = payloads;
+                }
+                _ = tag_union;
+                break :blk try self.newProducedTagUnion(produced_tags, row.ext);
+            },
+        };
+        try self.checked_base_produced_equivalents.put(node, produced);
+        return self.find(produced);
+    }
+
     /// Return the canonical identity node for one already-built immediate
-    /// child. Row extensions are normalized once here, when a parent records
-    /// that child, rather than being rediscovered by later call consumers.
+    /// child. Row extensions and concrete checked recipes are normalized once
+    /// here, when a producer records that child, rather than being
+    /// rediscovered by later call consumers.
     fn canonicalImmediateChild(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         var node = self.find(raw_node);
         var remaining = self.nodes.items.len;
@@ -1869,6 +1944,11 @@ pub const InstGraph = struct {
             remaining -= 1;
             node = self.find((self.nodes.items[@intFromEnum(node)].named.backing orelse
                 Common.invariant("transparent alias child had no backing")).node);
+        }
+        if (self.checked_base_construction_depth == 0 and
+            self.checked_base_nodes.items[@intFromEnum(node)])
+        {
+            return try self.producedEquivalentOfCheckedBase(node);
         }
         return switch (self.nodes.items[@intFromEnum(node)]) {
             .tag_union => blk: {
@@ -6003,6 +6083,42 @@ test "produced records erase checked row topology at their construction boundary
     try std.testing.expectEqual(a_node, graph.rootNode(produced.fields[0].ty));
     try std.testing.expectEqual(b_name, produced.fields[1].name);
     try std.testing.expectEqual(b_node, graph.rootNode(produced.fields[1].ty));
+}
+
+test "exact producers convert a concrete checked recipe bottom-up once" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    graph.beginCheckedBaseConstruction();
+    const item = try graph.newNode(.{ .primitive = .u8 });
+    graph.markCheckedBase(item);
+    const checked_list = try graph.newNode(.{ .list = item });
+    graph.markCheckedBase(checked_list);
+    const checked_tuple_items = try graph.arena().dupe(NodeId, &.{checked_list});
+    const checked_tuple = try graph.newNode(.{ .tuple = checked_tuple_items });
+    graph.markCheckedBase(checked_tuple);
+    graph.endCheckedBaseConstruction();
+
+    const produced_box = try graph.newProducedBox(checked_tuple);
+    const produced_tuple = graph.content(produced_box).box;
+    const produced_list = graph.content(produced_tuple).tuple[0];
+
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_box));
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_tuple));
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_list));
+    try std.testing.expectEqual(item, graph.content(produced_list).list);
+
+    const node_count = graph.nodes.items.len;
+    try std.testing.expectEqual(produced_box, try graph.newProducedBox(checked_tuple));
+    try std.testing.expectEqual(node_count, graph.nodes.items.len);
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {

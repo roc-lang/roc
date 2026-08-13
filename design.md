@@ -3487,6 +3487,14 @@ Neither stage may maintain a second handwritten operation classification,
 stamp the low-level result with the checker-public type, or derive
 callable identity from operation-specific syntax.
 
+A primitive with no runtime operand that determines a polymorphic result
+representation is explicitly request-directed in the shared low-level
+vocabulary. For example, `list_with_capacity` receives only a capacity value,
+so checking records that it consumes its result request to choose the list item
+representation. Monotype consumes that bit directly. It does not infer the
+direction from primitive syntax, default an otherwise-open item cell, or later
+reconcile the empty allocation with a produced element type.
+
 Every checked procedure use that names a compiler-provided low-level operation
 records that exact operation in `CheckedModule` data. A direct call to a
 representation-sensitive low-level procedure therefore lowers through
@@ -3566,10 +3574,18 @@ interner domains. A lookup for an exact produced list, box, tuple, function, tag
 row, record, or named type can return only a node previously created by an exact
 producer; an immutable checked-base recipe can never satisfy that lookup. Every
 produced constructor canonicalizes its immediate child nodes before forming its
-key and stores those exact children in the parent. It does not recursively
-canonicalize descendants, because each child producer already returned its
-canonical exact node. This prevents checked recipes from escaping as runtime
-values without adding a whole-graph canonicalization pass.
+key and stores those exact children in the parent. An ordinary exact child is
+already the canonical node returned by its producer and is never traversed.
+The one explicit exception is an immutable concrete `checked_base` construction
+recipe supplied as a request: when a producer first stores that recipe as an
+exact child, Monotype converts the recipe bottom-up into the produced interner
+domain. That conversion memoizes every structural recipe node in a dense column,
+so the recipe is traversed at most once in the body graph and every later
+producer reuses the exact result directly. An open checked recipe may not cross
+this boundary. A generated nominal encountered during conversion remains one
+atomic exact node; conversion never enters its backing or asks whether an
+enclosing recipe contains one. This prevents checked recipes from escaping as
+runtime values without adding a repeated whole-graph canonicalization pass.
 
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
@@ -3593,11 +3609,13 @@ exact producer and may fill its recorded child edges. A requested operand does
 not remain a consumer after it has returned a value. An enclosing exact result
 destination is also only a request: it may seed result-context edges before the
 callee runs, but it is not the call's produced result. Materializing a call
-request constructs the result recipe needed to lower the callee without
-publishing that recipe as output. The completed body later publishes the one
-produced result edge. A type-only dispatch has no value operand, so its checked
-plan records the one direct self-edge from the enclosing procedure's
-substitution span to its dispatcher slot.
+request constructs the result recipe needed to lower the callee under
+`checked_base` authority, without consuming occurrence defaults and without
+publishing that recipe as output. Only construction of an actual
+`produced_occurrence` may consume those defaults. The completed body later
+publishes the one produced result edge. A type-only dispatch has no value
+operand, so its checked plan records the one direct self-edge from the enclosing
+procedure's substitution span to its dispatcher slot.
 
 Applying a completed argument, result, or dispatcher edge is directed
 request-to-produced substitution, not type checking and not symmetric type
@@ -3684,17 +3702,19 @@ bypass producer conversion merely because it does not need evidence lookup.
 
 Selecting a concrete procedure copies only the exact nodes named by the
 checker's direct source-to-target bindings into the target procedure's checked
-identity span. Each binding explicitly classifies its source as either an
-`exact_selection` supplied by a runtime projection or a `concrete_checked`
-root that checking proved needs no runtime substitution. Only the former is a
-call-plan slot; Monotype materializes the latter directly from the exact checked
-root named by the binding. It cannot consult an ambient substitution table when
-an `exact_selection` source edge is absent; absence is an invariant violation
-in checked data. Each relation also declares whether its source is a callable
-input or output. Inputs must exist when the target is selected. Outputs remain
-absent until the selected body produces them, unless an enclosing exact
-destination has supplied a request seed. At body entry, Monotype consumes that
-immutable span directly.
+identity span. Each binding explicitly classifies its source as one of three
+operations: `exact_selection` reads a completed runtime projection,
+`concrete_checked` materializes an immutable checked constant, and
+`checked_substitution` constructs one ordinary output request from the source
+callable's already-selected children. A checked substitution has request
+authority: it can guide a request-directed target body, but it cannot publish
+the target's output. Generated nominals are never checked substitutions; their
+exact nodes come only from their content-addressed producer operations. Only an
+input `exact_selection` is a call-plan source that must exist while selecting
+the target. An absent required exact selection is an invariant violation in
+checked data; Monotype cannot consult an ambient substitution table or try a
+different source. At body entry, Monotype consumes that immutable span
+directly, and the completed target body separately publishes its actual output.
 It does not compare the caller's complete function graph with the target's
 complete checked function, and it does not reconstruct substitutions from
 either graph.
@@ -3755,6 +3775,14 @@ route that first writes a checker-public destination and later reconciles it
 with what the expression produced. A contextual consumer lowers the expression
 once, reads that returned `NodeId`, and only then performs the explicit storage
 or control-flow selection required by the consumer.
+
+Reachability follows the same authority rule. An exact producer never inspects
+its unfinished checked result recipe to decide that the value is uninhabited;
+that recipe is construction input, not evidence about the value the producer
+will return. Transparent wrappers such as sequential blocks lower their final
+expression and retain that expression's exact produced cell. Only an explicit
+exact destination that is already proven uninhabited may lower the incoming
+value as an uninhabited scrutinee and omit the unreachable continuation.
 
 Lowering may give a genuinely requested value, such as a lambda or an empty
 container, the exact destination named by the checker's directional schedule

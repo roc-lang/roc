@@ -126,7 +126,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "const request_fn_node = try self.materializeCallSelectionSpan(");
     try expectNotContains(lower_call, "functionRequestNode(");
     try expectContains(lower_call, "const callee = try self.lowerExprAtCallConsumerRequest(");
-    try expectContains(lower_call, "const callee_node = try self.builder.completePendingProducedNode(");
+    try expectContains(lower_call, "const callee_node = try self.builder.completePendingProducedRepresentationNode(");
     try expectContains(lower_call, "const callee_fn = try self.graph.functionNodes(callee_node);");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
@@ -147,7 +147,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectNotContains(lower_expr_type_node, "callResultTypeNode");
     try expectNotContains(lower_expr_type_node, "dispatchResultTypeNode");
     try expectNotContains(lower_expr_type_node, "fieldAccessTypeNode");
-    try expectContains(lower_expr_at_cell, ".lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node)");
+    try expectContains(lower_expr_at_cell, ".lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(");
     try expectContains(lookup_type_node, "return try self.lowerTypeNode(checked_ty);");
     try std.testing.expect(std.mem.find(u8, lookup_type_node, "lookupExprMonoType") == null);
     try expectContains(lower_expr_inner, ".lookup_local => |lookup| return try self.lowerLookupExprAtNode(");
@@ -466,7 +466,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const list_iterator_producer = sourceSliceBetween(
         lower_source,
-        ".list_iter => {",
+        ".list_iter, .list_iter_rev => {",
         ".str_iter_utf8 => {",
     );
     try expectContains(list_iterator_producer, "generatedIteratorNode(");
@@ -896,31 +896,41 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
-test "Monotype iterator result completion stays out of relation replay and retains public request lookups" {
+test "Monotype procedure results come directly from producer completion" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const dispatch_result = sourceSliceBetween(
+    const resolved_dispatch = sourceSliceBetween(
         lower_source,
-        "fn callableDispatchResultTypeNodeInPhase(",
-        "fn materializeEvidence(",
+        "fn lowerResolvedDispatchAtNode(",
+        "fn lowerResolvedDirectDispatchAtNode(",
     );
-    try expectContains(dispatch_result, "if (phase == .expression_lowering)");
-    try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
+    const direct_dispatch = sourceSliceBetween(
+        lower_source,
+        "fn lowerResolvedDirectDispatchAtNode(",
+        "fn lowerStructuralEqualityAtNode(",
+    );
+    try expectContains(resolved_dispatch, "completeDraftFnSlotTypeNode(callee, prepared_callable)");
+    try expectContains(direct_dispatch, "completeDraftFnSlotTypeNode(callee, prepared_callable)");
+    try expectNotContains(lower_source, "lowerAndCompleteIteratorMethodResultAtNode");
+    try expectNotContains(lower_source, "containsIteratorInterface");
+}
 
-    const completion = sourceSliceBetween(
+test "Monotype producers never infer uninhabited results from checked recipes" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const branch = sourceSliceBetween(
         lower_source,
-        "fn completeDeferredIteratorResult(",
-        "fn constUseMonoType(",
+        "fn lowerBranchValueAtTypeCell(",
+        "fn sameProducedNamedIdentity(",
     );
-    try expectContains(completion, "try updateTemplateSpecInterfaceLookups(");
-    try expectContains(completion, "completed_source.evidence_digest.bytes");
-    try expectNotContains(completion, "unregisterTemplateSpec");
+    const block = sourceSliceBetween(
+        lower_source,
+        "fn lowerBlockAtTypeCellWithRelation(",
+        "const StatementTermination = union(enum)",
+    );
 
-    const template_spec = sourceSliceBetween(
-        lower_source,
-        "const DraftTemplateSpec = struct",
-        "const DraftConstUseProvenance",
-    );
-    try expectContains(template_spec, "lookup_request_fn_node: ?NodeId");
+    try expectContains(branch, ".exact_request => if (try self.nodeIsProvenUninhabited(");
+    try expectContains(branch, ".checked_mapping, .exact_producer => try self.lowerExpr(body)");
+    try expectContains(block, ".exact_request => if (try self.nodeIsProvenUninhabited(");
+    try expectContains(block, ".checked_mapping, .exact_producer => try self.lowerExpr(block.final_expr)");
 }
 
 test "Monotype direct uninhabited calls lower argument through graph cell" {
@@ -1096,7 +1106,7 @@ test "Monotype structural equality lowers through one directional exact operand 
     try expectContains(equality_source, "specializationValueFlowForExpr(eq.lhs)");
     try expectContains(equality_source, "try self.lowerExpr(first_checked)");
     try expectContains(equality_source, "DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(first_checked))");
-    try expectContains(equality_source, "const produced_request = try self.builder.completePendingProducedNode(");
+    try expectContains(equality_source, "const produced_request = try self.builder.completePendingProducedRepresentationNode(");
     try expectContains(equality_source, "try self.exprTypeCell(first).toGraphNode(self.graph)");
     try expectContains(equality_source, "DraftTypeCell.fromGraphNode(produced_request)");
     try expectContains(equality_source, "deferStructuralDerivationOperandsAtNode(");
@@ -1438,7 +1448,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         "fn lowerDispatchExprAtType(",
         "fn lowerClosedDirectLowLevelDispatch(",
     );
-    try expectContains(dispatch, ".procedure => direct_graph_call = true");
+    try expectContains(dispatch, "const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan)");
     try expectNotContains(lower_source, "fn lowerClosedDirectProcedureDispatch(");
     try expectNotContains(lower_source, "closed_direct_specializations");
 
@@ -1966,7 +1976,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const iterator = sourceSliceBetween(
         lower_source,
         "fn lowerIteratorDispatch(",
-        "fn lowerGeneratedIteratorDispatch(",
+        "fn iteratorMethodLookup(",
     );
 
     try expectContains(full_request, "directCallSelectionsFromPublishedPlan(");

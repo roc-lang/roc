@@ -16397,14 +16397,26 @@ pub const SpecializationIdentityRelation = extern struct {
 pub const SpecializationTargetIdentityRelation = extern struct {
     source: CheckedTypeId,
     dependent: CheckedTypeId,
-    source_kind: SpecializationCallConsumerSource,
+    source_kind: SpecializationTargetSource,
     source_edge: SpecializationTargetSourceEdge,
     reserved: [2]u8 = .{ 0, 0 },
 };
 
+/// The explicit operation that makes a target-relation source available.
+/// Runtime selections are supplied by completed values, concrete roots are
+/// immutable checked constants, and a checked substitution constructs one
+/// ordinary output request from the source callable's already-selected
+/// identity children. Generated nominals are never checked substitutions.
+pub const SpecializationTargetSource = enum(u8) {
+    exact_selection,
+    concrete_checked,
+    checked_substitution,
+};
+
 /// The callable edge that owns a cross-target identity. Inputs must already
-/// be present when selecting the target; output-only identities are produced
-/// by the selected body unless an enclosing exact destination supplies them.
+/// be present when selecting the target. An output is either supplied by its
+/// completed producer or constructed as the explicit ordinary request named
+/// by `SpecializationTargetSource`.
 pub const SpecializationTargetSourceEdge = enum(u8) {
     input,
     output,
@@ -20140,9 +20152,10 @@ fn collectDirectionalCallIdentityRelations(
 }
 
 /// Checked semantic rule for value direction at a call boundary. Numerals,
-/// empty lists, and tag constructors receive their exact runtime type from the
-/// call request: their syntax does not produce the numeral representation,
-/// element type, or unconstructed tag-row variants/remainder, respectively.
+/// empty lists, request-directed primitives, and tag constructors receive
+/// their exact runtime type from the call request: their syntax does not
+/// produce the numeral representation, element type, or unconstructed tag-row
+/// variants/remainder, respectively.
 /// Callable literals likewise consume the complete function request so their
 /// nested ABI is never specialized from an isolated checked default.
 /// A lookup of a let-bound procedure alias consumes that request too: there is
@@ -20157,6 +20170,10 @@ fn specializationOperandFlowForExpr(
     return switch (expr.data) {
         .lambda, .closure => .requested_callable,
         .numeral, .empty_list, .tag, .zero_argument_tag => .requested_value,
+        .run_low_level => |low_level| if (low_level.op.consumesResultTypeRequest())
+            .requested_value
+        else
+            .produced,
         .nominal => |nominal| specializationOperandFlowForExpr(
             checked_bodies,
             resolved_value_refs,
@@ -20728,6 +20745,10 @@ fn publishIteratorCallBindings(
     loop_state_ty: CheckedTypeId,
     operand_flow_span: artifact_serialize.Span,
     operand_flows: []const SpecializationOperandFlow,
+    shape: SpecializationCallShape,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    projections: []const SpecializationProjection,
     consumer_bindings: *std.ArrayList(SpecializationCallConsumerBinding),
     consumer_binding_spans: *std.ArrayList(artifact_serialize.Span),
     plan: *SpecializationCallPlan,
@@ -20751,6 +20772,16 @@ fn publishIteratorCallBindings(
         consumer_bindings,
     );
     const context_start: u32 = @intCast(consumer_bindings.items.len);
+    try appendResultOnlyCallContextBindings(
+        allocator,
+        concrete_sources,
+        shape,
+        slots,
+        occurrences,
+        projections,
+        consumer_bindings,
+        context_start,
+    );
     plan.context_bindings = .{
         .start = context_start,
         .len = @intCast(consumer_bindings.items.len - context_start),
@@ -20814,6 +20845,60 @@ fn appendCallConsumerSelfBindings(
             .consumer = root,
             .source_kind = .exact_selection,
         });
+    }
+}
+
+/// Publish the enclosing-specialization input for a polymorphic call slot
+/// that occurs only in the callable's result. No argument or dispatcher can
+/// produce such a slot before the callee is specialized, so a produced call
+/// consumes the exact node already selected by its enclosing procedure. This
+/// is an explicit checker-authored edge; Monotype never searches ambient
+/// checked IDs for an otherwise missing source.
+fn appendResultOnlyCallContextBindings(
+    allocator: Allocator,
+    concrete_sources: *SpecializationConcreteSourceIndex,
+    shape: SpecializationCallShape,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    projections: []const SpecializationProjection,
+    pool: *std.ArrayList(SpecializationCallConsumerBinding),
+    start: u32,
+) Allocator.Error!void {
+    const shape_slots = slots[shape.slots.start..][0..shape.slots.len];
+    const shape_projections = projections[shape.projections.start..][0..shape.projections.len];
+    for (shape_slots) |slot| {
+        if (try concrete_sources.isConcrete(slot.checked)) continue;
+        var has_input_producer = false;
+        var has_result_producer = false;
+        for (occurrences[slot.occurrences.start..][0..slot.occurrences.len]) |occurrence| {
+            if (occurrence.production != .producer) continue;
+            if (occurrence.root_projection >= shape_projections.len) {
+                checkedArtifactInvariant("call occurrence named a root outside its shape", .{});
+            }
+            switch (shape_projections[occurrence.root_projection].step) {
+                .argument, .dispatcher => has_input_producer = true,
+                .result => has_result_producer = true,
+                .alias_argument,
+                .alias_backing,
+                .nominal_argument,
+                .function_argument,
+                .function_result,
+                .tuple_item,
+                .record_field,
+                .record_remainder,
+                .tag_payload,
+                .tag_remainder,
+                => checkedArtifactInvariant("call occurrence root was not a root edge", .{}),
+            }
+        }
+        if (!has_input_producer and has_result_producer) {
+            try appendCallConsumerSelfBindings(
+                allocator,
+                &.{slot.checked},
+                pool,
+                start,
+            );
+        }
     }
 }
 
@@ -20920,7 +21005,7 @@ fn appendPublishedTargetSourceRoots(
     for (entries) |entry| {
         const relations = published.relations[entry.relations.start .. entry.relations.start + entry.relations.len];
         for (relations) |relation| {
-            if (relation.source_kind == .concrete_checked or relation.source_edge == .output) continue;
+            if (relation.source_kind != .exact_selection or relation.source_edge == .output) continue;
             for (out.items) |existing| {
                 if (existing == relation.source) break;
             } else try out.append(allocator, relation.source);
@@ -21071,12 +21156,31 @@ fn appendSpecializationTargetRelation(
         if (source_edge == .input) existing.source_edge = .input;
         return;
     }
+    const source_payload = concrete_sources.checked_types.store.payload(source);
     try build.relations.append(allocator, .{
         .source = source,
         .dependent = dependent,
-        .source_kind = if (try concrete_sources.isConcrete(source)) .concrete_checked else .exact_selection,
+        .source_kind = specializationTargetSourceKind(
+            try concrete_sources.isConcrete(source),
+            source_edge,
+            checkedTypePayloadIsIdentity(source_payload),
+            checkedTypeIsGeneratedNominal(source_payload),
+        ),
         .source_edge = source_edge,
     });
+}
+
+fn specializationTargetSourceKind(
+    is_concrete: bool,
+    source_edge: SpecializationTargetSourceEdge,
+    is_identity: bool,
+    is_generated_nominal: bool,
+) SpecializationTargetSource {
+    if (is_concrete) return .concrete_checked;
+    if (source_edge == .output and !is_identity and !is_generated_nominal) {
+        return .checked_substitution;
+    }
+    return .exact_selection;
 }
 
 fn appendSpecializationTargetRelationBuild(
@@ -21616,6 +21720,16 @@ fn publishSpecializationCallPlans(
             &consumer_bindings,
         );
         const context_binding_start: u32 = @intCast(consumer_bindings.items.len);
+        try appendResultOnlyCallContextBindings(
+            allocator,
+            &concrete_sources,
+            shapes.items[@intFromEnum(by_expr[raw_expr].shape)],
+            slots.items,
+            occurrences.items,
+            projections.items,
+            &consumer_bindings,
+            context_binding_start,
+        );
         const callee_ty = checked_bodies.expr(expr.data.call.func).ty;
         const callee_flow = value_flows_by_expr[@intFromEnum(expr.data.call.func)];
         if (callee_flow == .produced) {
@@ -21909,6 +22023,16 @@ fn publishSpecializationCallPlans(
             &consumer_bindings,
         );
         const dispatch_context_start: u32 = @intCast(consumer_bindings.items.len);
+        try appendResultOnlyCallContextBindings(
+            allocator,
+            &concrete_sources,
+            shapes.items[@intFromEnum(by_expr[raw_plan_expr].shape)],
+            slots.items,
+            occurrences.items,
+            projections.items,
+            &consumer_bindings,
+            dispatch_context_start,
+        );
         switch (plan.dispatcher) {
             .arg => {},
             .type_only => try appendCallConsumerSelfBindings(
@@ -22140,6 +22264,10 @@ fn publishSpecializationCallPlans(
             plan.iterator_ty,
             iter_flow_span,
             operand_flows.items,
+            shapes.items[@intFromEnum(iter_plans[index].shape)],
+            slots.items,
+            occurrences.items,
+            projections.items,
             &consumer_bindings,
             &consumer_binding_spans,
             &iter_plans[index],
@@ -22186,6 +22314,10 @@ fn publishSpecializationCallPlans(
             plan.iterator_ty,
             next_flow_span,
             operand_flows.items,
+            shapes.items[@intFromEnum(next_plans[index].shape)],
+            slots.items,
+            occurrences.items,
+            projections.items,
             &consumer_bindings,
             &consumer_binding_spans,
             &next_plans[index],
@@ -38456,6 +38588,29 @@ test "checked module keeps current compile-time ownership tables" {
 
 fn testIndexId(comptime Id: type, index: usize) Id {
     return @enumFromInt(index);
+}
+
+test "target source kind distinguishes exact values from ordinary output requests" {
+    try std.testing.expectEqual(
+        SpecializationTargetSource.concrete_checked,
+        specializationTargetSourceKind(true, .output, false, false),
+    );
+    try std.testing.expectEqual(
+        SpecializationTargetSource.exact_selection,
+        specializationTargetSourceKind(false, .input, false, false),
+    );
+    try std.testing.expectEqual(
+        SpecializationTargetSource.checked_substitution,
+        specializationTargetSourceKind(false, .output, false, false),
+    );
+    try std.testing.expectEqual(
+        SpecializationTargetSource.exact_selection,
+        specializationTargetSourceKind(false, .output, true, false),
+    );
+    try std.testing.expectEqual(
+        SpecializationTargetSource.exact_selection,
+        specializationTargetSourceKind(false, .output, false, true),
+    );
 }
 
 test "target source roots exclude explicit concrete checked sources" {
