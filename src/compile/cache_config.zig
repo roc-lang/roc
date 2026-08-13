@@ -142,8 +142,8 @@ pub const Constants = struct {
     ///     to/until carrying producer-specific representations distinct from
     ///     the range helpers they do not delegate to.
     /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
-    ///     `_to` methods, and numeric range iteration has one stored-bound
-    ///     iterator procedure identity.
+    ///     `_to` methods, and stored ranges mint iterator representations while
+    ///     numeric range hooks explicitly delegate to that representation.
     pub const CACHE_VERSION = 59;
 };
 

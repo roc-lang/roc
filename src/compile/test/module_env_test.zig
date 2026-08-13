@@ -131,7 +131,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Plus 4 fully qualified Crypto builtin type names: SHA256/BLAKE3 Digest and Hasher
-    // Plus 2 range method identifiers: range_exclusive, range_inclusive
+    // Plus 2 range method identifiers: range_exclusive_to, range_inclusive_to
     // Count reflects the merged builtin set, including structural parser/encoder
     // method identifiers, Builtin.Json.Encoding's parse/encode helpers, and Crypto.
     try testing.expectEqual(@as(u32, 120), original.common.idents.interner.entry_count);

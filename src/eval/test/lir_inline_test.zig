@@ -4080,7 +4080,7 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
             \\    }}
             \\    until_last = $last
             \\    $last = 0.{s}
-            \\    for i in {s}.range_exclusive(0, n) {{
+            \\    for i in {s}.range_exclusive_to(0, n) {{
             \\        $last = i
             \\    }}
             \\    exclusive_last = $last
@@ -4090,7 +4090,7 @@ test "issue 10429 numeric range spellings in one body have no heap or RC operati
             \\    }}
             \\    to_last = $last
             \\    $last = 0.{s}
-            \\    for i in {s}.range_inclusive(0, n) {{
+            \\    for i in {s}.range_inclusive_to(0, n) {{
             \\        $last = i
             \\    }}
             \\    (until_last, exclusive_last, to_last, $last)
@@ -4445,7 +4445,7 @@ test "iter alloc static: iterator returned from a function is zero-alloc" {
         \\}
         \\
         \\make : U64 -> Iter(U64)
-        \\make = |n| Iter.map(0.U64..<n, |x| x + 1)
+        \\make = |n| Iter.map((0.U64..<n).iter(), |x| x + 1)
         \\
         \\main : U64
         \\main = consume(make(5))
@@ -4464,7 +4464,7 @@ test "iter alloc static: iterator passed to a non-inlined function is zero-alloc
         \\}
         \\
         \\main : U64
-        \\main = consume(Iter.map(0.U64..<5, |x| x + 1))
+        \\main = consume(Iter.map((0.U64..<5).iter(), |x| x + 1))
     );
 }
 
@@ -4482,9 +4482,9 @@ test "iter alloc static: branch-chosen iterator is zero-alloc" {
         \\choose : Bool -> Iter(U64)
         \\choose = |flag|
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + 1)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + 1)
         \\    } else {
-        \\        Iter.keep_if(0.U64..<5, |x| x > 2)
+        \\        Iter.keep_if((0.U64..<5).iter(), |x| x > 2)
         \\    }
         \\
         \\main : U64
@@ -4511,9 +4511,9 @@ test "iter alloc static: same adapter with different capture layouts is zero-all
         \\    config : Config
         \\    config = { big: 10, small: 3 }
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + offset)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + offset)
         \\    } else {
-        \\        Iter.map(0.U64..<5, |x| x + config.big + config.small)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + config.big + config.small)
         \\    }
         \\}
         \\
@@ -4547,7 +4547,7 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -4585,7 +4585,7 @@ test "iter alloc static: recursive map wrapping terminates at dynamic boundary" 
         \\    }
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -4615,7 +4615,7 @@ fn deepStaticChainSource(comptime map_count: usize) []const u8 {
         var source: []const u8 =
             \\main : U64 -> U64
             \\main = |n| {
-            \\    i0 = 0.U64..<n
+            \\    i0 = (0.U64..<n).iter()
             \\
         ;
         for (0..map_count) |index| {
@@ -4998,6 +4998,7 @@ test "plant iter pipeline collect uses direct range map list loop" {
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
         \\    (0.I64..=15)
+        \\        .iter()
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -5017,7 +5018,7 @@ test "direct range map collect uses direct list loop" {
         \\main : () -> List(Plant)
         \\main = ||
         \\    Iter.collect(
-        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
+        \\        Iter.map((0.I64..=15).iter(), |i| random_plant(i * 12)),
         \\    )
     , 2);
 }
@@ -6320,7 +6321,7 @@ test "iterdiff: recursively-constructed iterator chain agrees across inline mode
         \\build : U64 -> U64
         \\build = |depth| {
         \\    var $sum = 0.U64
-        \\    for x in wrap(depth, 0.U64..<5) {
+        \\    for x in wrap(depth, (0.U64..<5).iter()) {
         \\        $sum = $sum + x
         \\    }
         \\    dbg $sum

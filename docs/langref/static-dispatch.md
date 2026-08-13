@@ -52,7 +52,10 @@ packages can define and require their own methods with `where` clauses.
 | `to_hash : T, Hasher -> Hasher` | `Dict`, `Set`, and hash-based APIs | Values of the type should participate in hashing. |
 | `plus`, `minus`, `times`, `div_by`, `div_trunc_by`, `rem_by` | `+`, `-`, `*`, `/`, `//`, `%` | The type has arithmetic-like operations. |
 | `is_lt`, `is_lte`, `is_gt`, `is_gte` | `<`, `<=`, `>`, `>=` | The type has an ordering. |
-| `range_exclusive : T, T -> Iter(T)`, `range_inclusive : T, T -> Iter(T)` | `..<`, `..=` | The type supports range syntax. |
+| `range_exclusive_to : T, T -> Range(T)`, `range_inclusive_to : T, T -> Range(T)` | `..<`, `..=` | The type supports range syntax. |
+| `range_exclusive_from : T, T -> Range(T)`, `range_inclusive_from : T, T -> Range(T)` | `Range.iter_rev` | The type's ranges can be reversed exactly. |
+| `range_iter` | `Range.iter`, `Range.iter_rev` | The type can iterate its stored range representation. |
+| `range_len_if_known` | Numeric range constructors, `Range.step_by` | The type can provide an exact `U64` count when representable. |
 | `negate`, `not` | Unary `-`, unary `!` | The type has a unary negation or complement operation. |
 | `from_numeral : Num.Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals with target type `T` | Plain numeric literal syntax should construct the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | Quoted string literals with target type `T` | Plain quoted literal syntax should construct the type. |
@@ -215,28 +218,38 @@ must have the same type.
 | `>` | `is_gt` |
 | `>=` | `is_gte` |
 
-Range operators dispatch to methods whose result is an `Iter` of the operand
+Range operators dispatch to methods whose result is a `Range` of the operand
 type. Both operands must have the same type.
 
 | Operator | Method |
 | --- | --- |
-| `..<` | `range_exclusive` |
-| `..=` | `range_inclusive` |
+| `..<` | `range_exclusive_to` |
+| `..=` | `range_inclusive_to` |
 
 All the builtin number types have these methods, and a custom type can support
 range syntax by defining them:
 
 ```roc
 PageNum := { num : U32 }.{
-    range_exclusive : PageNum, PageNum -> Iter(PageNum)
-    range_exclusive = |start, end|
-        Iter.map(start.num..<end.num, |num| PageNum.{ num })
+    range_exclusive_to : PageNum, PageNum -> Range(PageNum)
+    range_exclusive_to = |start, end|
+        Range.custom({
+            lower: start,
+            upper: end,
+            step: PageNum.{ num: 1 },
+            upper_bound: Exclusive,
+            direction: To,
+            len_if_known: Unknown,
+        })
 }
 
-for page in first_page..<last_page {
-    render(page)
-}
+pages : Range(PageNum)
+pages = first_page..<last_page
 ```
+
+To iterate that value, `PageNum` also defines `range_iter` in terms of its own
+representation. Defining the two `_from` constructors opts it into
+`Range.iter_rev`; types whose stepping is not exactly reversible can omit them.
 
 Unary operators dispatch to methods whose argument and return type are the same:
 

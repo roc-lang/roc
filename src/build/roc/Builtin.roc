@@ -3240,7 +3240,7 @@ Builtin :: [].{
 		## the rest, so a single-item iterator returns that item without calling
 		## either method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
-		## expect (1..=4).sum() == 10
+		## expect (1..=4).iter().sum() == 10
 		##
 		## expect [42.I64].iter().sum() == 42
 		##
@@ -3265,7 +3265,7 @@ Builtin :: [].{
 		## not for `times`, so there is no value it could return for an empty iterator
 		## that would keep `product` consistent with multiplication.
 		## ```roc
-		## expect (1..=4).product() == Ok(24)
+		## expect (1..=4).iter().product() == Ok(24)
 		##
 		## expect [42.I64].iter().product() == Ok(42)
 		##
@@ -6380,6 +6380,7 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
+
 		## A reusable numeric range description. Range syntax constructs one of these
 		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
 		##
@@ -6394,6 +6395,7 @@ Builtin :: [].{
 			direction : [To, From],
 			len_if_known : [Known(U64), Unknown],
 		}.{
+
 			## Construct a range description for a builtin or third-party numeric type.
 			## A [Known] length must be the exact number of values the range will yield.
 			custom : {
@@ -22385,14 +22387,6 @@ range_len_dec = |lower, upper, step, upper_bound| {
 	}
 }
 
-range_hint_after_one : [Known(U64), Unknown] -> [Known(U64), Unknown]
-range_hint_after_one = |len_if_known|
-	match len_if_known {
-		Known(0) => Known(0)
-		Known(len) => Known(len - 1)
-		Unknown => Unknown
-	}
-
 # Return `value mod step` normalized into `[0, step)`. The explicit checked
 # arithmetic is shared by signed integers and Dec; unsigned remainders simply
 # take the nonnegative branch.
@@ -22461,86 +22455,11 @@ range_standard_last = |lower, upper, step, upper_bound| {
 	}
 }
 
-range_iter_standard_to : num, num, num, [Exclusive, Inclusive], [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lt : num, num -> Bool,
-		num.is_lte : num, num -> Bool,
-		num.is_gt : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_iter_standard_to = |current, upper, step, upper_bound, len_if_known|
-	iter_from_step(
-		len_if_known,
-		||
-			match len_if_known {
-				Known(0) => Done
-				_ => {
-					within_upper = match upper_bound {
-						Exclusive => current < upper
-						Inclusive => current <= upper
-					}
-
-					if step > 0 and within_upper {
-						rest = match len_if_known {
-							Known(1) => range_done()
-							_ => match current.plus_try(step) {
-								Ok(next) => if next > current {
-									range_iter_standard_to(next, upper, step, upper_bound, range_hint_after_one(len_if_known))
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							}
-						}
-
-						One({ item: current, rest })
-					} else {
-						Done
-					}
-				}
-			},
-	)
-
-range_iter_standard_from : num, num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_eq : num, num -> Bool,
-		num.is_lt : num, num -> Bool,
-		num.is_gte : num, num -> Bool,
-		num.minus_try : num, num -> Try(num, [Overflow]),
-	]
-range_iter_standard_from = |current, lower, step, len_if_known|
-	iter_from_step(
-		len_if_known,
-		||
-			match len_if_known {
-				Known(0) => Done
-				_ => if current >= lower {
-					rest = if current == lower {
-						range_done()
-					} else {
-						match len_if_known {
-							Known(1) => range_done()
-							_ => match current.minus_try(step) {
-								Ok(next) => if next < current and next >= lower {
-									range_iter_standard_from(next, lower, step, range_hint_after_one(len_if_known))
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							}
-						}
-					}
-
-					One({ item: current, rest })
-				} else {
-					Done
-				}
-			},
-	)
-
 # Shared range iterator for integers and Dec. Concrete numeric `range_iter`
 # methods call this helper after static dispatch has selected their arithmetic.
+# Both directions use one tagged seed shape, so the public Range source owns a
+# single flat iterator representation even when `direction` is only known at
+# runtime.
 range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_eq : num, num -> Bool,
@@ -22554,14 +22473,58 @@ range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(
 		num.rem_by : num, num -> num,
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
-range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
-	match direction {
-		To => range_iter_standard_to(lower, upper, step, upper_bound, len_if_known)
+range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		To => if step > 0 {
+			RangeAt(lower)
+		} else {
+			RangeDone
+		}
 		From => match range_standard_last(lower, upper, step, upper_bound) {
-			Ok(last) => range_iter_standard_from(last, lower, step, len_if_known)
-			Err(NoMore) => range_done()
+			Ok(last) => RangeAt(last)
+			Err(NoMore) => RangeDone
 		}
 	}
+
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(current) => match direction {
+					To => {
+						within_upper = match upper_bound {
+							Exclusive => current < upper
+							Inclusive => current <= upper
+						}
+						if step > 0 and within_upper {
+							next_state = match current.plus_try(step) {
+								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+							Ok((current, next_state))
+						} else {
+							Err(NoMore)
+						}
+					}
+					From => if step > 0 and current >= lower {
+						next_state = if current == lower {
+							RangeDone
+						} else {
+							match current.minus_try(step) {
+								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+						}
+						Ok((current, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
 
 # IEEE floats deliberately support only `_to` constructors. This helper keeps
 # their existing repeated-addition/stall semantics; a manually-constructed
@@ -22574,31 +22537,34 @@ range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64
 		num.plus : num, num -> num,
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
-range_iter_float = |current, upper, step, upper_bound, direction, len_if_known|
-	match direction {
-		From => range_done()
-		To => iter_from_step(
-			len_if_known,
-			|| {
-				within_upper = match upper_bound {
-					Exclusive => current < upper
-					Inclusive => current <= upper
-				}
-
-				if step > 0 and within_upper {
-					next = current + step
-					rest = if next > current {
-						range_iter_float(next, upper, step, upper_bound, To, range_hint_after_one(len_if_known))
-					} else {
-						range_done()
+range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		From => RangeDone
+		To => if step > 0 RangeAt(current) else RangeDone
+	}
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(item) => {
+					within_upper = match upper_bound {
+						Exclusive => item < upper
+						Inclusive => item <= upper
 					}
-					One({ item: current, rest })
-				} else {
-					Done
+
+					if step > 0 and within_upper {
+						next = item + step
+						next_state = if next > item RangeAt(next) else RangeDone
+						Ok((item, next_state))
+					} else {
+						Err(NoMore)
+					}
 				}
 			},
-		)
-	}
+	)
+}
 
 iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {

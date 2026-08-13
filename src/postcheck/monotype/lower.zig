@@ -20564,7 +20564,8 @@ const BodyContext = struct {
         if (expected_ret) |expected| switch (procedure) {
             .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
             .range_done => return try self.graphFunctionNode(request_fn.args, expected),
-            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .numeric_range, .numeric_to, .numeric_until => {},
+            .numeric_range_delegate => return try self.graphFunctionNode(request_fn.args, expected),
+            .iter_iter, .iter_next, .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_to, .numeric_until => {},
         };
 
         switch (procedure) {
@@ -20653,7 +20654,7 @@ const BodyContext = struct {
                     ),
                 );
             },
-            .numeric_range, .numeric_until, .numeric_to => {
+            .range_iter, .numeric_until, .numeric_to => {
                 if (try self.generatedIteratorExpectedProducerFunctionNode(mintedProducerKind(procedure), request_fn.args, expected_ret)) |expected_fn| return expected_fn;
                 return try self.graphFunctionNode(
                     request_fn.args,
@@ -20676,7 +20677,7 @@ const BodyContext = struct {
                     );
                 }
             },
-            .iter_from_step, .range_done => {},
+            .numeric_range_delegate, .iter_from_step, .range_done => {},
         }
         return null;
     }
@@ -46525,7 +46526,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .numeric_range, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .range_iter, .numeric_range_delegate, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 

@@ -19790,8 +19790,8 @@ fn checkBinopExpr(
         },
         .range_exclusive, .range_inclusive => {
             const method_name = switch (binop.op) {
-                .range_exclusive => self.cir.idents.range_exclusive,
-                .range_inclusive => self.cir.idents.range_inclusive,
+                .range_exclusive => self.cir.idents.range_exclusive_to,
+                .range_inclusive => self.cir.idents.range_inclusive_to,
                 .add,
                 .sub,
                 .mul,
