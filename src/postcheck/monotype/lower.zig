@@ -43520,17 +43520,22 @@ const BodyContext = struct {
         const first_checked = if (lhs_first) eq.lhs else eq.rhs;
         const second_checked = if (lhs_first) eq.rhs else eq.lhs;
 
-        // Equality is an explicit checked relation between the operands, so
-        // instantiate that relation once. The first value lowers against the
-        // shared request; the exact node it actually produces is then the
-        // second value's request. No independently produced type graphs are
-        // compared, merged, or reconciled after either value has been built.
-        const shared_request = try self.lowerExprTypeNode(first_checked);
-        const first = try self.lowerExprAtExactRequest(
-            first_checked,
-            DraftTypeCell.fromGraphNode(shared_request),
+        // A producer runs without a checker-shaped destination and returns its
+        // authoritative runtime node. Only when both operands are requested
+        // values does the first operand consume the checked equality relation
+        // as the component's explicit seed. The second operand always
+        // consumes the first value's exact node.
+        const first = if (self.view.templates.specializationValueFlowForExpr(first_checked) == .produced)
+            try self.lowerExpr(first_checked)
+        else
+            try self.lowerExprAtExactRequest(
+                first_checked,
+                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(first_checked)),
+            );
+        const produced_request = try self.builder.completePendingProducedNode(
+            self,
+            try self.exprTypeCell(first).toGraphNode(self.graph),
         );
-        const produced_request = try self.exprTypeCell(first).toGraphNode(self.graph);
         const second = try self.lowerExprAtExactRequest(
             second_checked,
             DraftTypeCell.fromGraphNode(produced_request),

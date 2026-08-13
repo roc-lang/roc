@@ -1053,8 +1053,10 @@ test "Monotype structural equality lowers through one directional exact operand 
         "fn lowerStructuralEqFromOperands(",
     );
     try expectContains(equality_source, "specializationValueFlowForExpr(eq.lhs)");
-    try expectContains(equality_source, "const shared_request = try self.lowerExprTypeNode(first_checked)");
-    try expectContains(equality_source, "const produced_request = try self.exprTypeCell(first).toGraphNode(self.graph)");
+    try expectContains(equality_source, "try self.lowerExpr(first_checked)");
+    try expectContains(equality_source, "DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(first_checked))");
+    try expectContains(equality_source, "const produced_request = try self.builder.completePendingProducedNode(");
+    try expectContains(equality_source, "try self.exprTypeCell(first).toGraphNode(self.graph)");
     try expectContains(equality_source, "DraftTypeCell.fromGraphNode(produced_request)");
     try expectContains(equality_source, "deferStructuralDerivationOperandsAtNode(");
     try expectNotContains(equality_source, "requireSameExactProducedValue");

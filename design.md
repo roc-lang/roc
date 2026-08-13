@@ -6106,10 +6106,11 @@ Structural equality follows the same rule. The checker has already established
 that the operands are equality-compatible and has either emitted a dispatch plan
 that permits derived `is_eq` to lower as structural equality or rewritten the
 expression to an explicit structural equality node. Monotype lowering
-creates one shared operand request. If checker-published value flow identifies
-an operand that already has an exact produced selection, that operand produces
-first; otherwise source order selects the producer. The producer returns its
-exact runtime node, and the other operand is lowered at that exact node. It must
+uses checker-published value flow to identify an operand that produces its
+exact runtime node independently. That operand produces first, and the other
+operand is lowered at its exact node. If neither operand is a producer, source
+order chooses the first requested operand and the checked equality relation is
+its explicit seed; the second operand consumes the first value's result. It must
 not independently lower the left and right operand types and then attempt to
 reconcile the results. Independent operand lowering is order-sensitive: an
 unconstrained operand can default to an uninhabited type before the other
