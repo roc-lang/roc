@@ -2064,14 +2064,26 @@ the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
 
-Canonicalization also outputs the exact strict-demand edges between top-level
-definitions. Those edges are durable `ModuleEnv` data, serialized independently
-of the transient SCC evaluation order, because `RootRequestTable` scheduling
-and compile-time finalization must distinguish eager dependencies from references
+Canonicalization outputs the initial exact strict-demand edges between top-level
+definitions. Literal conversions remain leaves in that initial relation because
+their method target does not exist until static dispatch resolves. At the checked
+boundary, checking supplies the exact literal-constraint-function-variable to
+local-method-target relation and reruns the same demand analysis once. Demand
+summaries retain an unresolved literal requirement while it is polymorphic;
+when a callable is demanded, the checker-produced `SchemeUseRecord` pairs map
+that requirement through each concrete instantiation until its selected target
+is exact. A resolved conversion is an eager call, so the selected callable
+body's top-level demands flow into its caller exactly like those of any other
+statically known call. The resulting relation replaces the initial one, and
+checking applies the ordinary SCC non-function-cycle rule before constructing
+the CheckedModule.
+
+The finalized edges are durable `ModuleEnv` data, serialized independently of
+the transient SCC evaluation order, because `RootRequestTable` scheduling and
+compile-time finalization must distinguish eager dependencies from references
 inside delayed callable bodies. Those consumers use the serialized relation
 directly; they must not infer strictness from checked template references,
-rebuild it from CIR, or treat a missing relation as an empty one. This relation
-is durable `ModuleEnv` data, not a dependency graph stored in the checked module.
+rebuild it from CIR, or treat a missing relation as an empty one.
 
 A checked module must not permanently store a hoisted-root dependency graph or
 per-expression dependency metadata. The durable checked data is the compile-time
