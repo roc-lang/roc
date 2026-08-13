@@ -587,6 +587,10 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
+/// Construction-time position shared by the parallel method identity and
+/// definition tables.
+pub const MethodTableIndex = enum(u32) { _ };
+
 /// A definition whose implementation was authored by the compiler as one
 /// exact low-level operation. Canonicalization publishes this alongside CIR so
 /// every later stage can consume the producer-owned runtime identity without
@@ -909,8 +913,10 @@ store: NodeStore,
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
 /// Exact strict-demand edges between top-level definitions. Canonicalization
-/// produces this data and serialization preserves it for checked-artifact
-/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+/// produces the initial relation and checking replaces it after resolving
+/// literal dispatch; serialization preserves the finalized relation for
+/// checked-artifact publication. Unlike `evaluation_order`, it is not a
+/// transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
 
@@ -1250,18 +1256,18 @@ pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.Low
     return null;
 }
 
-/// Return the exact strict-demand relation produced by canonicalization.
+/// Return the current producer-authored exact strict-demand relation.
 pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
     std.debug.assert(self.top_level_demand_dependencies_ready);
     return self.top_level_demand_dependencies.items.items;
 }
 
-/// Whether canonicalization has produced the exact strict-demand relation.
+/// Whether a compiler stage has produced the exact strict-demand relation.
 pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
     return self.top_level_demand_dependencies_ready;
 }
 
-/// Whether one exact strict-demand edge was produced by canonicalization.
+/// Whether the current exact strict-demand relation contains one edge.
 pub fn hasTopLevelDemandDependency(
     self: *const Self,
     dependent: CIR.Def.Idx,
@@ -5182,6 +5188,42 @@ pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_i
 pub fn registerMethodDefForMethodOwner(self: *Self, owner: MethodOwner, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
+}
+
+/// Appends one complete method entry to the parallel construction tables.
+pub fn appendMethodForMethodOwner(
+    self: *Self,
+    owner: MethodOwner,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    binding: MethodBinding,
+) Allocator.Error!MethodTableIndex {
+    std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
+    const index: MethodTableIndex = @enumFromInt(self.method_idents.entries.items.len);
+
+    try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
+    try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
+    try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);
+    try self.registerMethodDefForMethodOwner(owner, method_ident, binding);
+    return index;
+}
+
+/// Replaces the values at one construction-time method table position while
+/// preserving its explicit owner-and-name key.
+pub fn replaceMethodAt(
+    self: *Self,
+    index: MethodTableIndex,
+    owner: MethodOwner,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    binding: MethodBinding,
+) void {
+    const table_index: usize = @intFromEnum(index);
+    const key = MethodKey.init(owner, method_ident);
+    std.debug.assert(MethodKey.order(self.method_idents.entries.items[table_index].key, key) == .eq);
+    std.debug.assert(MethodKey.order(self.method_defs.entries.items[table_index].key, key) == .eq);
+    self.method_idents.entries.items[table_index].value = qualified_ident;
+    self.method_defs.entries.items[table_index].value = binding;
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.

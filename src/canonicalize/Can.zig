@@ -215,6 +215,17 @@ const PendingProvidesEntry = struct {
     region: Region,
 };
 
+const MethodRegistrationKind = enum {
+    declaration_owner,
+    receiver_extension,
+};
+
+const MethodRegistration = struct {
+    kind: MethodRegistrationKind,
+    table_index: ModuleEnv.MethodTableIndex,
+    region: Region,
+};
+
 env: *ModuleEnv,
 parse_ir: *AST,
 /// Track whether we're in statement position (true) or expression position (false)
@@ -276,6 +287,10 @@ compiler_version: ?[]const u8 = null,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
+/// Construction-time collision policy for methods keyed by their dispatch
+/// owner and name. Declaration-owned methods take precedence over receiver
+/// extensions independently of source order.
+method_registrations: std.AutoHashMapUnmanaged(ModuleEnv.MethodKey, MethodRegistration) = .{},
 /// Stack of function regions for tracking var reassignment across function boundaries
 function_regions: std.array_list.Managed(Region),
 /// Maps var patterns to the function region they were declared in
@@ -606,6 +621,7 @@ pub fn deinit(
     self.placeholder_idents.deinit(gpa);
     self.explicit_root_defs.deinit(gpa);
     self.pending_provides_entries.deinit(gpa);
+    self.method_registrations.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -919,15 +935,88 @@ fn registerAssociatedMethodIdent(
     type_anno_idx: ?TypeAnno.Idx,
 ) std.mem.Allocator.Error!void {
     const associated_owner = ModuleEnv.MethodOwner.init(self.env.qualified_module_ident, owner_stmt_idx);
-    try self.env.registerMethodIdentForMethodOwner(associated_owner, method_ident, qualified_ident);
-    try self.env.registerMethodDefForMethodOwner(associated_owner, method_ident, binding);
+    const region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(binding.def_idx));
+    try self.registerMethodForDispatchOwner(
+        associated_owner,
+        method_ident,
+        qualified_ident,
+        binding,
+        region,
+        .declaration_owner,
+    );
 
     if (!self.associatedOwnerAllowsReceiverMethods(owner_stmt_idx)) return;
     const receiver_owner = try self.receiverMethodOwnerFromFunctionAnno(type_anno_idx) orelse return;
     if (receiver_owner.eql(associated_owner)) return;
 
-    try self.env.registerMethodIdentForMethodOwner(receiver_owner, method_ident, qualified_ident);
-    try self.env.registerMethodDefForMethodOwner(receiver_owner, method_ident, binding);
+    try self.registerMethodForDispatchOwner(
+        receiver_owner,
+        method_ident,
+        qualified_ident,
+        binding,
+        region,
+        .receiver_extension,
+    );
+}
+
+fn registerMethodForDispatchOwner(
+    self: *Self,
+    owner: ModuleEnv.MethodOwner,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    binding: ModuleEnv.MethodBinding,
+    region: Region,
+    kind: MethodRegistrationKind,
+) std.mem.Allocator.Error!void {
+    const key = ModuleEnv.MethodKey.init(owner, method_ident);
+    const entry = try self.method_registrations.getOrPut(self.env.gpa, key);
+    if (!entry.found_existing) {
+        entry.value_ptr.* = .{
+            .kind = kind,
+            .table_index = try self.env.appendMethodForMethodOwner(owner, method_ident, qualified_ident, binding),
+            .region = region,
+        };
+        return;
+    }
+
+    switch (entry.value_ptr.kind) {
+        .declaration_owner => switch (kind) {
+            // The associated-value duplicate check owns this source error.
+            .declaration_owner => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
+                }
+                unreachable;
+            },
+            // A method declared by its receiver wins over a namespace extension.
+            .receiver_extension => return,
+        },
+        .receiver_extension => switch (kind) {
+            // Preserve declaration-owned precedence even when the extension
+            // appeared earlier in source order.
+            .declaration_owner => {
+                const table_index = entry.value_ptr.table_index;
+                self.env.replaceMethodAt(table_index, owner, method_ident, qualified_ident, binding);
+                entry.value_ptr.* = .{
+                    .kind = .declaration_owner,
+                    .table_index = table_index,
+                    .region = region,
+                };
+            },
+            // Two extensions in one module compete for the same receiver call.
+            // Report the same source-order shadowing rule used by duplicate
+            // associated values, and keep the later declaration explicitly.
+            .receiver_extension => {
+                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                    .ident = method_ident,
+                    .region = region,
+                    .original_region = entry.value_ptr.region,
+                } });
+                self.env.replaceMethodAt(entry.value_ptr.table_index, owner, method_ident, qualified_ident, binding);
+                entry.value_ptr.region = region;
+            },
+        },
+    }
 }
 
 fn associatedOwnerAllowsReceiverMethods(self: *const Self, owner_stmt_idx: Statement.Idx) bool {

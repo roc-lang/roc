@@ -254,7 +254,9 @@ pub fn Decimal(comptime T: type) type {
 
                 // Skip leading zeroes
                 if (d.num_digits == 0) {
-                    stream.skipChars("0");
+                    // Underscores are separators, not digits: skipping only "0" stops at the
+                    // first one, so the remaining leading zeros are counted as significant.
+                    stream.skipChars("0_");
                 }
 
                 while (stream.hasLen(8) and d.num_digits + 8 < max_digits) {
@@ -275,11 +277,13 @@ pub fn Decimal(comptime T: type) type {
             if (d.num_digits != 0) {
                 // Ignore trailing zeros if any
                 var n_trailing_zeros: usize = 0;
-                var i = stream.offsetTrue() - 1;
+                // `offsetTrue` excludes consumed underscores, but `s` still contains them,
+                // so indexing `s` with it walks back into the middle of the literal.
+                var i = stream.offset - 1;
                 while (true) {
                     if (s[i] == '0') {
                         n_trailing_zeros += 1;
-                    } else if (s[i] != '.') {
+                    } else if (s[i] != '.' and s[i] != '_') {
                         break;
                     }
 

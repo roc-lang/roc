@@ -5759,6 +5759,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
@@ -5859,6 +5876,37 @@ Builtin :: [].{
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
 
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
+
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
 		## expect Dict.single(1, "One")
@@ -5909,6 +5957,36 @@ Builtin :: [].{
 				var $state = init
 				for (key, value) in data.entries {
 					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
+
+		## Same as [Dict.fold], except you can stop folding early.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold_until(0, |count, _key, qty| if count + qty >= 30 {
+		##                Break(count + qty)
+		##            } else {
+		##                Continue(count + qty)
+		##            }) == 36
+		## ```
+		fold_until : Dict(k, v), state, (state, k, v -> [Continue(state), Break(state)]) -> state
+		fold_until = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					match step($state, key, value) {
+						Continue(new_state) => {
+							$state = new_state
+						}
+						Break(final_state) => {
+							$state = final_state
+							break
+						}
+					}
 				}
 				$state
 			}
@@ -14846,12 +14924,12 @@ Builtin :: [].{
 			round_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Every [Dec] rounds to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.round_to_i128_try(7.2) == Ok(7)
+			## expect Dec.round_to_i128(7.2) == 7
 			## ```
-			round_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| dec_round_to_i128(self)
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14916,12 +14994,12 @@ Builtin :: [].{
 			floor_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Every [Dec] rounds down to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
+			## expect Dec.floor_to_i128(3.8) == 3
 			## ```
-			floor_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| dec_floor_to_i128(self)
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14986,12 +15064,12 @@ Builtin :: [].{
 			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Every [Dec] rounds up to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
+			## expect Dec.ceiling_to_i128(3.2) == 4
 			## ```
-			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| dec_ceiling_to_i128(self)
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -15165,22 +15243,12 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
-			## the exact value (scaled by 10^18) instead.
+			## [I128], so this never fails. See [Dec.to_attos] to get the exact
+			## value (scaled by 10^18) instead.
 			## ```roc
-			## expect Dec.to_i128_wrap(42.5) == 42
+			## expect Dec.to_i128(42.5) == 42
 			## ```
-			to_i128_wrap : Dec -> I128
-
-			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
-			## integer part does not fit. The fractional part is truncated toward
-			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
-			## instead.
-			## ```roc
-			## expect Dec.to_i128_try(42.5) == Ok(42)
-			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
+			to_i128 : Dec -> I128
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 
@@ -22789,8 +22857,6 @@ dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
 dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
 
 dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
-
-dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
 
 dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
 

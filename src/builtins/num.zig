@@ -1426,6 +1426,31 @@ test "powi128 handles signed magnitude and overflow boundaries" {
     try std.testing.expectError(error.Overflow, powi128(u128, std.math.maxInt(u128), 2));
 }
 
+fn expectSeparatorsIgnored(comptime T: type, with_separators: []const u8, roc_ops: *RocOps) NumTestHelperError!void {
+    var buf: [512]u8 = undefined;
+    var n: usize = 0;
+    for (with_separators) |c| {
+        if (c != '_') {
+            buf[n] = c;
+            n += 1;
+        }
+    }
+
+    const RocStrT = @import("str.zig").RocStr;
+    const with_str = RocStrT.fromSlice(with_separators, roc_ops);
+    defer with_str.decref(roc_ops);
+    const without_str = RocStrT.fromSlice(buf[0..n], roc_ops);
+    defer without_str.decref(roc_ops);
+
+    const with = parseFloatFromStr(T, with_str);
+    const without = parseFloatFromStr(T, without_str);
+    try std.testing.expectEqual(@as(u8, 0), with.errorcode);
+    try std.testing.expectEqual(@as(u8, 0), without.errorcode);
+
+    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    try std.testing.expectEqual(@as(Bits, @bitCast(without.value)), @as(Bits, @bitCast(with.value)));
+}
+
 test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1452,6 +1477,32 @@ test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
         .{ .text = "0x1.921fb54442d18p+1", .bits = 0x400921fb54442d18 },
     }) |text| {
         try expectParseFloatBits(f64, text.text, text.bits, test_env.getOps());
+    }
+}
+
+test "parseFloatFromStr ignores digit separators wherever they appear issue 10660" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // `_` is a separator, so a literal must parse identically with and without it.
+    // The last case is the fuzzer-found input from the issue: leading zero groups mixed
+    // with separators moved the decimal point by 163 orders of magnitude, which sent the
+    // slow path into minutes of shifting before returning a wrong value.
+    inline for (&[_][]const u8{
+        "1_000",
+        "1_000.5",
+        "0.5_5",
+        "0_0.1",
+        "1_0e1_0",
+        "-1_2.3_4",
+        "0_0000_0000.0000_1",
+        "1_2_3_4_5.6_7_8_9",
+        "0.000_000_000_000_000_1",
+        "1_000e-1_0",
+        "123_456.789_012e1_2",
+        "0_0000_0000.00_000_0_000000_00000_00_00_00_0_000000_0000_0_00000_00000_00_00_00_000_0_0_000000_00000_0_000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013478162400000000000",
+    }) |text| {
+        try expectSeparatorsIgnored(f64, text, test_env.getOps());
     }
 }
 
