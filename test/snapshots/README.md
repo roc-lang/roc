@@ -6,6 +6,33 @@ Snapshot tests provide comprehensive validation of the compilation pipeline by s
 
 Each snapshot file contains the expected output and helps us to detect regressions when compiler behavior changes unexpectedly.
 
+## Semantic diagnostics vs renderer output
+
+Diagnostics are covered by two different kinds of snapshot, split so that
+semantic changes and presentation changes never show up in the same files:
+
+- **Ordinary snapshots** (`type=file`, `snippet`, `expr`, ...) capture diagnostic
+  *semantics*. Their `PROBLEMS` section contains the canonical S-expression
+  serialization of each `reporting.Report` (see
+  `src/reporting/report_sexpr.zig`): severity, title, source regions, and the
+  full document structure (text, annotations, source excerpts, underlines).
+  It contains no renderer-specific details — no box-drawing characters, ANSI
+  escapes, wrapping, or markup. `NIL` means the compile produced no reports.
+  These snapshots answer: *did the compiler produce the correct diagnostic?*
+
+- **Reporting snapshots** (`type=reporting`, in `reporting/`) pin renderer
+  *output*. Each one compiles its `SOURCE` normally, then renders the same
+  semantic reports through every user-facing format, one section per renderer:
+  `REPORT` (the canonical S-expression), `CLI` (plain-text box layout),
+  `MARKDOWN`, `HTML`, and `LSP`. Layout, wrapping, punctuation, and markup are
+  pinned here and only here.
+
+A renderer-only change must only affect files in `reporting/`; a change to
+diagnostic semantics shows up in ordinary snapshots (and possibly in
+`reporting/` too). Note that snapshot post-processing globally rewrites the
+text `module` to `mod` (the removed keyword), which also applies inside the
+S-expression output.
+
 ## Usage
 
 - **Generate all snapshots**: `zig build run-snapshot-tool`
