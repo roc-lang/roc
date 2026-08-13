@@ -24,6 +24,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const numeric_conversion = base.numeric_conversion;
 const layout = @import("layout");
 const lir = @import("lir");
 const CheckedArithmetic = lir.CheckedArithmetic;
@@ -101,6 +102,11 @@ const LayoutStore = layout.Store;
 const RcOp = layout.RcOp;
 const RcHelperKey = layout.RcHelperKey;
 const RcAtomicity = lir.LIR.RcAtomicity;
+
+/// Width in bits of `op`'s source type. `op` must be a conversion.
+fn srcBits(op: lir.LowLevel) u8 {
+    return numeric_conversion.getConversionSpec(op).?.src.bits();
+}
 
 fn narrowEnum(comptime Narrow: type, wide: anytype) Narrow {
     const raw = @intFromEnum(wide);
@@ -2919,14 +2925,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Sign-extend: shift left to put sign bit at bit 63, then arithmetic shift right
-                    const src_bits: u8 = if (ll.op == .i8_to_i16 or ll.op == .i8_to_i32 or ll.op == .i8_to_i64)
-                        8
-                    else if (ll.op == .i16_to_i32 or ll.op == .i16_to_i64)
-                        16
-                    else if (ll.op == .i32_to_i64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitAsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -2951,14 +2950,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(src_loc);
                     // Zero-extend: mask off upper bits
-                    const src_bits: u8 = if (ll.op == .u8_to_i16 or ll.op == .u8_to_i32 or ll.op == .u8_to_i64 or ll.op == .u8_to_u16 or ll.op == .u8_to_u32 or ll.op == .u8_to_u64)
-                        8
-                    else if (ll.op == .u16_to_i32 or ll.op == .u16_to_i64 or ll.op == .u16_to_u32 or ll.op == .u16_to_u64)
-                        16
-                    else if (ll.op == .u32_to_i64 or ll.op == .u32_to_u64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -3045,16 +3037,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .i8_to_f32 or ll.op == .i8_to_f64)
-                        8
-                    else if (ll.op == .i16_to_f32 or ll.op == .i16_to_f64)
-                        16
-                    else if (ll.op == .i32_to_f32 or ll.op == .i32_to_f64)
-                        32
-                    else if (ll.op == .i64_to_f32 or ll.op == .i64_to_f64)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -3094,14 +3077,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .u8_to_f32 or ll.op == .u8_to_f64)
-                        8
-                    else if (ll.op == .u16_to_f32 or ll.op == .u16_to_f64)
-                        16
-                    else if (ll.op == .u32_to_f32 or ll.op == .u32_to_f64)
-                        32
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     const shift_amount: u8 = 64 - src_bits;
                     try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
                     try self.emitLsrImm(.w64, src_reg, src_reg, shift_amount);
@@ -3329,16 +3305,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ll.op == .i16_to_u128_wrap or
                         ll.op == .i32_to_u128_wrap or
                         ll.op == .i64_to_u128_wrap;
-                    const src_bits: u8 = if (ll.op == .u8_to_u128 or ll.op == .u8_to_i128 or ll.op == .i8_to_i128 or ll.op == .i8_to_u128_wrap)
-                        8
-                    else if (ll.op == .u16_to_u128 or ll.op == .u16_to_i128 or ll.op == .i16_to_i128 or ll.op == .i16_to_u128_wrap)
-                        16
-                    else if (ll.op == .u32_to_u128 or ll.op == .u32_to_i128 or ll.op == .i32_to_i128 or ll.op == .i32_to_u128_wrap)
-                        32
-                    else if (ll.op == .u64_to_u128 or ll.op == .u64_to_i128 or ll.op == .i64_to_i128 or ll.op == .i64_to_u128_wrap)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
 
                     // Sign/zero extend source to 64 bits
                     if (src_bits < 64) {
@@ -3445,16 +3412,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Zero-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .u8_to_dec)
-                        8
-                    else if (ll.op == .u16_to_dec)
-                        16
-                    else if (ll.op == .u32_to_dec)
-                        32
-                    else if (ll.op == .u64_to_dec)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
@@ -3475,16 +3433,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const src_reg = try self.ensureInGeneralReg(src_loc);
 
                     // Sign-extend source to 64 bits
-                    const src_bits: u8 = if (ll.op == .i8_to_dec)
-                        8
-                    else if (ll.op == .i16_to_dec)
-                        16
-                    else if (ll.op == .i32_to_dec)
-                        32
-                    else if (ll.op == .i64_to_dec)
-                        64
-                    else
-                        unreachable;
+                    const src_bits = srcBits(ll.op);
                     if (src_bits < 64) {
                         const shift_amount: u8 = 64 - src_bits;
                         try self.emitShlImm(.w64, src_reg, src_reg, shift_amount);
