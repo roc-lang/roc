@@ -24466,7 +24466,7 @@ const ProcBodyBuilder = struct {
         // A generalized worker can represent that result with erased payload
         // storage, so compute the builtin into its concrete ABI and cross the
         // explicit descriptor-guided representation boundary afterwards.
-        if (op.numericParseSpec()) |parse_spec| {
+        if (base.numeric_conversion.getNumericParseSpec(op)) |parse_spec| {
             const result_rep = self.repForType(result_ty);
             const number_layout = numericParsePayloadLayout(parse_spec);
             const concrete_layout = try self.parent.result.layouts.putTagUnion(&.{ .zst, number_layout });
@@ -24597,7 +24597,7 @@ const ProcBodyBuilder = struct {
         return continuation;
     }
 
-    fn numericParsePayloadLayout(spec: base.LowLevel.NumericParseSpec) layout.Idx {
+    fn numericParsePayloadLayout(spec: base.numeric_conversion.NumericParseSpec) layout.Idx {
         return switch (spec) {
             .int => |int| switch (int.width_bytes) {
                 1 => if (int.signed) .i8 else .u8,

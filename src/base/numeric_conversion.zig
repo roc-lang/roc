@@ -140,6 +140,33 @@ pub fn getStringConversionSpec(op: LowLevel) ?StringConversion {
     return string_conversion_by_op[@intFromEnum(op)];
 }
 
+/// What a `*_from_str` op needs in order to parse text into its number type.
+pub const NumericParseSpec = union(enum) {
+    int: struct {
+        width_bytes: u8,
+        signed: bool,
+    },
+    float: struct {
+        width_bytes: u8,
+    },
+    dec,
+};
+
+/// Look up what a `*_from_str` op needs to parse text into its number type: the
+/// width, and the signedness for integers. Returns null for any other op.
+pub fn getNumericParseSpec(op: LowLevel) ?NumericParseSpec {
+    const conversion = getStringConversionSpec(op) orelse return null;
+    if (conversion.direction != .from_str) return null;
+    return switch (conversion.num.class()) {
+        .int => .{ .int = .{
+            .width_bytes = @intCast(conversion.num.bytes()),
+            .signed = conversion.num.isSigned(),
+        } },
+        .float => .{ .float = .{ .width_bytes = @intCast(conversion.num.bytes()) } },
+        .dec => .dec,
+    };
+}
+
 /// Look up a `NumType` by name. Returns null when no variant has that name.
 /// Hand-rolled because `std.meta.stringToEnum` builds a comptime map on every
 /// call, which costs most of the branch budget.

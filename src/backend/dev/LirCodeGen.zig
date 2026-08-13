@@ -11557,7 +11557,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (args.len != 1) unreachable;
             const str_loc = try self.emitValueLocal(GuardedList.at(args, 0));
             const str_off = try self.ensureOnStack(str_loc, roc_str_size);
-            const parse_spec = ll.op.numericParseSpec() orelse
+            const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
                 std.debug.panic("generateNumFromStr: expected typed from_str op, got {s}", .{@tagName(ll.op)});
 
             const ls = self.layout_store;

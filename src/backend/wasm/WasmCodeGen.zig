@@ -14516,7 +14516,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const tu_layout = try WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
             const disc_offset: u32 = tu_layout.discriminant_offset;
             const result_offset = try self.allocStackMemory(tu_layout.size, 4);
-            const parse_spec = ll.op.numericParseSpec() orelse unreachable;
+            const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse unreachable;
 
             try self.emitProcLocal(GuardedList.at(args, 0));
             const input = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;

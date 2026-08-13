@@ -2233,7 +2233,7 @@ pub const Evaluator = struct {
     /// delegated to the same builtins the LIR interpreter uses so the accepted
     /// syntax (radix prefixes, leading sign, overflow, empty string) matches.
     fn evalFromStr(self: *Evaluator, op: base.LowLevel, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
-        const spec = op.numericParseSpec() orelse return self.unsupported_("numeric parse spec missing");
+        const spec = base.numeric_conversion.getNumericParseSpec(op) orelse return self.unsupported_("numeric parse spec missing");
         const source = args[0].str;
         const outcome: ParseOutcome = switch (spec) {
             .int => |int| switch (int.width_bytes) {

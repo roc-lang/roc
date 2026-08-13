@@ -7197,7 +7197,7 @@ pub const Interpreter = struct {
             .f32_from_str,
             .f64_from_str,
             => blk: {
-                const parse_spec = ll.op.numericParseSpec() orelse
+                const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
                     return self.runtimeError("typed from_str low-level missing numeric parse spec");
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
