@@ -253,6 +253,7 @@ my @guarded_stale_write_checks = (
 
 my @postcheck_jargon_forbidden = (
     [qr/\b[A-Za-z0-9_]*[Bb]ridge[A-Za-z0-9_]*\b/, "banned vague post-check term; say the exact operation"],
+    [qr/\b[A-Za-z0-9_]*[Tt]ype(?:[_-]?[Pp]ath)[A-Za-z0-9_]*\b/, "banned vague post-check term; say the exact field, payload, argument, result, or selection edge"],
     [qr/\b[A-Za-z0-9_]*[Pp]rojection[A-Za-z0-9_]*\b/, "banned vague post-check term; say field read, tag payload read, capture slot, or another exact operation"],
     [qr/\b[A-Za-z0-9_]*[Rr]eadback[A-Za-z0-9_]*\b/, "banned compile-time const term; use ConstStore wording"],
     [qr/\bread_back\b/i, "banned compile-time const term; use ConstStore wording"],

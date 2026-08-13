@@ -664,10 +664,7 @@ pub const LowLevel = enum(u16) {
     /// determine the list's element representation. Checking publishes this
     /// semantic direction and post-check lowering consumes it directly.
     pub fn consumesResultTypeRequest(self: LowLevel) bool {
-        return switch (self) {
-            .list_with_capacity => true,
-            else => false,
-        };
+        return self == .list_with_capacity;
     }
 
     /// Index into `builtins.simd.Op`. The SIMD entries are intentionally one

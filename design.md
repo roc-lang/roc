@@ -997,9 +997,9 @@ into long compound type or function names. Prefer a small local vocabulary such
 as `FnSet`, `FnVariant`, `FnTemplate`, and `CaptureSlot`, then define the exact
 meaning in the surrounding design or module comments. Longer names are reserved
 for cases where two nearby concepts would otherwise be genuinely ambiguous.
-Avoid vague compiler jargon when a plain name is available. The words `bridge`
-and `projection` are banned in new post-check docs, APIs, modules, type names,
-variable names, and comments. They may appear only in this ban. Say the
+Avoid vague compiler jargon when a plain name is available. The words `bridge`,
+`projection`, and `type path` are banned in new post-check docs, APIs, modules,
+type names, variable names, and comments. They may appear only in this ban. Say the
 specific operation instead, such as conversion, field read, tag payload read,
 capture slot, or wrapper function.
 
@@ -1449,13 +1449,13 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
-The checked statement artifact preserves whether each declaration or variable
-binding had an explicit annotation. This is semantic direction data, not source
+The checked statement data preserves whether each declaration or variable
+binding had an explicit annotation. This is checked direction data, not source
 presentation data: an annotated initializer consumes the annotation root as an
 exact runtime request, while an unannotated initializer is an independent exact
 producer. Post-check lowering must consume this bit directly. It must not inspect
 the solved pattern type, ask whether that type is closed, or use any other type
-shape as a substitute for the annotation fact.
+shape as a substitute for the explicit-annotation direction.
 
 ## Nominal Constructor Backing Relation
 
@@ -3415,7 +3415,7 @@ discipline. Their declaration plus exact public argument roots are sufficient
 identity evidence, so Monotype consults that identity before normalizing any
 row argument. Only an exact-root miss may flatten a row to account for two
 different extension decompositions of the same public argument. A vacant
-normalized identity is published directly; it must not pass through a generic
+normalized identity is recorded directly; it must not pass through a generic
 constructor that repeats normalization and lookup before the declaration
 backing is built. Declared field order and padding types are likewise
 deterministic declaration metadata, not identity inputs; Monotype instantiates
@@ -3493,7 +3493,7 @@ vocabulary. For example, `list_with_capacity` receives only a capacity value,
 so checking records that it consumes its result request to choose the list item
 representation. Monotype consumes that bit directly. It does not infer the
 direction from primitive syntax, default an otherwise-open item cell, or later
-reconcile the empty allocation with a produced element type.
+reconcile the empty allocation with a produced item type.
 
 Every checked procedure use that names a compiler-provided low-level operation
 records that exact operation in `CheckedModule` data. A direct call to a
@@ -3537,7 +3537,7 @@ explicit directional interface, scoped to that constructor. Checking records
 the result-row type of every source-order field as one producer root, the
 produced-or-requested direction of each field expression, and the direct
 formal-to-expression bindings for each requested field. Lowering first runs
-independent producers, appends only the projections rooted at the fields that
+independent producers, appends only the selection edges rooted at the fields that
 just completed, and materializes a requested field once under that explicit
 flat substitution span. After a requested field returns, that exact node is
 itself a producer for later fields. Lowering never searches the record result
@@ -3552,7 +3552,7 @@ nodes. This is distinct from absence of a record plan as a runtime fallback;
 the nominal-construction route and structural-record route are separate
 checker-authored operations.
 
-There is no per-checked-type value plan and no precompiled projection tree for
+There is no per-checked-type value plan and no precompiled selection edge tree for
 an arbitrary complete value. Exact destinations stay exact through transparent
 expressions such as blocks and control-flow wrappers. Compounds request or read
 only their immediate children, then construct their exact result from those
@@ -3565,7 +3565,7 @@ state without allocating a graph node. It constructs the immediate children and
 interns the completed parent directly. Only a recursive child turns the
 unfinished state into a dense reserved `NodeId`; the original traversal then
 fills that same reservation. Instantiation must not allocate an acyclic
-placeholder and redirect it to a second canonical root. Initial fill cannot
+placeholder and redirect it to a second interned root. Initial fill cannot
 invalidate active snapshots: unresolved recursive reservations cannot be
 snapshotted, and every prior snapshot is independent of the newly filled node.
 
@@ -3573,9 +3573,9 @@ Checked construction recipes and exact produced compounds occupy separate
 interner domains. A lookup for an exact produced list, box, tuple, function, tag
 row, record, or named type can return only a node previously created by an exact
 producer; an immutable checked-base recipe can never satisfy that lookup. Every
-produced constructor canonicalizes its immediate child nodes before forming its
+produced constructor interns its immediate child nodes before forming its
 key and stores those exact children in the parent. An ordinary exact child is
-already the canonical node returned by its producer and is never traversed.
+already the interned node returned by its producer and is never traversed.
 The one explicit exception is an immutable concrete `checked_base` construction
 recipe supplied as a request: when a producer first stores that recipe as an
 exact child, Monotype converts the recipe bottom-up into the produced interner
@@ -3585,7 +3585,7 @@ producer reuses the exact result directly. An open checked recipe may not cross
 this boundary. A generated nominal encountered during conversion remains one
 atomic exact node; conversion never enters its backing or asks whether an
 enclosing recipe contains one. This prevents checked recipes from escaping as
-runtime values without adding a repeated whole-graph canonicalization pass.
+runtime values without adding a repeated whole-graph interning pass.
 
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
@@ -3593,13 +3593,13 @@ makes one forward pass over those slots. It must not retry unresolved slots to
 a fixed point or search a parent type for generated descendants.
 
 Each generated construction slot also records the exact operation that supplies
-each public argument: read a named exact-selection slot, rebuild that one
+each public argument: read a named exact-selection slot, construct that one
 compound argument from its explicit substitutions, or reuse a checker-proven
 concrete base. For a compound argument the slot stores the exact child-edge ID;
 lowering does not search the shared shape for an edge with matching checked
 contents. Lowering does not choose among these operations. If a named producer
 has not run at the current operand-scheduling point, the generated slot remains
-absent; the next refinement that publishes that producer executes the same
+absent; the next refinement that records that producer executes the same
 checker-authored operation. This is scheduling, not a fallback: no alternative
 source is tried and no checked or produced graph is inspected to discover one.
 
@@ -3610,12 +3610,30 @@ not remain a consumer after it has returned a value. An enclosing exact result
 destination is also only a request: it may seed result-context edges before the
 callee runs, but it is not the call's produced result. Materializing a call
 request constructs the result recipe needed to lower the callee under
-`checked_base` authority, without consuming occurrence defaults and without
-publishing that recipe as output. Only construction of an actual
-`produced_occurrence` may consume those defaults. The completed body later
-publishes the one produced result edge. A type-only dispatch has no value
+`checked_base` or `request_occurrence` authority, as appropriate, without
+consuming occurrence defaults and without recording that recipe as output.
+Only construction of an actual `produced_occurrence`, or a checker-proven
+concrete checked source, may consume those defaults. The completed body later
+records the one produced result edge. A type-only dispatch has no value
 operand, so its checked plan records the one direct self-edge from the enclosing
 procedure's substitution span to its dispatcher slot.
+
+A call-operand request is constructed in the produced interner domain, but it
+does not consume an unselected checked default while another operand in the
+same call can still produce that identity. The request retains that checked
+variable or row extension as one explicit forward cell. A requested empty
+container can therefore produce `List(forward_item)`, and a requested callback
+which receives that list can later complete `forward_item` from the exact item
+its body produces. Both operands share the one cell through the call's flat
+selection span. If no runtime edge ever selects the cell, normal Monotype
+sealing consumes its checker-recorded language default.
+
+A compound formed around such a forward cell is not repeatedly constructed or
+eagerly propagated through its ancestors. When a later checker-recorded call
+slot makes that exact compound meet another produced root, Monotype interns
+only those two immediate parents from their now-current child roots. Equal
+parents select the existing produced identity. This work occurs only at the
+declared meeting edge; unrelated parents and descendants are untouched.
 
 Applying a completed argument, result, or dispatcher edge is directed
 request-to-produced substitution, not type checking and not symmetric type
@@ -3623,7 +3641,10 @@ equality. A generated nominal is an ordinary atomic exact node as soon as the
 producer encounters it. No enclosing list, tuple, record, tag, nominal, or
 function asks whether any descendant is generated, and no edge descends into a
 generated nominal's backing. The checked plan names the generated slot itself;
-the producer records the exact node at that point.
+the producer records the exact node at that point. Ordinary relation processing
+does not classify unrelated node pairs by generated-private content. An attempt
+to use a generated nominal in a structural-backing relation fails only when that
+nominal itself is encountered.
 
 A contextual consumer binding names its exact source identity directly. That
 identity is the checked ID of its call slot, so Monotype reads the flat
@@ -3633,7 +3654,7 @@ source; checking already made that decision when it emitted the binding.
 
 The active substitution environment stores one paged dense column per checked
 module namespace. A stable module digest selects the namespace; the
-artifact-local `CheckedTypeId` directly indexes that namespace's live column.
+module-local `CheckedTypeId` directly indexes that namespace's live column.
 It does not hash the composite `(module digest, CheckedTypeId)` on every
 lookup. Lexically nested environments retain their parent explicitly, and an
 owned-but-unfilled local slot shadows the same numeric ID in that parent.
@@ -3648,10 +3669,10 @@ refinement performs no body-wide invalidation or unchanged-slot rescan.
 An ordinary nominal's identity is its declaration plus its exact public type
 arguments. Its declaration backing is a function of those arguments, not an
 additional identity input and not another substitution root. A directional
-projection may therefore enter the nominal's public arguments, rebuild the
+selection edge may therefore enter the nominal's public arguments, construct the
 ordinary nominal from changed argument nodes, and construct the corresponding
-backing once. It never projects through the declaration backing. This applies
-to ordinary builtin nominals such as `Try` as well as user declarations. A
+backing once. It never follows a selection edge through the declaration backing.
+This applies to ordinary builtin nominals such as `Try` as well as user declarations. A
 content-addressed generated nominal is stricter still: it is atomic at the
 nominal occurrence, so even its public arguments are consumed only by the
 explicit generated-construction operation that precedes the slot.
@@ -3659,9 +3680,9 @@ explicit generated-construction operation that precedes the slot.
 Monotype interns that ordinary declaration-plus-arguments identity before it
 evaluates the declaration backing. An identity hit returns the existing atomic
 nominal immediately and performs no backing work. On a miss, Monotype reserves
-the backing cell, publishes the named identity pointing at that cell, and only
+the backing cell, records the named identity pointing at that cell, and only
 then instantiates the declaration recipe. A recursive occurrence therefore
-finds the already-published nominal directly. There is no separate backing
+finds the already-recorded nominal directly. There is no separate backing
 cache, no bucket scan over prior instances of the same declaration, and no
 need to construct a backing in order to ask whether its nominal already exists.
 
@@ -3703,30 +3724,30 @@ bypass producer conversion merely because it does not need evidence lookup.
 Selecting a concrete procedure copies only the exact nodes named by the
 checker's direct source-to-target bindings into the target procedure's checked
 identity span. Each binding explicitly classifies its source as one of three
-operations: `exact_selection` reads a completed runtime projection,
+operations: `exact_selection` reads a completed runtime selection edge,
 `concrete_checked` materializes an immutable checked constant, and
 `checked_substitution` constructs one ordinary output request from the source
 callable's already-selected children. A checked substitution has request
-authority: it can guide a request-directed target body, but it cannot publish
+authority: it can guide a request-directed target body, but it cannot record
 the target's output. Generated nominals are never checked substitutions; their
 exact nodes come only from their content-addressed producer operations. Only an
 input `exact_selection` is a call-plan source that must exist while selecting
 the target. An absent required exact selection is an invariant violation in
 checked data; Monotype cannot consult an ambient substitution table or try a
 different source. At body entry, Monotype consumes that immutable span
-directly, and the completed target body separately publishes its actual output.
+directly, and the completed target body separately records its actual output.
 It does not compare the caller's complete function graph with the target's
 complete checked function, and it does not reconstruct substitutions from
 either graph.
 
-A selected method's checker-published callable plan is the operation interface.
+A selected method's checker-recorded callable plan is the operation interface.
 For a direct dispatch this is the selected instantiation recorded by checking;
 for evidence-dependent dispatch it is the instantiation carried by the chosen
 evidence target. The syntax-level plan continues to own evaluation order and
 whether each syntax operand is produced or requested, but it is not a second
-callable-type authority. Monotype interprets the selected plan in the checked
-artifact that owns its IDs, supplies its positional argument and result nodes
-directly, and restores the source artifact before lowering syntax expressions.
+callable-type authority. Monotype interprets the selected plan in the
+CheckedModule that owns its IDs, supplies its positional argument and result
+nodes directly, and restores that module view before lowering syntax expressions.
 It does not build, compare, merge, or retain a separate target signature.
 
 Each completed argument is its own value authority, so two independent
@@ -3808,18 +3829,18 @@ the same produced identity when the body completes.
 
 The call schedule has one result-authority field, not a second
 `include_result` flag that can contradict it. Only `exact_destination` may
-publish the enclosing result as a call-plan source before the callee runs. A
+record the enclosing result as a call-plan source before the callee runs. A
 `produced` call materializes only an immutable checked result recipe from the
-substitutions supplied by completed inputs. It publishes no result selection.
+substitutions supplied by completed inputs. It records no result selection.
 The callable owns a distinct forward result cell, body lowering completes that
-cell with the exact returned node, and that completion point publishes the
+cell with the exact returned node, and that completion point records the
 result's checker-authored slot edges with produced authority. A
 compiler-authored operation whose result is determined directly from completed
-operands publishes at that explicit producer operation instead. Direct,
+operands records at that explicit producer operation instead. Direct,
 indirect, dispatch, iterator, and synthetic calls all obey the same rule: only
-the operation that determines the exact output can publish it. There is no
-optional republishing step, and no result request is ever mistaken for the
-completed output.
+the operation that determines the exact output can record it. There is no
+second result-edge recording step, and no result request is ever mistaken for
+the completed output.
 
 Compound construction does not apply one complete type graph to another. It
 lowers each runtime child once, constructs the parent directly from those exact
@@ -3831,7 +3852,7 @@ and no ordinary node participates in generated-representation work merely
 because such a descendant is possible.
 
 Nominal construction follows the same rule at its constructor boundary.
-Checking publishes the direct identities that flow from the completed backing
+Checking records the direct identities that flow from the completed backing
 into the declaration's public arguments. Monotype lowers the backing once,
 applies those direct edges, constructs the ordinary nominal identity from the
 resulting argument nodes, and attaches that exact backing. It does not first
@@ -3860,17 +3881,17 @@ might eventually occur.
 One function specialization owns an immutable checked interface and a small
 flat substitution span from checked occurrence `NodeId` to exact argument or
 evidence `NodeId`. A call constructs that span directly from its completed
-operands by following only the checker-published root-to-child paths whose
+operands by following only the checker-recorded root-to-child paths whose
 producer edge has just completed. Every occurrence stores that exact root edge
-alongside its final projection, so a refinement rejects occurrences from
+alongside its final selection edge, so a refinement rejects occurrences from
 unchanged roots before doing any path or graph work; it never walks parent
-projections merely to rediscover which operand owns an occurrence. Lowering
+selection edges merely to rediscover which operand owns an occurrence. Lowering
 keeps only that flat span; it never
 allocates demand, result, or base columns sized to every descendant in the
 shared call shape, and it never walks a checked operand beside a produced
 operand. One call schedule owns and refines one mutable sparse list; completing
 an operand does not allocate and retain a replacement copy of the entire span.
-Only the completed request publishes an immutable span into the graph.
+Only the completed request records an immutable span into the graph.
 
 Materialization is an ordinary forward checked-type instantiation scoped to
 that immutable span. When instantiation encounters a checked id named by the
@@ -3879,10 +3900,10 @@ constructs the ordinary tuple, record, tag union, list, box, function, alias,
 or nominal once from the exact nodes returned by its immediate children. It
 never constructs an unsubstituted compound first, scans a completed graph for
 selected descendants, applies a whole produced graph to a checked graph, or
-rebuilds ancestors along projection paths. A generated nominal is an atomic
-exact node, so encountering it performs only its content-identity lookup and
-never enters its private backing. Any complete exact node selected at an
-ordinary compound edge is likewise a hard boundary for that occurrence: the
+constructs no ancestors beyond the immediate compounds named by those edges. A
+generated nominal is an atomic exact node, so encountering it performs only its
+content-identity lookup and never enters its private backing. Any complete exact
+node selected at an ordinary compound edge is likewise a hard boundary for that occurrence: the
 producer already returned the whole runtime value, so materialization neither
 validates nor visits checked descendants below it.
 
@@ -3895,21 +3916,21 @@ private backing. Generated-private evidence that has no producer-assigned
 digest remains backing-sensitive, because in that older representation the
 backing itself is still the explicit identity-bearing data.
 
-Transparent aliases are not runtime compounds. Checking publishes only the
-alias backing route; it does not also publish the declared alias arguments as
-runtime projection paths. Every representation-relevant argument occurrence is
-already present where it is used in the checked backing. When a projection
+Transparent aliases are not runtime compounds. Checking records only the
+alias backing route; it does not also record the declared alias arguments as
+runtime selection edges. Every representation-relevant argument occurrence is
+already present where it is used in the checked backing. When a selection edge
 crosses an alias recipe, Monotype unwraps that recipe's stored backing; when it
 crosses an exact produced value, the value is already the backing and the step
 is the identity operation. Neither case scans the produced value or duplicates
 the backing occurrences.
 
-While checking creates a shared call shape's parent-first projection paths, it
+While checking creates a shared call shape's parent-first selection edges, it
 attaches to every selectable slot the exact ordinary ancestor checked ids whose
 output can change under that selection. Monotype reads those spans directly
 from only the slots present in the call's explicit substitution span and reuses
 the persistent checked base for every child absent from them. There is no
-second checked-ID index or lookup, and Monotype never scans all projections,
+second checked-ID index or lookup, and Monotype never scans all selection edges,
 asks a transitive containment question, or propagates a property of generated
 nominals. The slot span describes the direct substitution operation, not the
 kinds of nodes it might eventually encounter.
@@ -3923,7 +3944,7 @@ the exact generated nominal that owns it.
 Every explicit argument, result, dispatcher, and selected-target root is
 retained in the shared shape even when it has no identity-bearing child. The
 shape stores direct root-edge IDs in arity order. Lowering indexes those IDs; it
-does not scan the shape for a matching root, and a missing ID is an artifact
+does not scan the shape for a matching root, and a missing ID is a checked-module
 invariant rather than permission to instantiate a checked default.
 The specialization key reads the checked interface through the span, and the
 body uses the same span to return exact selected nodes directly from checked
@@ -3942,17 +3963,17 @@ Contextual operands start only when every non-concrete consumer binding named
 by checking has an exact source node. Lowering performs direct slot-occurrence
 lookups for those sources; it does not build a selection table by traversing a
 compound base, and absence is not permission to instantiate a checked default.
-For a record literal, checking publishes the complete field schedule. Produced
-fields publish only their own declared slot occurrences. A requested field runs
+For a record literal, checking records the complete field schedule. Produced
+fields record only their own declared slot occurrences. A requested field runs
 only after its declared sources are available. Each dependency component with
 no earlier producer has exactly one checked seed: the first field in source
 order in that component. Checking marks that field with a distinct seed flow
 and removes its incoming bindings; lowering materializes that one
-checker-authored field projection, then the field's completed value supplies
+checker-authored field selection edge, then the field's completed value supplies
 the component's later exact substitutions. This source-order rule is the
-semantic tie-break for a cyclic or source-free component, not a lowering
+checked source-order choice for a cyclic or source-free component, not a lowering
 heuristic or a fallback for missing metadata. Every exact binding source must
-occur in the published record shape, or checked-artifact construction fails.
+occur in the recorded record shape, or CheckedModule construction fails.
 
 The `?` operator follows the same producer direction. It lowers its operand to
 the exact produced `Try`, binds patterns from that exact tag, and returns the
@@ -4003,6 +4024,15 @@ first requested branch consumes the declared result request as the explicit
 seed and completes the cell. Lowering order does not change source branch order
 in the emitted IR. No branch result is joined, merged, or reconciled after
 independent lowering.
+
+Match-branch reachability is decided during the already-required traversal that
+binds the branch pattern to the exact produced scrutinee. At an applied tag,
+that traversal asks the scrutinee node for the selected tag's immediate payload
+nodes. An absent tag makes that branch unreachable; a present tag supplies the
+exact payload nodes used by nested patterns and binders. Lowering never
+instantiates a second whole checked pattern type, never scans the scrutinee in
+advance, and never propagates reachability information through unrelated type
+nodes.
 
 When an exact-producing call is itself specialization input, Monotype completes
 that one call before selecting the consumer specialization and uses the
@@ -4085,7 +4115,7 @@ are never hashed twice for one miss.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs
-the exact result independently from its operands. When a checker-published
+the exact result independently from its operands. When a checker-recorded
 call slot supplies the exact item argument, forward instantiation constructs
 the generated iterator identity at that checked nominal occurrence and returns
 it directly; there is never a completed public/generated pair to compare or
@@ -4094,7 +4124,7 @@ body is lowered, and the body must independently produce that same identity.
 
 The same rule applies to compiler-generated `FieldName(shape)` handles. Their
 runtime backing is determined solely by the exact record-shape argument, so a
-checker-published exact-argument slot constructs the content-addressed handle
+checker-recorded exact-argument slot constructs the content-addressed handle
 before an enclosing `Iter(FieldName(shape))` is constructed. The `FieldNames`
 backing and the iterator item consequently contain the identical atomic type;
 post-seal code never compares public and generated nominal structures or treats
@@ -4132,7 +4162,7 @@ ConstStore preserves that exact output beside the stored value, and restoration
 uses it directly.
 
 A value-producing `if` or `match` owns one explicit exact result selection for
-all of its inhabited branches. Checker-published value flow identifies the
+all of its inhabited branches. Checker-recorded value flow identifies the
 producer candidates. Monotype lowers those candidates first until one reachable
 branch completes and returns an exact node, redirects the one result selection
 to that node, and lowers every remaining branch at the selection as an exact
@@ -4143,7 +4173,7 @@ project their exact binder cells from the exact scrutinee, so branch-local
 lookups produce from those cells directly. The emitted branch order stays in
 source order even though the compile-time lowering schedule is producer-first.
 
-There is no list of completed branch roots, no root-equality obligation, and no
+There is no list of completed branch roots, no root-equality check, and no
 freeze-time result comparison. A branch that did not consume the selected exact
 request is an immediate compiler invariant at that branch boundary. The
 boundary never walks either value, creates a pair memo, combines children from
@@ -4160,7 +4190,7 @@ finalize as uninhabited. A negative answer is monotone: it can be produced only
 by permanently inhabited content, so Monotype records that root in a dense
 `NodeId` column and answers later queries directly. A positive answer is not
 cached because explicit producer completion may resolve the open content. A
-redirect is always queried at its new root, so it cannot inherit a stale fact.
+redirect is always queried at its new root, so it cannot inherit a stale result.
 
 After relation production freezes, runtime-demand validation classifies each
 recorded demand once. It stores the indices that finalized as the closed empty
@@ -4178,12 +4208,12 @@ lowering completes the queued producer and stores the resulting exact node.
 Recursive children retain their one stable forward cell, which their active
 producer completes; no checked child recipe is substituted for it.
 
-Every element of a non-empty list meets one flat exact-root storage obligation;
-the list node stores the first element's exact root and final validation proves
+Every item of a non-empty list meets one flat exact-root storage requirement;
+the list node stores the first item's exact root and final validation proves
 that the remaining producers converged to it. Record scheduling similarly
-publishes a complete compound projection only when a checker-authored consumer
+records all edges needed for a compound only when a checker-authored consumer
 binding explicitly names that compound as a source. Unrelated record fields
-still publish only their necessary identity slots. Neither rule authorizes a
+still record only their necessary identity slots. Neither rule authorizes a
 compound scan during Monotype lowering.
 
 A tag-construction row carries both its exact payload cells and its exact
@@ -4213,7 +4243,7 @@ to rediscover whether it can return an exact generated type. An exact local
 procedure lowers its result as a produced value even when its initial request
 still has the public return shape, so the body can replace that public result
 with the generated identity it constructs before the specialization is sealed.
-Every checker-recorded generalized local-procedure use also publishes the
+Every checker-recorded generalized local-procedure use also records the
 shared call shape for that use occurrence's checked callable. The use relation
 already names its resolved-value record, and that record's checked type is the
 immutable source contract passed to local-procedure specialization. Monotype
@@ -6356,19 +6386,19 @@ name, runtime layout, object symbol, or generated procedure id. Entering another
 checked module changes that address explicitly. A fresh scope exists only for
 operation-local construction state such as a declaration backing whose formal
 arguments have been replaced. It does not license copying an entire checked
-function or value graph.
+function or the complete checked type of a value.
 
 Exact nodes enter that substitution span only at checker-authored directional
 edges: completed call arguments and results, lambda and closure interfaces,
 static-dispatch operands and targets, numeric default operations, declaration
-formal arguments, and immediate pattern projections. None of these edges
+formal arguments, and immediate pattern selection edges. None of these edges
 unifies a whole checked root with a whole produced root. Pattern lowering, for
 example, consumes the exact scrutinee node and the checked field, tuple-item,
 tag-payload, or binder position directly.
 
 Transparent aliases are normalized to their runtime backing before the checker
-publishes one of these directional edges. A producer shape therefore names the
-same backing root as the consumer binding; it never publishes an alias wrapper
+records one of these directional edges. A producer shape therefore names the
+same backing root as the consumer binding; it never records an alias wrapper
 that Monotype would have to rediscover or retain as a second runtime slot.
 
 Direct calls in the interface program are dependencies on a concrete callee
@@ -6399,11 +6429,11 @@ specializations, not to the size of matching checked and produced type trees.
 Checked-node construction is lazy about recursion. Entering a checked type
 records an unfinished scope entry but does not allocate a graph node. After its
 immediate children have produced their exact nodes, an acyclic parent is
-interned directly and the scope entry becomes that canonical node. Only a
+interned directly and the scope entry becomes that interned node. Only a
 recursive backedge turns the unfinished entry into a reserved forward node;
 the original traversal later fills that same reservation. Consequently an
 acyclic checked occurrence may not allocate a placeholder and redirect it to a
-second canonical root. A child body context that must inherit an unfinished
+second interned root. A child body context that must inherit an unfinished
 parent entry first gives that entry a real forward node and inherits the node,
 never the private unfinished marker.
 
@@ -6499,7 +6529,7 @@ checked literal identity.
 Checked output does not classify a complete root by whether its descendants
 contain identity variables. Such a transitive property would make unrelated
 parents participate in exact-representation work. A call shape instead names
-the individual identity slots and direct projections that can supply them.
+the individual identity slots and direct selection edges that can supply them.
 Function requests keep the persistent checked function base plus their explicit
 substitution span, so distinct requests retain distinct request identity without
 copying unchanged function components.
@@ -6519,7 +6549,7 @@ Structural equality follows the same rule. The checker has already established
 that the operands are equality-compatible and has either emitted a dispatch plan
 that permits derived `is_eq` to lower as structural equality or rewritten the
 expression to an explicit structural equality node. Monotype lowering
-uses checker-published value flow to identify an operand that produces its
+uses checker-recorded value flow to identify an operand that produces its
 exact runtime node independently. That operand produces first, and the other
 operand is lowered at its exact node. If the producer reserved a forward result
 cell (for example, a queued procedure call), lowering completes that producer
@@ -6537,12 +6567,12 @@ source operand order regardless of lowering order.
 Homogeneous value sequences use the same directional rule. For a non-empty
 list literal, checking's value-flow column selects the first item that can
 produce an exact runtime node. A forward result is completed before it becomes
-the element request. If no item is a producer, the first requested item
-consumes the checked element request as the explicit seed. Every other
+the item request. If no item is a producer, the first requested item
+consumes the checked item request as the explicit seed. Every other
 item then consumes the seed's exact produced node. This lowering schedule never
 changes the source order stored in the list expression, and there is no set of
-independently lowered element graphs to compare or merge afterward. An empty
-list has no runtime element producer and retains its declared element request.
+independently lowered item graphs to compare or merge afterward. An empty
+list has no runtime item producer and retains its declared item request.
 
 The reason this is the long-term design rather than a local implementation
 detail is that it makes specialization, dispatch, lambda lowering, and equality

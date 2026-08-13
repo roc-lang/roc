@@ -15571,7 +15571,7 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]p
         .{ .name = "Declaration checked node misses", .count = body.declaration_checked_node_misses },
         .{ .name = "Recursive checked node reservations", .count = body.recursive_checked_node_reservations },
         .{ .name = "Call selection refinements", .count = body.call_selection_refinements },
-        .{ .name = "Call selection entries published", .count = body.call_selection_entries_published },
+        .{ .name = "Call selection entries recorded", .count = body.call_selection_entries_recorded },
         .{ .name = "Call selection non-slot entries", .count = body.call_selection_non_slot_entries },
         .{ .name = "Call selection slot visits", .count = body.call_selection_slot_visits },
         .{ .name = "Call selection binding visits", .count = body.call_selection_binding_visits },

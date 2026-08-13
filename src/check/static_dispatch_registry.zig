@@ -1218,6 +1218,7 @@ pub const LiteralConversionResultTopology = struct {
     err_tag: canonical.TagLabelId,
 };
 
+/// Compiler-generated argument passed to a custom numeral conversion.
 pub const GeneratedNumeralOperand = struct {
     literal: ModuleEnv.NumeralLiteral,
     literal_tag: canonical.TagLabelId,
@@ -1228,11 +1229,13 @@ pub const GeneratedNumeralOperand = struct {
     result: LiteralConversionResultTopology,
 };
 
+/// Compiler-generated argument passed to a custom string conversion.
 pub const GeneratedQuoteOperand = struct {
     literal: CheckedStringLiteralId,
     result: LiteralConversionResultTopology,
 };
 
+/// One source or compiler-generated operand in a static dispatch call.
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     /// Compiler-generated finite `Iter` for string interpolation. The checked

@@ -207,6 +207,7 @@ const InstFunction = struct {
     ret: NodeId,
 };
 
+/// One node in the exact Monotype construction graph.
 pub const InstNode = union(enum) {
     redirect: NodeId,
     unresolved: InstVariable,
@@ -309,13 +310,14 @@ const NodePair = struct {
 };
 
 /// Stable identity of one node in an immutable checked-type base. Checked type
-/// ids are dense only within one module artifact, so the module identity is an
+/// ids are dense only within one CheckedModule, so the module identity is an
 /// inseparable part of every specialization-substitution key.
 pub const CheckedBaseKey = struct {
     module_bytes: [32]u8,
     checked: checked.CheckedTypeId,
 };
 
+/// Whether a call slot contains request input or a completed value node.
 pub const DirectRequestSelectionAuthority = enum(u8) {
     /// Context used to lower a value before its exact result exists. The
     /// value's producer replaces this seed when it completes.
@@ -325,7 +327,7 @@ pub const DirectRequestSelectionAuthority = enum(u8) {
     produced,
 };
 
-/// One checker-published call slot and its current exact node. Producer
+/// One checker-recorded call slot and its current exact node. Producer
 /// selections are single-assignment; a producer may replace only an earlier
 /// request seed for the same slot.
 pub const DirectRequestSelection = struct {
@@ -354,6 +356,7 @@ pub const GeneratedNominalLookup = struct {
     digest: names.TypeDigest,
 };
 
+/// Generated nominal lookup used by iterator construction.
 pub const GeneratedIteratorLookup = GeneratedNominalLookup;
 
 const RelationStamp = struct {
@@ -434,18 +437,18 @@ pub const InstGraph = struct {
     row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Roots already proven unable to finalize as uninhabited. This fact is
+    /// Roots already proven unable to finalize as uninhabited. This entry is
     /// monotone: only permanent inhabited content can produce it. A root that
     /// later redirects is looked up by its new root and therefore recomputed.
     permanently_inhabited_nodes: collections.DenseMap(NodeId, void),
     /// Generated nominals keyed by the final content digest assigned by their
     /// producer. Identity, arguments, and backing are complete before entry.
     generated_nominal_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80),
-    /// Canonical graph node for each completed nominal identity. A nominal's
+    /// Interned graph node for each completed nominal identity. A nominal's
     /// definition and exact argument nodes determine its type; the backing is
     /// implementation data owned by that identity, not another type axis.
     named_nodes_by_identity_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
-    /// Canonical compound nodes keyed only by their immediate exact children.
+    /// Interned compound nodes keyed only by their immediate exact children.
     /// Producers therefore share an already-built type without traversing any
     /// descendant graph.
     list_nodes_by_element: collections.DenseMap(NodeId, InternedCompoundByAuthority),
@@ -453,7 +456,7 @@ pub const InstGraph = struct {
     tuple_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     /// Completed function values keyed by their exact immediate argument and
     /// result nodes. Open requests remain distinct until their producer fills
-    /// the result edge; completion canonicalizes the one finished shape once.
+    /// the result edge; completion interns the one finished shape once.
     function_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     record_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     /// Produced equivalent of an immutable checked structural recipe. A
@@ -476,14 +479,14 @@ pub const InstGraph = struct {
     /// NodeId column because request identity is graph-local and every node
     /// already has a stable dense ordinal.
     function_result_relations: std.ArrayList(?FunctionResultRelation),
-    /// Immutable flat substitutions selected by the checker's projection
+    /// Immutable flat substitutions selected by the checker's selection-edge
     /// program for each function request.
     direct_request_selection_spans: std.ArrayList(DirectRequestSelectionSpan),
     direct_request_selections: std.ArrayList(DirectRequestSelection),
     /// Exact producer roots that meet at one runtime-value boundary. The
     /// roots must converge through their own producer completions and the
     /// immediate-child interners; validating this flat pair never traverses
-    /// either value graph or relates it to a checked graph.
+    /// descendants below either root or relates either root to a checked one.
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -538,12 +541,6 @@ pub const InstGraph = struct {
     fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += 1;
-        }
-    }
-
-    fn countDiagnosticBy(self: *InstGraph, comptime field: []const u8, amount: usize) void {
-        if (self.diagnostics) |diagnostics| {
-            @field(diagnostics, field) += @intCast(amount);
         }
     }
 
@@ -846,7 +843,7 @@ pub const InstGraph = struct {
     }
 
     /// Whether two requests carry the same node and authority for every
-    /// checker-published identity slot. A request seed and a produced edge are
+    /// checker-recorded identity slot. A request seed and a produced edge are
     /// not interchangeable even when they currently name the same graph node.
     /// Callers compare the immutable checked callable base separately.
     pub fn sameDirectRequestSelections(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) bool {
@@ -896,7 +893,7 @@ pub const InstGraph = struct {
             }
             try self.setContent(result_cell, .{ .redirect = exact_produced });
         }
-        _ = try self.canonicalizeCompletedFunction(fn_node);
+        _ = try self.internCompletedFunction(fn_node);
     }
 
     /// Resolve one explicit control-flow result cell to the exact node chosen
@@ -962,7 +959,7 @@ pub const InstGraph = struct {
         return .{ .existing = null, .digest = digest };
     }
 
-    /// Reserve, fill, and publish one recursive generated iterator nominal.
+    /// Reserve, fill, and record one recursive generated iterator nominal.
     /// Registering the reservation before `fill` lets recursive occurrences
     /// with the same content identity resolve directly to this atomic node.
     pub fn addRecursiveGeneratedIterator(
@@ -1119,7 +1116,7 @@ pub const InstGraph = struct {
         return .{ .existing = null, .digest = digest };
     }
 
-    /// Publish a completed generated nominal at the identity assigned by its
+    /// Record a completed generated nominal at the identity assigned by its
     /// producer. This is the only registry used by consumers and sealing.
     pub fn registerGeneratedNominalAtDigest(
         self: *InstGraph,
@@ -1472,7 +1469,7 @@ pub const InstGraph = struct {
 
     /// Construct one completed producer-owned tag row. Row chaining is a
     /// checked construction recipe, not runtime identity: consume the chain,
-    /// sort the variants, and intern the canonical immediate children once at
+    /// sort the variants, and intern the exact immediate children once at
     /// the producer boundary.
     pub fn newProducedTagUnion(
         self: *InstGraph,
@@ -1486,7 +1483,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         initial_tags: []const InstTag,
         raw_ext: NodeId,
-        canonicalize_children: bool,
+        intern_children: bool,
     ) Allocator.Error!NodeId {
         var tags = std.ArrayList(InstTag).empty;
         defer tags.deinit(self.allocator);
@@ -1511,25 +1508,25 @@ pub const InstGraph = struct {
             .tag_union => unreachable,
         }
         std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
-        const canonical_tags = try self.arena().dupe(InstTag, tags.items);
-        for (canonical_tags) |*tag| {
-            if (!canonicalize_children) continue;
-            var canonical_payloads: ?[]NodeId = null;
+        const interned_tags = try self.arena().dupe(InstTag, tags.items);
+        for (interned_tags) |*tag| {
+            if (!intern_children) continue;
+            var interned_payloads: ?[]NodeId = null;
             for (tag.payloads, 0..) |payload, index| {
-                const canonical = try self.canonicalImmediateChild(payload);
-                if (canonical_payloads) |payloads| {
-                    payloads[index] = canonical;
-                } else if (self.find(payload) != canonical) {
+                const interned = try self.internImmediateChild(payload);
+                if (interned_payloads) |payloads| {
+                    payloads[index] = interned;
+                } else if (self.find(payload) != interned) {
                     const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
                     @memcpy(payloads[0..index], tag.payloads[0..index]);
-                    payloads[index] = canonical;
-                    canonical_payloads = payloads;
+                    payloads[index] = interned;
+                    interned_payloads = payloads;
                 }
             }
-            if (canonical_payloads) |payloads| tag.payloads = payloads;
+            if (interned_payloads) |payloads| tag.payloads = payloads;
         }
         return try self.newNode(.{ .tag_union = .{
-            .tags = canonical_tags,
+            .tags = interned_tags,
             .ext = ext,
         } });
     }
@@ -1549,7 +1546,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         initial_fields: []const InstField,
         raw_ext: NodeId,
-        canonicalize_children: bool,
+        intern_children: bool,
     ) Allocator.Error!NodeId {
         var fields = std.ArrayList(InstField).empty;
         defer fields.deinit(self.allocator);
@@ -1574,17 +1571,17 @@ pub const InstGraph = struct {
             .record => unreachable,
         }
         std.mem.sort(InstField, fields.items, self.name_store, instFieldLessThan);
-        const canonical_fields = try self.arena().dupe(InstField, fields.items);
-        if (canonicalize_children) {
-            for (canonical_fields) |*field| {
-                field.ty = try self.canonicalImmediateChild(field.ty);
+        const interned_fields = try self.arena().dupe(InstField, fields.items);
+        if (intern_children) {
+            for (interned_fields) |*field| {
+                field.ty = try self.internImmediateChild(field.ty);
                 if (field.value_ty) |value_ty| {
-                    field.value_ty = try self.canonicalImmediateChild(value_ty);
+                    field.value_ty = try self.internImmediateChild(value_ty);
                 }
             }
         }
         return try self.newNode(.{ .record = .{
-            .fields = canonical_fields,
+            .fields = interned_fields,
             .ext = ext,
         } });
     }
@@ -1592,23 +1589,23 @@ pub const InstGraph = struct {
     /// Construct a completed producer-owned list from its one exact immediate
     /// element node. This consumes only that child; it never walks descendants.
     pub fn newProducedList(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
-        return try self.newNode(.{ .list = try self.canonicalImmediateChild(element) });
+        return try self.newNode(.{ .list = try self.internImmediateChild(element) });
     }
 
     /// Construct a completed producer-owned box from its one exact immediate
     /// element node. This consumes only that child; it never walks descendants.
     pub fn newProducedBox(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
-        return try self.newNode(.{ .box = try self.canonicalImmediateChild(element) });
+        return try self.newNode(.{ .box = try self.internImmediateChild(element) });
     }
 
     /// Construct a completed producer-owned tuple from exact immediate item
     /// nodes. Each item is normalized at this boundary and is not traversed.
     pub fn newProducedTuple(self: *InstGraph, items: []const NodeId) Allocator.Error!NodeId {
-        const canonical_items = try self.arena().alloc(NodeId, items.len);
-        for (items, canonical_items) |item, *canonical| {
-            canonical.* = try self.canonicalImmediateChild(item);
+        const interned_items = try self.arena().alloc(NodeId, items.len);
+        for (items, interned_items) |item, *interned| {
+            interned.* = try self.internImmediateChild(item);
         }
-        return try self.newNode(.{ .tuple = canonical_items });
+        return try self.newNode(.{ .tuple = interned_items });
     }
 
     fn nodeSpanShapeHash(self: *InstGraph, nodes: []const NodeId) u64 {
@@ -1722,14 +1719,14 @@ pub const InstGraph = struct {
         try bucket.value_ptr.append(self.allocator, node);
     }
 
-    /// Canonicalize a function only when its producer has completed the exact
+    /// Intern a function only when its producer has completed the exact
     /// result edge. Open requests retain distinct forward cells; completed
     /// values with identical immediate children become one runtime type node.
-    fn canonicalizeCompletedFunction(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+    fn internCompletedFunction(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         const node = self.find(raw_node);
         const function = switch (self.nodes.items[@intFromEnum(node)]) {
             .func => |function| function,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("completed function canonicalization received a non-function node"),
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("completed function interning received a non-function node"),
         };
         if (self.existingFunctionShape(function)) |existing| {
             if (existing != node) {
@@ -1752,22 +1749,22 @@ pub const InstGraph = struct {
     ) Allocator.Error!NodeId {
         const stored_args = try self.arena().alloc(NodeId, args.len);
         for (args, stored_args) |arg, *stored| {
-            stored.* = try self.canonicalImmediateChild(arg);
+            stored.* = try self.internImmediateChild(arg);
         }
         const node = try self.newNode(.{ .func = .{
             .args = stored_args,
-            .ret = try self.canonicalImmediateChild(ret),
+            .ret = try self.internImmediateChild(ret),
         } });
-        return try self.canonicalizeCompletedFunction(node);
+        return try self.internCompletedFunction(node);
     }
 
     /// Finish the exact identity of the produced node encountered at a value
     /// boundary. A compound may have been assembled while an immediate child
-    /// was a forward cell; once that child completes, rebuild only this one
+    /// was a forward cell; once that child completes, intern only this one
     /// parent from the child's current root. This never descends into a child.
-    pub fn canonicalizeProducedNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+    pub fn internProducedNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         const node = self.find(raw_node);
-        const canonical = switch (self.nodes.items[@intFromEnum(node)]) {
+        const interned = switch (self.nodes.items[@intFromEnum(node)]) {
             .list => |element| try self.newProducedList(element),
             .box => |element| try self.newProducedBox(element),
             .tuple => |items| try self.newProducedTuple(items),
@@ -1775,25 +1772,25 @@ pub const InstGraph = struct {
             .record => |record| try self.newProducedRecord(record.fields, record.ext),
             .tag_union => |tag_union| try self.newProducedTagUnion(tag_union.tags, tag_union.ext),
             .named => |named| if (named.kind == .alias)
-                try self.canonicalImmediateChild(node)
+                try self.internImmediateChild(node)
             else
                 try self.newNode(.{ .named = named }),
             .redirect => unreachable,
             .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
         };
-        if (canonical == node) return node;
+        if (interned == node) return node;
         // Function nodes carry request/result metadata indexed by their
         // original NodeId, and named nodes can own recursive backing state.
-        // Exact expressions use the returned canonical node directly. Plain
+        // Exact expressions use the returned interned node directly. Plain
         // structural parents carry no such side data, so redirecting them
         // updates every already-built immediate parent edge as well.
         if (self.nodes.items[@intFromEnum(node)] != .func and
             self.nodes.items[@intFromEnum(node)] != .named and
             !self.checked_base_nodes.items[@intFromEnum(node)])
         {
-            try self.redirectRoot(canonical, node);
+            try self.redirectRoot(interned, node);
         }
-        return canonical;
+        return interned;
     }
 
     fn recordShapeHash(self: *InstGraph, record: InstNode) u64 {
@@ -1930,11 +1927,11 @@ pub const InstGraph = struct {
         return self.find(produced);
     }
 
-    /// Return the canonical identity node for one already-built immediate
+    /// Return the interned identity node for one already-built immediate
     /// child. Row extensions and concrete checked recipes are normalized once
     /// here, when a producer records that child, rather than being
     /// rediscovered by later call consumers.
-    fn canonicalImmediateChild(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+    fn internImmediateChild(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         var node = self.find(raw_node);
         var remaining = self.nodes.items.len;
         while (self.nodes.items[@intFromEnum(node)] == .named and
@@ -1964,23 +1961,23 @@ pub const InstGraph = struct {
         };
     }
 
-    fn canonicalizeNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
-        var canonical_args: ?[]NodeId = null;
+    fn internNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
+        var interned_args: ?[]NodeId = null;
         for (named.args, 0..) |arg, index| {
-            const canonical = try self.canonicalImmediateChild(arg);
-            if (canonical_args) |args| {
-                args[index] = canonical;
-            } else if (self.find(arg) != canonical) {
+            const interned = try self.internImmediateChild(arg);
+            if (interned_args) |args| {
+                args[index] = interned;
+            } else if (self.find(arg) != interned) {
                 const args = try self.arena().alloc(NodeId, named.args.len);
                 @memcpy(args[0..index], named.args[0..index]);
-                args[index] = canonical;
-                canonical_args = args;
+                args[index] = interned;
+                interned_args = args;
             }
         }
-        if (canonical_args) |args| {
-            var canonical = named;
-            canonical.args = args;
-            return canonical;
+        if (interned_args) |args| {
+            var interned = named;
+            interned.args = args;
+            return interned;
         }
         return null;
     }
@@ -2035,8 +2032,8 @@ pub const InstGraph = struct {
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
         if (node_content == .named and self.checked_base_construction_depth == 0) {
-            if (try self.canonicalizeNamedArguments(node_content.named)) |canonical| {
-                return try self.newNode(.{ .named = canonical });
+            if (try self.internNamedArguments(node_content.named)) |interned| {
+                return try self.newNode(.{ .named = interned });
             }
         }
         switch (node_content) {
@@ -2140,13 +2137,13 @@ pub const InstGraph = struct {
             Common.invariant("produced node reservation was completed more than once");
         }
         const completed_content = if (raw_content == .named and self.checked_base_construction_depth == 0)
-            if (try self.canonicalizeNamedArguments(raw_content.named)) |canonical|
-                InstNode{ .named = canonical }
+            if (try self.internNamedArguments(raw_content.named)) |interned|
+                InstNode{ .named = interned }
             else
                 raw_content
         else
             raw_content;
-        const canonical: ?NodeId = switch (completed_content) {
+        const interned: ?NodeId = switch (completed_content) {
             .primitive => |primitive| if (self.primitive_nodes[@intFromEnum(primitive)]) |node| self.find(node) else null,
             .empty_tag_union => if (self.empty_tag_union_node) |node| self.find(node) else null,
             .empty_record => if (self.empty_record_node) |node| self.find(node) else null,
@@ -2159,7 +2156,7 @@ pub const InstGraph = struct {
             .named => |named| self.existingNamedIdentity(named),
             .redirect, .unresolved, .func, .erased => null,
         };
-        if (canonical) |node| {
+        if (interned) |node| {
             try self.redirectRoot(node, root);
             return;
         }
@@ -2195,7 +2192,7 @@ pub const InstGraph = struct {
     /// Intern an ordinary nominal from its complete identity before evaluating
     /// its declaration backing. The declaration plus exact public arguments
     /// are the identity; the backing is deterministic implementation data.
-    /// Publishing the named node first makes recursive occurrences direct
+    /// Recording the named node first makes recursive occurrences direct
     /// identity hits and means an ordinary hit performs no backing work.
     pub fn reserveOrdinaryNamedBacking(
         self: *InstGraph,
@@ -2219,7 +2216,7 @@ pub const InstGraph = struct {
             return .{ .existing = existing };
         }
 
-        const canonical = if (try self.canonicalizeNamedArguments(raw_named)) |normalized| blk: {
+        const interned = if (try self.internNamedArguments(raw_named)) |normalized| blk: {
             if (self.existingNamedIdentity(normalized)) |existing| {
                 return .{ .existing = existing };
             }
@@ -2227,13 +2224,13 @@ pub const InstGraph = struct {
         } else raw_named;
 
         const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() });
-        var completed = canonical;
+        var completed = interned;
         completed.backing = .{
             .node = backing,
             .use = backing_use,
             .authority = .checked_public,
         };
-        // `canonical` has already missed the identity table. Publish it
+        // `interned` has already missed the identity table. Record it
         // directly: routing this vacant reservation through `newNode` would
         // normalize and query the same identity a second time.
         const named = try self.appendDistinctNode(.{ .named = completed });
@@ -2436,11 +2433,11 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Return an exact node for an explicit checker-published default on an identity slot.
+    /// Return an exact node for an explicit checker-recorded default on an identity slot.
     /// Call dependency planning uses this for pathless numeric and open-row
     /// identities before lowering a contextual consumer. Returns false when
     /// the node has no checked default; callers must then wait for another
-    /// published producer edge.
+    /// recorded producer edge.
     pub fn checkedDefaultNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!?NodeId {
         self.requireRelationProduction();
         const node = self.find(raw_node);
@@ -2586,6 +2583,25 @@ pub const InstGraph = struct {
         return self.tagPayloadNodeWithAccess(node, name, payload_index, .inspectable);
     }
 
+    /// Read the exact payload span for a named tag. A missing result means the
+    /// exact row does not contain that constructor.
+    pub fn tagPayloadNodesOrNull(
+        self: *InstGraph,
+        node: NodeId,
+        name: names.TagNameId,
+    ) Allocator.Error!?[]const NodeId {
+        const structural = try self.shapeRoot(node, "tag payloads", .inspectable);
+        if (self.content(structural) != .tag_union) {
+            Common.invariant("instantiation tag payload span read had a non-tag-union node");
+        }
+        const row = try self.flattenTagRow(structural);
+        const wanted = self.tagLabelText(name);
+        for (row.tags) |tag| {
+            if (Ident.textEql(wanted, self.tagLabelText(tag.name))) return tag.payloads;
+        }
+        return null;
+    }
+
     /// Project one exact tag payload cell for runtime construction.
     pub fn tagConstructionPayloadNode(
         self: *InstGraph,
@@ -2712,9 +2728,9 @@ pub const InstGraph = struct {
         return self.requiredRecordFieldNodeWithAccess(raw_record, name, .inspectable, "required record field access");
     }
 
-    /// Project the semantic open-row remainder after the checker-published
-    /// fields. Row extension topology is intentionally irrelevant: checked
-    /// publication names the fields owned by the enclosing row, and this edge
+    /// Select the checked open-row remainder after the checker-recorded
+    /// fields. Row extension topology is intentionally irrelevant: checker
+    /// output names the fields owned by the enclosing row, and this edge
     /// returns exactly the remaining flattened row.
     pub fn recordRemainderNode(
         self: *InstGraph,
@@ -2744,73 +2760,7 @@ pub const InstGraph = struct {
         return try self.newProducedRecord(retained.items, row.ext);
     }
 
-    /// Copy one record row while replacing exactly one named immediate field.
-    /// This is the reverse operation of a checker-authored `record_field`
-    /// projection; unrelated child nodes remain shared with the base row.
-    pub fn recordWithProjectedField(
-        self: *InstGraph,
-        raw_record: NodeId,
-        name: names.RecordFieldNameId,
-        child: NodeId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_record, "record projection rebuild", .inspectable);
-        if (self.content(structural) != .record) {
-            Common.invariant("record projection rebuild had a non-record node");
-        }
-        const row = try self.flattenRecordRow(structural);
-        const fields = try self.arena().dupe(InstField, row.fields);
-        const wanted = self.fieldLabelText(name);
-        var replaced = false;
-        for (fields) |*field| {
-            if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
-            field.ty = self.find(child);
-            replaced = true;
-            break;
-        }
-        if (!replaced) Common.invariant("record projection rebuild named an absent field");
-        return try self.newProducedRecord(fields, row.ext);
-    }
-
-    /// Copy one record row while replacing its checker-declared remainder.
-    /// Only the explicitly excluded head fields are retained from the base;
-    /// the supplied exact remainder contributes its fields and tail.
-    pub fn recordWithProjectedRemainder(
-        self: *InstGraph,
-        raw_record: NodeId,
-        excluded: []const names.RecordFieldNameId,
-        raw_remainder: NodeId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_record, "record remainder rebuild", .inspectable);
-        if (self.content(structural) != .record) {
-            Common.invariant("record remainder rebuild had a non-record node");
-        }
-        const base_row = try self.flattenRecordRow(structural);
-        var fields = std.ArrayList(InstField).empty;
-        defer fields.deinit(self.allocator);
-        for (excluded) |name| {
-            const wanted = self.fieldLabelText(name);
-            for (base_row.fields) |field| {
-                if (!Ident.textEql(wanted, self.fieldLabelText(field.name))) continue;
-                try fields.append(self.allocator, field);
-                break;
-            } else Common.invariant("record remainder rebuild named an absent base field");
-        }
-
-        const remainder = self.find(raw_remainder);
-        const remainder_ext = switch (self.content(remainder)) {
-            .record => blk: {
-                const row = try self.flattenRecordRow(remainder);
-                try fields.appendSlice(self.allocator, row.fields);
-                break :blk row.ext;
-            },
-            .empty_record, .unresolved => remainder,
-            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("record remainder rebuild received a non-record remainder"),
-        };
-        if (fields.items.len == 0) return remainder_ext;
-        return try self.newProducedRecord(fields.items, remainder_ext);
-    }
-
-    /// Project the semantic open-tag-row remainder after the checker-published
+    /// Select the checked open-tag-row remainder after the checker-recorded
     /// tags. The returned node contains only tags not owned by the enclosing
     /// checked row and preserves the exact produced tail node.
     pub fn tagRemainderNode(
@@ -2839,73 +2789,6 @@ pub const InstGraph = struct {
         }
         if (retained.items.len == 0) return self.find(row.ext);
         return try self.newProducedTagUnion(retained.items, row.ext);
-    }
-
-    /// Copy one tag row while replacing one checker-declared payload edge.
-    pub fn tagUnionWithProjectedPayload(
-        self: *InstGraph,
-        raw_union: NodeId,
-        name: names.TagNameId,
-        payload_index: usize,
-        child: NodeId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_union, "tag payload rebuild", .inspectable);
-        if (self.content(structural) != .tag_union) {
-            Common.invariant("tag payload rebuild had a non-tag-union node");
-        }
-        const row = try self.flattenTagRow(structural);
-        const tags = try self.arena().dupe(InstTag, row.tags);
-        const wanted = self.tagLabelText(name);
-        var replaced = false;
-        for (tags) |*tag| {
-            if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
-            if (payload_index >= tag.payloads.len) {
-                Common.invariant("tag payload rebuild exceeded the checked payload arity");
-            }
-            tag.payloads = try self.arena().dupe(NodeId, tag.payloads);
-            tag.payloads[payload_index] = self.find(child);
-            replaced = true;
-            break;
-        }
-        if (!replaced) Common.invariant("tag payload rebuild named an absent tag");
-        return try self.newProducedTagUnion(tags, row.ext);
-    }
-
-    /// Copy one tag row while replacing its checker-declared remainder.
-    pub fn tagUnionWithProjectedRemainder(
-        self: *InstGraph,
-        raw_union: NodeId,
-        excluded: []const names.TagNameId,
-        raw_remainder: NodeId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_union, "tag remainder rebuild", .inspectable);
-        if (self.content(structural) != .tag_union) {
-            Common.invariant("tag remainder rebuild had a non-tag-union node");
-        }
-        const base_row = try self.flattenTagRow(structural);
-        var tags = std.ArrayList(InstTag).empty;
-        defer tags.deinit(self.allocator);
-        for (excluded) |name| {
-            const wanted = self.tagLabelText(name);
-            for (base_row.tags) |tag| {
-                if (!Ident.textEql(wanted, self.tagLabelText(tag.name))) continue;
-                try tags.append(self.allocator, tag);
-                break;
-            } else Common.invariant("tag remainder rebuild named an absent base tag");
-        }
-
-        const remainder = self.find(raw_remainder);
-        const remainder_ext = switch (self.content(remainder)) {
-            .tag_union => blk: {
-                const row = try self.flattenTagRow(remainder);
-                try tags.appendSlice(self.allocator, row.tags);
-                break :blk row.ext;
-            },
-            .empty_tag_union, .unresolved => remainder,
-            .redirect, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("tag remainder rebuild received a non-tag remainder"),
-        };
-        if (tags.items.len == 0) return remainder_ext;
-        return try self.newProducedTagUnion(tags.items, remainder_ext);
     }
 
     /// Select a private backing field for
@@ -3139,7 +3022,7 @@ pub const InstGraph = struct {
     }
 
     /// Redirect one reserved or related root while preserving every exact row
-    /// back-reference to its canonical target.
+    /// back-reference to its interned target.
     fn redirectRoot(
         self: *InstGraph,
         winner: NodeId,
@@ -3214,8 +3097,8 @@ pub const InstGraph = struct {
             Common.invariant("exact lowering attempted to rewrite an immutable checked base node");
         }
         if (new_content == .named) {
-            if (try self.canonicalizeNamedArguments(new_content.named)) |canonical| {
-                return try self.setContent(root, .{ .named = canonical });
+            if (try self.internNamedArguments(new_content.named)) |interned| {
+                return try self.setContent(root, .{ .named = interned });
             }
         }
         const old_content = self.nodes.items[@intFromEnum(root)];
@@ -3404,19 +3287,6 @@ pub const InstGraph = struct {
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
-        const left_generated_private = left_content == .named and
-            (if (left_content.named.backing) |backing| backing.authority == .generated_private else false);
-        const right_generated_private = right_content == .named and
-            (if (right_content.named.backing) |backing| backing.authority == .generated_private else false);
-        // An unresolved exact-result cell is completed by its producer's
-        // generated nominal in the ordinary way. What is forbidden is
-        // relating an already-built public nominal graph to a private one.
-        if (left_generated_private != right_generated_private and
-            left_content != .unresolved and right_content != .unresolved)
-        {
-            Common.invariant("generated-private representation reached ordinary public/private graph unification");
-        }
-
         if (left_content == .redirect) unreachable;
         if (left_content == .unresolved) {
             if (right_content == .unresolved) {
@@ -3606,12 +3476,12 @@ pub const InstGraph = struct {
                     const right_generated = isGeneratedPrivateRootContent(right_content);
                     if (left_generated or right_generated) {
                         if (left_generated and right_generated and
-                            self.sameExactGeneratedPrivateIdentity(left_named, right_named))
+                            std.meta.eql(left_named.def, right_named.def))
                         {
                             try self.union_(left, right);
                             return;
                         }
-                        Common.invariant("generated-private nominal reached ordinary unification instead of an explicit producer mapping or control-flow join");
+                        Common.invariant("distinct generated nominal declarations reached ordinary unification");
                     }
                     if (left_named.kind == .alias) {
                         try self.unifyThroughBacking(left, left_content, right, pending);
@@ -3648,19 +3518,7 @@ pub const InstGraph = struct {
                                     } else if (!right_wraps_left) {
                                         try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
                                     }
-                                } else {
-                                    const private_is_left = left_backing.authority == .generated_private;
-                                    const private_is_right = right_backing.authority == .generated_private;
-                                    if (private_is_left == private_is_right) {
-                                        Common.invariant("instantiation named backing authorities were incompatible");
-                                    }
-                                    if (private_is_left) {
-                                        try self.union_(left, right);
-                                    } else {
-                                        try self.union_(right, left);
-                                    }
-                                    return;
-                                }
+                                } else Common.invariant("instantiation named backing authorities were incompatible");
                             } else {
                                 Common.invariant("instantiation named type backing presence differed");
                             }
@@ -3699,21 +3557,6 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Generated-private nominals are complete, atomic producer results.
-    /// Neither their arguments nor their backings participate in downstream
-    /// relation work; the producer's content digest is their exact identity.
-    fn sameExactGeneratedPrivateIdentity(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
-        _ = self;
-        if (left.kind != right.kind or
-            left.def.module != right.def.module or
-            left.def.type_name != right.def.type_name or
-            left.def.source_decl != right.def.source_decl)
-        {
-            return false;
-        }
-        return optionalInstDigestEql(left.def.generated, right.def.generated);
-    }
-
     /// A named type met a structurally different type. Aliases are transparent
     /// downstream, so an alias relates through its backing without merging
     /// roots. A nominal becomes the single node both sides resolve to: the
@@ -3728,6 +3571,9 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (named_content != .named) unreachable;
+        if (isGeneratedPrivateRootContent(named_content)) {
+            Common.invariant("generated nominal declaration reached structural backing unification");
+        }
         const named = named_content.named;
         const declared_backing = named.backing orelse
             Common.invariant("instantiation unified an opaque type without backing against a structural type");
@@ -3925,8 +3771,8 @@ pub const InstGraph = struct {
 
     /// Read one tag row as a flat list without rewriting its graph-owned root.
     /// Checked-base nodes are immutable, and produced compounds already store
-    /// their exact immediate children; flattening is therefore a projection,
-    /// never a graph mutation.
+    /// their exact immediate children; flattening is therefore an exact row
+    /// read, never a graph mutation.
     fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
         const root = self.find(raw_root);
         const root_content = self.nodes.items[@intFromEnum(root)];
@@ -4409,7 +4255,7 @@ pub const InstGraph = struct {
         };
         try self.setContent(node, imported);
         if (imported == .func) {
-            _ = try self.canonicalizeCompletedFunction(node);
+            _ = try self.internCompletedFunction(node);
         }
         return self.find(node);
     }
@@ -4656,14 +4502,6 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addDeclaredFields(sealed);
     }
 };
-
-fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
-    if (left) |left_digest| {
-        const right_digest = right orelse return false;
-        return std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes);
-    }
-    return right == null;
-}
 
 /// Writes the content-addressed content identity of a generated producer input.
 /// Generated-private nominals are atomic digest leaves.
@@ -5760,6 +5598,34 @@ test "unconstrained specialization default closes only without exact selection" 
 
     try std.testing.expectEqual(Type.Span.empty(), type_store.get(sealed_defaulted).tag_union);
     try std.testing.expectEqual(Type.Primitive.str, type_store.get(sealed_selected).primitive);
+}
+
+test "produced compound re-interns after its immediate forward child completes" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const item_request = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{0} ** 32,
+    ) });
+    const requested_list = try graph.newProducedList(item_request);
+    const exact_item = try graph.newNode(.{ .primitive = .u64 });
+    const exact_list = try graph.newProducedList(exact_item);
+
+    try graph.completeProducedSelection(item_request, exact_item);
+    const normalized = try graph.internProducedNode(requested_list);
+
+    try std.testing.expect(graph.sameClass(exact_list, normalized));
 }
 
 test "relation mutation remains available only before freezing" {
