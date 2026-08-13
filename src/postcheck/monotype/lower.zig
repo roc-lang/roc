@@ -26116,13 +26116,21 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const parent_projection = plan.projections[projection.parent];
         return switch (projection.step) {
-            .alias_argument => blk: {
-                const named = self.graph.namedNodes(parent);
-                if (projection.index >= named.args.len) Common.invariant("checked alias projection exceeded argument arity");
-                break :blk named.args[projection.index];
+            .alias_argument => Common.invariant("checker emitted a runtime projection through a transparent alias argument"),
+            .alias_backing => switch (self.graph.content(parent)) {
+                .named => |named| blk: {
+                    if (named.kind != .alias) {
+                        Common.invariant("checked alias backing projection reached an ordinary nominal");
+                    }
+                    break :blk (named.backing orelse
+                        Common.invariant("checked alias projection had no exact backing")).node;
+                },
+                // A produced transparent alias is already its runtime backing.
+                // This checker-authored step is therefore an identity edge,
+                // not a structural query or a best-effort shape test.
+                .redirect, .unresolved => unreachable,
+                .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => parent,
             },
-            .alias_backing => (self.graph.namedNodes(parent).backing orelse
-                Common.invariant("checked alias projection had no exact backing")).node,
             .nominal_argument => switch (self.graph.content(parent)) {
                 .named => |named| blk: {
                     if (projection.index >= named.args.len) Common.invariant("checked nominal projection exceeded argument arity");

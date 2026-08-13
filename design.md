@@ -3773,6 +3773,15 @@ private backing. Generated-private evidence that has no producer-assigned
 digest remains backing-sensitive, because in that older representation the
 backing itself is still the explicit identity-bearing data.
 
+Transparent aliases are not runtime compounds. Checking publishes only the
+alias backing route; it does not also publish the declared alias arguments as
+runtime projection paths. Every representation-relevant argument occurrence is
+already present where it is used in the checked backing. When a projection
+crosses an alias recipe, Monotype unwraps that recipe's stored backing; when it
+crosses an exact produced value, the value is already the backing and the step
+is the identity operation. Neither case scans the produced value or duplicates
+the backing occurrences.
+
 While checking creates a shared call shape's parent-first projection paths, it
 attaches to every selectable slot the exact ordinary ancestor checked ids whose
 output can change under that selection. Monotype reads those spans directly

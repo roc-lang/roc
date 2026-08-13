@@ -16581,6 +16581,8 @@ pub const SpecializationProjectionStep = enum(u8) {
     dispatcher,
     target_argument,
     target_result,
+    /// Retained in the serialized enum for format stability. Transparent alias
+    /// arguments are not runtime children and checking never emits this step.
     alias_argument,
     alias_backing,
     nominal_argument,
@@ -22104,15 +22106,12 @@ fn collectSpecializationCallOccurrences(
     switch (payload) {
         .flex, .rigid => {},
         .alias => |alias| {
-            for (alias.args, 0..) |arg, index| {
-                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
-                    .checked = arg,
-                    .parent = projection_index,
-                    .index = @intCast(index),
-                    .payload_index = 0,
-                    .step = .alias_argument,
-                }, produced, active, projections, builds)) != null or has_output;
-            }
+            // A transparent alias has no runtime argument children. Its exact
+            // value is its backing, whose checked occurrences already carry
+            // every representation-relevant identity. Publishing the alias
+            // arguments as a second route duplicates those occurrences and
+            // asks Monotype to project compile-time metadata from a runtime
+            // value that contains no alias shell.
             has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, alias.backing, .{
                 .checked = alias.backing,
                 .parent = projection_index,
