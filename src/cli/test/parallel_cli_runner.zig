@@ -5140,6 +5140,14 @@ fn customIssue10733WasmBoxyDevCache(
     if (!std.mem.eql(u8, first_bytes, second_bytes)) {
         return customFailure(allocator, timer, "cached prepared host changed the final wasm bytes", .{});
     }
+    if (std.mem.find(u8, first_bytes, "wasm_main") == null) {
+        return customFailure(allocator, timer, "prepared host lost its platform export", .{});
+    }
+    if (std.mem.find(u8, first_bytes, "roc_boxy_init_embedded") != null or
+        std.mem.find(u8, first_bytes, "roc_builtins_str_concat") != null)
+    {
+        return customFailure(allocator, timer, "prepared host leaked runtime internals into final wasm exports", .{});
+    }
 
     return null;
 }

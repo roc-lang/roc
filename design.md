@@ -7880,8 +7880,11 @@ when LIR explicitly requires Boxy, the relocatable Boxy runtime object. Later
 builds load that cached prepared-host variant and surgically merge only the
 generated app code and its exact sidecar. The cache identity includes every
 ordered input's bytes and the selected runtime variant; changing any input or
-the explicit LIR requirement produces a different prepared host. The
-standalone Wasm runtime uses direct data-symbol relocations rather than PIC GOT
+the explicit LIR requirement produces a different prepared host. The cached
+object preserves only the platform's original function exports, leaving
+builtins and Boxy runtime functions internal and eligible for dead-code
+elimination during the surgical link. The standalone Wasm runtime uses direct
+data-symbol relocations rather than PIC GOT
 globals, so the partial link preserves its unresolved sidecar references for
 the later surgical merge. Entrypoint wrappers initialize the embedded runtime
 before calling Roc code. Dictionary worker thunks and erased-callable

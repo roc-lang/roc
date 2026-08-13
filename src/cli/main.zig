@@ -8514,7 +8514,7 @@ fn preparedWasmHostCacheKey(
     boxy_runtime_bytes: ?[]const u8,
 ) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-prepared-wasm-host-v1");
+    updateHashBytes(&hasher, "roc-prepared-wasm-host-v2");
     updateHashU32(&hasher, @intCast(platform_files_pre.len));
     for (platform_files_pre) |bytes| updateHashBytes(&hasher, bytes);
     updateHashU32(&hasher, @intCast(platform_files_post.len));
@@ -8600,6 +8600,14 @@ fn loadPreparedWasmHost(
         return .{ .cached = cached };
     }
 
+    var platform_exports = std.array_list.Managed([]const u8).init(ctx.arena);
+    for (link_inputs.platform_files_pre, host_inputs.items[0..pre_end]) |path, bytes| {
+        try appendWasmInputBytesExportNames(ctx, &platform_exports, path, bytes);
+    }
+    for (link_inputs.platform_files_post, host_inputs.items[pre_end..post_end]) |path, bytes| {
+        try appendWasmInputBytesExportNames(ctx, &platform_exports, path, bytes);
+    }
+
     const temp_dir = try createUniqueTempDir(ctx);
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
@@ -8653,7 +8661,13 @@ fn loadPreparedWasmHost(
         } });
     };
 
-    const prepared_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, prepared_path, ctx.gpa, .unlimited);
+    const linked_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, prepared_path, ctx.gpa, .unlimited);
+    defer ctx.gpa.free(linked_bytes);
+
+    var prepared_module = try preloadWasmObject(ctx, prepared_path, null, linked_bytes);
+    defer prepared_module.deinit();
+    try exportWasmFunctionsByName(&prepared_module, platform_exports.items);
+    const prepared_bytes = try prepared_module.encodeRelocatable(ctx.gpa);
     cache_manager.storeRawBytes(cache_key, prepared_bytes, cache_dir);
     return .{ .owned = prepared_bytes };
 }
@@ -8893,8 +8907,23 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) CliMainError!void {
-    try module.exportGlobalSymbols();
+fn exportWasmFunctionsByName(
+    module: *backend.wasm.WasmModule,
+    names: []const []const u8,
+) CliMainError!void {
+    for (names) |name| {
+        var already_exported = false;
+        for (module.exports.items) |exp| {
+            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
+                already_exported = true;
+                break;
+            }
+        }
+        if (already_exported) continue;
+
+        const function_index = try module.findDefinedFunctionIndexExact(name);
+        try module.addExport(name, .func, function_index);
+    }
 }
 
 fn appendUniqueWasmExportName(exports: *std.array_list.Managed([]const u8), name: []const u8) Allocator.Error!void {
@@ -8930,6 +8959,15 @@ fn appendWasmInputExportNames(
 ) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
+    try appendWasmInputBytesExportNames(ctx, exports, path, bytes);
+}
+
+fn appendWasmInputBytesExportNames(
+    ctx: *CliCtx,
+    exports: *std.array_list.Managed([]const u8),
+    path: []const u8,
+    bytes: []const u8,
+) CliMainError!void {
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
         try appendWasmObjectExportNames(ctx, exports, path, null, bytes);
         return;
@@ -9177,7 +9215,6 @@ fn rocBuildWasmSurgical(
     configureWasmDataBase(&wasm_module, link_inputs.wasm);
     errdefer if (loaded_module) wasm_module.deinit();
 
-    try exportConfiguredWasmEntrypoints(&wasm_module);
     try wasm_module.prepareObjectAbiForFinalLink();
     try mergeBoxySidecarWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
 
