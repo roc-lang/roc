@@ -184,7 +184,7 @@ const BoundaryState = struct {
 
         state.emoji_suffix = switch (grapheme) {
             .extended_pictographic => .pictographic,
-            .extend => state.emoji_suffix,
+            .extend => if (state.emoji_suffix == .pictographic) .pictographic else .none,
             .zwj => if (state.emoji_suffix == .pictographic) .pictographic_zwj else .none,
             .cr,
             .control,
@@ -616,6 +616,11 @@ test "grapheme boundaries preserve combining marks and emoji sequences" {
     const joined = "👩‍👩";
     const zwj_end = "👩‍".len;
     try testing.expectEqual(joined.len, try graphemeBoundaryAtOrAfter(joined, zwj_end));
+
+    // GB11 allows Extend before ZWJ, but not between ZWJ and the next
+    // Extended_Pictographic codepoint.
+    const extend_after_zwj = "👩‍\u{301}👩";
+    try testing.expectEqual("👩‍\u{301}".len, try nextGraphemeBoundary(extend_after_zwj, 0));
 }
 
 test "grapheme boundaries cover control, Hangul, Indic, and regional rules" {
