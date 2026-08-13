@@ -1907,6 +1907,23 @@ pub const InstGraph = struct {
             node = self.find((self.nodes.items[@intFromEnum(node)].named.backing orelse
                 Common.invariant("transparent alias child had no backing")).node);
         }
+        if (self.nodes.items[@intFromEnum(node)] == .unresolved) {
+            const variable = self.nodes.items[@intFromEnum(node)].unresolved;
+            const completed: ?InstNode = if (variable.numeric_default_phase) |phase| blk: {
+                const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                    Common.invariant("checking-finalized numeric variable reached exact producer interning");
+                break :blk switch (target) {
+                    .dec => .{ .primitive = .dec },
+                    .str => .{ .primitive = .str },
+                };
+            } else if (variable.row_default) |row_default| switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            } else if (variable.specialization_default) |default| switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            } else null;
+            if (completed) |defaulted| node = try self.newNode(defaulted);
+        }
         if (self.checked_base_construction_depth == 0 and
             self.checked_base_nodes.items[@intFromEnum(node)])
         {
@@ -1924,6 +1941,21 @@ pub const InstGraph = struct {
             .redirect => unreachable,
             .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
         };
+    }
+
+    /// Canonicalize one exact producer root at the moment it becomes a
+    /// specialization identity. This is the root counterpart of recording an
+    /// immediate produced child: it consumes only transparent aliases and the
+    /// root's row-extension chain, then reuses the existing immediate-shape
+    /// interner. It never traverses through a generated nominal.
+    pub fn internProducedIdentity(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = try self.internImmediateChild(raw_node);
+        if (self.nodes.items[@intFromEnum(node)] == .named) {
+            if (try self.internNamedArguments(self.nodes.items[@intFromEnum(node)].named)) |interned| {
+                return try self.newNode(.{ .named = interned });
+            }
+        }
+        return node;
     }
 
     fn internNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
