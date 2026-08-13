@@ -4053,19 +4053,30 @@ Nominal declaration bodies close markers as written.
 An annotation whose generated type gains a variable this way (directly or
 through an alias) denotes a scheme, so its value binding generalizes exactly
 as if the variable had been spelled out (`Check.annotation_scheme_has_vars`).
-Three positions opt out: host-boundary annotations (hosted lambdas and
-`provides` defs) keep their rows as written, because the host side is a fixed
-ABI rather than a Roc producer; derived structural parsers/encoders
-determine each tag row exactly, so implicit openness collapses (the flex ext
-unifies with `[]`) before derivation (`Check.closeTagRowsForDerivation`); and a
-DEFAULTED record field (`?? default`) is a closed (negative) position, walked
-at `.neg` regardless of the surrounding polarity. A default is materialized as
-one concrete value at every construction site that omits the field ("Defaulted
-Fields": the declared field type must be CONCRETE), so it has no "at least"
-covariance; opening its rows would make the declared field a scheme, generalize
-the archived default, and reach monotype lowering as an unresolved
-instantiation. Display follows the same polarity: an anonymous, unshared,
-unconstrained flex ext in an output position is not rendered as `..`.
+Two positions opt out, both genuine non-producers: host-boundary annotations
+(hosted lambdas and `provides` defs) keep their rows as written, because the
+host side is a fixed ABI rather than a Roc producer; and derived structural
+parsers/encoders determine each tag row exactly, so implicit openness
+collapses (the flex ext unifies with `[]`) before derivation
+(`Check.closeTagRowsForDerivation`). Display follows the same polarity: an
+anonymous, unshared, unconstrained flex ext in an output position is not
+rendered as `..`.
+
+A DEFAULTED record field (`?? default`) follows the polarity of its
+surrounding position like every other field — directly and through alias
+bodies, where the marker-rigid deferral needs no defaulted-field special
+case. This is sound because the field's written tags are a lower bound at
+every use site (unification rejects any narrowing), so the archived default
+inhabits every widening of its row. The default is still evaluated exactly
+once, at the ground representation of the written row; a construction site
+whose row widened restores the stored value at the widened representation
+through the produced-value witness, the same route as stored constants
+(below). Accordingly, the "Defaulted Fields" CONCRETE rule admits exactly
+one identity-variable shape: a flex TAG-ROW EXTENSION, the one axis with a
+declared sealing default. Every other identity variable (a payload or
+element type variable, e.g. `List(x) ?? []`) still rejects — a type
+parameter has no sealing default, so a parametric field has no single
+runtime representation.
 
 After the module fully solves, `Check.closeUnquantifiedTagRowExts` grounds
 every tag-row extension that is still an unconstrained flex var and is not
@@ -4080,16 +4091,22 @@ specialization identity along the way. Rows reachable from a scheme root
 keep their openness: instantiation copies them fresh at each use, which is
 where output-position widening actually happens.
 
-Monotype adapts to the resulting rows in two places. A stored constant's
+Monotype adapts to the resulting rows in three places. A stored constant's
 ground representation can be narrower than a use-site request that widened
 its implicitly open row, so produced-value witnesses compare flattened rows
 and let checked-only tags join the witness — the value is restored at the
 widened representation — rather than unifying two closed rows that disagree.
-And stored codec restores (parser/encoder runtime functions) emit bodies
+Stored codec restores (parser/encoder runtime functions) emit bodies
 from a resolved view before their graph freezes; their requests may still
 carry live checked row defaults at that point, so
 `InstGraph.groundUnresolvedDefaults` commits those defaults early, matching
-what final sealing would materialize.
+what final sealing would materialize. And a record constructor that omits a
+DEFAULTED field materializes the archived default at the field's node,
+which inside a generalized body still carries its quantified row's checked
+default when lowering demands a resolved view; the same early commit
+(`groundUnresolvedDefaults`) grounds it to what sealing would produce. A
+cell with no declared default is left untouched and still fails the
+resolved-view invariant loudly.
 
 ### Hosted Try Question Widening
 
@@ -4909,13 +4926,22 @@ Restrictions:
   identities back to the starting default is rejected as `recursive_default_value`.
   This judgment runs before building `CheckedModule`, so postcheck lowering
   only receives defaults whose materialization graph is acyclic.
-- The declared FIELD type of a default must be CONCRETE: the one archived
-  default is materialized at every construction site, so a parametric field
-  has no single runtime representation even when the default literal itself
-  happens to settle concretely in an instantiated check copy. Judged at
-  finalize, after the defaulting rounds so numeral defaults commit first—a
-  literal (`?? []`) can still be non-concrete, which is why this axis survives
-  the literal restriction. (Purity needs no axis of its own anymore: a literal
+- The declared FIELD type of a default must be CONCRETE MODULO TAG-ROW
+  EXTENSIONS: the one archived default is materialized at every construction
+  site, so a parametric field has no single runtime representation even when
+  the default literal itself happens to settle concretely in an instantiated
+  check copy. A flex TAG-ROW extension is the declared exception (see
+  "Polarity"): implicit output-position openness mints one on the field's
+  written unions, row openness has a declared sealing default, and the
+  archived ground value is restored at widened rows through the
+  produced-value witness—so it never denies the field a single stored
+  representation. The polarity MARKER rigid (`types.polarity_var_text`) in
+  tag-ext position is the same exception in its alias-declaration-body form:
+  it stands for exactly "flex or `[]`, per use-site polarity", both of which
+  are admitted. Every other identity variable rejects; `?? []` against
+  `List(x)` stays non-concrete, which is why this axis survives the literal
+  restriction. Judged at finalize, after the defaulting rounds so numeral
+  defaults commit first. (Purity needs no axis of its own anymore: a literal
   is never effectful, so the finalize-time `effectful_default_value` judgment
   remains only as a backstop invariant.)
 
