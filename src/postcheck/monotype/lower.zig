@@ -5288,7 +5288,7 @@ const Builder = struct {
                 .lowered => {},
                 .deferred, .resolved => Common.invariant("a hosted specialization owned a live Roc result node"),
             }
-            return try body_ctx.graph.internProducedNode(raw_node);
+            return body_ctx.graph.rootNode(raw_node);
         }
         if (body_ctx.draft.deferred_const_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_const_uses.items[boundary_index].preparation_state) {
@@ -5300,7 +5300,7 @@ const Builder = struct {
                 .preparing => return result_node,
                 .prepared => {},
             }
-            return try body_ctx.graph.internProducedNode(raw_node);
+            return body_ctx.graph.rootNode(raw_node);
         }
         if (body_ctx.draft.structural_serialization_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_structural_serializations.items[boundary_index].preparation_state) {
@@ -5315,9 +5315,9 @@ const Builder = struct {
                 .preparing => return result_node,
                 .prepared => {},
             }
-            return try body_ctx.graph.internProducedNode(raw_node);
+            return body_ctx.graph.rootNode(raw_node);
         }
-        return try body_ctx.graph.internProducedNode(result_node);
+        return result_node;
     }
 
     /// Return the explicit request recipe for a producer whose one exact
@@ -13801,10 +13801,9 @@ const BodyContext = struct {
         defer timing_scope.end();
         const produced_ty = switch (ty) {
             .sealed => ty,
-            .graph_node => |raw_node| blk: {
-                const node = self.constructorRepresentationNode(raw_node);
-                break :blk DraftTypeCell.fromGraphNode(try self.graph.internProducedNode(node));
-            },
+            .graph_node => |raw_node| DraftTypeCell.fromGraphNode(
+                self.constructorRepresentationNode(raw_node),
+            ),
         };
         const id = try self.draft.addExprWithSource(
             .{ .ty = produced_ty, .data = data },
@@ -26449,36 +26448,10 @@ const BodyContext = struct {
             return;
         }
 
-        // A request-owned compound may have been interned while one immediate
-        // child was still a forward cell. If another producer just completed
-        // that child, normalize only these two exact roots at the point where
-        // the checked call plan says they meet. This is one immediate-parent
-        // operation, not a descendant walk or ancestor propagation pass.
-        if (existing.authority == .produced and candidate.authority == .produced) {
-            if (try self.internProducedSelectionsAtMeeting(existing.produced, candidate.produced)) |interned| {
-                existing.produced = interned;
-                return;
-            }
-        }
-
         if (existing.authority == .request) {
             Common.invariant("one call identity received two different request contexts");
         }
         Common.invariant("one call identity received two exact runtime producers");
-    }
-
-    /// Intern the two immediate produced roots at an explicit selection edge.
-    /// A parent built around a forward child may become equal only after that
-    /// child completes. This operation touches those two parents only.
-    fn internProducedSelectionsAtMeeting(
-        self: *BodyContext,
-        left: NodeId,
-        right: NodeId,
-    ) Allocator.Error!?NodeId {
-        const interned_left = try self.graph.internProducedNode(left);
-        const interned_right = try self.graph.internProducedNode(right);
-        if (!self.graph.sameClass(interned_left, interned_right)) return null;
-        return self.graph.rootNode(interned_left);
     }
 
     /// Record the same request-or-producer selection into a lexical checked-ID
@@ -26549,16 +26522,6 @@ const BodyContext = struct {
                 .authority = existing.authority,
             });
             return;
-        }
-
-        if (existing.authority == .produced and candidate.authority == .produced) {
-            if (try self.internProducedSelectionsAtMeeting(existing.node, candidate.node)) |interned| {
-                selections.setEntryValue(entry, .{
-                    .node = interned,
-                    .authority = .produced,
-                });
-                return;
-            }
         }
 
         if (existing.authority == .request) {
@@ -44067,10 +44030,16 @@ const BodyContext = struct {
                     );
                 },
             },
-            // Compound destinations are substitution input for contextual
-            // children, not an alternative output graph. The producer's
-            // completed compound is the authoritative runtime value.
-            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return produced_expr,
+            // Checking has already proved that this value may flow to the
+            // destination. Structural requests carry representation identity,
+            // not a runtime constructor: retain the value and record the
+            // destination directly without comparing, merging, or traversing
+            // either graph.
+            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
+                self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
+                    DraftTypeCell.fromGraphNode(destination);
+                return produced_expr;
+            },
         }
     }
 
@@ -46162,9 +46131,8 @@ const BodyContext = struct {
             // Two pending recursive producers cannot supply representation to
             // each other. A later concrete alternative, or the body operation
             // that owns one of these cells, must complete the selected cell.
-        } else if (!self.graph.sameClass(selected_node, value_node)) {
+        } else if (!self.graph.sameClass(selected_node, value_node))
             Common.invariant("control-flow result did not consume its exact produced request");
-        }
         self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
     }
 

@@ -3641,12 +3641,16 @@ its body produces. Both operands share the one cell through the call's flat
 selection span. If no runtime edge ever selects the cell, normal Monotype
 sealing consumes its checker-recorded language default.
 
-A compound formed around such a forward cell is not repeatedly constructed or
-eagerly propagated through its ancestors. When a later checker-recorded call
-slot makes that exact compound meet another produced root, Monotype interns
-only those two immediate parents from their now-current child roots. Equal
-parents select the existing produced identity. This work occurs only at the
-declared meeting edge; unrelated parents and descendants are untouched.
+A compound formed around such a forward cell is not repeatedly constructed,
+re-interned after child completion, or eagerly propagated through its
+ancestors. Every later producer for that checker-recorded call slot receives
+the already selected compound as its exact request and returns that same root.
+Two different completed roots at the slot are an invariant violation even when
+their current children happen to be structurally equal; lowering must preserve
+the explicit directional edge instead of repairing it by normalization. Final
+graph sealing consumes the identity that lowering selected; it is not a later
+repair or deduplication pass. No ordinary expression, selection boundary, or
+sealing boundary reconciles independently built roots.
 
 Applying a completed argument, result, or dispatcher edge is directed
 request-to-produced substitution, not type checking and not symmetric type

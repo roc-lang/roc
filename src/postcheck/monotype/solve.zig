@@ -1758,41 +1758,6 @@ pub const InstGraph = struct {
         return try self.internCompletedFunction(node);
     }
 
-    /// Finish the exact identity of the produced node encountered at a value
-    /// boundary. A compound may have been assembled while an immediate child
-    /// was a forward cell; once that child completes, intern only this one
-    /// parent from the child's current root. This never descends into a child.
-    pub fn internProducedNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
-        const node = self.find(raw_node);
-        const interned = switch (self.nodes.items[@intFromEnum(node)]) {
-            .list => |element| try self.newProducedList(element),
-            .box => |element| try self.newProducedBox(element),
-            .tuple => |items| try self.newProducedTuple(items),
-            .func => |function| try self.newProducedFunction(function.args, function.ret),
-            .record => |record| try self.newProducedRecord(record.fields, record.ext),
-            .tag_union => |tag_union| try self.newProducedTagUnion(tag_union.tags, tag_union.ext),
-            .named => |named| if (named.kind == .alias)
-                try self.internImmediateChild(node)
-            else
-                try self.newNode(.{ .named = named }),
-            .redirect => unreachable,
-            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
-        };
-        if (interned == node) return node;
-        // Function nodes carry request/result metadata indexed by their
-        // original NodeId, and named nodes can own recursive backing state.
-        // Exact expressions use the returned interned node directly. Plain
-        // structural parents carry no such side data, so redirecting them
-        // updates every already-built immediate parent edge as well.
-        if (self.nodes.items[@intFromEnum(node)] != .func and
-            self.nodes.items[@intFromEnum(node)] != .named and
-            !self.checked_base_nodes.items[@intFromEnum(node)])
-        {
-            try self.redirectRoot(interned, node);
-        }
-        return interned;
-    }
-
     fn recordShapeHash(self: *InstGraph, record: InstNode) u64 {
         const row = record.record;
         var hasher = std.hash.Wyhash.init(0);
@@ -5598,34 +5563,6 @@ test "unconstrained specialization default closes only without exact selection" 
 
     try std.testing.expectEqual(Type.Span.empty(), type_store.get(sealed_defaulted).tag_union);
     try std.testing.expectEqual(Type.Primitive.str, type_store.get(sealed_selected).primitive);
-}
-
-test "produced compound re-interns after its immediate forward child completes" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const item_request = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
-        null,
-        null,
-        .empty_tag_union,
-        [_]u8{0} ** 32,
-    ) });
-    const requested_list = try graph.newProducedList(item_request);
-    const exact_item = try graph.newNode(.{ .primitive = .u64 });
-    const exact_list = try graph.newProducedList(exact_item);
-
-    try graph.completeProducedSelection(item_request, exact_item);
-    const normalized = try graph.internProducedNode(requested_list);
-
-    try std.testing.expect(graph.sameClass(exact_list, normalized));
 }
 
 test "relation mutation remains available only before freezing" {

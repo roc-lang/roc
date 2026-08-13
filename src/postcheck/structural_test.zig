@@ -1409,16 +1409,15 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn recordCallSelection(",
         "fn recordActiveCheckedSelection(",
     );
-    try expectContains(selection, "self.internProducedSelectionsAtMeeting(existing.produced, candidate.produced)");
-    try expectContains(selection, "self.graph.internProducedNode(left)");
-    try expectContains(selection, "self.graph.internProducedNode(right)");
+    try expectNotContains(selection, "internProduced");
 
     const active_selection = sourceSliceBetween(
         lower_source,
         "fn recordActiveCheckedSelection(",
         "fn directSelectionsForCall(",
     );
-    try expectContains(active_selection, "self.internProducedSelectionsAtMeeting(existing.node, candidate.node)");
+    try expectNotContains(active_selection, "internProduced");
+    try expectNotContains(lower_source, "internProducedNode(");
 }
 
 test "Monotype callable requests keep explicit independent body result authority" {
