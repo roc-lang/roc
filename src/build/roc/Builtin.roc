@@ -5759,6 +5759,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
@@ -5859,6 +5876,37 @@ Builtin :: [].{
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
 
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
+
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
 		## expect Dict.single(1, "One")
@@ -5893,6 +5941,32 @@ Builtin :: [].{
 			}
 		}
 
+		## Iterate over the key-value pairs of a dictionary, in the same order
+		## as [Dict.to_list].
+		## ```roc
+		## expect List.from_iter(Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .iter()) == [("Apples", 12), ("Oranges", 24)]
+		## ```
+		iter : Dict(k, v) -> Iter((k, v))
+		iter = |dict| match dict {
+			HashMap(data) => {
+				entries_len = List.len(data.entries)
+
+				Iter.custom(
+					0,
+					Known(entries_len),
+					|index|
+						if index == entries_len {
+							Err(NoMore)
+						} else {
+							Ok((list_get_unsafe(data.entries, index), index + 1))
+						},
+				)
+			}
+		}
+
 		## Build a value by folding through each key-value pair in the
 		## dictionary. Starting with a given `state` value, this runs the
 		## given `step` function on each pair, using its return value as
@@ -5909,6 +5983,36 @@ Builtin :: [].{
 				var $state = init
 				for (key, value) in data.entries {
 					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
+
+		## Same as [Dict.fold], except you can stop folding early.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold_until(0, |count, _key, qty| if count + qty >= 30 {
+		##                Break(count + qty)
+		##            } else {
+		##                Continue(count + qty)
+		##            }) == 36
+		## ```
+		fold_until : Dict(k, v), state, (state, k, v -> [Continue(state), Break(state)]) -> state
+		fold_until = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					match step($state, key, value) {
+						Continue(new_state) => {
+							$state = new_state
+						}
+						Break(final_state) => {
+							$state = final_state
+							break
+						}
+					}
 				}
 				$state
 			}
