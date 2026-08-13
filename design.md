@@ -3302,7 +3302,8 @@ Integers and `Dec` provide both `_to` and `_from` constructors. `F32` and `F64`
 provide only `_to`, so their ranges deliberately have no `iter_rev` dispatch.
 `Range.custom` permits third-party number types to construct the same stored
 representation and participate by implementing the explicit range methods;
-the compiler does not recover range semantics from arithmetic method names.
+range behavior comes only from those explicit methods, and arithmetic method
+names are not consulted.
 
 #### Explicit Iterator Representation Tiers
 
