@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const numeric_conversion = base.numeric_conversion;
 const builtins = @import("builtins");
 const layout = @import("layout");
 /// Dec's scaling factor (10^18) as an i64, sourced from the canonical Dec type.
@@ -7645,64 +7646,10 @@ fn decIntTryInfo(op: DecIntTryOp) DecIntTryInfo {
     };
 }
 
-const FloatIntTryInfo = struct {
-    src_is_f32: bool,
-    target_bits: u32,
-    val_size: u32,
-    signed: bool,
-};
-
-const FloatIntTryOp = enum {
-    f32_to_i8_try_unsafe,
-    f64_to_i8_try_unsafe,
-    f32_to_u8_try_unsafe,
-    f64_to_u8_try_unsafe,
-    f32_to_i16_try_unsafe,
-    f64_to_i16_try_unsafe,
-    f32_to_u16_try_unsafe,
-    f64_to_u16_try_unsafe,
-    f32_to_i32_try_unsafe,
-    f64_to_i32_try_unsafe,
-    f32_to_u32_try_unsafe,
-    f64_to_u32_try_unsafe,
-    f32_to_i64_try_unsafe,
-    f64_to_i64_try_unsafe,
-    f32_to_u64_try_unsafe,
-    f64_to_u64_try_unsafe,
-    f32_to_i128_try_unsafe,
-    f64_to_i128_try_unsafe,
-    f32_to_u128_try_unsafe,
-    f64_to_u128_try_unsafe,
-};
-
-fn floatIntTryInfo(op: FloatIntTryOp) FloatIntTryInfo {
-    return switch (op) {
-        .f32_to_i8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = true },
-        .f64_to_i8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = true },
-        .f32_to_u8_try_unsafe => .{ .src_is_f32 = true, .target_bits = 8, .val_size = 1, .signed = false },
-        .f64_to_u8_try_unsafe => .{ .src_is_f32 = false, .target_bits = 8, .val_size = 1, .signed = false },
-        .f32_to_i16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = true },
-        .f64_to_i16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = true },
-        .f32_to_u16_try_unsafe => .{ .src_is_f32 = true, .target_bits = 16, .val_size = 2, .signed = false },
-        .f64_to_u16_try_unsafe => .{ .src_is_f32 = false, .target_bits = 16, .val_size = 2, .signed = false },
-        .f32_to_i32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = true },
-        .f64_to_i32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = true },
-        .f32_to_u32_try_unsafe => .{ .src_is_f32 = true, .target_bits = 32, .val_size = 4, .signed = false },
-        .f64_to_u32_try_unsafe => .{ .src_is_f32 = false, .target_bits = 32, .val_size = 4, .signed = false },
-        .f32_to_i64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = true },
-        .f64_to_i64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = true },
-        .f32_to_u64_try_unsafe => .{ .src_is_f32 = true, .target_bits = 64, .val_size = 8, .signed = false },
-        .f64_to_u64_try_unsafe => .{ .src_is_f32 = false, .target_bits = 64, .val_size = 8, .signed = false },
-        .f32_to_i128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = true },
-        .f64_to_i128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = true },
-        .f32_to_u128_try_unsafe => .{ .src_is_f32 = true, .target_bits = 128, .val_size = 16, .signed = false },
-        .f64_to_u128_try_unsafe => .{ .src_is_f32 = false, .target_bits = 128, .val_size = 16, .signed = false },
-    };
-}
-
-fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
+fn emitFloatToIntTryBuiltin(self: *Self, op: lir.LowLevel, ret_layout: layout.Idx, arg: ProcLocalId) Allocator.Error!void {
     const offsets = self.tryUnsafeOffsets(ret_layout);
-    const info = floatIntTryInfo(op);
+    const spec = numeric_conversion.getConversionSpec(op).?;
+    std.debug.assert(spec.src.class() == .float and spec.dst.class() == .int);
     const result_size = try self.layoutStorageByteSize(ret_layout);
     const result_align = try self.layoutStorageByteAlign(ret_layout);
     const result_offset = try self.allocStackMemory(result_size, result_align);
@@ -7712,13 +7659,13 @@ fn emitFloatToIntTryBuiltin(self: *Self, op: FloatIntTryOp, ret_layout: layout.I
     try self.emitLocalSet(result_local);
     try self.emitLocalGet(result_local);
     try self.emitProcLocal(arg);
-    try self.emitI32Const(@intCast(info.target_bits));
-    try self.emitI32Const(@intFromBool(info.signed));
-    try self.emitI32Const(@intCast(info.val_size));
+    try self.emitI32Const(spec.dst.bits());
+    try self.emitI32Const(@intFromBool(spec.dst.isSigned()));
+    try self.emitI32Const(spec.dst.bytes());
     try self.emitI32Const(@intCast(offsets.success));
     try self.emitI32Const(@intCast(offsets.value));
 
-    if (info.src_is_f32) {
+    if (spec.src == .f32) {
         try self.emitBuiltinCall(.f32_to_int_try_unsafe, self.f32_to_int_try_unsafe_import);
     } else {
         try self.emitBuiltinCall(.f64_to_int_try_unsafe, self.f64_to_int_try_unsafe_import);
@@ -16252,26 +16199,27 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // Float try_unsafe conversions return { success, val_or_memory_garbage }.
         // The wrapper ABI preserves the source width exactly: F32 never passes
         // through an F64 Wasm value or helper parameter.
-        .f32_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u8_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u8_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u16_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u32_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u64_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_i128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_i128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f32_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f32_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        .f64_to_u128_try_unsafe => try self.emitFloatToIntTryBuiltin(.f64_to_u128_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
+        .f32_to_i8_try_unsafe,
+        .f64_to_i8_try_unsafe,
+        .f32_to_u8_try_unsafe,
+        .f64_to_u8_try_unsafe,
+        .f32_to_i16_try_unsafe,
+        .f64_to_i16_try_unsafe,
+        .f32_to_u16_try_unsafe,
+        .f64_to_u16_try_unsafe,
+        .f32_to_i32_try_unsafe,
+        .f64_to_i32_try_unsafe,
+        .f32_to_u32_try_unsafe,
+        .f64_to_u32_try_unsafe,
+        .f32_to_i64_try_unsafe,
+        .f64_to_i64_try_unsafe,
+        .f32_to_u64_try_unsafe,
+        .f64_to_u64_try_unsafe,
+        .f32_to_i128_try_unsafe,
+        .f64_to_i128_try_unsafe,
+        .f32_to_u128_try_unsafe,
+        .f64_to_u128_try_unsafe,
+        => try self.emitFloatToIntTryBuiltin(ll.op, ll.ret_layout, GuardedList.at(args, 0)),
         .f64_to_f32_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
             try self.emitProcLocal(GuardedList.at(args, 0));
