@@ -11745,15 +11745,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack = .{ .offset = result_offset } };
         }
 
-        // ── Float/Dec try_unsafe conversion info ──
-
-        const FloatDecTryUnsafeInfo = struct {
-            src_kind: enum { f32, f64, dec },
-            tgt_kind: enum { int, f32, dec },
-            tgt_bits: u8,
-            tgt_signed: bool,
-        };
-
         const TryUnsafeOffsets = struct {
             success: u32,
             value: u32,
@@ -11771,79 +11762,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn floatDecTryUnsafeInfo(op: anytype) FloatDecTryUnsafeInfo {
-            const FloatDecTryUnsafeOp = enum(u16) {
-                f32_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i8_try_unsafe),
-                f32_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i16_try_unsafe),
-                f32_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i32_try_unsafe),
-                f32_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i64_try_unsafe),
-                f32_to_i128_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_i128_try_unsafe),
-                f32_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u8_try_unsafe),
-                f32_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u16_try_unsafe),
-                f32_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u32_try_unsafe),
-                f32_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u64_try_unsafe),
-                f32_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.f32_to_u128_try_unsafe),
-                f64_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i8_try_unsafe),
-                f64_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i16_try_unsafe),
-                f64_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i32_try_unsafe),
-                f64_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i64_try_unsafe),
-                f64_to_i128_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_i128_try_unsafe),
-                f64_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u8_try_unsafe),
-                f64_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u16_try_unsafe),
-                f64_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u32_try_unsafe),
-                f64_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u64_try_unsafe),
-                f64_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_u128_try_unsafe),
-                f64_to_f32_try_unsafe = @intFromEnum(lir.LowLevel.f64_to_f32_try_unsafe),
-                dec_to_i8_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i8_try_unsafe),
-                dec_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i16_try_unsafe),
-                dec_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i32_try_unsafe),
-                dec_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i64_try_unsafe),
-                dec_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u8_try_unsafe),
-                dec_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u16_try_unsafe),
-                dec_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u32_try_unsafe),
-                dec_to_u64_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u64_try_unsafe),
-                dec_to_u128_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u128_try_unsafe),
-                dec_to_f32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_f32_try_unsafe),
-                u128_to_dec_try_unsafe = @intFromEnum(lir.LowLevel.u128_to_dec_try_unsafe),
-                i128_to_dec_try_unsafe = @intFromEnum(lir.LowLevel.i128_to_dec_try_unsafe),
-            };
-            return switch (narrowEnum(FloatDecTryUnsafeOp, op)) {
-                .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .f32_to_i16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .f32_to_i32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .f32_to_i64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .f32_to_i128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
-                .f32_to_u8_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .f32_to_u16_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .f32_to_u32_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .f32_to_u64_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .f32_to_u128_try_unsafe => .{ .src_kind = .f32, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .f64_to_i8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .f64_to_i16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .f64_to_i32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .f64_to_i64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .f64_to_i128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
-                .f64_to_u8_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .f64_to_u16_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .f64_to_u32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .f64_to_u64_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .f64_to_u128_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .f64_to_f32_try_unsafe => .{ .src_kind = .f64, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
-                .dec_to_i8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = true },
-                .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
-                .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
-                .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
-                .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
-                .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
-                .dec_to_u64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = false },
-                .dec_to_u128_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = false },
-                .dec_to_f32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .f32, .tgt_bits = 32, .tgt_signed = true },
-                .u128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = false },
-                .i128_to_dec_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .dec, .tgt_bits = 128, .tgt_signed = true },
-            };
-        }
-
         /// Generate a float/dec try_unsafe conversion returning a record.
         fn generateFloatDecTryUnsafeConversion(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             if (args.len != 1) unreachable;
@@ -11855,17 +11773,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_offset = self.codegen.allocStackSlot(size_align.size);
             try self.zeroStackArea(result_offset, size_align.size);
 
-            const info = floatDecTryUnsafeInfo(ll.op);
+            const spec = numeric_conversion.getConversionSpec(ll.op).?;
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
 
-            switch (info.tgt_kind) {
+            switch (spec.dst.class()) {
                 .int => {
                     // Float/Dec to integer: call wrapper with (out, val, target_bits, target_is_signed, val_size)
-                    const val_size: u32 = @as(u32, info.tgt_bits) / 8;
-                    const target_bits: u32 = info.tgt_bits;
-                    const target_is_signed: u32 = if (info.tgt_signed) 1 else 0;
+                    const val_size: u32 = spec.dst.bytes();
+                    const target_bits: u32 = spec.dst.bits();
+                    const target_is_signed: u32 = if (spec.dst.isSigned()) 1 else 0;
 
-                    if (info.src_kind == .dec) {
+                    if (spec.src == .dec) {
                         // Dec source: get i128 parts, call Dec-to-int wrapper
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
@@ -11889,7 +11807,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // integer args (val -> XMM1, target_bits -> R8), and only the
                         // builder tracks that. On aarch64 (AAPCS) FP args use v0-v7
                         // independently, so the single float arg goes in V0 directly.
-                        const src_width: FloatWidth = if (info.src_kind == .f32) .f32 else .f64;
+                        const src_width: FloatWidth = if (spec.src == .f32) .f32 else .f64;
                         const freg = try self.ensureInFloatReg(src_loc, src_width);
                         const base_reg = frame_ptr;
 
@@ -11915,9 +11833,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeFloat(freg);
                     }
                 },
-                .f32 => {
+                .float => {
                     // Float/Dec narrowing to f32: result is {val: F32, success: Bool}
-                    if (info.src_kind == .dec) {
+                    std.debug.assert(spec.dst == .f32);
+                    if (spec.src == .dec) {
                         // Dec to f32
                         const parts = try self.getI128Parts(src_loc, .signed); // Dec is signed i128
                         const base_reg = frame_ptr;
@@ -11957,8 +11876,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .dec => {
                     // Integer to Dec: result is { success: U8, val_or_memory_garbage: Dec }
-                    const parts = try self.getI128Parts(src_loc, if (info.tgt_signed) .signed else .unsigned);
-                    const builtin_fn: BuiltinFn = if (info.tgt_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
+                    std.debug.assert(spec.src.bits() == 128);
+                    const parts = try self.getI128Parts(src_loc, if (spec.src.isSigned()) .signed else .unsigned);
+                    const builtin_fn: BuiltinFn = if (spec.src.isSigned()) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
                     const base_reg = frame_ptr;
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
