@@ -920,6 +920,30 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     );
 }
 
+test "check type - record - default - defaulted tag-union field follows polarity through an alias" {
+    // A defaulted field follows the polarity of its surrounding position
+    // (design.md "Polarity" / "Defaulted Fields"), so its written tag union
+    // opens implicitly in output positions — inline and through an alias
+    // body alike, where the ordinary polarity marker defers the decision.
+    // The concreteness judgment admits the minted row extension (and its
+    // marker form), so both spellings are accepted; factoring the type into
+    // an alias must not change its meaning.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config : { mode : [Fast, Slow] ?? Fast }
+        \\
+        \\mk : U64 -> Config
+        \\mk = |_n| {}
+        \\
+        \\mk_inline : U64 -> { mode : [Fast, Slow] ?? Fast }
+        \\mk_inline = |_n| {}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "mk_inline" } },
+        \\U64 -> { mode: [Fast, Slow] ?? Fast }
+    );
+}
+
 test "check type - record - opt - list literal conditional presence rejected (unannotated)" {
     const source =
         \\main! = |_| {}

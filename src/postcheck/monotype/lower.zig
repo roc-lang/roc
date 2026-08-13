@@ -32468,6 +32468,31 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
     }
 
+    /// `defaultedFieldValueFromDefault` at a live graph node instead of a
+    /// sealed type: an omitted default in an unsealed record constructor
+    /// materializes at the field's cell exactly as a supplied field's value
+    /// lowers at its cell. Demanding a resolved view here instead would fail
+    /// on rows polarity legitimately leaves live pre-sealing (a widened row's
+    /// never-constructed tag payload has no resolution until sealing).
+    fn defaultedFieldValueFromDefaultAtNode(
+        self: *BodyContext,
+        default: checked.CheckedFieldDefault,
+        value_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        const origin_module = default.origin() orelse return null;
+        return try self.defaultedFieldValueAtNode(self.view.names.moduleIdentityBytes(origin_module), default.expr_node, value_node);
+    }
+
+    /// `defaultedFieldValueFromMonoDefault` at a live graph node; see
+    /// `defaultedFieldValueFromDefaultAtNode`.
+    fn defaultedFieldValueFromMonoDefaultAtNode(
+        self: *BodyContext,
+        default: Type.FieldDefault,
+        value_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        return try self.defaultedFieldValueAtNode(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, value_node);
+    }
+
     /// Restore a default from its declaring module, including during local root finalization.
     fn defaultedFieldValueAt(
         self: *BodyContext,
@@ -32493,6 +32518,34 @@ const BodyContext = struct {
             Common.invariant("imported defaulted field's default constant was not finalized");
         }
         return try self.lowerExprAtType(default_expr, field_ty);
+    }
+
+    /// `defaultedFieldValueAt` targeting a live graph node; see
+    /// `defaultedFieldValueFromDefaultAtNode`.
+    fn defaultedFieldValueAtNode(
+        self: *BodyContext,
+        origin_hash: *const [32]u8,
+        expr_node: u32,
+        value_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        const declaring_view = if (moduleViewIdentityMatches(self.view, origin_hash))
+            self.view
+        else
+            self.builder.moduleForIdentityHash(origin_hash) orelse
+                Common.invariant("defaulted field's declaring module was not present in the lowering input");
+        const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
+            Common.invariant("defaulted field's default expression was not archived");
+        // Local roots may still be pending; imported roots must be finalized.
+        if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
+            switch (root.payload) {
+                .const_node => |node| return try self.restoreConstNodeAtNode(declaring_view, declaring_view, node, value_node),
+                .pending, .fn_value, .expect => {},
+            }
+        }
+        if (!moduleViewIdentityMatches(self.view, origin_hash)) {
+            Common.invariant("imported defaulted field's default constant was not finalized");
+        }
+        return try self.lowerExprAtTypeCell(default_expr, DraftTypeCell.fromGraphNode(value_node));
     }
 
     /// The explicit `??` identity carried by a field in `record_ty`.
@@ -33434,18 +33487,21 @@ const BodyContext = struct {
                 break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
             } else omitted: {
                 produced_fields[index] = field;
+                // An omitted default materializes at the field's cell exactly
+                // as a supplied field's value lowers at its cell — no
+                // resolved-view demand, so rows polarity legitimately leaves
+                // live pre-sealing (e.g. a widened row's never-constructed
+                // tag payload) resolve at sealing like every other cell.
                 if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
                     const value_node = field.value_ty orelse field.ty;
-                    const value_ty = try self.resolvedTypeViewForNode(value_node);
-                    break :omitted (try self.defaultedFieldValueFromDefault(default, value_ty)) orelse
+                    break :omitted (try self.defaultedFieldValueFromDefaultAtNode(default, value_node)) orelse
                         Common.invariant("checker-selected omitted default had no archived default value");
                 }
                 const field_kind = try self.graph.recordOmittedFieldKind(record_node, field.name);
                 break :omitted switch (field_kind) {
                     .defaulted => |default| blk: {
                         const value_node = field.value_ty orelse field.ty;
-                        const value_ty = try self.resolvedTypeViewForNode(value_node);
-                        break :blk (try self.defaultedFieldValueFromMonoDefault(default, value_ty)) orelse
+                        break :blk (try self.defaultedFieldValueFromMonoDefaultAtNode(default, value_node)) orelse
                             Common.invariant("resolved defaulted field had no archived default value");
                     },
                     .optional => try self.optionalSlotMissingExprAtNode(field.ty),

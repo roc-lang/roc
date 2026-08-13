@@ -4100,13 +4100,13 @@ Stored codec restores (parser/encoder runtime functions) emit bodies
 from a resolved view before their graph freezes; their requests may still
 carry live checked row defaults at that point, so
 `InstGraph.groundUnresolvedDefaults` commits those defaults early, matching
-what final sealing would materialize. And a record constructor that omits a
-DEFAULTED field materializes the archived default at the field's node,
-which inside a generalized body still carries its quantified row's checked
-default when lowering demands a resolved view; the same early commit
-(`groundUnresolvedDefaults`) grounds it to what sealing would produce. A
-cell with no declared default is left untouched and still fails the
-resolved-view invariant loudly.
+what final sealing would materialize. And an unsealed record constructor
+that omits a DEFAULTED field materializes the archived default at the
+field's live graph cell (`defaultedFieldValueAtNode`), exactly as a supplied
+field's value lowers at its cell — never through an early resolved-view
+demand, which would fail on rows polarity legitimately leaves live
+pre-sealing (a widened row's never-constructed tag payload has no
+resolution until sealing).
 
 ### Hosted Try Question Widening
 

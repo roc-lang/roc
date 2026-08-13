@@ -7710,6 +7710,17 @@ fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, var_, &self.var_set);
 }
 
+/// The concreteness judgment for a defaulted field/default pair (design.md
+/// "Defaulted Fields": CONCRETE MODULO TAG-ROW EXTENSIONS). Identical to the
+/// value-graph walk except that a tag union's extension may be a flex var
+/// (implicit output-position openness) or the polarity marker rigid (its
+/// alias-declaration-body form): row openness has a declared sealing
+/// default, so it never denies the field a single stored representation.
+fn varIsConcreteDefaultedFieldType(self: *Self, var_: Var) Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varIsConcreteHoistedConstTypeInternal(.defaulted_value_graph, var_, &self.var_set);
+}
+
 /// Resolve a nominal application's declaration backing TEMPLATE for read-only
 /// structural queries, or null when the declaration is invalid or source-less.
 /// A source-backed nominal missing from the declaration table is a checker
@@ -7736,10 +7747,13 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
 }
 
 /// Which graph a hoisted-const concreteness walk is inspecting: the value
-/// graph (rigids are NOT concrete) or a declaration backing template (rigids
+/// graph (rigids are NOT concrete), a declaration backing template (rigids
 /// are the declaration's formals, standing for args the caller has already
-/// checked, so they count as concrete).
-const HoistedConstWalk = enum { value_graph, decl_template };
+/// checked, so they count as concrete), or a defaulted field/default pair's
+/// value graph (like `value_graph`, but a tag union's flex or
+/// polarity-marker extension counts as concrete—see
+/// `varIsConcreteDefaultedFieldType`).
+const HoistedConstWalk = enum { value_graph, decl_template, defaulted_value_graph };
 
 /// Copy a record's field value-type variables onto `scratch_record_field_vars`
 /// and return the start mark of the pushed batch. The batch is
@@ -7835,6 +7849,17 @@ fn flatTypeIsConcreteHoistedConst(
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |tag_args| {
                 if (!try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tag_args), visited)) break :blk false;
+            }
+            if (walk == .defaulted_value_graph) {
+                // A flex tag-row ext (implicit output-position openness) or
+                // the polarity marker rigid (its alias-declaration-body form)
+                // is the one admitted identity-variable shape: row openness
+                // has a declared sealing default.
+                switch (self.types.resolveVar(tag_union.ext).desc.content) {
+                    .flex => break :blk true,
+                    .rigid => |rigid| if (rigid.name.eql(self.cir.idents.polarity_var)) break :blk true,
+                    else => {},
+                }
             }
             break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, tag_union.ext, visited);
         },
@@ -14444,24 +14469,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             for (recs_anno_slice) |rec_anno_idx| {
                 const rec_field = self.cir.store.getAnnoRecordField(rec_anno_idx);
 
-                // A DEFAULTED field materializes its default as one concrete
-                // value at every construction site that omits it (design.md
-                // "Defaulted Fields": the declared field type must be
-                // CONCRETE). Implicit polarity opening would give its tag rows
-                // a flex ext, making the declared field a scheme; the archived
-                // default then generalizes and reaches monotype lowering as an
-                // unresolved instantiation node. A stored value has no
-                // "at least"/covariance, so a defaulted field is a closed
-                // (input-like) position: walk its type at negative polarity so
-                // its rows stay closed-as-written and materialize concretely.
-                const field_polarity: Polarity = if (rec_field.default_value != null) .neg else polarity;
+                // A DEFAULTED field follows the polarity of its surrounding
+                // position like every other field (design.md "Polarity"):
+                // its written tags are a lower bound at every use site, so
+                // the archived default inhabits every widening of its row,
+                // and the concreteness judgment admits the minted flex
+                // tag-row extension (checkDefaultRestrictions).
 
                 // Still resolve the field's annotated type (so unnamed padding
                 // fields are type-checked), but unnamed fields are layout padding,
                 // not real record fields: keep them out of the structural row so
                 // they are never unified, name-resolved, or required at
                 // construction (and so repeated `_` names cannot collide).
-                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, field_polarity);
+                try self.generateAnnoTypeInPlace(rec_field.ty, env, ctx, polarity);
                 if (rec_field.is_unnamed) continue;
                 const record_field_var = ModuleEnv.varFrom(rec_field.ty);
 
@@ -22833,13 +22853,16 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 }
 
 /// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
-/// the reusable field/default pair must be CONCRETE (the default is evaluated
-/// once at compile time and materialized at every construction site, so the
-/// field must have exactly one runtime representation—judged after the
-/// defaulting rounds so numeral defaults have committed). Checking only the
-/// default expression is insufficient: unifying a literal with an instantiated
-/// copy of a parametric field type can make that copy concrete while leaving
-/// the declared field polymorphic.
+/// the reusable field/default pair must be CONCRETE MODULO TAG-ROW EXTENSIONS
+/// (the default is evaluated once at compile time and materialized at every
+/// construction site, so the field must have exactly one runtime
+/// representation—judged after the defaulting rounds so numeral defaults
+/// have committed; a flex tag-row ext is admitted because row openness has a
+/// declared sealing default and widened rows restore the stored value
+/// through the produced-value witness). Checking only the default expression
+/// is insufficient: unifying a literal with an instantiated copy of a
+/// parametric field type can make that copy concrete while leaving the
+/// declared field polymorphic.
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
@@ -22850,8 +22873,8 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         // judging concreteness of an err var would cascade a second problem
         // onto the same default.
         if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
-        const default_is_concrete = try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr));
-        const field_is_concrete = try self.varIsConcreteHoistedConstType(pending.field_type_var);
+        const default_is_concrete = try self.varIsConcreteDefaultedFieldType(ModuleEnv.varFrom(pending.default_expr));
+        const field_is_concrete = try self.varIsConcreteDefaultedFieldType(pending.field_type_var);
         if (!default_is_concrete or !field_is_concrete) {
             _ = try self.problems.appendProblem(self.gpa, .{ .non_concrete_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
