@@ -16018,10 +16018,6 @@ const BodyContext = struct {
         return try self.graph.importMono(ty);
     }
 
-    fn activeTypeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromNode(try self.activeNodeFromType(ty));
-    }
-
     fn lowerTypeCell(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!DraftTypeCell {
         return DraftTypeCell.fromGraphNode(try self.lowerTypeNode(checked_ty));
     }
@@ -34026,17 +34022,9 @@ const BodyContext = struct {
                 .op = op,
                 .args = args,
             } });
-            // Only equality/hash result modes inspect the result type; a
-            // `.value` low-level result may still be an unresolved open row
-            // (e.g. an open error union) with no Monotype view yet.
-            return switch (plan.result_mode) {
-                .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
-                .equality, .hash => try self.applyDispatchResultMode(
-                    plan.result_mode,
-                    call_expr,
-                    try self.activeTypeFromNode(plan_ret_node),
-                ),
-            };
+            // Result modes consume the graph-backed call type directly because
+            // the return node may still be an unresolved open row here.
+            return try self.applyDispatchResultMode(plan.result_mode, call_expr);
         }
         const call_data = if (direct_graph_call)
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items)
@@ -34050,17 +34038,7 @@ const BodyContext = struct {
             call_ret_cell,
             call_data,
         );
-        return switch (plan.result_mode) {
-            .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
-            .equality, .hash => blk: {
-                const ret_ty = try self.activeTypeFromNode(plan_ret_node);
-                if (expected_ret_ty) |expected| {
-                    const expected_ty = try self.activeTypeFromType(expected);
-                    if (!self.sameType(expected_ty, ret_ty)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
-                }
-                break :blk try self.applyDispatchResultMode(plan.result_mode, call_expr, ret_ty);
-            },
-        };
+        return try self.applyDispatchResultMode(plan.result_mode, call_expr);
     }
 
     fn lowerClosedDirectLowLevelDispatch(
@@ -34104,7 +34082,7 @@ const BodyContext = struct {
             .op = op,
             .args = lowered,
         } });
-        return try self.applyDispatchResultMode(plan.result_mode, call, function.ret);
+        return try self.applyDispatchResultMode(plan.result_mode, call);
     }
 
     fn lowerClosedDispatchOperandsAtTypes(
@@ -34274,11 +34252,7 @@ const BodyContext = struct {
             .args = lowered,
             .captures = try self.methodTargetCaptureSpan(lookup),
         } });
-        const result_ty = if (completed_ret_is_private)
-            try self.activeTypeFromNode(completed_function.ret)
-        else
-            function.ret;
-        return try self.applyDispatchResultMode(plan.result_mode, call, result_ty);
+        return try self.applyDispatchResultMode(plan.result_mode, call);
     }
 
     const ClosedDispatchOperands = union(enum) {
@@ -34368,7 +34342,6 @@ const BodyContext = struct {
         self: *BodyContext,
         mode: static_dispatch.StaticDispatchResultMode,
         expr: DraftExprId,
-        expr_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         return switch (mode) {
             .value => expr,
@@ -34377,11 +34350,32 @@ const BodyContext = struct {
             .map => expr,
             .map_effectful => expr,
             .equality => |eq| if (eq.negated) blk: {
-                if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
-                break :blk try self.lowLevelExpr(.bool_not, &.{expr}, expr_ty);
+                const result_cell = self.exprTypeCell(expr);
+                if (!self.typeCellHasBuiltinOwner(result_cell, .bool)) {
+                    Common.invariant("checked equality dispatch returned a non-Bool value");
+                }
+                break :blk try self.addExprWithTypeCell(result_cell, .{ .low_level = .{
+                    .op = .bool_not,
+                    .args = try self.addExprSpan(&.{expr}),
+                } });
             } else expr,
             // A resolved `to_hash` dispatch returns its Hasher result directly.
             .hash => expr,
+        };
+    }
+
+    fn typeCellHasBuiltinOwner(
+        self: *BodyContext,
+        cell: DraftTypeCell,
+        expected: static_dispatch.BuiltinOwner,
+    ) bool {
+        const owner = switch (cell) {
+            .graph_node => |node| self.methodOwnerFromNode(node),
+            .sealed => |ty| methodOwnerFromType(&self.builder.program.types, ty),
+        } orelse return false;
+        return switch (owner) {
+            .builtin => |actual| actual == expected,
+            .nominal => false,
         };
     }
 
