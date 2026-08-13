@@ -2884,11 +2884,16 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     ctx.io.stderr().print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
                     return error.PlatformNotSupported;
                 },
+                error.ParseError => {
+                    // validatePlatformHeader already rendered the syntax
+                    // diagnostics; stop here so we don't fall through and
+                    // print a misleading "no compatible target" error too.
+                    return error.PlatformNotSupported;
+                },
                 error.FileReadError,
                 error.MissingFilesDirectory,
                 error.MissingTargetFile,
                 error.OutOfMemory,
-                error.ParseError,
                 error.UnsupportedTarget,
                 => {
                     std.log.debug("Could not validate platform header: {}", .{err});
@@ -17387,6 +17392,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                     const origin = bump.extract.OriginMap.Origin{
                         .kind = origin_kind,
                         .module_name = if (is_platform_root) "" else mod_env.module_name,
+                        .artifact = module_state.checkedArtifact(),
                     };
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);

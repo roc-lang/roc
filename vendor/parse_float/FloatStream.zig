@@ -90,7 +90,10 @@ pub fn advance(self: *FloatStream, n: usize) void {
 
 /// Skip all leading bytes that match one of `cs`.
 pub fn skipChars(self: *FloatStream, comptime cs: []const u8) void {
-    while (self.firstIs(cs)) : (self.advance(1)) {}
+    while (self.firstIs(cs)) {
+        if (self.slice[self.offset] == '_') self.underscore_count += 1;
+        self.advance(1);
+    }
 }
 
 /// Read the next 8 bytes as little-endian u64 without checking bounds.

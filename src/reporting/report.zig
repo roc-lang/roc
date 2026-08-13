@@ -456,6 +456,7 @@ pub const Report = struct {
                 .vertical_stack,
                 .horizontal_concat,
                 .source_code_multi_region,
+                .source_location,
                 => {},
             }
         }

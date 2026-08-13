@@ -351,7 +351,7 @@ pub const Evaluator = struct {
             .direct_call => |call| return try self.evalDirectCall(frame, call),
             .indirect_erased_call => |call| return try self.evalErasedCall(frame, call),
             .low_level => |low| return try self.evalLowLevel(frame, expr.ty, low.op, low.args),
-            .field_access => |access| return try self.evalFieldAccess(frame, access.receiver, access.field),
+            .field_access => |access| return try self.evalFieldAccess(frame, access.receiver, access.segments),
             .capture_access => |slot| return try self.evalCaptureAccess(frame, slot),
             .tuple_access => |access| {
                 const receiver = try self.evalExpr(frame, access.tuple);
@@ -556,15 +556,29 @@ pub const Evaluator = struct {
         return std.meta.eql(variants[@intFromEnum(a)].source, variants[@intFromEnum(b)].source);
     }
 
-    fn evalFieldAccess(self: *Evaluator, frame: *Frame, receiver: Ast.ExprId, field: Type.names.RecordFieldNameId) EvalError!Value {
-        const value = try self.evalExpr(frame, receiver);
-        const content = self.structural(self.exprType(receiver));
-        if (content != .record) return self.unsupported_("field access on non-record");
-        const type_fields = self.program.types.fieldSpan(content.record);
-        const index = self.recordFieldIndex(type_fields, field) orelse
-            return self.unsupported_("field access field not found");
-        if (value != .record) return self.unsupported_("field access on non-record value");
-        return value.record[index];
+    fn evalFieldAccess(
+        self: *Evaluator,
+        frame: *Frame,
+        receiver: Ast.ExprId,
+        segments_span: Ast.Span(Ast.FieldAccessSegment),
+    ) EvalError!Value {
+        var value = try self.evalExpr(frame, receiver);
+        var receiver_ty = self.exprType(receiver);
+        const segments = self.program.fieldAccessSegmentSpan(segments_span);
+        if (segments.len == 0) return self.unsupported_("field access path had no segments");
+
+        for (0..segments.len) |segment_index| {
+            const segment = GuardedList.at(segments, segment_index);
+            const structural_content = self.structural(receiver_ty);
+            if (structural_content != .record) return self.unsupported_("field access on non-record");
+            const type_fields = self.program.types.fieldSpan(structural_content.record);
+            const index = self.recordFieldIndex(type_fields, segment.field) orelse
+                return self.unsupported_("field access field not found");
+            receiver_ty = GuardedList.at(type_fields, index).ty;
+            if (value != .record) return self.unsupported_("field access on non-record value");
+            value = value.record[index];
+        }
+        return value;
     }
 
     fn evalCaptureAccess(self: *Evaluator, frame: *Frame, slot: Ast.CaptureSlot) EvalError!Value {
@@ -1642,7 +1656,6 @@ pub const Evaluator = struct {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,

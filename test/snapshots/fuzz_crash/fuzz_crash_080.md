@@ -82,7 +82,7 @@ c : L
 (can-ir
 	(d-let
 		(p-assign (ident "c"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)
 			(where

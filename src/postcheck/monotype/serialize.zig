@@ -28,13 +28,14 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 11: field access expressions carry flattened segment spans.
 /// Version 9: function metadata records whether a signature is independent
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
-const SECTION_COUNT = 42;
+const SECTION_COUNT = 43;
 
 fn testMethodTarget() static_dispatch.MethodTarget {
     return .{
@@ -80,6 +81,7 @@ pub const SectionId = enum(u8) {
     typed_locals,
     stmt_ids,
     field_exprs,
+    field_access_segments,
     fn_def_captures,
     record_destructs,
     str_pattern_steps,
@@ -219,6 +221,7 @@ pub const SpecializationCacheHeader = extern struct {
     typed_locals: FileSlice = .{},
     stmt_ids: FileSlice = .{},
     field_exprs: FileSlice = .{},
+    field_access_segments: FileSlice = .{},
     fn_def_captures: FileSlice = .{},
     record_destructs: FileSlice = .{},
     str_pattern_steps: FileSlice = .{},
@@ -284,6 +287,7 @@ pub const MappedView = struct {
             .typed_locals = try self.sectionTyped(Ast.TypedLocal, header.typed_locals),
             .stmt_ids = try self.sectionTyped(Ast.StmtId, header.stmt_ids),
             .field_exprs = try self.sectionTyped(Ast.FieldExpr, header.field_exprs),
+            .field_access_segments = try self.sectionTyped(Ast.FieldAccessSegment, header.field_access_segments),
             .fn_def_captures = try self.sectionTyped(Ast.FnDefCapture, header.fn_def_captures),
             .record_destructs = try self.sectionTyped(Ast.RecordDestruct, header.record_destructs),
             .str_pattern_steps = try self.sectionTyped(Ast.StrPatternStep, header.str_pattern_steps),
@@ -334,6 +338,7 @@ pub const MappedSections = struct {
     typed_locals: []const Ast.TypedLocal,
     stmt_ids: []const Ast.StmtId,
     field_exprs: []const Ast.FieldExpr,
+    field_access_segments: []const Ast.FieldAccessSegment,
     fn_def_captures: []const Ast.FnDefCapture,
     record_destructs: []const Ast.RecordDestruct,
     str_pattern_steps: []const Ast.StrPatternStep,
@@ -500,6 +505,7 @@ pub const MappedProgramView = struct {
     typed_locals: []const Ast.TypedLocal,
     stmt_ids: []const Ast.StmtId,
     field_exprs: []const Ast.FieldExpr,
+    field_access_segments: []const Ast.FieldAccessSegment,
     fn_def_captures: []const Ast.FnDefCapture,
     record_destructs: []const Ast.RecordDestruct,
     str_pattern_steps: []const Ast.StrPatternStep,
@@ -696,7 +702,9 @@ pub const MappedProgramView = struct {
             .call_value => |call| self.exprRefInBounds(call.callee) and self.exprIdSpanInBounds(call.args),
             .call_proc => |call| self.exprIdSpanInBounds(call.args) and captureOperandSpanInBounds(call.captures),
             .low_level => |call| self.exprIdSpanInBounds(call.args),
-            .field_access => |field| self.exprRefInBounds(field.receiver),
+            .field_access => |field| self.exprRefInBounds(field.receiver) and
+                field.segments.len > 0 and
+                self.fieldAccessSegmentSpanInBounds(field.segments),
             .tuple_access => |tuple| self.exprRefInBounds(tuple.tuple),
             .structural_eq => |eq| self.exprRefInBounds(eq.lhs) and self.exprRefInBounds(eq.rhs),
             .structural_hash => |hash| self.exprRefInBounds(hash.value) and self.exprRefInBounds(hash.hasher),
@@ -828,6 +836,10 @@ pub const MappedProgramView = struct {
 
     fn fieldExprSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FieldExpr)) bool {
         return spanInBounds(self.field_exprs.len, span.start, span.len);
+    }
+
+    fn fieldAccessSegmentSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FieldAccessSegment)) bool {
+        return spanInBounds(self.field_access_segments.len, span.start, span.len);
     }
 
     fn fnDefCaptureSpanInBounds(self: MappedProgramView, span: Ast.Span(Ast.FnDefCapture)) bool {
@@ -981,6 +993,7 @@ pub fn mappedProgramView(view: MappedView) CacheError!MappedProgramView {
         .typed_locals = sections_.typed_locals,
         .stmt_ids = sections_.stmt_ids,
         .field_exprs = sections_.field_exprs,
+        .field_access_segments = sections_.field_access_segments,
         .fn_def_captures = sections_.fn_def_captures,
         .record_destructs = sections_.record_destructs,
         .str_pattern_steps = sections_.str_pattern_steps,
@@ -1209,6 +1222,7 @@ pub fn computeCompilerLayoutHash() [32]u8 {
     writeLayout(&hasher, Ast.Local);
     writeLayout(&hasher, Ast.TypedLocal);
     writeLayout(&hasher, Ast.FieldExpr);
+    writeLayout(&hasher, Ast.FieldAccessSegment);
     writeLayout(&hasher, Ast.RecordDestruct);
     writeLayout(&hasher, Ast.StrPatternStep);
     writeLayout(&hasher, Ast.Branch);
@@ -1262,6 +1276,7 @@ fn sections(header: *const SpecializationCacheHeader) [SECTION_COUNT]FileSlice {
         header.typed_locals,
         header.stmt_ids,
         header.field_exprs,
+        header.field_access_segments,
         header.fn_def_captures,
         header.record_destructs,
         header.str_pattern_steps,
@@ -1308,6 +1323,7 @@ const section_order = [_]SectionId{
     .typed_locals,
     .stmt_ids,
     .field_exprs,
+    .field_access_segments,
     .fn_def_captures,
     .record_destructs,
     .str_pattern_steps,
@@ -1354,25 +1370,26 @@ fn sectionIndex(id: SectionId) usize {
         .typed_locals => 20,
         .stmt_ids => 21,
         .field_exprs => 22,
-        .fn_def_captures => 23,
-        .record_destructs => 24,
-        .str_pattern_steps => 25,
-        .branches => 26,
-        .if_branches => 27,
-        .string_literals => 28,
-        .imports => 29,
-        .roots => 30,
-        .layout_requests => 31,
-        .runtime_schema_requests => 32,
-        .static_data_values => 33,
-        .comptime_sites => 34,
-        .source_files => 35,
-        .expr_locs => 36,
-        .expr_regions => 37,
-        .stmt_locs => 38,
-        .stmt_regions => 39,
-        .local_names => 40,
-        .debug_names => 41,
+        .field_access_segments => 23,
+        .fn_def_captures => 24,
+        .record_destructs => 25,
+        .str_pattern_steps => 26,
+        .branches => 27,
+        .if_branches => 28,
+        .string_literals => 29,
+        .imports => 30,
+        .roots => 31,
+        .layout_requests => 32,
+        .runtime_schema_requests => 33,
+        .static_data_values => 34,
+        .comptime_sites => 35,
+        .source_files => 36,
+        .expr_locs => 37,
+        .expr_regions => 38,
+        .stmt_locs => 39,
+        .stmt_regions => 40,
+        .local_names => 41,
+        .debug_names => 42,
     };
 }
 
@@ -1424,6 +1441,7 @@ fn setSection(header: *SpecializationCacheHeader, id: SectionId, slice: FileSlic
         .typed_locals => header.typed_locals = slice,
         .stmt_ids => header.stmt_ids = slice,
         .field_exprs => header.field_exprs = slice,
+        .field_access_segments => header.field_access_segments = slice,
         .fn_def_captures => header.fn_def_captures = slice,
         .record_destructs => header.record_destructs = slice,
         .str_pattern_steps => header.str_pattern_steps = slice,
@@ -2107,6 +2125,7 @@ test "monotype specialization cache round trips empty program functions imports 
     const fields = [_]Type.Field{.{
         .name = field_a,
         .ty = unit_ty,
+        .default = null,
     }};
     const tags = [_]Type.Tag{.{
         .name = tag_ok,
@@ -2226,6 +2245,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
     defer program.deinit();
 
     const field_name = try program.names.internRecordFieldLabel("field");
+    const outer_field_name = try program.names.internRecordFieldLabel("outer");
     const tag_name = try program.names.internTagLabel("Ok");
     const module_identity = try program.names.internModuleIdentity(&([_]u8{0x77} ** 32));
     const type_name = try program.names.internTypeName("Boxed");
@@ -2236,8 +2256,10 @@ test "monotype specialization cache maps fresh single-shard program view equival
         .args = fn_arg_tys,
         .ret = unit_ty,
     } });
-    const record_fields = try program.types.addFields(&.{.{ .name = field_name, .ty = unit_ty }});
+    const record_fields = try program.types.addFields(&.{.{ .name = field_name, .ty = unit_ty, .default = null }});
     const record_ty = try program.types.add(.{ .record = record_fields });
+    const outer_record_fields = try program.types.addFields(&.{.{ .name = outer_field_name, .ty = record_ty, .default = null }});
+    const outer_record_ty = try program.types.add(.{ .record = outer_record_fields });
     const tag_payloads = try program.types.addSpan(&.{unit_ty});
     const tags = try program.types.addTags(&.{.{ .name = tag_name, .checked_name = tag_name, .payloads = tag_payloads }});
     _ = try program.types.add(.{ .tag_union = tags });
@@ -2254,6 +2276,17 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const local = try program.addLocal(@enumFromInt(1), unit_ty);
     try program.setLocalName(local, "value");
     const local_expr = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = local } });
+    const record_local = try program.addLocal(@enumFromInt(4), outer_record_ty);
+    try program.setLocalName(record_local, "record");
+    const record_local_expr = try program.addExpr(.{ .ty = outer_record_ty, .data = .{ .local = record_local } });
+    const field_access_segments = try program.addFieldAccessSegmentSpan(&.{
+        .{ .field = outer_field_name },
+        .{ .field = field_name },
+    });
+    _ = try program.addExpr(.{ .ty = unit_ty, .data = .{ .field_access = .{
+        .receiver = record_local_expr,
+        .segments = field_access_segments,
+    } } });
     const call_args = try program.addExprSpan(&.{local_expr});
     const typed_args = try program.addTypedLocalSpan(&.{.{ .local = local, .ty = unit_ty }});
 
@@ -2381,6 +2414,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
         .{ .id = .typed_locals, .bytes = std.mem.sliceAsBytes(fresh.typed_locals) },
         .{ .id = .stmt_ids, .bytes = std.mem.sliceAsBytes(fresh.stmt_ids) },
         .{ .id = .field_exprs, .bytes = std.mem.sliceAsBytes(fresh.field_exprs) },
+        .{ .id = .field_access_segments, .bytes = std.mem.sliceAsBytes(fresh.field_access_segments) },
         .{ .id = .fn_def_captures, .bytes = std.mem.sliceAsBytes(fresh.fn_def_captures) },
         .{ .id = .record_destructs, .bytes = std.mem.sliceAsBytes(fresh.record_destructs) },
         .{ .id = .str_pattern_steps, .bytes = std.mem.sliceAsBytes(fresh.str_pattern_steps) },
@@ -2587,6 +2621,40 @@ test "monotype specialization cache reports malformed internal data as corruptio
         const exprs = [_]Ast.Expr{.{
             .ty = unit_ty,
             .data = .{ .list = .{ .start = 0, .len = 1 } },
+        }};
+        const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+            .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes[0..]) },
+            .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests[0..]) },
+            .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(exprs[0..]) },
+        });
+        defer allocator.free(image);
+
+        var header: SpecializationCacheHeader = undefined;
+        @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+        const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+        const program = try mappedProgramView(mapped);
+        var resolved: [0]ResolvedImportedFn = .{};
+        try std.testing.expectError(
+            error.CorruptSpecializationCacheFile,
+            program.verifyAndResolveImports(&name_store, &.{}, resolved[0..]),
+        );
+    }
+
+    for ([_]Ast.Span(Ast.FieldAccessSegment){
+        Ast.Span(Ast.FieldAccessSegment).empty(),
+        .{ .start = 0, .len = 1 },
+    }) |bad_segments| {
+        // Each hand-built pool below holds exactly one entry; this is its index.
+        const sole_index: u32 = 0;
+        const unit_ty: Type.TypeId = @enumFromInt(sole_index);
+        const type_nodes = [_]Type.Content{.zst};
+        const type_digests = [_]checked_names.TypeDigest{.{}};
+        const exprs = [_]Ast.Expr{.{
+            .ty = unit_ty,
+            .data = .{ .field_access = .{
+                .receiver = @enumFromInt(sole_index),
+                .segments = bad_segments,
+            } },
         }};
         const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
             .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes[0..]) },
@@ -2834,6 +2902,7 @@ fn expectEquivalentProgramViews(
     try std.testing.expectEqualSlices(Ast.TypedLocal, fresh.typed_locals, mapped.typed_locals);
     try std.testing.expectEqualSlices(Ast.StmtId, fresh.stmt_ids, mapped.stmt_ids);
     try std.testing.expectEqualSlices(Ast.FieldExpr, fresh.field_exprs, mapped.field_exprs);
+    try std.testing.expectEqualSlices(Ast.FieldAccessSegment, fresh.field_access_segments, mapped.field_access_segments);
     try std.testing.expectEqualSlices(Ast.FnDefCapture, fresh.fn_def_captures, mapped.fn_def_captures);
     try std.testing.expectEqualSlices(Ast.RecordDestruct, fresh.record_destructs, mapped.record_destructs);
     try std.testing.expectEqualSlices(Ast.StrPatternStep, fresh.str_pattern_steps, mapped.str_pattern_steps);

@@ -1149,12 +1149,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_2 = d2_inner_first.Inner.inner_val
                      ^^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .Inner here.
@@ -1280,12 +1281,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_3 = d2_outer_val_middle.Inner.inner_val
                           ^^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .Inner here.
@@ -1394,12 +1396,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 outer_val = d2_outer_refs_inner.Inner.inner_val
                                ^^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .Inner here.
@@ -1637,12 +1640,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 valA = d2_siblings.InnerB.valB + 1
                   ^^^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .InnerB here.
@@ -1673,12 +1677,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d2_5 = d2_siblings.InnerA.valA
                   ^^^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .InnerA here.
@@ -1804,12 +1809,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_2 = d3_types_then_vals.L2.val2
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -1823,12 +1829,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_3 = d3_types_then_vals.L2.L3.val3
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -1842,12 +1849,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_3 = d3_types_then_vals.L2.L3.val3
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -1973,12 +1981,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_5 = d3_vals_then_types.L2.val2
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -1992,12 +2001,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_6 = d3_vals_then_types.L2.L3.val3
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2011,12 +2021,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_6 = d3_vals_then_types.L2.L3.val3
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -2366,12 +2377,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_8 = d3_val_after_nested.L2.val2
                           ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2385,12 +2397,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_9 = d3_val_after_nested.L2.L3.val3
                           ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2404,12 +2417,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d3_9 = d3_val_after_nested.L2.L3.val3
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -2535,12 +2549,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2554,12 +2569,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                                 ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -2573,12 +2589,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_1 = d4_all_types_then_vals.L2.L3.L4.val4
                                    ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -2704,12 +2721,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2723,12 +2741,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                                 ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -2742,12 +2761,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_2 = d4_all_vals_then_types.L2.L3.L4.val4
                                    ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -2873,12 +2893,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                        ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -2892,12 +2913,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                           ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -2911,12 +2933,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_3 = d4_reverse_types.L2.L3.L4.val4
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -3042,12 +3065,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                      ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -3061,12 +3085,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                         ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -3080,12 +3105,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_4 = d4_interleaved.L2.L3.L4.val4
                            ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -3211,12 +3237,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -3230,12 +3257,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -3249,12 +3277,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_5 = d4_l3_val_after_l4.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -3380,12 +3409,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -3399,12 +3429,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -3418,12 +3449,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_6 = d4_l2_val_after_l3.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -3549,12 +3581,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -3568,12 +3601,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -3587,12 +3621,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d4_7 = d4_l1_val_after_l2.L2.L3.L4.val4
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4054,12 +4089,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -4073,12 +4109,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                 ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -4092,12 +4129,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                    ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4111,12 +4149,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_1 = d5_all_types_then_vals.L2.L3.L4.L5.val5
                                       ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -4242,12 +4281,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                              ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -4261,12 +4301,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                 ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -4280,12 +4321,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                    ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4299,12 +4341,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_2 = d5_all_vals_then_types.L2.L3.L4.L5.val5
                                       ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -4430,12 +4473,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -4449,12 +4493,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -4468,12 +4513,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4487,12 +4533,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_3 = d5_deep_interleave.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -4618,12 +4665,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -4637,12 +4685,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -4656,12 +4705,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4675,12 +4725,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_4 = d5_l4_val_after_l5.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -4806,12 +4857,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -4825,12 +4877,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -4844,12 +4897,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -4863,12 +4917,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_5 = d5_l3_val_after_l4.L2.L3.L4.L5.val5
                                   ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -4994,12 +5049,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_7 = d5_l1_val_last.L2.val2
                      ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -5013,12 +5069,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_8 = d5_l1_val_last.L2.L3.val3
                      ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -5032,12 +5089,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_8 = d5_l1_val_last.L2.L3.val3
                         ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -5051,12 +5109,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                      ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -5070,12 +5129,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                         ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -5089,12 +5149,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_9 = d5_l1_val_last.L2.L3.L4.val4
                            ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -5108,12 +5169,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                       ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L2 here.
@@ -5127,12 +5189,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                          ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L3 here.
@@ -5146,12 +5209,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                             ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L4 here.
@@ -5165,12 +5229,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 d5_10 = d5_l1_val_last.L2.L3.L4.L5.val5
                                ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .L5 here.
@@ -7498,8 +7563,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d1_1"))
 			(e-field-access
-				(e-ident (raw "d1_forward"))
-				(e-ident (raw "first"))))
+				(receiver
+					(e-ident (raw "d1_forward")))
+				(segment (mode "required") (field "first"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7513,8 +7579,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d1_2"))
 			(e-field-access
-				(e-ident (raw "d1_scope"))
-				(e-ident (raw "inner"))))
+				(receiver
+					(e-ident (raw "d1_scope")))
+				(segment (mode "required") (field "inner"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7538,13 +7605,15 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_1"))
 			(e-field-access
-				(e-ident (raw "d2_inner_first"))
-				(e-ident (raw "outer_val"))))
+				(receiver
+					(e-ident (raw "d2_inner_first")))
+				(segment (mode "required") (field "outer_val"))))
 		(s-decl
 			(p-ident (raw "d2_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7568,8 +7637,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7579,8 +7649,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "outer_val"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "inner_val"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "inner_val"))))
 		(s-type-decl
 			(header (name "Inner")
 				(args))
@@ -7595,8 +7666,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_4"))
 			(e-field-access
-				(e-ident (raw "d2_outer_refs_inner"))
-				(e-ident (raw "outer_val"))))
+				(receiver
+					(e-ident (raw "d2_outer_refs_inner")))
+				(segment (mode "required") (field "outer_val"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7634,8 +7706,9 @@ EndOfFile,
 					(p-ident (raw "valA"))
 					(e-binop (op "+")
 						(e-field-access
-							(e-malformed (reason "expr_dot_suffix_not_allowed"))
-							(e-ident (raw "valB")))
+							(receiver
+								(e-malformed (reason "expr_dot_suffix_not_allowed")))
+							(segment (mode "required") (field "valB")))
 						(e-int (raw "1"))))))
 		(s-type-decl
 			(header (name "InnerB")
@@ -7651,8 +7724,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d2_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "valA"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "valA"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7688,18 +7762,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_1"))
 			(e-field-access
-				(e-ident (raw "d3_types_then_vals"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_types_then_vals")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7737,18 +7814,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_4"))
 			(e-field-access
-				(e-ident (raw "d3_vals_then_types"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_vals_then_types")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_6"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7840,18 +7920,21 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d3_7"))
 			(e-field-access
-				(e-ident (raw "d3_val_after_nested"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d3_val_after_nested")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d3_8"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d3_9"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7899,8 +7982,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_1"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -7952,8 +8036,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8003,8 +8088,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8056,8 +8142,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_4"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8097,8 +8184,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8141,8 +8229,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_6"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8192,8 +8281,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d4_7"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8355,8 +8445,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_1"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8424,8 +8515,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_2"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8493,8 +8585,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_3"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8541,8 +8634,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_4"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8592,8 +8686,9 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_5"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -8661,28 +8756,33 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "d5_6"))
 			(e-field-access
-				(e-ident (raw "d5_l1_val_last"))
-				(e-ident (raw "val1"))))
+				(receiver
+					(e-ident (raw "d5_l1_val_last")))
+				(segment (mode "required") (field "val1"))))
 		(s-decl
 			(p-ident (raw "d5_7"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val2"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val2"))))
 		(s-decl
 			(p-ident (raw "d5_8"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val3"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val3"))))
 		(s-decl
 			(p-ident (raw "d5_9"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val4"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val4"))))
 		(s-decl
 			(p-ident (raw "d5_10"))
 			(e-field-access
-				(e-malformed (reason "expr_dot_suffix_not_allowed"))
-				(e-ident (raw "val5"))))
+				(receiver
+					(e-malformed (reason "expr_dot_suffix_not_allowed")))
+				(segment (mode "required") (field "val5"))))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -9266,17 +9366,21 @@ L2 := [DS].{
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d1_1"))
-		(e-field-access (field "first")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "first") (mode "required")))))
 	(d-let
 		(p-assign (ident "inner"))
 		(e-num (value "200")))
 	(d-let
 		(p-assign (ident "d1_2"))
-		(e-field-access (field "inner")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "inner") (mode "required")))))
 	(d-let
 		(p-assign (ident "Test.Inner.inner_val"))
 		(e-lookup-local
@@ -9286,38 +9390,48 @@ L2 := [DS].{
 		(e-num (value "300")))
 	(d-let
 		(p-assign (ident "d2_1"))
-		(e-field-access (field "outer_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "outer_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "d2_2"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_val"))
 		(e-num (value "500")))
 	(d-let
 		(p-assign (ident "d2_3"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_val"))
-		(e-field-access (field "inner_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "inner_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "d2_4"))
-		(e-field-access (field "outer_val")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "outer_val") (mode "required")))))
 	(d-let
 		(p-assign (ident "outer_trying_inner"))
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 704)
+		(e-dispatch-call (method "plus") (constraint-fn-var 731)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -9327,12 +9441,14 @@ L2 := [DS].{
 		(e-num (value "800")))
 	(d-let
 		(p-assign (ident "d2_5"))
-		(e-field-access (field "valA")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "valA") (mode "required")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 730)
+		(e-dispatch-call (method "plus") (constraint-fn-var 756)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))
@@ -9347,37 +9463,49 @@ L2 := [DS].{
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d3_1"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_2"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_3"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "30")))
 	(d-let
 		(p-assign (ident "d3_4"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_5"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_6"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad_l1"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -9386,69 +9514,89 @@ L2 := [DS].{
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d3_7"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_8"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d3_9"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d4_1"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "d4_2"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "7")))
 	(d-let
 		(p-assign (ident "d4_3"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "15")))
 	(d-let
 		(p-assign (ident "d4_4"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d4_5"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d4_6"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "d4_7"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))
@@ -9457,63 +9605,83 @@ L2 := [DS].{
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "d5_1"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "100")))
 	(d-let
 		(p-assign (ident "d5_2"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "d5_3"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_4"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_5"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "val1"))
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "d5_6"))
-		(e-field-access (field "val1")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "val1") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_7"))
-		(e-field-access (field "val2")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val2") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_8"))
-		(e-field-access (field "val3")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val3") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_9"))
-		(e-field-access (field "val4")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val4") (mode "required")))))
 	(d-let
 		(p-assign (ident "d5_10"))
-		(e-field-access (field "val5")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "expr_not_canonicalized")))))
+				(e-runtime-error (tag "expr_not_canonicalized")))
+			(segments
+				(segment (name "val5") (mode "required")))))
 	(d-let
 		(p-assign (ident "bad"))
 		(e-runtime-error (tag "ident_not_in_scope")))

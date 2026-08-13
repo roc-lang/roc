@@ -272,14 +272,15 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     const result = try self.stepLanguageWithConfig(input, report_config);
     return switch (result) {
         .expression => |output| .{ .output = output },
-        .definition => |definition| if (definition.kind == .annotation)
-            .none
-        else
-            .{ .output = try std.fmt.allocPrint(
-                self.allocator,
-                "{s} `{s}`",
-                .{ if (definition.kind == .import) "imported" else "assigned", definition.name },
-            ) },
+        .definition => |definition| if (definition.kind == .annotation) .none else blk: {
+            const verb = if (definition.kind == .import) "imported" else "assigned";
+            if (definition.kind == .value) {
+                const names = try declarationBoundNames(self.allocator, input);
+                defer self.allocator.free(names);
+                break :blk .{ .output = try formatDefinitionResult(self.allocator, verb, names) };
+            }
+            break :blk .{ .output = try std.fmt.allocPrint(self.allocator, "{s} `{s}`", .{ verb, definition.name }) };
+        },
         .diagnostic => |diagnostic| .{ .diagnostic = diagnostic.message },
         .runtime_crash => |message| .{ .runtime_crash = message },
         .none => .none,
@@ -335,9 +336,19 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
                 return .{ .definition = .{ .name = name, .kind = .annotation, .file_import = false } };
             }
 
+            const bound_names = if (input_info.definition_kind == .value)
+                try declarationBoundNames(self.allocator, line)
+            else
+                null;
+            defer if (bound_names) |names| self.allocator.free(names);
+
             var snapshot = try self.definitions.snapshot(self.allocator);
             errdefer self.definitions.restore(self.allocator, &snapshot);
-            try self.addOrReplaceDefinitionWithImportKind(line, name, input_info.definition_kind, input_info.file_import);
+            if (bound_names) |names| {
+                try self.definitions.addOrReplaceNames(self.allocator, line, names, input_info.definition_kind, input_info.file_import);
+            } else {
+                try self.addOrReplaceDefinitionWithImportKind(line, name, input_info.definition_kind, input_info.file_import);
+            }
             const validation = try self.validateDefinitions(report_config);
             if (!validation.valid) {
                 self.definitions.restore(self.allocator, &snapshot);
@@ -822,15 +833,16 @@ fn printDefs(self: *ReplSession, use_color: bool) ReplStepError![]u8 {
     for (self.definitions.items.items) |item| {
         switch (item.kind) {
             .value => {
-                const name = item.name;
-                const def_idx = getDefOfName(env, name) orelse continue;
-                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
-
-                if (use_color) {
-                    try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n{s}\n\n", .{ name, tw.get(), item.source });
-                } else {
-                    try out.print(self.allocator, "{s} : {s}\n{s}\n\n", .{ name, tw.get(), item.source });
+                for (item.names) |name| {
+                    const pattern = getBindingPatternOfName(env, name) orelse continue;
+                    try tw.write(ModuleEnv.varFrom(pattern), .one_line);
+                    if (use_color) {
+                        try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
+                    } else {
+                        try out.print(self.allocator, "{s} : {s}\n", .{ name, tw.get() });
+                    }
                 }
+                try out.print(self.allocator, "{s}\n\n", .{item.source});
             },
             .annotation => {
                 // italics, usually succeeded by a .value let-binding
@@ -864,8 +876,8 @@ fn printTypeOfVar(self: *ReplSession, name: []const u8, use_color: bool) ReplSte
     var tw = try env.initTypeWriter();
     defer tw.deinit();
 
-    if (getDefOfName(env, name)) |def_idx| {
-        try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
+    if (getBindingPatternOfName(env, name)) |pattern| {
+        try tw.write(ModuleEnv.varFrom(pattern), .one_line);
         if (use_color) {
             try out.print(self.allocator, "\x1b[3m\x1b[90m{s} : {s}\x1b[0m\n", .{ name, tw.get() });
         } else {
@@ -940,7 +952,7 @@ pub fn inspectExpressionType(
                 .empty_tag_union,
                 => return error.Internal,
             },
-            .err, .flex, .rigid => return error.Internal,
+            .err, .flex, .rigid, .field_presence => return error.Internal,
         }
     };
     var tw = try parsed.module_env.initTypeWriter();
@@ -967,7 +979,10 @@ pub const CompletionItem = struct {
 /// cannot be checked until the matching value arrives.
 pub fn hasPendingAnnotation(self: *const ReplSession) bool {
     for (self.definitions.items.items) |definition| {
-        if (definition.kind == .annotation and !self.definitions.hasKind(definition.name, .value)) return true;
+        if (definition.kind != .annotation) continue;
+        for (definition.names) |name| {
+            if (!self.definitions.hasKind(name, .value)) return true;
+        }
     }
     return false;
 }
@@ -1002,8 +1017,10 @@ fn completionItemsWithoutDetails(self: *ReplSession) Allocator.Error![]Completio
     }
 
     for (self.definitions.items.items) |definition| {
-        if (definition.kind == .annotation and self.definitions.hasKind(definition.name, .value)) continue;
-        try self.appendCompletionItem(&items, definition.name, definition.kind, null);
+        for (definition.names) |name| {
+            if (definition.kind == .annotation and self.definitions.hasKind(name, .value)) continue;
+            try self.appendCompletionItem(&items, name, definition.kind, null);
+        }
     }
     return items.toOwnedSlice(self.allocator);
 }
@@ -1027,14 +1044,16 @@ pub fn completionItems(self: *ReplSession) ReplStepError![]CompletionItem {
     defer tw.deinit();
     for (self.definitions.items.items) |definition| {
         if (definition.kind == .annotation) continue;
-        var detail: ?[]u8 = null;
-        if (definition.kind == .value) {
-            if (getDefOfName(parsed.module_env, definition.name)) |def_idx| {
-                try tw.write(ModuleEnv.varFrom(def_idx), .one_line);
-                detail = try self.allocator.dupe(u8, tw.get());
+        for (definition.names) |name| {
+            var detail: ?[]u8 = null;
+            if (definition.kind == .value) {
+                if (getBindingPatternOfName(parsed.module_env, name)) |pattern_idx| {
+                    try tw.write(ModuleEnv.varFrom(pattern_idx), .one_line);
+                    detail = try self.allocator.dupe(u8, tw.get());
+                }
             }
+            try self.appendCompletionItem(&items, name, definition.kind, detail);
         }
-        try self.appendCompletionItem(&items, definition.name, definition.kind, detail);
     }
     return items.toOwnedSlice(self.allocator);
 }
@@ -1069,7 +1088,7 @@ pub fn storedDefinitions(self: *const ReplSession) Allocator.Error![]StoredDefin
     }
 
     for (self.definitions.items.items, 0..) |definition, index| {
-        const name = try self.allocator.dupe(u8, definition.name);
+        const name = try self.allocator.dupe(u8, if (definition.names.len > 0) definition.names[0] else definition.source);
         errdefer self.allocator.free(name);
         const source = try self.allocator.dupe(u8, definition.source);
         stored[index] = .{
@@ -1155,11 +1174,79 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
     );
 }
 
+fn bindingPatternOfName(env: *ModuleEnv, pattern_idx: can.CIR.Pattern.Idx, name: []const u8) ?can.CIR.Pattern.Idx {
+    switch (env.store.getPattern(pattern_idx)) {
+        .assign => |assign| {
+            if (std.mem.eql(u8, env.getIdent(assign.ident), name)) return pattern_idx;
+        },
+        .as => |as_pattern| {
+            if (std.mem.eql(u8, env.getIdent(as_pattern.ident), name)) return pattern_idx;
+            return bindingPatternOfName(env, as_pattern.pattern, name);
+        },
+        .applied_tag => |tag| {
+            for (env.store.slicePatterns(tag.args)) |arg| {
+                if (bindingPatternOfName(env, arg, name)) |found| return found;
+            }
+        },
+        .nominal => |nominal| return bindingPatternOfName(env, nominal.backing_pattern, name),
+        .nominal_external => |nominal| return bindingPatternOfName(env, nominal.backing_pattern, name),
+        .record_destructure => |record| {
+            for (env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                const destruct = env.store.getRecordDestruct(destruct_idx);
+                if (bindingPatternOfName(env, destruct.kind.toPatternIdx(), name)) |found| return found;
+            }
+        },
+        .list => |list| {
+            for (env.store.slicePatterns(list.patterns)) |elem| {
+                if (bindingPatternOfName(env, elem, name)) |found| return found;
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern| {
+                    if (bindingPatternOfName(env, rest_pattern, name)) |found| return found;
+                }
+            }
+        },
+        .tuple => |tuple| {
+            for (env.store.slicePatterns(tuple.patterns)) |elem| {
+                if (bindingPatternOfName(env, elem, name)) |found| return found;
+            }
+        },
+        .str_interpolation => |string| {
+            var offset: u32 = 0;
+            while (offset < string.steps.span.len) : (offset += 1) {
+                const string_step = env.store.getStrPatternStep(string.steps, offset);
+                if (string_step.capture) |capture| {
+                    if (bindingPatternOfName(env, capture, name)) |found| return found;
+                }
+            }
+        },
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+    }
+    return null;
+}
+
+fn getBindingPatternOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Pattern.Idx {
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        if (bindingPatternOfName(env, def.pattern, name)) |pattern| return pattern;
+    }
+    return null;
+}
+
 fn getDefOfName(env: *ModuleEnv, name: []const u8) ?can.CIR.Def.Idx {
     for (env.store.sliceDefs(env.all_defs)) |def_idx| {
         const def = env.store.getDef(def_idx);
-        const pat = env.store.getPattern(def.pattern);
-        if (pat == .assign and std.mem.eql(u8, env.getIdent(pat.assign.ident), name)) {
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), name)) {
             return def_idx;
         }
     }
@@ -1535,7 +1622,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         .interpreter, .dev, .llvm => .native,
         .wasm => .u32,
     };
-    var compiled = eval.Inspected.compileProgramForTargetWithBuiltinAndContext(
+    const compile_outcome = eval.Inspected.compileProgramForTargetWithBuiltinAndContextReporting(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1646,6 +1733,18 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.WouldBlock,
         error.WriteFailed,
         => return err,
+    };
+    var compiled = switch (compile_outcome) {
+        .compiled => |compiled| compiled,
+        .diagnostics => |resources_value| {
+            var resources = resources_value;
+            defer resources.deinit(self.allocator);
+            return .{ .diagnostic = try eval.Inspected.renderParsedResourcesProblemsWithConfig(
+                self.allocator,
+                &resources,
+                report_config,
+            ) };
+        },
     };
     defer compiled.deinit(self.allocator);
 
@@ -1955,61 +2054,63 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     }
 
     const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
-    return .{ .complete = switch (statement) {
-        .expr,
-        .crash,
-        .dbg,
-        .expect,
-        .@"for",
-        .@"while",
-        .@"return",
-        .@"break",
-        => .{ .kind = .expression },
-        .decl => |decl| .{
-            .kind = .definition,
-            .definition_kind = .value,
-            .name = declarationName(ast, decl.pattern),
-        },
-        .@"var" => |v| .{
-            .kind = .definition,
-            .definition_kind = .value,
-            .name = ast.resolve(v.name),
-        },
-        .type_anno => |anno| .{
-            .kind = .definition,
-            .definition_kind = .annotation,
-            .name = ast.resolve(anno.name),
-        },
-        .type_decl => |decl| blk: {
-            const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+    return .{
+        .complete = switch (statement) {
+            .expr,
+            .crash,
+            .dbg,
+            .expect,
+            .@"for",
+            .@"while",
+            .@"return",
+            .@"break",
+            => .{ .kind = .expression },
+            .decl => |decl| .{
                 .kind = .definition,
-                .definition_kind = .type_decl,
-                .name = null,
-            };
-            break :blk .{
+                .definition_kind = .value,
+                .name = declarationName(ast, decl.pattern),
+            },
+            .@"var" => |v| .{
                 .kind = .definition,
-                .definition_kind = .type_decl,
-                .name = ast.resolve(header.name),
-            };
+                .definition_kind = .value,
+                .name = ast.resolve(v.name),
+            },
+            .type_anno => |anno| .{
+                .kind = .definition,
+                .definition_kind = .annotation,
+                .name = ast.resolve(anno.name),
+            },
+            .type_decl => |decl| blk: {
+                const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+                    .kind = .definition,
+                    .definition_kind = .type_decl,
+                    .name = null,
+                };
+                break :blk .{
+                    .kind = .definition,
+                    .definition_kind = .type_decl,
+                    .name = ast.resolve(header.name),
+                };
+            },
+            .import => |import| .{
+                .kind = .definition,
+                .definition_kind = .import,
+                .name = if (import.alias_tok) |tok|
+                    ast.resolve(tok)
+                else if (import.target.nested_start_tok) |nested_start|
+                    ast.resolve(nested_start + import.target.nested_len - 1)
+                else
+                    ast.resolve(import.target.module_name_tok),
+            },
+            .file_import => |file_import| .{
+                .kind = .definition,
+                .definition_kind = .import,
+                .name = ast.resolve(file_import.name_tok),
+                .file_import = true,
+            },
+            .malformed => return .invalid,
         },
-        .import => |import| .{
-            .kind = .definition,
-            .definition_kind = .import,
-            .name = if (import.alias_tok) |tok|
-                ast.resolve(tok)
-            else if (import.target.nested_start_tok) |nested_start|
-                ast.resolve(nested_start + import.target.nested_len - 1)
-            else
-                ast.resolve(import.target.module_name_tok),
-        },
-        .file_import => |file_import| .{
-            .kind = .definition,
-            .definition_kind = .import,
-            .name = ast.resolve(file_import.name_tok),
-            .file_import = true,
-        },
-        .malformed => return .invalid,
-    } };
+    };
 }
 
 fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
@@ -2085,20 +2186,176 @@ fn declarationName(ast: *const parse.AST, pattern_idx: parse.AST.Pattern.Idx) ?[
     return null;
 }
 
+fn appendBoundName(names: *std.ArrayList([]const u8), allocator: Allocator, name: []const u8) Allocator.Error!void {
+    for (names.items) |existing| {
+        if (std.mem.eql(u8, existing, name)) return;
+    }
+    try names.append(allocator, name);
+}
+
+fn collectPatternBoundNames(
+    ast: *const parse.AST,
+    pattern_idx: parse.AST.Pattern.Idx,
+    names: *std.ArrayList([]const u8),
+    allocator: Allocator,
+) Allocator.Error!void {
+    switch (ast.store.getPattern(pattern_idx)) {
+        .ident => |ident| try appendBoundName(names, allocator, ast.resolve(ident.ident_tok)),
+        .var_ident => |ident| try appendBoundName(names, allocator, ast.resolve(ident.ident_tok)),
+        .tag => |tag| {
+            for (ast.store.patternSlice(tag.args)) |arg| {
+                try collectPatternBoundNames(ast, arg, names, allocator);
+            }
+        },
+        .record => |record| {
+            for (ast.store.patternRecordFieldSlice(record.fields)) |field_idx| {
+                const field = ast.store.getPatternRecordField(field_idx);
+                if (field.value) |value| {
+                    try collectPatternBoundNames(ast, value, names, allocator);
+                } else if (field.name) |name| {
+                    try appendBoundName(names, allocator, ast.resolve(name));
+                }
+            }
+        },
+        .list => |list| {
+            for (ast.store.patternSlice(list.patterns)) |elem| {
+                try collectPatternBoundNames(ast, elem, names, allocator);
+            }
+        },
+        .list_rest => |rest| {
+            if (rest.name) |name| try appendBoundName(names, allocator, ast.resolve(name));
+        },
+        .tuple => |tuple| {
+            for (ast.store.patternSlice(tuple.patterns)) |elem| {
+                try collectPatternBoundNames(ast, elem, names, allocator);
+            }
+        },
+        .string => |string| {
+            for (ast.store.patternStringPartSlice(string.parts)) |part_idx| {
+                switch (ast.store.getPatternStringPart(part_idx)) {
+                    .text => {},
+                    .capture => |capture| {
+                        if (capture.name) |name| try appendBoundName(names, allocator, ast.resolve(name));
+                    },
+                }
+            }
+        },
+        .alternatives => |alternatives| {
+            for (ast.store.patternSlice(alternatives.patterns)) |alternative| {
+                try collectPatternBoundNames(ast, alternative, names, allocator);
+            }
+        },
+        .as => |as_pattern| {
+            try collectPatternBoundNames(ast, as_pattern.pattern, names, allocator);
+            try appendBoundName(names, allocator, ast.resolve(as_pattern.name));
+        },
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .single_quote,
+        .underscore,
+        .malformed,
+        => {},
+    }
+}
+
+fn declarationBoundNames(allocator: Allocator, line: []const u8) Allocator.Error![][]const u8 {
+    var env = try ModuleEnv.init(allocator, line);
+    defer env.deinit();
+    env.common.source = line;
+    try env.common.calcLineStarts(allocator);
+
+    const ast = try parse.statement(allocator, &env.common);
+    defer ast.deinit();
+
+    var names = std.ArrayList([]const u8).empty;
+    errdefer names.deinit(allocator);
+    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    if (statement == .decl) {
+        try collectPatternBoundNames(ast, statement.decl.pattern, &names, allocator);
+    } else if (statement == .@"var") {
+        try appendBoundName(&names, allocator, ast.resolve(statement.@"var".name));
+    }
+    return names.toOwnedSlice(allocator);
+}
+
+fn formatDefinitionResult(allocator: Allocator, verb: []const u8, names: []const []const u8) Allocator.Error![]u8 {
+    if (names.len == 0) return std.fmt.allocPrint(allocator, "{s} pattern", .{verb});
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, verb);
+    try out.append(allocator, ' ');
+    for (names, 0..) |name, index| {
+        if (index > 0) try out.appendSlice(allocator, ", ");
+        try out.append(allocator, '`');
+        try out.appendSlice(allocator, name);
+        try out.append(allocator, '`');
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 const Definition = struct {
-    name: []u8,
+    names: [][]u8,
     source: []u8,
     kind: DefinitionKind,
     file_import: bool,
 
+    fn initOwned(
+        allocator: Allocator,
+        source: []const u8,
+        names: []const []const u8,
+        kind: DefinitionKind,
+        file_import: bool,
+    ) Allocator.Error!Definition {
+        const owned_names = try allocator.alloc([]u8, names.len);
+        var initialized_names: usize = 0;
+        errdefer {
+            for (owned_names[0..initialized_names]) |owned_name| allocator.free(owned_name);
+            allocator.free(owned_names);
+        }
+        for (names, 0..) |name, index| {
+            owned_names[index] = try allocator.dupe(u8, name);
+            initialized_names += 1;
+        }
+        const owned_source = try allocator.dupe(u8, source);
+        return .{
+            .names = owned_names,
+            .source = owned_source,
+            .kind = kind,
+            .file_import = file_import,
+        };
+    }
+
+    fn clone(self: *const Definition, allocator: Allocator) Allocator.Error!Definition {
+        return initOwned(allocator, self.source, self.names, self.kind, self.file_import);
+    }
+
     fn deinit(self: *Definition, allocator: Allocator) void {
-        allocator.free(self.name);
+        for (self.names) |name| allocator.free(name);
+        allocator.free(self.names);
         allocator.free(self.source);
         self.* = undefined;
     }
+
+    fn bindsName(self: *const Definition, name: []const u8) bool {
+        for (self.names) |bound_name| {
+            if (std.mem.eql(u8, bound_name, name)) return true;
+        }
+        return false;
+    }
+
+    fn overlapsNames(self: *const Definition, names: []const []const u8) bool {
+        for (names) |name| {
+            if (self.bindsName(name)) return true;
+        }
+        return false;
+    }
 };
 
-/// Ordered REPL definition collection with same-name replacement by definition kind.
+/// Ordered REPL definition collection with overlapping-binder replacement by
+/// definition kind.
 pub const DefinitionStore = struct {
     items: std.ArrayList(Definition),
 
@@ -2118,9 +2375,22 @@ pub const DefinitionStore = struct {
 
     pub fn hasKind(self: *const DefinitionStore, name: []const u8, kind: DefinitionKind) bool {
         for (self.items.items) |definition| {
-            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
+            if (definition.kind == kind and definition.bindsName(name)) return true;
         }
         return false;
+    }
+
+    pub fn removeByNameAndKind(self: *DefinitionStore, allocator: Allocator, name: []const u8, kind: DefinitionKind) void {
+        var i: usize = 0;
+        while (i < self.items.items.len) {
+            const definition = &self.items.items[i];
+            if (definition.kind == kind and definition.bindsName(name)) {
+                var removed = self.items.orderedRemove(i);
+                removed.deinit(allocator);
+                return;
+            }
+            i += 1;
+        }
     }
 
     fn addOrReplace(
@@ -2131,33 +2401,36 @@ pub const DefinitionStore = struct {
         kind: DefinitionKind,
         file_import: bool,
     ) Allocator.Error!void {
-        for (self.items.items) |*definition| {
-            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
-                const new_source = try allocator.dupe(u8, source);
-                errdefer allocator.free(new_source);
-                const new_name = try allocator.dupe(u8, name);
-                allocator.free(definition.source);
-                allocator.free(definition.name);
-                definition.* = .{
-                    .name = new_name,
-                    .source = new_source,
-                    .kind = kind,
-                    .file_import = file_import,
-                };
-                return;
+        const names = [_][]const u8{name};
+        return self.addOrReplaceNames(allocator, source, &names, kind, file_import);
+    }
+
+    fn addOrReplaceNames(
+        self: *DefinitionStore,
+        allocator: Allocator,
+        source: []const u8,
+        names: []const []const u8,
+        kind: DefinitionKind,
+        file_import: bool,
+    ) Allocator.Error!void {
+        var replacement = try Definition.initOwned(allocator, source, names, kind, file_import);
+        errdefer replacement.deinit(allocator);
+        try self.items.ensureUnusedCapacity(allocator, 1);
+
+        var insertion_index = self.items.items.len;
+        var index: usize = 0;
+        while (index < self.items.items.len) {
+            const definition = &self.items.items[index];
+            if (definition.kind == kind and definition.overlapsNames(names)) {
+                insertion_index = @min(insertion_index, index);
+                var removed = self.items.orderedRemove(index);
+                removed.deinit(allocator);
+            } else {
+                index += 1;
             }
         }
 
-        const owned_name = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned_name);
-        const owned_source = try allocator.dupe(u8, source);
-        errdefer allocator.free(owned_source);
-        try self.items.append(allocator, .{
-            .name = owned_name,
-            .source = owned_source,
-            .kind = kind,
-            .file_import = file_import,
-        });
+        self.items.insertAssumeCapacity(insertion_index, replacement);
     }
 
     fn snapshot(self: *const DefinitionStore, allocator: Allocator) Allocator.Error!DefinitionStore {
@@ -2165,16 +2438,7 @@ pub const DefinitionStore = struct {
         errdefer result.deinit(allocator);
         try result.items.ensureTotalCapacity(allocator, self.items.items.len);
         for (self.items.items) |definition| {
-            const name = try allocator.dupe(u8, definition.name);
-            errdefer allocator.free(name);
-            const source = try allocator.dupe(u8, definition.source);
-            errdefer allocator.free(source);
-            result.items.appendAssumeCapacity(.{
-                .name = name,
-                .source = source,
-                .kind = definition.kind,
-                .file_import = definition.file_import,
-            });
+            result.items.appendAssumeCapacity(try definition.clone(allocator));
         }
         return result;
     }
@@ -2860,6 +3124,97 @@ test "Repl - issue 9258 opaque type param field access" {
     try expectStepsFinal(.dev, steps, "\"hello\"");
 }
 
+test "Repl - optional record field renders <missing> and plain present values" {
+    const missing_steps = &[_][]const u8{
+        "r : { a ?: U8, b : U8 }",
+        "r = { b: 2 }",
+        "r",
+    };
+    try expectStepsFinal(.interpreter, missing_steps, "{ a: <missing>, b: 2 }");
+    try expectStepsFinal(.dev, missing_steps, "{ a: <missing>, b: 2 }");
+
+    const present_steps = &[_][]const u8{
+        "s : { a ?: U8, b : U8 }",
+        "s = { a: 5, b: 2 }",
+        "s",
+    };
+    try expectStepsFinal(.interpreter, present_steps, "{ a: 5, b: 2 }");
+    try expectStepsFinal(.dev, present_steps, "{ a: 5, b: 2 }");
+}
+
+test "Repl - issue 10576 generalized record update rejects an optional field" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const function_assigned = try repl.step("f = |r| { ..r, a: 5 }");
+    defer testing.allocator.free(function_assigned);
+    try testing.expectEqualStrings("assigned `f`", function_assigned);
+
+    const annotation = try repl.step("v : { a ?: U64 }");
+    defer testing.allocator.free(annotation);
+    try testing.expectEqualStrings("", annotation);
+
+    const value_assigned = try repl.step("v = {}");
+    defer testing.allocator.free(value_assigned);
+    try testing.expectEqualStrings("assigned `v`", value_assigned);
+
+    const result = try repl.step("f(v)");
+    defer testing.allocator.free(result);
+    try testing.expect(std.mem.find(u8, result, "TYPE MISMATCH") != null);
+}
+
+test "Repl - top-level destructure definitions publish their binders" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const type_assigned = try repl.step("Rec : { req : U8, other : U8 }");
+    defer testing.allocator.free(type_assigned);
+    try testing.expectEqualStrings("assigned `Rec`", type_assigned);
+
+    const anno = try repl.step("s : Rec");
+    defer testing.allocator.free(anno);
+    try testing.expectEqualStrings("", anno);
+
+    const assigned = try repl.step("s = { req: 7, other: 1 }");
+    defer testing.allocator.free(assigned);
+    try testing.expectEqualStrings("assigned `s`", assigned);
+
+    const destructure = try repl.step("{ req, .. } = s");
+    defer testing.allocator.free(destructure);
+    try testing.expectEqualStrings("assigned `req`", destructure);
+
+    const tuple_destructure = try repl.step("(a, b) = (1, 2)");
+    defer testing.allocator.free(tuple_destructure);
+    try testing.expectEqualStrings("assigned `a`, `b`", tuple_destructure);
+
+    const req_value = try repl.step("req");
+    defer testing.allocator.free(req_value);
+    try testing.expectEqualStrings("7", req_value);
+
+    const tuple_sum = try repl.step("a + b");
+    defer testing.allocator.free(tuple_sum);
+    try testing.expectEqualStrings("3.0", tuple_sum);
+
+    const config = reporting.ReportingConfig.initForTesting();
+    const req_type = try repl.executeCommandWithConfig(.{ .type_of = "req" }, config);
+    defer req_type.deinit(testing.allocator);
+    switch (req_type) {
+        .output => |output| try testing.expect(std.mem.find(u8, output, "req : U8") != null),
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
+
+    const definitions = try repl.executeCommandWithConfig(.definitions, config);
+    defer definitions.deinit(testing.allocator);
+    switch (definitions) {
+        .output => |output| {
+            try testing.expect(std.mem.find(u8, output, "req : U8") != null);
+            try testing.expect(std.mem.find(u8, output, "a :") != null);
+            try testing.expect(std.mem.find(u8, output, "b :") != null);
+        },
+        .diagnostic, .runtime_crash, .none, .exit => return error.TestUnexpectedResult,
+    }
+}
+
 test "Repl - polymorphic numeric in comparison snapshot sequence" {
     const steps = &[_][2][]const u8{
         .{ "is_positive = |x| x > 0", "assigned `is_positive`" },
@@ -3104,6 +3459,23 @@ test "Repl - definition replacement" {
         \\}
     ;
     try testing.expectEqualStrings(expected, full_source);
+}
+
+test "Repl - destructure definitions replace atomically by any bound name" {
+    var store = DefinitionStore.init();
+    defer store.deinit(testing.allocator);
+
+    const destructured_names = [_][]const u8{ "a", "b" };
+    try store.addOrReplaceNames(testing.allocator, "(a, b) = (1, 2)", &destructured_names, .value, false);
+    try testing.expectEqual(@as(usize, 1), store.count());
+    try testing.expect(store.hasKind("a", .value));
+    try testing.expect(store.hasKind("b", .value));
+
+    try store.addOrReplace(testing.allocator, "a = 3", "a", .value, false);
+    try testing.expectEqual(@as(usize, 1), store.count());
+    try testing.expect(store.hasKind("a", .value));
+    try testing.expect(!store.hasKind("b", .value));
+    try testing.expectEqualStrings("a = 3", store.items.items[0].source);
 }
 
 test "Repl - 4-arg lambda call (dev)" {

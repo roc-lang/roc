@@ -3064,7 +3064,7 @@ Builtin :: [].{
 		# a distinct chain component), so an adapter wrapping a range carries its
 		# state by value. `len_if_known`, when `Known`, is the exact remaining
 		# yield count: each step decrements it and the final `range_done()` is
-		# `Known(0)`, which `Iter.take_last`/`drop_last` rely on.
+		# `Known(0)`.
 		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lt : num, num -> Bool,
@@ -3500,54 +3500,6 @@ Builtin :: [].{
 					)
 				}
 
-		## Returns an iterator that yields the last `n` items of this iterator.
-		## If the source has fewer than `n` items, all of them are yielded.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [3, 4, 5]
-		##
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
-		## ```
-		take_last : Iter(item), U64 -> Iter(item)
-		take_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						iterator
-					} else {
-						Iter.drop_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
-		## Returns an iterator that yields all items except the last `n`.
-		## If the source has `n` or fewer items, the result is empty.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 2, 3]
-		##
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
-		## ```
-		drop_last : Iter(item), U64 -> Iter(item)
-		drop_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						range_done()
-					} else {
-						Iter.take_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
 		## empty iterator.
@@ -3591,21 +3543,6 @@ Builtin :: [].{
 							},
 					)
 				}
-
-		## Returns an iterator that yields this iterator's items in reverse order.
-		##
-		## Because an [Iter] only moves forward, this materializes the source into a
-		## list to reverse it. The result always has a known length, so collecting it
-		## is efficient. Avoid calling this on iterators whose length is unknown and
-		## might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
-		##
-		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
-		## ```
-		rev : Iter(item) -> Iter(item)
-		rev = |iterator|
-			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -3747,6 +3684,33 @@ Builtin :: [].{
 			}
 
 			make(0)
+		}
+
+		## Iterate over the list from last to first.
+		##
+		## This walks the list backwards in place; it does not build a reversed
+		## copy the way [List.rev] does.
+		## ```roc
+		## expect Iter.fold([1, 2, 3].iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold([].iter_rev(), [], |acc, item| acc.append(item)) == []
+		## ```
+		iter_rev : List(item) -> Iter(item)
+		iter_rev = |list| {
+			# `remaining` is both the number of items still to yield and the index
+			# just past the next one, so the length stays exact as it counts down.
+			make = |remaining|
+				iter_from_step(
+					Known(remaining),
+					||
+						if remaining == 0 {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, remaining - 1), rest: make(remaining - 1) })
+						},
+				)
+
+			make(List.len(list))
 		}
 
 		## Build a list from a pure [Iter], pre-sizing the allocation from the
@@ -4939,7 +4903,7 @@ Builtin :: [].{
 		## ```
 		find_last : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_last = |list, predicate| {
-			for item in list.rev() if predicate(item) {
+			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
 			return Err(NotFound)
@@ -5795,6 +5759,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
@@ -5831,7 +5812,9 @@ Builtin :: [].{
 			}
 		}
 
-		## Remove a value from the dictionary for a specified key.
+		## Remove a value from the dictionary for a specified key. Removal may
+		## change the iteration order of the remaining key-value pairs because
+		## the last pair can be moved into the removed pair's position.
 		## ```roc
 		## expect Dict.empty()
 		##            .insert("Some", "Value")
@@ -5858,6 +5841,30 @@ Builtin :: [].{
 			HashMap(data) => data.entries
 		}
 
+		## Iterate over the dictionary's key-value pairs in their current internal
+		## order. This matches insertion order until an entry is removed;
+		## [Dict.remove] may reorder the remaining pairs.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter(), [], |acc, pair| acc.append(pair)) == [(1, "One"), (2, "Two")]
+		## ```
+		iter : Dict(k, v) -> Iter((k, v))
+		iter = |dict| match dict {
+			HashMap(data) => List.iter(data.entries)
+		}
+
+		## Iterate over the dictionary's key-value pairs in reverse current
+		## internal order. This is reverse insertion order until an entry is
+		## removed; [Dict.remove] may reorder the remaining pairs. Like
+		## [List.iter_rev], this reads the entries in place rather than building a
+		## reversed copy.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter_rev(), [], |acc, pair| acc.append(pair)) == [(2, "Two"), (1, "One")]
+		## ```
+		iter_rev : Dict(k, v) -> Iter((k, v))
+		iter_rev = |dict| match dict {
+			HashMap(data) => List.iter_rev(data.entries)
+		}
+
 		## Create a `Dict` from a `List` of key-value pairs. If the list
 		## contains duplicate keys, later values overwrite earlier ones.
 		## ```roc
@@ -5868,6 +5875,37 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
+
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
 
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
@@ -5919,6 +5957,36 @@ Builtin :: [].{
 				var $state = init
 				for (key, value) in data.entries {
 					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
+
+		## Same as [Dict.fold], except you can stop folding early.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold_until(0, |count, _key, qty| if count + qty >= 30 {
+		##                Break(count + qty)
+		##            } else {
+		##                Continue(count + qty)
+		##            }) == 36
+		## ```
+		fold_until : Dict(k, v), state, (state, k, v -> [Continue(state), Break(state)]) -> state
+		fold_until = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					match step($state, key, value) {
+						Continue(new_state) => {
+							$state = new_state
+						}
+						Break(final_state) => {
+							$state = final_state
+							break
+						}
+					}
 				}
 				$state
 			}
@@ -6224,6 +6292,44 @@ Builtin :: [].{
 		to_list : Set(a) -> List(a)
 		to_list = |set| match set {
 			Items(list) => list
+		}
+
+		## Build a value by folding through each value in the set. Starting with
+		## a given `state` value, this runs the given `step` function on each
+		## value, using its return value as the new `state`. It returns the final
+		## `state` at the end.
+		## ```roc
+		## expect Set.from_list([1, 2, 3.U64]).fold(0, |sum, item| sum + item) == 6
+		##
+		## expect Set.empty().fold(0, |sum, item| sum + item) == 0.U64
+		## ```
+		fold : Set(a), state, (state, a -> state) -> state
+		fold = |set, init, step| match set {
+			Items(list) => List.fold(list, init, step)
+		}
+
+		## Iterate over the set's values in their current backing order.
+		## [Set.from_list] keeps the first insertion order, but inserting a value
+		## that is already present removes and re-appends it, which changes that
+		## value's position.
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		iter : Set(a) -> Iter(a)
+		iter = |set| match set {
+			Items(list) => List.iter(list)
+		}
+
+		## Iterate over the set's values in reverse current backing order. Like
+		## [List.iter_rev], this reads the values in place rather than building a
+		## reversed copy. Inserting an already-present value can change this order,
+		## as described by [Set.iter].
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		## ```
+		iter_rev : Set(a) -> Iter(a)
+		iter_rev = |set| match set {
+			Items(list) => List.iter_rev(list)
 		}
 
 		## Create a `Set` from a `List` of values.
@@ -14818,12 +14924,12 @@ Builtin :: [].{
 			round_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Every [Dec] rounds to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.round_to_i128_try(7.2) == Ok(7)
+			## expect Dec.round_to_i128(7.2) == 7
 			## ```
-			round_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			round_to_i128_try = |self| Ok(dec_round_to_i128(self))
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| dec_round_to_i128(self)
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14888,12 +14994,12 @@ Builtin :: [].{
 			floor_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Every [Dec] rounds down to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
+			## expect Dec.floor_to_i128(3.8) == 3
 			## ```
-			floor_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			floor_to_i128_try = |self| Ok(dec_floor_to_i128(self))
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| dec_floor_to_i128(self)
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -14958,12 +15064,12 @@ Builtin :: [].{
 			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Every [Dec] rounds up to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
+			## expect Dec.ceiling_to_i128(3.2) == 4
 			## ```
-			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			ceiling_to_i128_try = |self| Ok(dec_ceiling_to_i128(self))
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| dec_ceiling_to_i128(self)
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
@@ -15137,22 +15243,12 @@ Builtin :: [].{
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice. See [Dec.to_attos] to get
-			## the exact value (scaled by 10^18) instead.
+			## [I128], so this never fails. See [Dec.to_attos] to get the exact
+			## value (scaled by 10^18) instead.
 			## ```roc
-			## expect Dec.to_i128_wrap(42.5) == 42
+			## expect Dec.to_i128(42.5) == 42
 			## ```
-			to_i128_wrap : Dec -> I128
-
-			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
-			## integer part does not fit. The fractional part is truncated toward
-			## zero. See [Dec.to_attos] to get the exact value (scaled by 10^18)
-			## instead.
-			## ```roc
-			## expect Dec.to_i128_try(42.5) == Ok(42)
-			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
-			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
+			to_i128 : Dec -> I128
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 
@@ -22357,8 +22453,7 @@ range_done = || iter_from_step(
 
 # Shared state machine behind the numeric types' `range_exclusive` methods.
 # Each caller supplies `len_if_known` computed from its own representation;
-# when it is `Known`, it must be the exact yield count
-# (`Iter.take_last`/`drop_last` rely on that).
+# when it is `Known`, it must be the exact yield count.
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
@@ -22762,8 +22857,6 @@ dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
 dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
 
 dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
-
-dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
 
 dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
 

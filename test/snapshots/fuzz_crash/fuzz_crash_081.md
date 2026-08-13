@@ -18,12 +18,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 x = 0.()
      ^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found . here.

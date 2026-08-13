@@ -15817,17 +15817,16 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_u16_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u16_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
         .dec_to_u32_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u32_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
         .dec_to_u64_try_unsafe => try self.emitDecToIntTryUnsafe(.dec_to_u64_try_unsafe, ll.ret_layout, GuardedList.at(args, 0)),
-        // Dec → i128/u128: divide by 10^18
-        .dec_to_i128_try_unsafe, .dec_to_u128_try_unsafe => {
+        // Dec → u128: divide by 10^18
+        .dec_to_u128_try_unsafe => {
             const offsets = self.tryUnsafeOffsets(ll.ret_layout);
-            const is_signed = ll.op == .dec_to_i128_try_unsafe;
 
             // Generate the Dec value (pointer to 16 bytes in stack memory)
             try self.emitProcLocal(GuardedList.at(args, 0));
             const val_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(val_ptr);
 
-            // Allocate result: { success: U8, val_or_memory_garbage: i128/u128 }
+            // Allocate result: { success: U8, val_or_memory_garbage: u128 }
             const result_offset = try self.allocStackMemory(17, 8);
             const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitFpOffset(result_offset);
@@ -15840,7 +15839,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLocalGet(val_ptr);
                 try self.emitLoadOp(.i64, 8);
                 try self.emitI32Const(128);
-                try self.emitI32Const(@intFromBool(is_signed));
+                try self.emitI32Const(0); // unsigned
                 try self.emitI32Const(16);
                 try self.emitI32Const(@intCast(offsets.success));
                 try self.emitI32Const(@intCast(offsets.value));
@@ -15852,7 +15851,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 try self.emitBuiltinCall(
                     .dec_to_int_try_unsafe,
-                    if (is_signed) self.dec_to_i128_import else self.dec_to_u128_import,
+                    self.dec_to_u128_import,
                 );
                 const success_flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(success_flag);
@@ -16494,7 +16493,6 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .dec_to_i64_trunc,
         .dec_to_i64_try_unsafe,
         .dec_to_i128_trunc,
-        .dec_to_i128_try_unsafe,
         .dec_to_u8_trunc,
         .dec_to_u8_try_unsafe,
         .dec_to_u16_trunc,

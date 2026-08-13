@@ -35,12 +35,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 data = json.Core.Utf8.encode("hello")
            ^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .Core here.
@@ -54,12 +55,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 data = json.Core.Utf8.encode("hello")
                 ^^^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found .Utf8 here.
@@ -186,11 +188,7 @@ data = .encode("hello")
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "process"))
-		(e-lambda
-			(args
-				(p-assign (ident "encoder")))
-			(e-string
-				(e-literal (string "processing"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

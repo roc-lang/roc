@@ -23,6 +23,53 @@ pub const PatternBinderId = enum(u32) { _ };
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };
+/// Serial id into a `CheckedTypeStore`'s `var_names` interner (the text of a
+/// stored type-variable name).
+pub const CheckedVarNameId = enum(u32) { _ };
+
+/// The one inline optional-id encoding for checked-artifact data: an
+/// `enum(u32)` whose `0` value means "absent" and whose other values are the
+/// wrapped id biased by `+1`. Being a fixed-tag enum it is extern-compatible
+/// and exactly 4 bytes, so it can sit inline in serialized POD rows (unlike a
+/// native `?Id`, whose layout is not fixed, or `SerializedOptional`, which
+/// stores its payload out of line behind a relocation fixup). All bias
+/// arithmetic lives here so individual stores cannot drift into bespoke
+/// `_plus_one` / sentinel encodings.
+pub fn OptionalId(comptime Id: type) type {
+    comptime std.debug.assert(@typeInfo(Id).@"enum".tag_type == u32);
+    return enum(u32) {
+        none = 0,
+        _,
+
+        const Self = @This();
+
+        /// Wrap a present id. `maxInt(u32)` is unrepresentable (it would bias
+        /// to the `none` sentinel), which no checked-artifact id space reaches.
+        pub fn some(id: Id) Self {
+            const raw = @intFromEnum(id);
+            std.debug.assert(raw != std.math.maxInt(u32));
+            return @enumFromInt(raw + 1);
+        }
+
+        /// The wrapped id, or null for `none`.
+        pub fn get(self: Self) ?Id {
+            if (self == .none) return null;
+            return @enumFromInt(@intFromEnum(self) - 1);
+        }
+    };
+}
+
+test "OptionalId round-trips none and some" {
+    const Opt = OptionalId(CheckedVarNameId);
+    const absent: Opt = .none;
+    try std.testing.expectEqual(@as(?CheckedVarNameId, null), absent.get());
+    // The lowest id exercises the +1-bias boundary (raw 0 is reserved for none).
+    const id: CheckedVarNameId = @enumFromInt(std.math.minInt(u32));
+    try std.testing.expectEqual(id, Opt.some(id).get().?);
+    const high: CheckedVarNameId = @enumFromInt(std.math.maxInt(u32) - 1);
+    try std.testing.expectEqual(high, Opt.some(high).get().?);
+    comptime std.debug.assert(@sizeOf(Opt) == 4);
+}
 
 /// One explicit identity for a closure capture. Checked artifacts and active
 /// Monotype instantiation use the checked identities below; final Monotype

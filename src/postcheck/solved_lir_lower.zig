@@ -1488,15 +1488,22 @@ const Lowerer = struct {
         const expr = self.solved.lifted.getExpr(expr_id);
         if (expr.data == .field_access) {
             const field = expr.data.field_access;
-            return self.recordFieldType(try self.lowerExprContextTy(field.receiver), field.field);
-        } else if (expr.data == .tuple_access) {
+            var prefix_ty = try self.lowerExprContextTy(field.receiver);
+            const segments = self.solved.lifted.fieldAccessSegmentSpan(field.segments);
+            if (segments.len == 0) Common.invariant("field access path had no segments");
+            for (0..segments.len) |index| {
+                const segment = GuardedList.at(segments, index);
+                prefix_ty = self.recordFieldType(prefix_ty, segment.field);
+            }
+            return prefix_ty;
+        }
+        if (expr.data == .tuple_access) {
             const access = expr.data.tuple_access;
             const items = self.tupleItemTypes(try self.lowerExprContextTy(access.tuple));
             if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
             return GuardedList.at(items, @intCast(access.elem_index));
-        } else {
-            return try self.lowerExprTy(expr_id);
         }
+        return try self.lowerExprTy(expr_id);
     }
 
     fn lowerPatTy(self: *Lowerer, pat_id: Lifted.PatId) Common.LowerError!Type.TypeId {
@@ -1553,7 +1560,12 @@ const Lowerer = struct {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
                 for (self.solved_types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
+                    lowered[i] = .{
+                        .name = field.name,
+                        .ty = try self.lowerType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lowerType(value_ty) else null,
+                        .default = field.default,
+                    };
                 }
                 break :blk .{ .record = try self.types.addFields(lowered) };
             },
@@ -1976,14 +1988,22 @@ const Lowerer = struct {
         return self.result.const_type_names.internTagLabel(self.solved.lifted.names.tagLabelText(name));
     }
 
+    fn constFieldDefault(self: *Lowerer, default: ?MonoType.FieldDefault) std.mem.Allocator.Error!?const_store.TypeFieldDefault {
+        const field_default = default orelse return null;
+        return .{
+            .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
+    }
+
     fn constTypeDef(self: *Lowerer, def: MonoType.TypeDef) std.mem.Allocator.Error!const_store.TypeDef {
         return .{
             .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(def.module)),
             .type_name = try self.result.const_type_names.internTypeName(self.solved.lifted.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
             .generated = def.generated,
-            .iterator_representation = @enumFromInt(@intFromEnum(def.iterator_representation)),
-            .iterator_kind = @enumFromInt(@intFromEnum(def.iterator_kind)),
+            .iterator_representation = def.iterator_representation,
+            .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(topology.len_field),
@@ -2019,6 +2039,11 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.constTypeOfType(value_ty)
+                        else
+                            null,
+                        .default = try self.constFieldDefault(field.default),
                     };
                 }
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
@@ -2153,6 +2178,11 @@ const Lowerer = struct {
                     out[i] = .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = try self.constTypeOfMonoType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.constTypeOfMonoType(value_ty)
+                        else
+                            null,
+                        .default = try self.constFieldDefault(field.default),
                     };
                 }
                 break :blk .{ .record = try self.result.const_types.appendFieldSpan(out) };
@@ -2750,7 +2780,7 @@ const Lowerer = struct {
             },
             .call_value => |call| try self.lowerValueCallInto(target, expr_ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .low_level => |call| try self.lowerLowLevelInto(target, call.op, call.args, next),
-            .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
+            .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
             .structural_hash => |h| try self.lowerStructuralHashInto(target, h.value, h.hasher, next),
@@ -2846,7 +2876,7 @@ const Lowerer = struct {
             .nominal => |backing| try self.lowerNominalInto(target, ty, backing, next),
             .let_ => |let_| try self.lowerLetIntoAtType(target, ty, let_, next),
             .static_data_candidate => |candidate| try self.lowerStaticDataCandidateInto(target, candidate, ty, next),
-            .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.field, next),
+            .field_access => |field| try self.lowerFieldAccessInto(target, field.receiver, field.segments, next),
             .call_value => |call| try self.lowerValueCallInto(target, ty, call.callee, self.solved.lifted.exprSpan(call.args), next),
             .match_ => |match_| try self.lowerMatchInto(target, ty, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, ty, if_.branches, if_.final_else, next),
@@ -4698,28 +4728,80 @@ const Lowerer = struct {
         return try self.lowerExprInto(source, arg, assign);
     }
 
-    fn lowerFieldAccessInto(self: *Lowerer, target: LIR.LocalId, receiver: Lifted.ExprId, field_name: Type.names.RecordFieldNameId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn lowerFieldAccessInto(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        receiver: Lifted.ExprId,
+        segments_span: Lifted.Span(Lifted.FieldAccessSegment),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const segments = self.solved.lifted.fieldAccessSegmentSpan(segments_span);
+        if (segments.len == 0) Common.invariant("field access path had no segments");
+
         const receiver_ty = try self.lowerExprContextTy(receiver);
         const receiver_local = try self.addTemp(receiver_ty);
-        const target_field_index = self.recordFieldIndex(receiver_ty, field_name);
-        const target_fields = self.recordFields(receiver_ty);
-        const target_field_ty = GuardedList.at(target_fields, @intCast(target_field_index)).ty;
-        const source_ty = self.storageTypeOfLocalOr(receiver_local, receiver_ty);
-        const source_field_index = self.recordFieldIndex(source_ty, field_name);
-        const source_fields = self.recordFields(source_ty);
-        const source_field_ty = GuardedList.at(source_fields, @intCast(source_field_index)).ty;
-        if (self.isZstLocal(target)) {
-            return try self.lowerExprIntoAtType(receiver_local, receiver, receiver_ty, try self.assignZst(target, next));
+
+        const FieldRead = struct {
+            target: LIR.LocalId,
+            target_ty: Type.TypeId,
+            source: LIR.LocalId,
+            source_ty: Type.TypeId,
+            source_field_index: u16,
+            storage_layout: ?layout.Idx,
+        };
+        const reads = try self.allocator.alloc(FieldRead, segments.len);
+        defer self.allocator.free(reads);
+
+        var logical_source_ty = receiver_ty;
+        var source_local = receiver_local;
+        for (0..segments.len) |index| {
+            const segment = GuardedList.at(segments, index);
+            const target_field_index = self.recordFieldIndex(logical_source_ty, segment.field);
+            const target_fields = self.recordFields(logical_source_ty);
+            const target_field_ty = GuardedList.at(target_fields, @intCast(target_field_index)).ty;
+            const destination = if (index + 1 == segments.len)
+                target
+            else
+                try self.addTemp(target_field_ty);
+
+            const storage_source_ty = self.storageTypeOfLocalOr(source_local, logical_source_ty);
+            const source_field_index = self.recordFieldIndex(storage_source_ty, segment.field);
+            const source_fields = self.recordFields(storage_source_ty);
+            const source_field_ty = GuardedList.at(source_fields, @intCast(source_field_index)).ty;
+            reads[index] = .{
+                .target = destination,
+                .target_ty = target_field_ty,
+                .source = source_local,
+                .source_ty = source_field_ty,
+                .source_field_index = source_field_index,
+                .storage_layout = if (self.isZstLocal(destination))
+                    null
+                else
+                    self.localFieldLayout(source_local, source_field_index),
+            };
+
+            source_local = destination;
+            logical_source_ty = target_field_ty;
         }
-        const assign = try self.assignTypedRefRead(
-            target,
-            target_field_ty,
-            source_field_ty,
-            self.localFieldLayout(receiver_local, source_field_index),
-            .{ .field = .{ .source = receiver_local, .field_idx = source_field_index } },
-            next,
-        );
-        return try self.lowerExprIntoAtType(receiver_local, receiver, receiver_ty, assign);
+
+        var current = next;
+        var index = reads.len;
+        while (index > 0) {
+            index -= 1;
+            const read = reads[index];
+            current = if (read.storage_layout) |storage_layout|
+                try self.assignTypedRefRead(
+                    read.target,
+                    read.target_ty,
+                    read.source_ty,
+                    storage_layout,
+                    .{ .field = .{ .source = read.source, .field_idx = read.source_field_index } },
+                    current,
+                )
+            else
+                try self.assignZst(read.target, current);
+        }
+        return try self.lowerExprIntoAtType(receiver_local, receiver, receiver_ty, current);
     }
 
     fn lowerTupleAccessInto(self: *Lowerer, target: LIR.LocalId, tuple: Lifted.ExprId, elem_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -9491,6 +9573,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .typed_locals = try clonedLiftedProgramList(Lifted.TypedLocal, "typed_locals", allocator, view.typed_locals),
         .stmt_ids = try clonedLiftedProgramList(Lifted.StmtId, "stmt_ids", allocator, view.stmt_ids),
         .field_exprs = try clonedLiftedProgramList(Lifted.FieldExpr, "field_exprs", allocator, view.field_exprs),
+        .field_access_segments = try clonedLiftedProgramList(Lifted.FieldAccessSegment, "field_access_segments", allocator, view.field_access_segments),
         .fn_def_captures = try clonedLiftedProgramList(Lifted.FnDefCapture, "fn_def_captures", allocator, view.fn_def_captures),
         .capture_operands = try clonedLiftedProgramList(Lifted.CaptureOperand, "capture_operands", allocator, view.capture_operands),
         .record_destructs = try clonedLiftedProgramList(Lifted.RecordDestruct, "record_destructs", allocator, view.record_destructs),
@@ -9615,18 +9698,26 @@ fn reinternNames(
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {
     const view = source.view();
-    return .{
-        .allocator = allocator,
-        .types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types)),
-        .type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests)),
-        .specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView())),
-        .constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView())),
-        .spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans)),
-        .fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields)),
-        .tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags)),
-        .declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields)),
-        .frozen = source.isFrozen(),
-    };
+    var cloned = MonoType.Store.init(allocator);
+    errdefer cloned.deinit();
+
+    cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types));
+    cloned.type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests));
+    cloned.specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView()));
+    cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
+    cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
+    var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
+    errdefer iterator_interface_visit_epochs.deinit(allocator);
+    try iterator_interface_visit_epochs.resize(allocator, view.types.len);
+    @memset(iterator_interface_visit_epochs.items, 0);
+    cloned.iterator_interface_visit_epochs = @TypeOf(source.iterator_interface_visit_epochs).fromArrayList(iterator_interface_visit_epochs);
+    iterator_interface_visit_epochs = .empty;
+    cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
+    cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
+    cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
+    cloned.declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields));
+    cloned.frozen = source.isFrozen();
+    return cloned;
 }
 
 fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.Store) std.mem.Allocator.Error!SolvedType.Store {
@@ -9776,6 +9867,7 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         .empty, // typed_locals
         .empty, // stmt_ids
         .empty, // field_exprs
+        .empty, // field_access_segments
         .empty, // fn_def_captures
         .empty, // capture_operands
         .empty, // record_destructs

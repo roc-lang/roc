@@ -211,6 +211,10 @@ pub const Context = union(enum) {
         /// We have to use the real region here, because the field does not
         /// have its own CIR node
         field_region: base.Region,
+        /// Whether the access demanded a required field (`.name`) or an
+        /// optional one (`.?name`)—reports use this to tell a kind
+        /// mismatch from a missing field (design.md "Field Kinds").
+        mode: enum { required, optional } = .required,
     };
 
     /// Context for record update type errors

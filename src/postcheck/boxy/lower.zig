@@ -629,6 +629,11 @@ fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.Checke
     return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
 }
 
+fn procedureModuleIdentityMatches(module: ProcedureModuleView, identity: *const [32]u8) bool {
+    const module_identity = module.module_env.contentIdentityHash() orelse return false;
+    return base.ModuleIdentity.eql(module_identity, identity);
+}
+
 fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
     var current = ty;
     var remaining = module.checked_types.payloadCount();
@@ -13057,12 +13062,12 @@ const ProcBodyBuilder = struct {
             .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
             .str => |segments| try self.lowerStrInto(target, expr.ty, segments, next),
             .str_from_quote => |quote| try self.lowerQuoteConversionInto(target, expr_id, expr.ty, quote, next),
-            .empty_record => try self.assignZst(target, next),
+            .empty_record => try self.lowerEmptyRecordInto(target, expr_id, expr.ty, next),
             .empty_list => try self.lowerListInto(target, expr.ty, &.{}, next),
             .lookup_local => |lookup| try self.lowerLookupLocalInto(target, expr_id, expr.ty, lookup, next),
             .lookup_external => |ref_id| try self.lowerResolvedLookupInto(target, expr_id, expr.ty, ref_id, next),
             .lookup_required => |ref_id| try self.lowerResolvedLookupInto(target, expr_id, expr.ty, ref_id, next),
-            .field_access => |access| try self.lowerFieldAccessInto(target, expr.ty, access.receiver, access.field_name, next),
+            .field_access => |access| try self.lowerFieldAccessInto(target, expr.ty, access.receiver, access.segments, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .list => |items| try self.lowerListInto(target, expr.ty, items, next),
             .tuple => |items| try self.lowerTupleInto(target, expr.ty, items, next),
@@ -13078,7 +13083,7 @@ const ProcBodyBuilder = struct {
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, null, eq.negated, next),
             .method_eq => |plan| try self.lowerMethodEqInto(target, plan, next),
             .structural_hash => |hash| try self.lowerStructuralHashInto(target, hash.value, hash.hasher, next),
-            .record => |record| try self.lowerRecordExprInto(target, expr.ty, record, next),
+            .record => |record| try self.lowerRecordExprInto(target, expr_id, expr.ty, record, next),
             .nominal => |nominal| try self.lowerNominalInto(target, expr.ty, nominal.backing_expr, next),
             .call => |call| try self.lowerDirectCallInto(target, expr_id, call, next),
             .dispatch_call => |maybe_plan| try self.lowerDispatchCallInto(target, expr_id, maybe_plan, next),
@@ -14102,10 +14107,11 @@ const ProcBodyBuilder = struct {
                     variant.index,
                 );
                 const payload_storage = try self.addFrameLocal(payload_layout);
+                self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = payload_storage,
                     .target_rep = target_child.rep,
-                    .source_rep = target_child.rep,
+                    .source_rep = payload_rep,
                 }};
                 const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
                 defer tag_desc.deinit(self.parent.allocator);
@@ -14131,10 +14137,11 @@ const ProcBodyBuilder = struct {
                 try self.bindConstructedTargetDescriptor(target, target_rep);
                 const target_desc = try self.constructedTargetDescForRep(target_rep);
                 const dynamic_payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
+                self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = dynamic_payload.local,
                     .target_rep = target_child.rep,
-                    .source_rep = target_child.rep,
+                    .source_rep = payload_rep,
                 }};
                 const tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
                 defer tag_desc.deinit(self.parent.allocator);
@@ -20300,6 +20307,18 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const variant = self.tagVariant(rep, name);
+        return try self.lowerPlannedTagVariantInto(target, rep_id, variant, args, next);
+    }
+
+    fn lowerPlannedTagVariantInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        variant: TagVariantLookup,
+        args: []const checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != args.len) {
             boxyLowerInvariant("tag expression payload count disagreed with its checked type representation");
@@ -20338,7 +20357,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
                     .target_desc = target_desc,
-                    .tag_name = try self.lirTagName(name),
+                    .tag_name = try self.lirTagNameForLookup(variant),
                     .next = next,
                 } });
             } else try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
@@ -20753,9 +20772,12 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         result_ty: checked.CheckedTypeId,
         receiver_id: checked.CheckedExprId,
-        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+        segments: []const checked.CheckedFieldAccessSegment,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (segments.len == 0) {
+            boxyLowerInvariant("checked field access path had no segments");
+        }
         const receiver = self.module.checked_bodies.expr(receiver_id);
         const receiver_rep = self.repForType(receiver.ty);
         const receiver_layout = self.workerRuntimeLayoutForRep(receiver_rep);
@@ -20763,8 +20785,235 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(receiver_local).layout_idx != receiver_layout.layoutIdx()) {
             boxyLowerInvariant("boxy field access receiver local layout disagreed with checked type");
         }
-        const read = try self.lowerRecordFieldFromLocalInto(target, self.repForType(result_ty), receiver_local, receiver_rep, self.module, field_name, next);
-        return try self.lowerExprInto(receiver_local, receiver_id, read);
+
+        for (segments) |segment| {
+            if (segment.mode == .optional) {
+                const result_rep = self.repForType(result_ty);
+                const lowered = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    0,
+                    receiver_local,
+                    receiver_rep,
+                    next,
+                );
+                return try self.lowerExprInto(receiver_local, receiver_id, lowered);
+            }
+        }
+
+        const prefix_locals = try self.parent.allocator.alloc(LIR.LocalId, segments.len - 1);
+        defer self.parent.allocator.free(prefix_locals);
+        for (prefix_locals, segments[0 .. segments.len - 1]) |*local, segment| {
+            local.* = try self.addFrameLocalForRep(self.repForType(segment.success_ty));
+        }
+        var continuation = next;
+        var index = segments.len;
+        while (index > 0) {
+            index -= 1;
+            const segment = segments[index];
+            const segment_rep = self.repForType(segment.success_ty);
+            const destination = if (index + 1 == segments.len)
+                target
+            else
+                prefix_locals[index];
+            const source_local = if (index == 0) receiver_local else prefix_locals[index - 1];
+            const source_rep = if (index == 0)
+                receiver_rep
+            else
+                self.repForType(segments[index - 1].success_ty);
+            continuation = try self.lowerRecordFieldFromLocalInto(
+                destination,
+                if (index + 1 == segments.len) self.repForType(result_ty) else segment_rep,
+                source_local,
+                source_rep,
+                self.module,
+                segment.field_name,
+                continuation,
+            );
+        }
+        return try self.lowerExprInto(receiver_local, receiver_id, continuation);
+    }
+
+    fn lowerOptionalFieldAccessSegments(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        result_rep: Plan.TypeRepId,
+        segments: []const checked.CheckedFieldAccessSegment,
+        index: usize,
+        current: LIR.LocalId,
+        current_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (index == segments.len) {
+            const ok = self.generatedParserTagVariant(result_rep, "Ok");
+            return try self.assignGeneratedParserTag(
+                target,
+                result_rep,
+                ok,
+                current,
+                current_rep,
+                next,
+            );
+        }
+
+        const segment = segments[index];
+        const access = self.recordFieldAccessInfo(current_rep, self.module, segment.field_name);
+        return switch (segment.mode) {
+            .required => blk: {
+                if (access.field_kind == .optional) {
+                    boxyLowerInvariant("required field-access segment selected an optional slot");
+                }
+                const field_rep = self.repForType(segment.success_ty);
+                const field_local = try self.addFrameLocalForRep(field_rep);
+                const rest = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    index + 1,
+                    field_local,
+                    field_rep,
+                    next,
+                );
+                break :blk try self.lowerRecordFieldFromLocalInto(
+                    field_local,
+                    field_rep,
+                    current,
+                    current_rep,
+                    self.module,
+                    segment.field_name,
+                    rest,
+                );
+            },
+            .optional => blk: {
+                if (access.field_kind != .optional) {
+                    boxyLowerInvariant("optional field-access segment did not select an optional slot");
+                }
+                const slot_rep = access.field_rep;
+                const slot_local = try self.addFrameLocalForRep(slot_rep);
+                const slot_rep_info = self.parent.plan.representations.items[@intFromEnum(slot_rep)];
+                const present = self.plannedTagVariantByText(slot_rep, "#Present");
+                const payload_children = self.parent.plan.childSlice(present.payloads);
+                if (payload_children.len != 1) {
+                    boxyLowerInvariant("optional field Present slot did not carry one payload");
+                }
+                const payload_rep = payload_children[0].rep;
+                const payload = try self.addExtractedTagPayloadLocal(payload_rep, slot_rep_info.descriptor != null);
+                const present_rest = try self.lowerOptionalFieldAccessSegments(
+                    target,
+                    result_rep,
+                    segments,
+                    index + 1,
+                    payload.local,
+                    payload_rep,
+                    next,
+                );
+                const present_body = try self.assignConcreteTagPayloadRead(
+                    payload.local,
+                    payload_rep,
+                    payload.desc_local,
+                    slot_local,
+                    slot_rep,
+                    present.name,
+                    present.index,
+                    0,
+                    1,
+                    present_rest,
+                );
+
+                const err = self.generatedParserTagVariant(result_rep, "Err");
+                const err_payloads = self.parent.plan.childSlice(err.variant.payloads);
+                if (err_payloads.len != 1) {
+                    boxyLowerInvariant("optional field access Try Err variant did not carry one payload");
+                }
+                const error_rep = self.nominalBackingActualRep(result_rep, err_payloads[0].rep);
+                const error_local = try self.addFrameLocalForRep(error_rep);
+                const err_body = try self.assignGeneratedParserTag(
+                    target,
+                    result_rep,
+                    err,
+                    error_local,
+                    error_rep,
+                    next,
+                );
+                const missing = self.generatedParserTagVariant(error_rep, "MissingField");
+                const missing_body = try self.assignGeneratedParserZeroTag(
+                    error_local,
+                    error_rep,
+                    missing,
+                    err_body,
+                );
+
+                const discriminant = try self.addFrameLocal(.u16);
+                const branches = [_]LIR.CFSwitchBranch{.{
+                    .value = present.index,
+                    .body = present_body,
+                }};
+                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                    .cond = discriminant,
+                    .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+                    .default_branch = missing_body,
+                    .continuation = null,
+                } });
+                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = discriminant,
+                    .op = .{ .discriminant = .{ .source = slot_local } },
+                    .next = switch_stmt,
+                } });
+                break :blk try self.lowerRecordFieldFromLocalInto(
+                    slot_local,
+                    slot_rep,
+                    current,
+                    current_rep,
+                    self.module,
+                    segment.field_name,
+                    read_discriminant,
+                );
+            },
+        };
+    }
+
+    fn nominalBackingActualRep(
+        self: *const ProcBodyBuilder,
+        owner_rep: Plan.TypeRepId,
+        backing_rep: Plan.TypeRepId,
+    ) Plan.TypeRepId {
+        var current = owner_rep;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) {
+                boxyLowerInvariant("nominal backing substitution wrapper chain exceeded boxy lowerer limit");
+            }
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => {
+                    for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+                        if (substitution.formal_rep == backing_rep) return substitution.actual_rep;
+                    }
+                    return backing_rep;
+                },
+                .in_progress,
+                .dynamic,
+                .primitive,
+                .bool_tag_union,
+                .erased_callable,
+                .record,
+                .record_unbound,
+                .tuple,
+                .list,
+                .box,
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return backing_rep,
+            }
+        }
     }
 
     fn lowerRecordFieldFromLocalInto(
@@ -21012,12 +21261,27 @@ const ProcBodyBuilder = struct {
     fn lowerRecordInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         expr_fields: []const checked.CheckedRecordExprField,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const rep_id = self.repForType(record_ty);
-        return try self.lowerRecordRepInto(target, rep_id, expr_fields, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, null, next);
+    }
+
+    fn lowerEmptyRecordInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
+        record_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const rep_id = self.repForType(record_ty);
+        if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
+            return try self.assignZst(target, next);
+        }
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, null, next);
     }
 
     const RecordExtension = struct {
@@ -21028,6 +21292,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordRepInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         expr_fields: []const checked.CheckedRecordExprField,
         extension: ?RecordExtension,
@@ -21037,9 +21302,9 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .record,
             .record_unbound,
-            => return try self.lowerRecordPayloadInto(target, rep_id, rep, expr_fields, extension, next),
-            .dynamic => return try self.lowerDynamicRecordInto(target, rep_id, rep, expr_fields, extension, next),
-            .alias => return try self.lowerRecordRepInto(target, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
+            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
+            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
+            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .opaque_nominal,
@@ -21048,7 +21313,7 @@ const ProcBodyBuilder = struct {
                     const backing = self.requiredSingleChild(rep_id, .nominal_backing);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, backing.rep, expr_fields, extension, assign);
+                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, extension, assign);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21058,6 +21323,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordPayloadInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
@@ -21073,8 +21339,8 @@ const ProcBodyBuilder = struct {
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record representation had a non-record child role"),
             }
         }
-        if (extension == null and field_count != expr_fields.len) {
-            boxyLowerInvariant("record expression field count disagreed with its checked type representation");
+        if (expr_fields.len > field_count) {
+            boxyLowerInvariant("record expression had more fields than its checked type representation");
         }
 
         const field_locals = try self.parent.allocator.alloc(LIR.LocalId, field_count);
@@ -21087,6 +21353,8 @@ const ProcBodyBuilder = struct {
         const source_field_target_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, expr_fields.len);
         defer self.parent.allocator.free(source_field_target_reps);
         @memset(source_field_target_reps, null);
+        const source_field_kinds = try self.parent.allocator.alloc(checked.CheckedFieldKind.Tag, expr_fields.len);
+        defer self.parent.allocator.free(source_field_kinds);
         const field_sources = try self.parent.allocator.alloc(RecordPayloadFieldSource, field_count);
         defer self.parent.allocator.free(field_sources);
 
@@ -21106,14 +21374,18 @@ const ProcBodyBuilder = struct {
                         descriptor_fields[layout_index] = .{
                             .local = local,
                             .target_rep = child.rep,
-                            .source_rep = self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
+                            .source_rep = if (child.record_field_kind == .optional)
+                                child.rep
+                            else
+                                self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
                         };
                         if (source_field_locals[source_index] != null) {
                             boxyLowerInvariant("record expression field was selected more than once by representation order");
                         }
                         source_field_locals[source_index] = local;
                         source_field_target_reps[source_index] = child.rep;
-                        field_sources[layout_index] = .{ .expr = expr_fields[source_index].value };
+                        source_field_kinds[source_index] = child.record_field_kind;
+                        field_sources[layout_index] = .expr;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
@@ -21133,8 +21405,33 @@ const ProcBodyBuilder = struct {
                             .field_view = rep_field_view,
                             .label = label,
                         } };
-                    } else {
-                        boxyLowerInvariant("record expression was missing a field from its checked type representation");
+                    } else switch (child.record_field_kind) {
+                        .optional => {
+                            const local = try self.addFrameLocal(field_layout);
+                            field_locals[layout_index] = local;
+                            descriptor_fields[layout_index] = .{
+                                .local = local,
+                                .target_rep = child.rep,
+                                .source_rep = child.rep,
+                            };
+                            field_sources[layout_index] = .{ .missing_optional = child.rep };
+                        },
+                        .defaulted => {
+                            const default = self.omittedRecordFieldDefault(record_expr, rep_field_view, label) orelse
+                                boxyLowerInvariant("defaulted record expression field had no record_omitted_defaults entry");
+                            const local = try self.addFrameLocal(field_layout);
+                            field_locals[layout_index] = local;
+                            descriptor_fields[layout_index] = .{
+                                .local = local,
+                                .target_rep = child.rep,
+                                .source_rep = child.rep,
+                            };
+                            field_sources[layout_index] = .{ .defaulted = .{
+                                .default = default,
+                                .field_type = child.source_type,
+                            } };
+                        },
+                        .required, .undetermined, .err => boxyLowerInvariant("record expression was missing a required field from its checked type representation"),
                     }
                     layout_index += 1;
                 },
@@ -21163,6 +21460,13 @@ const ProcBodyBuilder = struct {
             field_index -= 1;
             continuation = switch (field_sources[field_index]) {
                 .expr => continuation,
+                .missing_optional => |slot_rep| try self.lowerOptionalSlotMissingInto(field_locals[field_index], slot_rep, continuation),
+                .defaulted => |defaulted| try self.lowerDefaultedRecordFieldInto(
+                    field_locals[field_index],
+                    defaulted.default,
+                    defaulted.field_type,
+                    continuation,
+                ),
                 .extension => |ext| blk: {
                     const field_local = field_locals[field_index];
                     if (self.localUsesWorkerLayoutForRep(field_local, ext.target_rep)) {
@@ -21197,13 +21501,21 @@ const ProcBodyBuilder = struct {
             const target_local = source_field_locals[source_index].?;
             const target_rep = source_field_target_reps[source_index] orelse
                 boxyLowerInvariant("record expression field target rep was not recorded");
-            continuation = try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
+            continuation = if (source_field_kinds[source_index] == .optional)
+                try self.lowerOptionalSlotPresentInto(target_local, target_rep, expr_fields[source_index].value, continuation)
+            else
+                try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
         }
         return try self.prependDescriptorArgMaterializations(aggregate_desc.field_initializers, continuation);
     }
 
     const RecordPayloadFieldSource = union(enum) {
-        expr: checked.CheckedExprId,
+        expr,
+        missing_optional: Plan.TypeRepId,
+        defaulted: struct {
+            default: checked.CheckedFieldDefault,
+            field_type: Plan.CheckedTypeIdentity,
+        },
         extension: struct {
             local: LIR.LocalId,
             rep: Plan.TypeRepId,
@@ -21213,9 +21525,112 @@ const ProcBodyBuilder = struct {
         },
     };
 
+    fn omittedRecordFieldDefault(
+        self: *const ProcBodyBuilder,
+        record_expr: checked.CheckedExprId,
+        field_view: ProcedureModuleView,
+        field_name: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) ?checked.CheckedFieldDefault {
+        for (self.module.checked_bodies.record_omitted_defaults) |entry| {
+            if (entry.expr != record_expr) continue;
+            if (self.recordFieldNameMatches(self.module, entry.field_name, field_view, field_name)) {
+                return entry.default;
+            }
+        }
+        return null;
+    }
+
+    fn lowerOptionalSlotPresentInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        slot_rep: Plan.TypeRepId,
+        value: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const present = self.plannedTagVariantByText(slot_rep, "#Present");
+        return try self.lowerPlannedTagVariantInto(target, slot_rep, present, &.{value}, next);
+    }
+
+    fn lowerOptionalSlotMissingInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        slot_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const missing = self.plannedTagVariantByText(slot_rep, "#Missing");
+        return try self.lowerPlannedTagVariantInto(target, slot_rep, missing, &.{}, next);
+    }
+
+    fn plannedTagVariantByText(
+        self: *const ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        text: []const u8,
+    ) TagVariantLookup {
+        const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .tag_union) {
+            boxyLowerInvariant("compiler-generated optional slot did not have a tag-union representation");
+        }
+        for (self.parent.plan.tagVariantSlice(rep.tag_variants), 0..) |variant, index| {
+            if (!std.mem.eql(u8, self.tagVariantNameText(variant), text)) continue;
+            if (index > std.math.maxInt(u16)) {
+                boxyLowerInvariant("compiler-generated optional slot variant index exceeded LIR range");
+            }
+            return .{
+                .index = @intCast(index),
+                .name = variant.name,
+                .name_module = variant.name_module,
+                .payloads = variant.payloads,
+            };
+        }
+        boxyLowerInvariant("compiler-generated optional slot was missing a reserved variant");
+    }
+
+    fn lowerDefaultedRecordFieldInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        default: checked.CheckedFieldDefault,
+        field_type: Plan.CheckedTypeIdentity,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const origin = default.origin() orelse
+            boxyLowerInvariant("defaulted record field carried no declaring module identity");
+        const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
+        const declaring_module = self.moduleForIdentityHash(origin_hash) orelse
+            boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
+        const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
+            boxyLowerInvariant("defaulted record field's expression was not archived");
+        const root = declaring_module.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr) orelse
+            boxyLowerInvariant("defaulted record field's expression had no compile-time root");
+        const node = switch (root.payload) {
+            .const_node => |node| node,
+            .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
+            .fn_value, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
+        };
+        const type_module = procedureModuleById(self.parent.modules, field_type.module);
+        return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
+    }
+
+    fn moduleForIdentityHash(
+        self: *const ProcBodyBuilder,
+        origin_hash: *const [32]u8,
+    ) ?ProcedureModuleView {
+        const root = rootProcedureModule(self.parent.modules);
+        if (procedureModuleIdentityMatches(root, origin_hash)) return root;
+        for (self.parent.modules.imports) |imported| {
+            const view = procedureModuleFromImport(imported);
+            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
+        }
+        for (self.parent.modules.root.relation_modules) |relation| {
+            const view = procedureModuleFromImport(relation);
+            if (procedureModuleIdentityMatches(view, origin_hash)) return view;
+        }
+        return null;
+    }
+
     fn lowerDynamicRecordInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
@@ -21238,6 +21653,7 @@ const ProcBodyBuilder = struct {
         } });
         return try self.lowerRecordPayloadInto(
             payload,
+            record_expr,
             rep_id,
             rep,
             expr_fields,
@@ -21249,6 +21665,7 @@ const ProcBodyBuilder = struct {
     fn lowerRecordExprInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
+        record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         record: anytype,
         next: LIR.CFStmtId,
@@ -21257,13 +21674,13 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            const continuation = try self.lowerRecordRepInto(target, self.repForType(record_ty), record.fields, .{
+            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, .{
                 .local = ext_local,
                 .rep = ext_rep,
             }, next);
             return try self.lowerExprInto(ext_local, ext, continuation);
         }
-        return try self.lowerRecordInto(target, record_ty, record.fields, next);
+        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, next);
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -23890,7 +24307,7 @@ const ProcBodyBuilder = struct {
             .box_unbox,
             => return try self.lowerBoxBoundaryLowLevelInto(target, result_ty, op, args, next),
             .list_map_can_reuse => return try self.lowerListMapCanReuseInto(target, args, next),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         try self.markLocalDescriptorForType(target, result_ty);
 
@@ -24171,7 +24588,7 @@ const ProcBodyBuilder = struct {
                         }
                         return assign;
                     },
-                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+                    .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
                 }
             }
             return try self.assignLocal(target, source, next);
@@ -24200,7 +24617,7 @@ const ProcBodyBuilder = struct {
                     return try self.assignUnaryLowLevel(target, .box_unbox, source, next);
                 }
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_i128_try_unsafe, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_release_excess_capacity, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_plus_wrap, .num_plus_checked, .num_minus, .num_minus_wrap, .num_minus_checked, .num_times, .num_times_wrap, .num_times_checked, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_round, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => unreachable,
         }
 
         boxyLowerInvariant("Box boundary low-level operation required descriptor-backed box adaptation lowering");
@@ -35815,6 +36232,7 @@ const ProcBodyBuilder = struct {
         record_rep: Plan.TypeRepId,
         field_idx: u16,
         field_rep: Plan.TypeRepId,
+        field_kind: checked.CheckedFieldKind.Tag,
     };
 
     const MatchedRecordField = struct {
@@ -35942,6 +36360,7 @@ const ProcBodyBuilder = struct {
                             .record_rep = record_rep_id,
                             .field_idx = index,
                             .field_rep = child.rep,
+                            .field_kind = child.record_field_kind,
                         };
                     }
                     index += 1;
@@ -36048,6 +36467,7 @@ const ProcBodyBuilder = struct {
     const TagVariantLookup = struct {
         index: u16,
         name: names.TagNameId,
+        name_module: checked.ModuleId,
         payloads: Plan.Span,
     };
 
@@ -36101,6 +36521,7 @@ const ProcBodyBuilder = struct {
             return .{
                 .index = @intCast(index),
                 .name = variant.name,
+                .name_module = variant.name_module,
                 .payloads = variant.payloads,
             };
         }
@@ -36147,6 +36568,14 @@ const ProcBodyBuilder = struct {
         variant: Plan.TagVariant,
     ) Allocator.Error!base.StringLiteral.Idx {
         return try self.parent.result.store.insertString(self.tagVariantNameText(variant));
+    }
+
+    fn lirTagNameForLookup(
+        self: *ProcBodyBuilder,
+        variant: TagVariantLookup,
+    ) Allocator.Error!base.StringLiteral.Idx {
+        const module = procedureModuleById(self.parent.modules, variant.name_module);
+        return try self.parent.result.store.insertString(module.canonical_names.tagLabelText(variant.name));
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u16 {
@@ -42715,14 +43144,20 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
+    try checked_module.checked_bodies.field_access_segment_pool.append(gpa, .{
+        .field_name = field_b,
+        .success_ty = @enumFromInt(fixtureTableIndex(0)),
+        .source_region = base.Region.zero(),
+        .mode = .required,
+        .backing_access = .inspectable,
+    });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
             .receiver = @enumFromInt(6),
-            .field_name = field_b,
-            .backing_access = .inspectable,
+            .segments = .{ .start = 0, .len = 1 },
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
@@ -43468,14 +43903,20 @@ test "boxy lowerer emits record field access using layout field index" {
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
     });
+    try checked_module.checked_bodies.field_access_segment_pool.append(gpa, .{
+        .field_name = field_b,
+        .success_ty = @enumFromInt(fixtureTableIndex(0)),
+        .source_region = base.Region.zero(),
+        .mode = .required,
+        .backing_access = .inspectable,
+    });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
             .receiver = @enumFromInt(2),
-            .field_name = field_b,
-            .backing_access = .inspectable,
+            .segments = .{ .start = 0, .len = 1 },
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{

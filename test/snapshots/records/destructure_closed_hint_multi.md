@@ -32,7 +32,7 @@ It has the type:
 
 But you are trying to use it as:
 
-    { x: _field }
+    { x: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 Hint: This pattern doesn't bind these fields:
  - y
  - z

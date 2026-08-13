@@ -50,7 +50,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "red"))
-		(e-not-implemented)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "design.Styles")

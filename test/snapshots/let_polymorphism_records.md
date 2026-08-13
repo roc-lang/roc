@@ -239,11 +239,13 @@ EndOfFile,
 							(e-ident (raw "update_data")))
 						(e-binop (op "+")
 							(e-field-access
-								(e-ident (raw "int_container"))
-								(e-ident (raw "count")))
+								(receiver
+									(e-ident (raw "int_container")))
+								(segment (mode "required") (field "count")))
 							(e-field-access
-								(e-ident (raw "str_container"))
-								(e-ident (raw "count"))))))))))
+								(receiver
+									(e-ident (raw "str_container")))
+								(segment (mode "required") (field "count"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -286,21 +288,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 337)
+		(e-call (constraint-fn-var 343)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 344)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 351)
+		(e-call (constraint-fn-var 361)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -321,7 +323,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 365)
+		(e-call (constraint-fn-var 377)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -329,7 +331,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 379)
+		(e-call (constraint-fn-var 391)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -338,7 +340,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 392)
+		(e-call (constraint-fn-var 404)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -356,20 +358,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 404)
+		(e-call (constraint-fn-var 418)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 416)
+		(e-call (constraint-fn-var 431)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 441)
+		(e-call (constraint-fn-var 457)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -385,17 +387,21 @@ NO CHANGE
 			(e-block
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 462)
+				(e-dispatch-call (method "plus") (constraint-fn-var 478)
 					(receiver
-						(e-field-access (field "count")
+						(e-field-access
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "int_container"))))))
+									(p-assign (ident "int_container"))))
+							(segments
+								(segment (name "count") (mode "required")))))
 					(args
-						(e-field-access (field "count")
+						(e-field-access
 							(receiver
 								(e-lookup-local
-									(p-assign (ident "str_container")))))))))))
+									(p-assign (ident "str_container"))))
+							(segments
+								(segment (name "count") (mode "required"))))))))))
 ~~~
 # TYPES
 ~~~clojure

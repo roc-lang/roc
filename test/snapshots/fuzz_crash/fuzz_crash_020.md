@@ -312,12 +312,13 @@ I was parsing access after `.`, and I expected a field name or tuple index.
 ...
 ^^^
 
-Record access uses a lowercase field name like .name. Tuple access uses a
-number like .0. Uppercase names, malformed names, and a bare . are not valid
-accessors.
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
 For example:
     person.name
+    maybe_person.?name
     pair.0
 
 I found ... here.
@@ -1439,19 +1440,20 @@ EndOfFile,
 									(e-int (raw "3")))))
 						(e-question-suffix
 							(e-field-access
-								(e-question-suffix
-									(e-method-call (method ".ned")
-										(receiver
-											(e-question-suffix
-												(e-method-call (method ".od")
-													(receiver
-														(e-question-suffix
-															(e-apply
-																(e-ident (raw "e_fn"))
-																(e-ident (raw "arg1")))))
-													(args))))
-										(args)))
-								(e-ident (raw "recd"))))
+								(receiver
+									(e-question-suffix
+										(e-method-call (method ".ned")
+											(receiver
+												(e-question-suffix
+													(e-method-call (method ".od")
+														(receiver
+															(e-question-suffix
+																(e-apply
+																	(e-ident (raw "e_fn"))
+																	(e-ident (raw "arg1")))))
+														(args))))
+											(args))))
+								(segment (mode "required") (field "recd"))))
 						(e-apply
 							(e-tag (raw "Stdo!"))
 							(e-string
@@ -1652,7 +1654,7 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "one"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -1663,7 +1665,7 @@ expect {
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -1679,7 +1681,7 @@ expect {
 		(e-empty_record))
 	(d-let
 		(p-assign (ident "t"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")

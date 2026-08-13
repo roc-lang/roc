@@ -18,15 +18,15 @@ main = {
 }
 ~~~
 # EXPECTED
-RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
+RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
-── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:9:11
+── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
 
 This from_interpolation dispatch would have to call itself to satisfy its own
 type.
 
-url = "https://${domain}.com"
-      ^^^^^^^^^^^^^^^^^^^^^^^
+url : Try(Try(Url, [InvalidUrl]), [Outer])
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The dispatcher type is:
 
@@ -210,12 +210,7 @@ main = {
 					(e-literal (string "example"))))
 			(s-let
 				(p-assign (ident "url"))
-				(e-block
-					(s-let
-						(p-assign (ident "#interp_0"))
-						(e-lookup-local
-							(p-assign (ident "domain"))))
-					(e-runtime-error (tag "erroneous_value_expr"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-lookup-local
 				(p-assign (ident "url")))))
 	(s-nominal-decl

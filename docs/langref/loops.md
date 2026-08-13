@@ -36,6 +36,27 @@ for n in [1, 2, 3, 4] {
 
 This `[1, 2, 3, 4]` code snippet works the same way as the earlier `1..<5` one. In one case, `1..<5` evaluates to an `Iter` of the numbers 1 through 4, and in the other, `[1, 2, 3, 4].iter()` evaluates to an `Iter` of those same numbers. Either way, the loop proceeds by repeatedly calling `next` on that `Iter`.
 
+### Looping backwards
+
+To visit a list's items from last to first, use `List.iter_rev` instead of
+`iter`:
+
+```roc
+var $visited = []
+
+for n in [1, 2, 3, 4].iter_rev() {
+    $visited = $visited.append(n)
+}
+
+# $visited is now [4, 3, 2, 1]
+```
+
+This reads the list backwards in place. Unlike `List.rev`, it does not build a
+reversed copy of the list first. Dictionaries and sets also provide `iter_rev`
+to traverse their current iteration order backwards. To reverse values from
+another iterator source, first collect them with `List.from_iter`, then call
+`iter_rev` on that list.
+
 ### Pattern matching in `for`
 
 Whatever you put between `for` and `in` is treated as a [pattern](pattern-matching), meaning (for example) that the item can be destructured inline:

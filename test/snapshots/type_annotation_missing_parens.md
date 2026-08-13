@@ -68,7 +68,7 @@ nums : List
 (can-ir
 	(d-let
 		(p-assign (ident "nums"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "List") (builtin)))))
 ~~~

@@ -28,8 +28,9 @@ EndOfFile,
 		(e-ident (raw "first_name"))
 		(e-string-part (raw " "))
 		(e-field-access
-			(e-ident (raw "rest"))
-			(e-ident (raw "last_name")))
+			(receiver
+				(e-ident (raw "rest")))
+			(segment (mode "required") (field "last_name")))
 		(e-string-part (raw ""))))
 ~~~
 # FORMATTED
@@ -55,11 +56,13 @@ NO CHANGE
 				(p-assign (ident "first_name"))))
 		(s-let
 			(p-assign (ident "#interp_1"))
-			(e-field-access (field "last_name")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "rest"))))))
-		(e-interpolation (constraint-fn-var 230) (dispatcher-var 18)
+						(p-assign (ident "rest"))))
+				(segments
+					(segment (name "last_name") (mode "required")))))
+		(e-interpolation (constraint-fn-var 232) (dispatcher-var 19)
 			(first
 				(e-literal (string "Hello ")))
 			(parts

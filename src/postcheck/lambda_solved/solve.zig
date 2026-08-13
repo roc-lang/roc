@@ -124,6 +124,13 @@ const Solver = struct {
     /// back-references to their existing vars exactly as an eager clone's
     /// per-call memo did. Allocated on a leaf's first expansion.
     leaf_contexts: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    /// Pools for the short-lived maps the solver creates per work item (clone
+    /// memos, visited sets). Their sparse chunks span the large type ID
+    /// domains, so per-item fresh maps would spend most of their time
+    /// allocating and zeroing chunks; pooled maps keep chunks across uses.
+    solved_set_pool: collections.DenseMapPool(Type.TypeVarId, void),
+    mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
+    clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -235,10 +242,16 @@ const Solver = struct {
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_contexts = .empty,
+            .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
+            .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
+            .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.clone_map_pool.deinit();
+        self.mono_set_pool.deinit();
+        self.solved_set_pool.deinit();
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.shared_clones.deinit();
@@ -543,6 +556,7 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     try self.closeCallableSlotsInType(field.ty, done, active);
+                    if (field.value_ty) |value_ty| try self.closeCallableSlotsInType(value_ty, done, active);
                 }
             },
             .tag_union => |tags| {
@@ -749,9 +763,13 @@ const Solver = struct {
                 try self.bindLowLevelTypes(call.op, expected, arg_tys);
             },
             .field_access => |field| {
-                const receiver_ty = try self.inferExpr(field.receiver);
-                const field_ty = try self.recordField(receiver_ty, field.field);
-                try self.unify(expected, field_ty);
+                var prefix_ty = try self.inferExpr(field.receiver);
+                const segments = self.lifted.fieldAccessSegmentSpan(field.segments);
+                if (segments.len == 0) Common.invariant("field access path had no segments");
+                for (segments) |segment| {
+                    prefix_ty = try self.recordField(prefix_ty, segment.field);
+                }
+                try self.unify(expected, prefix_ty);
             },
             .tuple_access => |access| {
                 const receiver_ty = try self.inferExpr(access.tuple);
@@ -1223,8 +1241,8 @@ const Solver = struct {
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
-        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer active.deinit();
+        var active = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&active);
         try self.markErasedCallablesReachedByTypeInner(ty, &active);
     }
 
@@ -1276,6 +1294,7 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     try self.markErasedCallablesReachedByTypeInner(field.ty, active);
+                    if (field.value_ty) |value_ty| try self.markErasedCallablesReachedByTypeInner(value_ty, active);
                 }
             },
             .tag_union => |tags| {
@@ -2046,8 +2065,8 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
-        var visiting = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer visiting.deinit();
+        var visiting = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visiting);
         return self.typeIsProvenUninhabitedInner(ty, &visiting);
     }
 
@@ -2065,8 +2084,8 @@ const Solver = struct {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
             .mono => |leaf| blk: {
-                var mono_visiting = collections.DenseMap(MonoType.TypeId, void).init(self.allocator);
-                defer mono_visiting.deinit();
+                var mono_visiting = self.mono_set_pool.acquire();
+                defer self.mono_set_pool.release(&mono_visiting);
                 break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
             },
             .named => |named| if (named.backing) |backing|
@@ -2232,6 +2251,12 @@ const Solver = struct {
                         Common.invariant("generated-private evidence relation received records with different fields");
                     }
                     try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
+                    if ((public_field.value_ty == null) != (private_field.value_ty == null)) {
+                        Common.invariant("generated-private evidence relation received different record field kinds");
+                    }
+                    if (public_field.value_ty) |public_value_ty| {
+                        try self.relateGeneratedPrivateEvidence(public_value_ty, private_field.value_ty.?);
+                    }
                 }
             },
             .tag_union => |public_tags| {
@@ -2503,6 +2528,12 @@ const Solver = struct {
             const right_field = self.program.types.fieldItem(rhs, i);
             if (left_field.name != right_field.name) Common.invariant("record field order failed Lambda Solved unification");
             try self.pushUnifyPair(stack, left_field.ty, right_field.ty);
+            if ((left_field.value_ty == null) != (right_field.value_ty == null)) {
+                Common.invariant("record field kind failed Lambda Solved unification");
+            }
+            if (left_field.value_ty) |left_value_ty| {
+                try self.pushUnifyPair(stack, left_value_ty, right_field.value_ty.?);
+            }
         }
     }
 
@@ -2610,8 +2641,8 @@ const Solver = struct {
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer active.deinit();
+        var active = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&active);
         try self.writeSolvedTypeDigest(&hasher, ty, &active);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -2667,6 +2698,13 @@ const Solver = struct {
                 for (0..fields.count()) |index| {
                     const field = self.program.types.fieldItem(fields, index);
                     writeBytes(hasher, self.lifted.names.recordFieldLabelText(field.name));
+                    MonoType.writeFieldDefaultDigest(self.lifted.names, hasher, field.default);
+                    if (field.value_ty) |value_ty| {
+                        writeBytes(hasher, "field-optional-value");
+                        try self.writeSolvedTypeDigest(hasher, value_ty, active);
+                    } else {
+                        writeBytes(hasher, "field-inline-value");
+                    }
                     try self.writeSolvedTypeDigest(hasher, field.ty, active);
                 }
             },
@@ -2772,7 +2810,10 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
                 .primitive, .zst, .erased => {},
                 .list, .box => |elem| callback.child(elem),
                 .tuple => |items| for (store.span(items)) |item| callback.child(item),
-                .record => |fields| for (store.fieldSpan(fields)) |field| callback.child(field.ty),
+                .record => |fields| for (store.fieldSpan(fields)) |field| {
+                    callback.child(field.ty);
+                    if (field.value_ty) |value_ty| callback.child(value_ty);
+                },
                 .tag_union => |tags| for (store.tagSpan(tags)) |tag| {
                     for (store.span(tag.payloads)) |payload| callback.child(payload);
                 },
@@ -2877,12 +2918,12 @@ const TypeCloner = struct {
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
-            .map = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .map = solver.clone_map_pool.acquire(),
         };
     }
 
     fn deinit(self: *TypeCloner) void {
-        self.map.deinit();
+        self.solver.clone_map_pool.release(&self.map);
     }
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
@@ -2960,6 +3001,8 @@ const TypeCloner = struct {
                     lowered[i] = .{
                         .name = field.name,
                         .ty = try self.lower(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lower(value_ty) else null,
+                        .default = field.default,
                     };
                 }
                 break :blk .{ .record = try self.solver.program.types.addFields(lowered) };
@@ -3025,8 +3068,8 @@ const TypeCloner = struct {
         owner_def: MonoType.TypeDef,
         backing: MonoType.TypeId,
     ) Allocator.Error!MonoType.TypeId {
-        var seen = collections.DenseMap(MonoType.TypeId, void).init(self.solver.allocator);
-        defer seen.deinit();
+        var seen = self.solver.mono_set_pool.acquire();
+        defer self.solver.mono_set_pool.release(&seen);
         var current = backing;
         while (true) {
             if (seen.contains(current)) return current;
@@ -3077,6 +3120,51 @@ fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return std.mem.eql(u8, left.?.bytes[0..], right.?.bytes[0..]);
+}
+
+test "lambda solved erased callable digest includes record field default identity" {
+    const gpa = std.testing.allocator;
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const field_name = try name_store.internRecordFieldLabel("retries");
+    const module = try name_store.internModuleIdentity(&([_]u8{0xD5} ** 32));
+
+    var program: Ast.Program = undefined;
+    program.types = Type.Store.init(gpa);
+    defer program.types.deinit();
+
+    const value_ty = try program.types.add(.{ .primitive = .u8 });
+    const plain_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = null,
+    }}) });
+    const first_default_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = .{ .module = module, .expr_node = 3 },
+    }}) });
+    const second_default_ty = try program.types.add(.{ .record = try program.types.addFields(&.{.{
+        .name = field_name,
+        .ty = value_ty,
+        .default = .{ .module = module, .expr_node = 4 },
+    }}) });
+
+    var lifted: Lifted.ProgramView = undefined;
+    lifted.names = &name_store;
+    var solver: Solver = undefined;
+    solver.allocator = gpa;
+    solver.program = &program;
+    solver.lifted = lifted;
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(gpa);
+    defer solver.solved_set_pool.deinit();
+
+    const plain_digest = try solver.solvedTypeDigest(plain_ty);
+    const first_default_digest = try solver.solvedTypeDigest(first_default_ty);
+    const second_default_digest = try solver.solvedTypeDigest(second_default_ty);
+    try std.testing.expect(!std.mem.eql(u8, plain_digest.bytes[0..], first_default_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first_default_digest.bytes[0..], second_default_digest.bytes[0..]));
 }
 
 test "lambda solved solve declarations are referenced" {

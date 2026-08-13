@@ -118,7 +118,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/runtime_dec_to_int_wrap_widths.roc",
         .io_spec = "0<3|1>widths: 3 3 3 3 3 3 3 3 3 3|1>trunc: 3 -3 -3|1>wide: 11553255926290448384 30000000000000000000 0",
-        .description = "Every runtime Dec-to-integer width recovers the whole part, truncates toward zero, and wraps past the destination range",
+        .description = "Every runtime Dec-to-integer width recovers the whole part and truncates toward zero; all but I128 wrap past the destination range",
     },
     .{
         .roc_file = "test/fx/runtime_i128_div_rem_mod.roc",

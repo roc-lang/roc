@@ -93,10 +93,20 @@ pub const SnapshotRecord = struct {
     ext: SnapshotContentIdx,
 };
 
+/// The resolved kind of a snapshotted record field. The field's value type is
+/// stored separately in `SnapshotRecordField.content`.
+pub const SnapshotFieldPresence = union(enum) {
+    required,
+    optional,
+    defaulted: types.DefaultId,
+    unknown,
+};
+
 /// A single field in a snapshotted record type.
 pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx,
+    presence: SnapshotFieldPresence,
 
     const Self = @This();
 
@@ -137,9 +147,6 @@ pub const SnapshotStaticDispatchConstraint = struct {
 };
 
 const Var = types.Var;
-const Content = types.Content;
-const Flex = types.Flex;
-const Rigid = types.Rigid;
 
 /// Self-contained snapshot store with fully resolved content (ie no Vars)
 ///
@@ -154,6 +161,124 @@ const TypeWriter = types.TypeWriter;
 const ByteList = std.array_list.Managed(u8);
 const ByteListRange = struct { start: usize, count: usize };
 
+/// Which var a snapshot frame records: `original_var` is the var the caller
+/// asked for—what the TypeWriter renders and what tag formatting uses as its
+/// root—while `resolved_var` is its union-find root, which is what the visit
+/// path and the flex identity record.
+const SnapshotFill = struct {
+    original_var: types.Var,
+    resolved_var: types.Var,
+};
+
+const SnapshotIdentityResult = enum { flex, rigid };
+
+const SnapshotFuncKind = enum { pure, effectful, unbound };
+
+/// One suspended step of the snapshot walk. A frame is pushed only after its
+/// var is on the visit path, and it takes the var back off that path when it
+/// records its content, so the recursion markers the snapshot embeds are
+/// exactly the ones the recursive walk produced.
+///
+/// Source runs are held as slices into the type store, which snapshotting
+/// never writes to, so a run stays valid across the children that suspend the
+/// frame holding it. Collected results live in the store's own scratch stacks
+/// at a base captured per frame.
+const SnapshotFrame = union(enum) {
+    identity: IdentityFrame,
+    alias: AliasFrame,
+    tuple: TupleFrame,
+    nominal: NominalFrame,
+    func: FuncFrame,
+    record: RecordFrame,
+    record_unbound: RecordUnboundFrame,
+    tag_union: TagUnionFrame,
+};
+
+/// A flex or rigid var, snapshotting its static-dispatch constraint list one
+/// constraint at a time.
+const IdentityFrame = struct {
+    fill: SnapshotFill,
+    result: SnapshotIdentityResult,
+    name: ?Ident.Idx,
+    constraints: []const types.StaticDispatchConstraint,
+    idx: u32 = 0,
+    scratch_top: u32,
+    stage: enum { head, await_fn } = .head,
+};
+
+const AliasFrame = struct {
+    fill: SnapshotFill,
+    ident: types.TypeIdent,
+    backing: types.Var,
+    args: []const types.Var,
+    idx: u32 = 0,
+    backing_content: SnapshotContentIdx = undefined,
+    scratch_top: u32 = 0,
+    stage: enum { backing, await_backing, args, await_arg } = .backing,
+};
+
+const TupleFrame = struct {
+    fill: SnapshotFill,
+    elems: []const types.Var,
+    idx: u32 = 0,
+    scratch_top: u32,
+    stage: enum { elems, await_elem } = .elems,
+};
+
+const NominalFrame = struct {
+    fill: SnapshotFill,
+    ident: types.TypeIdent,
+    origin_module: base.ModuleIdentity.Idx,
+    args: []const types.Var,
+    idx: u32 = 0,
+    backing: types.Var = undefined,
+    scratch_top: u32,
+    stage: enum { await_backing, args, await_arg } = .args,
+};
+
+const FuncFrame = struct {
+    fill: SnapshotFill,
+    kind: SnapshotFuncKind,
+    args: []const types.Var,
+    ret: types.Var,
+    idx: u32 = 0,
+    scratch_top: u32,
+    args_range: SnapshotContentIdxSafeList.Range = undefined,
+    stage: enum { args, await_arg, await_ret } = .args,
+};
+
+const RecordFrame = struct {
+    fill: SnapshotFill,
+    source_fields: types.RecordField.SafeMultiList.Range,
+    ext: types.Var,
+    idx: u32 = 0,
+    scratch_top: u32,
+    fields_range: SnapshotRecordFieldSafeList.Range = undefined,
+    stage: enum { fields, await_field, await_ext } = .fields,
+};
+
+const RecordUnboundFrame = struct {
+    fill: SnapshotFill,
+    source_fields: types.RecordField.SafeMultiList.Range,
+    idx: u32 = 0,
+    scratch_top: u32,
+    stage: enum { fields, await_field } = .fields,
+};
+
+const TagUnionFrame = struct {
+    fill: SnapshotFill,
+    source_tags: types.Tag.SafeMultiList.Range,
+    ext: types.Var,
+    tag_idx: u32 = 0,
+    arg_idx: u32 = 0,
+    /// Base of the current tag's payload results in `scratch_content`.
+    content_scratch_top: u32 = 0,
+    /// Base of this frame's collected tags in `scratch_tags`.
+    tags_scratch_top: u32,
+    tags_range: SnapshotTagSafeList.Range = undefined,
+    stage: enum { tag_head, tag_args, await_tag_arg, await_ext } = .tag_head,
+};
+
 /// Stores snapshots of types captured before unification errors overwrite them with `.err`.
 /// This allows error messages to display the original conflicting types rather than the
 /// error state. Also stores pre-formatted type strings for efficient error reporting.
@@ -165,8 +290,17 @@ pub const Store = struct {
     // Content storage
     contents: SnapshotContentList,
 
-    // Catch recursive references
-    seen_vars: base.Scratch(Var),
+    /// Vars on the current visit path, so a re-entry becomes a recursion
+    /// marker instead of an unbounded descent. Entries are unique: a var
+    /// already on the path is never added again.
+    seen_vars: std.AutoHashMapUnmanaged(Var, void),
+
+    /// Suspended steps of the snapshot walk, innermost last. The walk descends
+    /// on this heap stack rather than the native one, so snapshot depth is
+    /// bounded only by available memory.
+    frames: std.ArrayList(SnapshotFrame),
+    /// Finished child results, consumed by the frame that requested them.
+    pending_values: base.Scratch(SnapshotContentIdx),
 
     /// Storage for compound type parts
     content_indexes: SnapshotContentIdxSafeList,
@@ -188,7 +322,9 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .contents = try SnapshotContentList.initCapacity(gpa, capacity),
-            .seen_vars = try base.Scratch(Var).init(gpa),
+            .seen_vars = .empty,
+            .frames = .empty,
+            .pending_values = try base.Scratch(SnapshotContentIdx).init(gpa),
             .content_indexes = try SnapshotContentIdxSafeList.initCapacity(gpa, capacity),
             .record_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 256),
             .tags = try SnapshotTagSafeList.initCapacity(gpa, 256),
@@ -222,7 +358,9 @@ pub const Store = struct {
         }
 
         self.contents.deinit(self.gpa);
-        self.seen_vars.deinit();
+        self.seen_vars.deinit(self.gpa);
+        self.frames.deinit(self.gpa);
+        self.pending_values.deinit();
         self.content_indexes.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
@@ -305,59 +443,253 @@ pub const Store = struct {
     /// Deep copy a type variable for error reporting. This snapshots the type structure
     /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
     /// ONLY use this in error paths - it allocates formatted strings for all nested types.
+    ///
+    /// The graph walk runs on an explicit heap worklist, so snapshot depth is
+    /// bounded only by available memory, never by the native stack.
     pub fn snapshotVarForError(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const snapshot_idx = try self.deepCopyVarInternal(store, type_writer, var_);
-        return snapshot_idx;
-    }
+        const frames_base = self.frames.items.len;
+        const values_base = self.pending_values.top();
+        // A completed walk drains the worklist and leaves `seen_vars` empty.
+        // An allocation failure mid-walk can leave entries behind on buffers
+        // this store keeps for the next snapshot, so unwind them here and
+        // preserve that invariant on both exit paths.
+        errdefer {
+            self.frames.items.len = frames_base;
+            self.pending_values.clearFrom(values_base);
+            self.seen_vars.clearRetainingCapacity();
+        }
 
-    /// Internal recursive implementation of snapshotVarForError
-    fn deepCopyVarInternal(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
-        const resolved = store.resolveVar(var_);
-
-        // Check if we've seen this variable
-        var has_seen_var = false;
-        for (self.seen_vars.items.items) |seen_var| {
-            if (seen_var == resolved.var_) {
-                has_seen_var = true;
-                break;
+        if (!try self.requestVar(store, type_writer, var_)) {
+            while (self.frames.items.len > frames_base) {
+                const top = &self.frames.items[self.frames.items.len - 1];
+                // A step either suspends after requesting exactly one child
+                // (having already written its own resume state), or finishes
+                // without requesting anything—so popping on finish always
+                // removes the frame the step ran for.
+                const finished = switch (top.*) {
+                    .identity => |*frame| try self.stepIdentity(store, type_writer, frame),
+                    .alias => |*frame| try self.stepAlias(store, type_writer, frame),
+                    .tuple => |*frame| try self.stepTuple(store, type_writer, frame),
+                    .nominal => |*frame| try self.stepNominal(store, type_writer, frame),
+                    .func => |*frame| try self.stepFunc(store, type_writer, frame),
+                    .record => |*frame| try self.stepRecord(store, type_writer, frame),
+                    .record_unbound => |*frame| try self.stepRecordUnbound(store, type_writer, frame),
+                    .tag_union => |*frame| try self.stepTagUnion(store, type_writer, frame),
+                };
+                if (finished) {
+                    self.frames.items.len -= 1;
+                }
             }
         }
 
-        // If we've seen this variable, then return it as a recursive type
-        // Try to extract the name from the content for better error messages
-        if (has_seen_var) {
+        std.debug.assert(self.seen_vars.count() == 0);
+        std.debug.assert(self.pending_values.top() == values_base + 1);
+        return self.pending_values.pop().?;
+    }
+
+    /// Snapshot one var's head: hand back a recursion marker for a var already
+    /// on the path, and otherwise mark it as being visited and either record
+    /// its content immediately (contents with no children) or push the frame
+    /// that will record it. Returns true when the result index is already on
+    /// the value stack; false when a frame was pushed.
+    fn requestVar(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!bool {
+        const resolved = store.resolveVar(var_);
+
+        // If we've already reached this variable on the current path, then
+        // return it as a recursive type. Try to extract the name from the
+        // content for better error messages.
+        if (self.seen_vars.contains(resolved.var_)) {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
                 .alias => |alias| alias.ident.ident_idx,
+                .field_presence => null,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
                     // Other structures can appear as backing vars for nominal types.
                     // E.g., List(a) := [Nil, Cons(a, List(a))] has a tag union as backing.
-                    // These don't have a direct name, so we fall back to contextual naming.
+                    // These don't have a direct name, so contextual naming names them.
                     .record, .record_unbound, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                 },
                 // Error types shouldn't create cycles
                 .err => unreachable,
             };
-            return try self.contents.append(self.gpa, .{ .recursive = recursive_name });
+            const idx = try self.contents.append(self.gpa, .{ .recursive = recursive_name });
+            try self.pending_values.append(idx);
+            return true;
         }
 
-        // If not, add it to the seen list
-        try self.seen_vars.append(resolved.var_);
-        defer _ = self.seen_vars.pop();
+        // If not, mark it as being visited
+        try self.seen_vars.put(self.gpa, resolved.var_, {});
 
-        // Recursively copy content
-        const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content, var_);
+        const fill = SnapshotFill{ .original_var = var_, .resolved_var = resolved.var_ };
+        switch (resolved.desc.content) {
+            .err => {
+                try self.finishFrame(type_writer, fill, SnapshotContent.err);
+                return true;
+            },
+            .flex => |flex| {
+                if (flex.constraints.len() == 0) {
+                    try self.finishFrame(type_writer, fill, SnapshotContent{ .flex = SnapshotFlex{
+                        .name = flex.name,
+                        .var_ = resolved.var_,
+                        .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
+                    } });
+                    return true;
+                }
+                try self.frames.append(self.gpa, .{ .identity = .{
+                    .fill = fill,
+                    .result = .flex,
+                    .name = flex.name,
+                    .constraints = store.sliceStaticDispatchConstraints(flex.constraints),
+                    .scratch_top = self.scratch_static_dispatch_constraints.top(),
+                } });
+                return false;
+            },
+            .rigid => |rigid| {
+                if (rigid.constraints.len() == 0) {
+                    try self.finishFrame(type_writer, fill, SnapshotContent{ .rigid = SnapshotRigid{
+                        .name = rigid.name,
+                        .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
+                    } });
+                    return true;
+                }
+                try self.frames.append(self.gpa, .{ .identity = .{
+                    .fill = fill,
+                    .result = .rigid,
+                    .name = rigid.name,
+                    .constraints = store.sliceStaticDispatchConstraints(rigid.constraints),
+                    .scratch_top = self.scratch_static_dispatch_constraints.top(),
+                } });
+                return false;
+            },
+            .alias => |alias| {
+                try self.frames.append(self.gpa, .{ .alias = .{
+                    .fill = fill,
+                    .ident = alias.ident,
+                    .backing = store.getAliasBackingVar(alias),
+                    .args = store.sliceAliasArgs(alias),
+                } });
+                return false;
+            },
+            // Presence facts are represented on their owning record field in
+            // snapshots, never as standalone reportable types.
+            .field_presence => {
+                try self.finishFrame(type_writer, fill, SnapshotContent.err);
+                return true;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .empty_record => {
+                    try self.finishFrame(type_writer, fill, SnapshotContent{ .structure = SnapshotFlatType.empty_record });
+                    return true;
+                },
+                .empty_tag_union => {
+                    try self.finishFrame(type_writer, fill, SnapshotContent{ .structure = SnapshotFlatType.empty_tag_union });
+                    return true;
+                },
+                .tuple => |tuple| {
+                    try self.frames.append(self.gpa, .{ .tuple = .{
+                        .fill = fill,
+                        .elems = store.sliceVars(tuple.elems),
+                        .scratch_top = self.scratch_content.top(),
+                    } });
+                    return false;
+                },
+                .nominal_type => |nominal_type| {
+                    // vars[0] is the backing, kept for report traversals (e.g. equality
+                    // explanations descend into it). The application itself carries no
+                    // backing, so snapshot the DECLARATION's backing template—formals
+                    // read as rigids there, which the traversals treat optimistically.
+                    var frame = NominalFrame{
+                        .fill = fill,
+                        .ident = nominal_type.ident,
+                        .origin_module = nominal_type.origin_module,
+                        .args = store.sliceNominalArgs(nominal_type),
+                        .scratch_top = self.scratch_content.top(),
+                    };
+                    if (store.lookupNominalDecl(nominal_type)) |decl_idx| {
+                        const decl = store.getNominalDecl(decl_idx);
+                        if (decl.isValid()) {
+                            frame.backing = decl.backing;
+                            frame.stage = .await_backing;
+                            try self.frames.append(self.gpa, .{ .nominal = frame });
+                            _ = try self.requestVar(store, type_writer, decl.backing);
+                            return false;
+                        }
+                    }
+                    try self.scratch_content.append(try self.contents.append(self.gpa, .err));
+                    try self.frames.append(self.gpa, .{ .nominal = frame });
+                    return false;
+                },
+                .fn_pure => |func| return try self.pushFunc(store, fill, .pure, func),
+                .fn_effectful => |func| return try self.pushFunc(store, fill, .effectful, func),
+                .fn_unbound => |func| return try self.pushFunc(store, fill, .unbound, func),
+                .record => |record| {
+                    try self.frames.append(self.gpa, .{ .record = .{
+                        .fill = fill,
+                        .source_fields = record.fields,
+                        .ext = record.ext,
+                        .scratch_top = self.scratch_record_fields.top(),
+                    } });
+                    return false;
+                },
+                .record_unbound => |fields| {
+                    try self.frames.append(self.gpa, .{ .record_unbound = .{
+                        .fill = fill,
+                        .source_fields = fields,
+                        .scratch_top = self.scratch_record_fields.top(),
+                    } });
+                    return false;
+                },
+                .tag_union => |tag_union| {
+                    try self.frames.append(self.gpa, .{ .tag_union = .{
+                        .fill = fill,
+                        .source_tags = tag_union.tags,
+                        .ext = tag_union.ext,
+                        .tags_scratch_top = self.scratch_tags.top(),
+                    } });
+                    return false;
+                },
+            },
+        }
+    }
+
+    fn pushFunc(
+        self: *Self,
+        store: *const TypesStore,
+        fill: SnapshotFill,
+        kind: SnapshotFuncKind,
+        func: types.Func,
+    ) std.mem.Allocator.Error!bool {
+        try self.frames.append(self.gpa, .{ .func = .{
+            .fill = fill,
+            .kind = kind,
+            .args = store.sliceVars(func.args),
+            .ret = func.ret,
+            .scratch_top = self.scratch_content.top(),
+        } });
+        return false;
+    }
+
+    /// Record one node's finished content, format it with the TypeWriter, and
+    /// take it off the visit path. The formatted string is keyed by the
+    /// content index this call assigns, exactly as the recursion did.
+    fn finishFrame(
+        self: *Self,
+        type_writer: *TypeWriter,
+        fill: SnapshotFill,
+        content: SnapshotContent,
+    ) std.mem.Allocator.Error!void {
+        const snapshot_idx = try self.contents.append(self.gpa, content);
 
         // Format this type and store the formatted string
         // Here, we run the TypeWriter, writing directly into our backing
         {
             const formatted_strings_start = self.formatted_strings_backing.items.len;
-            type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap) catch return error.OutOfMemory;
+            type_writer.writeInto(&self.formatted_strings_backing, fill.original_var, .wrap) catch return error.OutOfMemory;
             const formatted_strings_end = self.formatted_strings_backing.items.len;
 
             const formatted_range = ByteListRange{
@@ -368,293 +700,361 @@ pub const Store = struct {
             try self.formatted_strings.put(self.gpa, snapshot_idx, formatted_range);
         }
 
-        return snapshot_idx;
+        _ = self.seen_vars.remove(fill.resolved_var);
+        try self.pending_values.append(snapshot_idx);
     }
 
-    fn deepCopyFlex(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, flex: types.Flex) std.mem.Allocator.Error!SnapshotFlex {
-        return SnapshotFlex{
-            .name = flex.name,
-            .var_ = var_,
-            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, type_writer, flex.constraints),
-        };
-    }
-
-    fn deepCopyRigid(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, rigid: types.Rigid) std.mem.Allocator.Error!SnapshotRigid {
-        return SnapshotRigid{
-            .name = rigid.name,
-            .constraints = try self.deepCopyStaticDispatchConstraintRange(store, type_writer, rigid.constraints),
-        };
-    }
-
-    fn deepCopyStaticDispatchConstraintRange(
-        self: *Self,
-        store: *const TypesStore,
-        type_writer: *TypeWriter,
-        range: types.StaticDispatchConstraint.SafeList.Range,
-    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraintSafeList.Range {
-        const scratch_top = self.scratch_static_dispatch_constraints.top();
-        defer self.scratch_static_dispatch_constraints.clearFrom(scratch_top);
-
-        for (store.sliceStaticDispatchConstraints(range)) |constraint| {
-            try self.scratch_static_dispatch_constraints.append(try self.deepCopyStaticDispatchConstraint(store, type_writer, constraint));
-        }
-
-        return self.static_dispatch_constraints.appendSlice(self.gpa, self.scratch_static_dispatch_constraints.sliceFromStart(scratch_top));
-    }
-
-    fn deepCopyStaticDispatchConstraint(
-        self: *Self,
-        store: *const TypesStore,
-        type_writer: *TypeWriter,
-        constraint: types.StaticDispatchConstraint,
-    ) std.mem.Allocator.Error!SnapshotStaticDispatchConstraint {
-        return SnapshotStaticDispatchConstraint{
-            .fn_name = constraint.fn_name,
-            .fn_content = try self.deepCopyVarInternal(store, type_writer, constraint.fn_var),
-            // Dispatcher is set when collecting constraints during write
-            .dispatcher = undefined,
-        };
-    }
-
-    fn deepCopyContent(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, content: Content, root_var: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
-        const deep_content = switch (content) {
-            .flex => |flex| SnapshotContent{ .flex = try self.deepCopyFlex(store, type_writer, var_, flex) },
-            .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, type_writer, rigid) },
-            .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, type_writer, alias) },
-            .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type, root_var) },
-            .err => SnapshotContent.err,
-        };
-
-        return try self.contents.append(self.gpa, deep_content);
-    }
-
-    fn deepCopyFlatType(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, flat_type: types.FlatType, root_var: types.Var) std.mem.Allocator.Error!SnapshotFlatType {
-        return switch (flat_type) {
-            .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, type_writer, tuple) },
-            .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, type_writer, nominal_type) },
-            .fn_pure => |func| SnapshotFlatType{ .fn_pure = try self.deepCopyFunc(store, type_writer, func) },
-            .fn_effectful => |func| SnapshotFlatType{ .fn_effectful = try self.deepCopyFunc(store, type_writer, func) },
-            .fn_unbound => |func| SnapshotFlatType{ .fn_unbound = try self.deepCopyFunc(store, type_writer, func) },
-            .record => |record| SnapshotFlatType{ .record = try self.deepCopyRecord(store, type_writer, record) },
-            .record_unbound => |fields| SnapshotFlatType{ .record_unbound = try self.deepCopyRecordFields(store, type_writer, fields) },
-            .empty_record => SnapshotFlatType.empty_record,
-            .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, type_writer, tag_union, root_var) },
-            .empty_tag_union => SnapshotFlatType.empty_tag_union,
-        };
-    }
-
-    fn deepCopyAlias(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, alias: types.Alias) std.mem.Allocator.Error!SnapshotAlias {
-        const backing_var = store.getAliasBackingVar(alias);
-        const deep_backing = try self.deepCopyVarInternal(store, type_writer, backing_var);
-
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_content.top();
-
-        // Iterate and append to scratch array
-        var arg_iter = store.iterAliasArgs(alias);
-        while (arg_iter.next()) |arg_var| {
-            const deep_arg = try self.deepCopyVarInternal(store, type_writer, arg_var);
-            try self.scratch_content.append(deep_arg);
-        }
-
-        // Append scratch to backing array, and shrink scratch
-        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
-        self.scratch_content.clearFrom(scratch_top);
-
-        return SnapshotAlias{
-            .ident = alias.ident,
-            .backing = deep_backing,
-            .vars = args_range,
-        };
-    }
-
-    fn deepCopyTuple(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, tuple: types.Tuple) std.mem.Allocator.Error!SnapshotTuple {
-        const elems_slice = store.sliceVars(tuple.elems);
-
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_content.top();
-
-        // Iterate and append to scratch array
-        for (elems_slice) |elem_var| {
-            const deep_elem = try self.deepCopyVarInternal(store, type_writer, elem_var);
-            try self.scratch_content.append(deep_elem);
-        }
-
-        // Append scratch to backing array, and shrink scratch
-        const elems_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
-        self.scratch_content.clearFrom(scratch_top);
-
-        return SnapshotTuple{
-            .elems = elems_range,
-        };
-    }
-
-    fn deepCopyNominalType(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, nominal_type: types.NominalType) std.mem.Allocator.Error!SnapshotNominalType {
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_content.top();
-
-        // vars[0] is the backing, kept for report traversals (e.g. equality
-        // explanations descend into it). The application itself carries no
-        // backing, so snapshot the DECLARATION's backing template—formals
-        // read as rigids there, which the traversals treat optimistically.
-        const backing_snapshot: SnapshotContentIdx = blk: {
-            if (store.lookupNominalDecl(nominal_type)) |decl_idx| {
-                const decl = store.getNominalDecl(decl_idx);
-                if (decl.isValid()) {
-                    break :blk try self.deepCopyVarInternal(store, type_writer, decl.backing);
-                }
+    fn stepIdentity(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *IdentityFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .head => {
+                    if (frame.idx < frame.constraints.len) {
+                        frame.stage = .await_fn;
+                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var)) return false;
+                        continue;
+                    }
+                    const range = try self.static_dispatch_constraints.appendSlice(
+                        self.gpa,
+                        self.scratch_static_dispatch_constraints.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_static_dispatch_constraints.clearFrom(frame.scratch_top);
+                    const content: SnapshotContent = switch (frame.result) {
+                        .flex => SnapshotContent{ .flex = SnapshotFlex{
+                            .name = frame.name,
+                            .var_ = frame.fill.resolved_var,
+                            .constraints = range,
+                        } },
+                        .rigid => SnapshotContent{ .rigid = SnapshotRigid{
+                            .name = frame.name.?,
+                            .constraints = range,
+                        } },
+                    };
+                    try self.finishFrame(type_writer, frame.fill, content);
+                    return true;
+                },
+                .await_fn => {
+                    try self.scratch_static_dispatch_constraints.append(.{
+                        .fn_name = frame.constraints[frame.idx].fn_name,
+                        .fn_content = self.pending_values.pop().?,
+                        // Dispatcher is set when collecting constraints during write
+                        .dispatcher = undefined,
+                    });
+                    frame.idx += 1;
+                    frame.stage = .head;
+                },
             }
-            break :blk try self.contents.append(self.gpa, .err);
-        };
-        try self.scratch_content.append(backing_snapshot);
-
-        // Add args after
-        var arg_iter = store.iterNominalArgs(nominal_type);
-        while (arg_iter.next()) |arg_var| {
-            const deep_arg = try self.deepCopyVarInternal(store, type_writer, arg_var);
-            try self.scratch_content.append(deep_arg);
         }
-
-        // Append scratch to backing array, and shrink scratch
-        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
-        self.scratch_content.clearFrom(scratch_top);
-
-        return SnapshotNominalType{
-            .ident = nominal_type.ident,
-            .vars = args_range,
-            .origin_module = nominal_type.origin_module,
-        };
     }
 
-    fn deepCopyFunc(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, func: types.Func) std.mem.Allocator.Error!SnapshotFunc {
-        const args_slice = store.sliceVars(func.args);
-
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_content.top();
-
-        // Iterate and append directly
-        for (args_slice) |arg_var| {
-            const deep_arg = try self.deepCopyVarInternal(store, type_writer, arg_var);
-            try self.scratch_content.append(deep_arg);
-        }
-
-        // Append scratch to backing array, and shrink scratch
-        const args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(scratch_top));
-        self.scratch_content.clearFrom(scratch_top);
-
-        // Deep copy return type
-        const deep_ret = try self.deepCopyVarInternal(store, type_writer, func.ret);
-
-        return SnapshotFunc{
-            .args = args_range,
-            .ret = deep_ret,
-        };
-    }
-
-    fn deepCopyRecordFields(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, fields: types.RecordField.SafeMultiList.Range) std.mem.Allocator.Error!SnapshotRecordFieldSafeList.Range {
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_record_fields.top();
-
-        const fields_slice = store.getRecordFieldsSlice(fields);
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, var_| {
-            const deep_field_content = try self.deepCopyVarInternal(store, type_writer, var_);
-
-            const snapshot_field = SnapshotRecordField{
-                .name = name,
-                .content = deep_field_content,
-            };
-
-            try self.scratch_record_fields.append(snapshot_field);
-        }
-
-        // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
-        self.scratch_record_fields.clearFrom(scratch_top);
-
-        return fields_range;
-    }
-
-    fn deepCopyRecord(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, record: types.Record) std.mem.Allocator.Error!SnapshotRecord {
-        // Mark starting position in the scratch array
-        const scratch_top = self.scratch_record_fields.top();
-
-        // Iterate and append to scratch array
-        var fields_iter = record.fields.iterIndices();
-        while (fields_iter.next()) |field_idx| {
-            const field = store.record_fields.get(field_idx);
-
-            const deep_field_content = try self.deepCopyVarInternal(store, type_writer, field.var_);
-
-            const snapshot_field = SnapshotRecordField{
-                .name = field.name,
-                .content = deep_field_content,
-            };
-
-            try self.scratch_record_fields.append(snapshot_field);
-        }
-
-        // Append scratch to backing array, and shrink scratch
-        const fields_range = try self.record_fields.appendSlice(self.gpa, self.scratch_record_fields.sliceFromStart(scratch_top));
-        self.scratch_record_fields.clearFrom(scratch_top);
-
-        // Deep copy extension type
-        const deep_ext = try self.deepCopyVarInternal(store, type_writer, record.ext);
-
-        return SnapshotRecord{
-            .fields = fields_range,
-            .ext = deep_ext,
-        };
-    }
-
-    fn deepCopyTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, tag_union: types.TagUnion, root_var: types.Var) std.mem.Allocator.Error!SnapshotTagUnion {
-        // Mark starting position in the scratch array for tags
-        const tags_scratch_top = self.scratch_tags.top();
-
-        // Iterate over tags and append to scratch array
-        var tags_iter = tag_union.tags.iterIndices();
-        while (tags_iter.next()) |tag_idx| {
-            const tag = store.tags.get(tag_idx);
-
-            const tag_args_slice = store.sliceVars(tag.args);
-
-            // Mark starting position in the scratch array for this tag's arguments
-            const content_scratch_top = self.scratch_content.top();
-
-            // Iterate over tag arguments and append to scratch array
-            for (tag_args_slice) |tag_arg_var| {
-                const deep_tag_arg = try self.deepCopyVarInternal(store, type_writer, tag_arg_var);
-                try self.scratch_content.append(deep_tag_arg);
+    fn stepAlias(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *AliasFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .backing => {
+                    frame.stage = .await_backing;
+                    if (!try self.requestVar(store, type_writer, frame.backing)) return false;
+                    continue;
+                },
+                .await_backing => {
+                    frame.backing_content = self.pending_values.pop().?;
+                    // The scratch run holding the alias arguments starts only
+                    // after the backing copy is done, matching the layout of
+                    // the snapshot alias, whose backing is a separate field.
+                    frame.scratch_top = self.scratch_content.top();
+                    frame.stage = .args;
+                },
+                .args => {
+                    if (frame.idx < frame.args.len) {
+                        frame.stage = .await_arg;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        continue;
+                    }
+                    const args_range = try self.content_indexes.appendSlice(
+                        self.gpa,
+                        self.scratch_content.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_content.clearFrom(frame.scratch_top);
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .alias = SnapshotAlias{
+                        .ident = frame.ident,
+                        .backing = frame.backing_content,
+                        .vars = args_range,
+                    } });
+                    return true;
+                },
+                .await_arg => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.idx += 1;
+                    frame.stage = .args;
+                },
             }
-
-            // Append scratch to backing array, and shrink scratch
-            const tag_args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
-            self.scratch_content.clearFrom(content_scratch_top);
-
-            // Format the tag using TypeWriter (uses correct Roc syntax like "TagName(a, b)")
-            const formatted_tag = type_writer.writeTagGet(tag, root_var) catch return error.OutOfMemory;
-            const formatted_owned = try self.gpa.dupe(u8, formatted_tag);
-
-            // Create and append the snapshot tag to scratch
-            const snapshot_tag = SnapshotTag{
-                .name = tag.name,
-                .args = tag_args_range,
-                .formatted = formatted_owned,
-            };
-
-            try self.scratch_tags.append(snapshot_tag);
         }
+    }
 
-        // Append scratch tags to backing array, and shrink scratch
-        const tags_range = try self.tags.appendSlice(self.gpa, self.scratch_tags.sliceFromStart(tags_scratch_top));
-        self.scratch_tags.clearFrom(tags_scratch_top);
+    fn stepTuple(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *TupleFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .elems => {
+                    if (frame.idx < frame.elems.len) {
+                        frame.stage = .await_elem;
+                        if (!try self.requestVar(store, type_writer, frame.elems[frame.idx])) return false;
+                        continue;
+                    }
+                    const elems_range = try self.content_indexes.appendSlice(
+                        self.gpa,
+                        self.scratch_content.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_content.clearFrom(frame.scratch_top);
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                        .tuple = SnapshotTuple{ .elems = elems_range },
+                    } });
+                    return true;
+                },
+                .await_elem => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.idx += 1;
+                    frame.stage = .elems;
+                },
+            }
+        }
+    }
 
-        // Deep copy extension type
-        const deep_ext = try self.deepCopyVarInternal(store, type_writer, tag_union.ext);
+    fn stepNominal(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *NominalFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .await_backing => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.stage = .args;
+                },
+                .args => {
+                    if (frame.idx < frame.args.len) {
+                        frame.stage = .await_arg;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        continue;
+                    }
+                    const args_range = try self.content_indexes.appendSlice(
+                        self.gpa,
+                        self.scratch_content.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_content.clearFrom(frame.scratch_top);
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                        .nominal_type = SnapshotNominalType{
+                            .ident = frame.ident,
+                            .vars = args_range,
+                            .origin_module = frame.origin_module,
+                        },
+                    } });
+                    return true;
+                },
+                .await_arg => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.idx += 1;
+                    frame.stage = .args;
+                },
+            }
+        }
+    }
 
-        return SnapshotTagUnion{
-            .tags = tags_range,
-            .ext = deep_ext,
+    fn stepFunc(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *FuncFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .args => {
+                    if (frame.idx < frame.args.len) {
+                        frame.stage = .await_arg;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx])) return false;
+                        continue;
+                    }
+                    // The argument run is committed before the return type is
+                    // walked, so the return type's own runs land after it.
+                    frame.args_range = try self.content_indexes.appendSlice(
+                        self.gpa,
+                        self.scratch_content.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_content.clearFrom(frame.scratch_top);
+                    frame.stage = .await_ret;
+                    if (!try self.requestVar(store, type_writer, frame.ret)) return false;
+                    continue;
+                },
+                .await_arg => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.idx += 1;
+                    frame.stage = .args;
+                },
+                .await_ret => {
+                    const deep_ret = self.pending_values.pop().?;
+                    const snapshot_func = SnapshotFunc{ .args = frame.args_range, .ret = deep_ret };
+                    const content: SnapshotContent = switch (frame.kind) {
+                        .pure => SnapshotContent{ .structure = SnapshotFlatType{ .fn_pure = snapshot_func } },
+                        .effectful => SnapshotContent{ .structure = SnapshotFlatType{ .fn_effectful = snapshot_func } },
+                        .unbound => SnapshotContent{ .structure = SnapshotFlatType{ .fn_unbound = snapshot_func } },
+                    };
+                    try self.finishFrame(type_writer, frame.fill, content);
+                    return true;
+                },
+            }
+        }
+    }
+
+    /// Read the source field at `idx` within `range`. Indexing through the
+    /// run's start only happens when the record has fields; start may be
+    /// undefined when count is 0.
+    fn sourceRecordField(
+        store: *const TypesStore,
+        range: types.RecordField.SafeMultiList.Range,
+        idx: u32,
+    ) types.RecordField {
+        return store.record_fields.get(@enumFromInt(@intFromEnum(range.start) + idx));
+    }
+
+    fn snapshotFieldPresence(store: *const TypesStore, presence: types.RecordField.Presence) SnapshotFieldPresence {
+        return switch (presence.decode()) {
+            .required => .required,
+            .unknown => |unknown| switch (store.resolveVar(unknown.presence).desc.content) {
+                .field_presence => |resolved| switch (resolved) {
+                    .required => .required,
+                    .optional => .optional,
+                    .defaulted => |id| .{ .defaulted = id },
+                },
+                .flex, .rigid, .alias, .structure, .err => .unknown,
+            },
         };
+    }
+
+    fn stepRecord(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *RecordFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .fields => {
+                    if (frame.idx < frame.source_fields.count) {
+                        frame.stage = .await_field;
+                        const field = sourceRecordField(store, frame.source_fields, frame.idx);
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
+                        continue;
+                    }
+                    // The field run is committed before the extension is
+                    // walked, so the extension's own runs land after it.
+                    frame.fields_range = try self.record_fields.appendSlice(
+                        self.gpa,
+                        self.scratch_record_fields.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_record_fields.clearFrom(frame.scratch_top);
+                    frame.stage = .await_ext;
+                    if (!try self.requestVar(store, type_writer, frame.ext)) return false;
+                    continue;
+                },
+                .await_field => {
+                    const field = sourceRecordField(store, frame.source_fields, frame.idx);
+                    try self.scratch_record_fields.append(.{
+                        .name = field.name,
+                        .content = self.pending_values.pop().?,
+                        .presence = snapshotFieldPresence(store, field.presence),
+                    });
+                    frame.idx += 1;
+                    frame.stage = .fields;
+                },
+                .await_ext => {
+                    const deep_ext = self.pending_values.pop().?;
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                        .record = SnapshotRecord{ .fields = frame.fields_range, .ext = deep_ext },
+                    } });
+                    return true;
+                },
+            }
+        }
+    }
+
+    fn stepRecordUnbound(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *RecordUnboundFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .fields => {
+                    if (frame.idx < frame.source_fields.count) {
+                        frame.stage = .await_field;
+                        const field = sourceRecordField(store, frame.source_fields, frame.idx);
+                        if (!try self.requestVar(store, type_writer, field.presence.typeVar())) return false;
+                        continue;
+                    }
+                    const fields_range = try self.record_fields.appendSlice(
+                        self.gpa,
+                        self.scratch_record_fields.sliceFromStart(frame.scratch_top),
+                    );
+                    self.scratch_record_fields.clearFrom(frame.scratch_top);
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                        .record_unbound = fields_range,
+                    } });
+                    return true;
+                },
+                .await_field => {
+                    const field = sourceRecordField(store, frame.source_fields, frame.idx);
+                    try self.scratch_record_fields.append(.{
+                        .name = field.name,
+                        .content = self.pending_values.pop().?,
+                        .presence = snapshotFieldPresence(store, field.presence),
+                    });
+                    frame.idx += 1;
+                    frame.stage = .fields;
+                },
+            }
+        }
+    }
+
+    fn stepTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *TagUnionFrame) std.mem.Allocator.Error!bool {
+        while (true) {
+            switch (frame.stage) {
+                .tag_head => {
+                    if (frame.tag_idx == frame.source_tags.count) {
+                        const tags_range = try self.tags.appendSlice(
+                            self.gpa,
+                            self.scratch_tags.sliceFromStart(frame.tags_scratch_top),
+                        );
+                        self.scratch_tags.clearFrom(frame.tags_scratch_top);
+                        frame.tags_range = tags_range;
+                        frame.stage = .await_ext;
+                        if (!try self.requestVar(store, type_writer, frame.ext)) return false;
+                        continue;
+                    }
+                    frame.content_scratch_top = self.scratch_content.top();
+                    frame.arg_idx = 0;
+                    frame.stage = .tag_args;
+                },
+                .tag_args => {
+                    // Indexing through the run's start only happens when the
+                    // tag union has tags; start may be undefined when count is 0.
+                    const tag = store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
+                    const tag_args_slice = store.sliceVars(tag.args);
+                    if (frame.arg_idx < tag_args_slice.len) {
+                        frame.stage = .await_tag_arg;
+                        if (!try self.requestVar(store, type_writer, tag_args_slice[frame.arg_idx])) return false;
+                        continue;
+                    }
+                    const tag_args_range = try self.content_indexes.appendSlice(
+                        self.gpa,
+                        self.scratch_content.sliceFromStart(frame.content_scratch_top),
+                    );
+                    self.scratch_content.clearFrom(frame.content_scratch_top);
+
+                    // Format the tag using TypeWriter (uses correct Roc syntax like "TagName(a, b)")
+                    const formatted_tag = type_writer.writeTagGet(tag, frame.fill.original_var) catch return error.OutOfMemory;
+                    const formatted_owned = try self.gpa.dupe(u8, formatted_tag);
+
+                    try self.scratch_tags.append(.{
+                        .name = tag.name,
+                        .args = tag_args_range,
+                        .formatted = formatted_owned,
+                    });
+                    frame.tag_idx += 1;
+                    frame.stage = .tag_head;
+                },
+                .await_tag_arg => {
+                    try self.scratch_content.append(self.pending_values.pop().?);
+                    frame.arg_idx += 1;
+                    frame.stage = .tag_args;
+                },
+                .await_ext => {
+                    const deep_ext = self.pending_values.pop().?;
+                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                        .tag_union = SnapshotTagUnion{ .tags = frame.tags_range, .ext = deep_ext },
+                    } });
+                    return true;
+                },
+            }
+        }
     }
 
     pub fn sliceVars(self: *const Self, range: SnapshotContentIdxSafeList.Range) []const SnapshotContentIdx {
@@ -740,8 +1140,8 @@ pub const Store = struct {
 
                     const fields_out_top: u32 = @intCast(fields_out.items.len);
                     const slice = self.sliceRecordFields(fields);
-                    for (slice.items(.name), slice.items(.content)) |name, content| {
-                        _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+                    for (slice.items(.name), slice.items(.content), slice.items(.presence)) |name, content, presence| {
+                        _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
                     }
                     const fields_out_range = fields_out.rangeToEnd(fields_out_top);
                     return RecordFieldSnapshot{ .record = fields_out_range };
@@ -774,8 +1174,8 @@ pub const Store = struct {
 
         // Add immediate fields
         const record_fields = self.sliceRecordFields(record.fields);
-        for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
-            _ = try fields_out.append(gpa, .{ .name = name, .content = content });
+        for (record_fields.items(.name), record_fields.items(.content), record_fields.items(.presence)) |name, content, presence| {
+            _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
         }
 
         // Follow extension chain
@@ -786,15 +1186,15 @@ pub const Store = struct {
                 .structure => |flat| switch (flat) {
                     .record => |rec| {
                         const ext_fields = self.sliceRecordFields(rec.fields);
-                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         ext_idx = rec.ext;
                     },
                     .record_unbound => |fields_range| {
                         const ext_fields = self.sliceRecordFields(fields_range);
-                        for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content });
+                        for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
+                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         break;
                     },
@@ -823,3 +1223,121 @@ pub const Store = struct {
         return tag.formatted;
     }
 };
+
+test "snapshot record field presence survives deep copy and gather" {
+    const gpa = std.testing.allocator;
+
+    var type_store = try TypesStore.initCapacity(gpa, 16, 8);
+    defer type_store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+
+    const top_name = try idents.insert(gpa, Ident.for_text("top"));
+    const middle_name = try idents.insert(gpa, Ident.for_text("middle"));
+    const tail_name = try idents.insert(gpa, Ident.for_text("tail"));
+    const field_var = try type_store.freshFromContent(.{ .structure = .empty_record });
+    const presence_var = try type_store.fresh();
+
+    const tail_fields = try type_store.appendRecordFields(&.{.{
+        .name = tail_name,
+        .presence = .unknown(presence_var, field_var),
+    }});
+    const tail_var = try type_store.freshFromContent(.{ .structure = .{ .record_unbound = tail_fields } });
+
+    const middle_fields = try type_store.appendRecordFields(&.{.{
+        .name = middle_name,
+        .presence = .unknown(presence_var, field_var),
+    }});
+    const middle_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = middle_fields,
+        .ext = tail_var,
+    } } });
+
+    const top_fields = try type_store.appendRecordFields(&.{.{
+        .name = top_name,
+        .presence = .required(field_var),
+    }});
+    const top_var = try type_store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = top_fields,
+        .ext = middle_var,
+    } } });
+
+    var type_writer = try TypeWriter.initFromParts(gpa, &type_store, &idents, null);
+    defer type_writer.deinit();
+    var snapshots = try Store.initCapacity(gpa, 16);
+    defer snapshots.deinit();
+
+    const top_snapshot_idx = try snapshots.snapshotVarForError(&type_store, &type_writer, top_var);
+    const top_content = snapshots.getContent(top_snapshot_idx);
+    if (top_content != .structure or top_content.structure != .record) unreachable;
+    const top_snapshot = top_content.structure.record;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.required,
+        snapshots.sliceRecordFields(top_snapshot.fields).items(.presence)[0],
+    );
+
+    const middle_content = snapshots.getContent(top_snapshot.ext);
+    if (middle_content != .structure or middle_content.structure != .record) unreachable;
+    const middle_snapshot = middle_content.structure.record;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.unknown,
+        snapshots.sliceRecordFields(middle_snapshot.fields).items(.presence)[0],
+    );
+
+    const tail_content = snapshots.getContent(middle_snapshot.ext);
+    if (tail_content != .structure or tail_content.structure != .record_unbound) unreachable;
+    const tail_snapshot_fields = tail_content.structure.record_unbound;
+    try std.testing.expectEqual(
+        SnapshotFieldPresence.unknown,
+        snapshots.sliceRecordFields(tail_snapshot_fields).items(.presence)[0],
+    );
+
+    var gathered_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 4);
+    defer gathered_fields.deinit(gpa);
+    const gathered = try snapshots.gatherRecordFields(top_snapshot_idx, gpa, &gathered_fields);
+    if (gathered != .record) unreachable;
+    try std.testing.expectEqualSlices(
+        SnapshotFieldPresence,
+        &.{ .required, .unknown, .unknown },
+        gathered_fields.sliceRange(gathered.record).items(.presence),
+    );
+}
+
+// Depth pin for the snapshot walk. Any of the ~29 `snapshotVarForError` call
+// sites can be handed a type as deep as the instantiator can build, so this
+// walk must survive whatever the copier produces. The chain is built from
+// alias backing vars: the snapshot walk descends every one of them, while the
+// per-node TypeWriter render stays constant-size (an alias renders as its
+// name), which keeps the pin about walk depth rather than about how much text
+// a deep type formats to. The recursive walk this replaced segfaulted on
+// exactly this chain.
+test "snapshotting a spine deeper than any native-stack budget" {
+    const allocator = std.testing.allocator;
+    const depth: u32 = 40000;
+
+    var idents = try Ident.Store.initCapacity(allocator, 16);
+    defer idents.deinit(allocator);
+    const alias_ident = try idents.insert(allocator, Ident.for_text("Chain"));
+
+    var store = try TypesStore.initCapacity(allocator, depth + 8, 8);
+    defer store.deinit();
+
+    var current = try store.freshFromContent(.{ .structure = .empty_record });
+    for (0..depth) |_| {
+        current = try store.freshFromContent(try store.mkAlias(
+            .{ .ident_idx = alias_ident },
+            current,
+            &.{},
+            base.ModuleIdentity.Idx.NONE,
+        ));
+    }
+
+    var type_writer = try TypeWriter.initFromParts(allocator, &store, &idents, null);
+    defer type_writer.deinit();
+
+    var snapshots = try Store.initCapacity(allocator, depth + 8);
+    defer snapshots.deinit();
+
+    const idx = try snapshots.snapshotVarForError(&store, &type_writer, current);
+    try std.testing.expect(snapshots.getFormattedString(idx) != null);
+}

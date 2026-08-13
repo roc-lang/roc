@@ -224,7 +224,7 @@ NO CHANGE
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "bar"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
@@ -246,7 +246,7 @@ NO CHANGE
 					(ty-lookup (name "U32") (builtin))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -256,7 +256,7 @@ NO CHANGE
 					(ty-underscore)))))
 	(d-let
 		(p-assign (ident "tag_tuple"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(d-let
