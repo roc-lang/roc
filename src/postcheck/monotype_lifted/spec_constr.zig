@@ -681,9 +681,9 @@ const SpecAdmission = enum {
 };
 
 /// The phase that owns a clone. Loop-exit projection is deliberately separate
-/// from specialization and ordinary rewrites: its full lexical clone may
-/// revisit calls, so only the final call-opaque projection phase may initiate
-/// another selected exit ABI.
+/// from specialization and ordinary rewrites: their full lexical clones can
+/// expose another projectable loop through an inlined callee, so only the final
+/// call-opaque projection phase may initiate another selected exit ABI.
 const ClonePurpose = enum {
     specialization,
     rewrite,

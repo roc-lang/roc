@@ -3565,8 +3565,9 @@ result, SpecConstr may narrow the loop's exit ABI without narrowing its
 back-edge state. Exit selection is a distinct final clone phase after the
 specialization graph is complete. Ordinary specialization and body-rewrite
 clones never initiate it. The projection clone keeps calls opaque, does not
-rewrite call patterns, and cannot emit callable workers, so it traverses only
-the finite expression ownership already present in each selected function.
+rewrite call patterns, and cannot emit callable workers, so it cannot reopen
+the specialization graph through recursive call edges. Its recursive input is
+limited to the selected function's finite, acyclic expression ownership.
 
 That rewrite is lexical: the dedicated full expression clone carries the
 selected exit ABI while cloning the owning loop body, rewrites every `break`
