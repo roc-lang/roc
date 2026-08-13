@@ -1449,6 +1449,14 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+The checked statement artifact preserves whether each declaration or variable
+binding had an explicit annotation. This is semantic direction data, not source
+presentation data: an annotated initializer consumes the annotation root as an
+exact runtime request, while an unannotated initializer is an independent exact
+producer. Post-check lowering must consume this bit directly. It must not inspect
+the solved pattern type, ask whether that type is closed, or use any other type
+shape as a substitute for the annotation fact.
+
 ## Nominal Constructor Backing Relation
 
 An explicit nominal constructor chooses the nominal wrapper itself. Its operand
@@ -3333,6 +3341,15 @@ argument and result cells through the compound just like any other child value;
 it is not an ordinary checked-public field merely because the procedure has not
 been called at that occurrence.
 
+An annotated binding is an explicit destination edge. Monotype lowers its
+initializer against the annotation root recorded on the binding and returns the
+exact value produced at that request. This rule applies unchanged when lowering
+expands a record destructure or carries reassigned locals through an `if` or
+`match`: every inhabited branch result consumes the same annotated request.
+An unannotated binding instead stores the initializer's independently produced
+node. Monotype never chooses between these directions by inspecting the solved
+type graph.
+
 Generated iterator identity is content-addressed at the producer. Its complete
 identity inputs are the public iterator declaration and the exact item type.
 Every iterator-producing operation first obtains that item type from its
@@ -3520,6 +3537,16 @@ fills that same reservation. Instantiation must not allocate an acyclic
 placeholder and redirect it to a second canonical root. Initial fill cannot
 invalidate active snapshots: unresolved recursive reservations cannot be
 snapshotted, and every prior snapshot is independent of the newly filled node.
+
+Checked construction recipes and exact produced compounds occupy separate
+interner domains. A lookup for an exact produced list, box, tuple, function, tag
+row, record, or named type can return only a node previously created by an exact
+producer; an immutable checked-base recipe can never satisfy that lookup. Every
+produced constructor canonicalizes its immediate child nodes before forming its
+key and stores those exact children in the parent. It does not recursively
+canonicalize descendants, because each child producer already returned its
+canonical exact node. This prevents checked recipes from escaping as runtime
+values without adding a whole-graph canonicalization pass.
 
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering

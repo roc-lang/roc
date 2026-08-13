@@ -377,6 +377,11 @@ const RelationState = enum {
     frozen,
 };
 
+const InternedCompoundByAuthority = struct {
+    checked_base: ?NodeId = null,
+    produced: ?NodeId = null,
+};
+
 /// Per-specialization type solver. Checked types instantiate into union-find
 /// nodes with explicit row extension links; constraints unify nodes
 /// order-independently. Type-shaped inspection stays graph-native until final
@@ -400,12 +405,10 @@ pub const InstGraph = struct {
     empty_tag_union_node: ?NodeId,
     empty_record_node: ?NodeId,
     zst_node: ?NodeId,
-    /// Produced tag unions are immutable compounds of exact child nodes.
-    /// Hash-consing their one-level shape prevents independently encountered
-    /// values with the same children from creating distinct specialization
-    /// identities. Checked-base construction remains scope-local and is not
-    /// interned here.
-    produced_tag_unions: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Compound interning keeps immutable checked construction recipes separate
+    /// from exact produced values. They may have the same immediate node shape,
+    /// but only the latter is runtime identity.
+    tag_unions_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     checked_base_nodes: std.ArrayList(bool),
     checked_base_construction_depth: usize,
     versions: std.ArrayList(u32),
@@ -434,8 +437,8 @@ pub const InstGraph = struct {
     /// Canonical compound nodes keyed only by their immediate exact children.
     /// Producers therefore share an already-built type without traversing any
     /// descendant graph.
-    list_nodes_by_element: collections.DenseMap(NodeId, NodeId),
-    box_nodes_by_element: collections.DenseMap(NodeId, NodeId),
+    list_nodes_by_element: collections.DenseMap(NodeId, InternedCompoundByAuthority),
+    box_nodes_by_element: collections.DenseMap(NodeId, InternedCompoundByAuthority),
     tuple_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     /// Completed function values keyed by their exact immediate argument and
     /// result nodes. Open requests remain distinct until their producer fills
@@ -485,7 +488,7 @@ pub const InstGraph = struct {
             .empty_tag_union_node = null,
             .empty_record_node = null,
             .zst_node = null,
-            .produced_tag_unions = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .tag_unions_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .checked_base_nodes = .empty,
             .checked_base_construction_depth = 0,
             .versions = .empty,
@@ -496,8 +499,8 @@ pub const InstGraph = struct {
             .permanently_inhabited_nodes = collections.DenseMap(NodeId, void).init(allocator),
             .generated_nominal_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80).init(allocator),
             .named_nodes_by_identity_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
-            .list_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
-            .box_nodes_by_element = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .list_nodes_by_element = collections.DenseMap(NodeId, InternedCompoundByAuthority).init(allocator),
+            .box_nodes_by_element = collections.DenseMap(NodeId, InternedCompoundByAuthority).init(allocator),
             .tuple_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .function_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .record_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
@@ -561,9 +564,9 @@ pub const InstGraph = struct {
         self.row_exts.deinit(allocator);
         self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
-        var produced_tag_buckets = self.produced_tag_unions.valueIterator();
-        while (produced_tag_buckets.next()) |bucket| bucket.deinit(allocator);
-        self.produced_tag_unions.deinit();
+        var tag_union_buckets = self.tag_unions_by_shape_hash.valueIterator();
+        while (tag_union_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.tag_unions_by_shape_hash.deinit();
         self.versions.deinit(allocator);
         self.checked_base_nodes.deinit(allocator);
         self.nodes.deinit(allocator);
@@ -1419,18 +1422,20 @@ pub const InstGraph = struct {
     }
 
     fn existingTagUnionShape(self: *InstGraph, tag_union: InstTagUnion) ?NodeId {
-        const bucket = self.produced_tag_unions.get(self.producedTagUnionHash(tag_union)) orelse return null;
+        const bucket = self.tag_unions_by_shape_hash.get(self.producedTagUnionHash(tag_union)) orelse return null;
         for (bucket.items) |candidate| {
             const root = self.find(candidate);
             const candidate_content = self.nodes.items[@intFromEnum(root)];
-            if (candidate_content == .tag_union and self.producedTagUnionEql(candidate_content.tag_union, tag_union)) return root;
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .tag_union and
+                self.producedTagUnionEql(candidate_content.tag_union, tag_union)) return root;
         }
         return null;
     }
 
     fn registerTagUnionShape(self: *InstGraph, raw_node: NodeId, tag_union: InstTagUnion) Allocator.Error!void {
         const node = self.find(raw_node);
-        const bucket = try self.produced_tag_unions.getOrPut(self.producedTagUnionHash(tag_union));
+        const bucket = try self.tag_unions_by_shape_hash.getOrPut(self.producedTagUnionHash(tag_union));
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
         try bucket.value_ptr.append(self.allocator, node);
@@ -1444,6 +1449,15 @@ pub const InstGraph = struct {
         self: *InstGraph,
         initial_tags: []const InstTag,
         raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        return try self.newProducedTagUnionInner(initial_tags, raw_ext, true);
+    }
+
+    fn newProducedTagUnionInner(
+        self: *InstGraph,
+        initial_tags: []const InstTag,
+        raw_ext: NodeId,
+        canonicalize_children: bool,
     ) Allocator.Error!NodeId {
         var tags = std.ArrayList(InstTag).empty;
         defer tags.deinit(self.allocator);
@@ -1468,8 +1482,25 @@ pub const InstGraph = struct {
             .tag_union => unreachable,
         }
         std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
+        const canonical_tags = try self.arena().dupe(InstTag, tags.items);
+        for (canonical_tags) |*tag| {
+            if (!canonicalize_children) continue;
+            var canonical_payloads: ?[]NodeId = null;
+            for (tag.payloads, 0..) |payload, index| {
+                const canonical = try self.canonicalImmediateChild(payload);
+                if (canonical_payloads) |payloads| {
+                    payloads[index] = canonical;
+                } else if (self.find(payload) != canonical) {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    @memcpy(payloads[0..index], tag.payloads[0..index]);
+                    payloads[index] = canonical;
+                    canonical_payloads = payloads;
+                }
+            }
+            if (canonical_payloads) |payloads| tag.payloads = payloads;
+        }
         return try self.newNode(.{ .tag_union = .{
-            .tags = try self.arena().dupe(InstTag, tags.items),
+            .tags = canonical_tags,
             .ext = ext,
         } });
     }
@@ -1481,6 +1512,15 @@ pub const InstGraph = struct {
         self: *InstGraph,
         initial_fields: []const InstField,
         raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        return try self.newProducedRecordInner(initial_fields, raw_ext, true);
+    }
+
+    fn newProducedRecordInner(
+        self: *InstGraph,
+        initial_fields: []const InstField,
+        raw_ext: NodeId,
+        canonicalize_children: bool,
     ) Allocator.Error!NodeId {
         var fields = std.ArrayList(InstField).empty;
         defer fields.deinit(self.allocator);
@@ -1505,10 +1545,41 @@ pub const InstGraph = struct {
             .record => unreachable,
         }
         std.mem.sort(InstField, fields.items, self.name_store, instFieldLessThan);
+        const canonical_fields = try self.arena().dupe(InstField, fields.items);
+        if (canonicalize_children) {
+            for (canonical_fields) |*field| {
+                field.ty = try self.canonicalImmediateChild(field.ty);
+                if (field.value_ty) |value_ty| {
+                    field.value_ty = try self.canonicalImmediateChild(value_ty);
+                }
+            }
+        }
         return try self.newNode(.{ .record = .{
-            .fields = try self.arena().dupe(InstField, fields.items),
+            .fields = canonical_fields,
             .ext = ext,
         } });
+    }
+
+    /// Construct a completed producer-owned list from its one exact immediate
+    /// element node. This consumes only that child; it never walks descendants.
+    pub fn newProducedList(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
+        return try self.newNode(.{ .list = try self.canonicalImmediateChild(element) });
+    }
+
+    /// Construct a completed producer-owned box from its one exact immediate
+    /// element node. This consumes only that child; it never walks descendants.
+    pub fn newProducedBox(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
+        return try self.newNode(.{ .box = try self.canonicalImmediateChild(element) });
+    }
+
+    /// Construct a completed producer-owned tuple from exact immediate item
+    /// nodes. Each item is normalized at this boundary and is not traversed.
+    pub fn newProducedTuple(self: *InstGraph, items: []const NodeId) Allocator.Error!NodeId {
+        const canonical_items = try self.arena().alloc(NodeId, items.len);
+        for (items, canonical_items) |item, *canonical| {
+            canonical.* = try self.canonicalImmediateChild(item);
+        }
+        return try self.newNode(.{ .tuple = canonical_items });
     }
 
     fn nodeSpanShapeHash(self: *InstGraph, nodes: []const NodeId) u64 {
@@ -1532,16 +1603,44 @@ pub const InstGraph = struct {
 
     fn existingListElement(self: *InstGraph, raw_element: NodeId) ?NodeId {
         const element = self.find(raw_element);
-        const candidate = self.find(self.list_nodes_by_element.get(element) orelse return null);
+        const entry = self.list_nodes_by_element.get(element) orelse return null;
+        const candidate = self.find(if (self.checked_base_construction_depth != 0)
+            entry.checked_base orelse return null
+        else
+            entry.produced orelse return null);
         const candidate_content = self.nodes.items[@intFromEnum(candidate)];
         return if (candidate_content == .list and self.find(candidate_content.list) == element) candidate else null;
     }
 
     fn existingBoxElement(self: *InstGraph, raw_element: NodeId) ?NodeId {
         const element = self.find(raw_element);
-        const candidate = self.find(self.box_nodes_by_element.get(element) orelse return null);
+        const entry = self.box_nodes_by_element.get(element) orelse return null;
+        const candidate = self.find(if (self.checked_base_construction_depth != 0)
+            entry.checked_base orelse return null
+        else
+            entry.produced orelse return null);
         const candidate_content = self.nodes.items[@intFromEnum(candidate)];
         return if (candidate_content == .box and self.find(candidate_content.box) == element) candidate else null;
+    }
+
+    fn registerListElement(self: *InstGraph, raw_element: NodeId, node: NodeId) Allocator.Error!void {
+        const entry = try self.list_nodes_by_element.getOrPut(self.find(raw_element));
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (self.checked_base_construction_depth != 0) {
+            entry.value_ptr.checked_base = node;
+        } else {
+            entry.value_ptr.produced = node;
+        }
+    }
+
+    fn registerBoxElement(self: *InstGraph, raw_element: NodeId, node: NodeId) Allocator.Error!void {
+        const entry = try self.box_nodes_by_element.getOrPut(self.find(raw_element));
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (self.checked_base_construction_depth != 0) {
+            entry.value_ptr.checked_base = node;
+        } else {
+            entry.value_ptr.produced = node;
+        }
     }
 
     fn existingTupleShape(self: *InstGraph, items: []const NodeId) ?NodeId {
@@ -1549,7 +1648,9 @@ pub const InstGraph = struct {
         for (bucket.items) |candidate| {
             const root = self.find(candidate);
             const candidate_content = self.nodes.items[@intFromEnum(root)];
-            if (candidate_content == .tuple and self.sameNodeSpanShape(candidate_content.tuple, items)) return root;
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .tuple and
+                self.sameNodeSpanShape(candidate_content.tuple, items)) return root;
         }
         return null;
     }
@@ -1620,10 +1721,13 @@ pub const InstGraph = struct {
         args: []const NodeId,
         ret: NodeId,
     ) Allocator.Error!NodeId {
-        const stored_args = try self.arena().dupe(NodeId, args);
+        const stored_args = try self.arena().alloc(NodeId, args.len);
+        for (args, stored_args) |arg, *stored| {
+            stored.* = try self.canonicalImmediateChild(arg);
+        }
         const node = try self.newNode(.{ .func = .{
             .args = stored_args,
-            .ret = self.find(ret),
+            .ret = try self.canonicalImmediateChild(ret),
         } });
         return try self.canonicalizeCompletedFunction(node);
     }
@@ -1635,13 +1739,9 @@ pub const InstGraph = struct {
     pub fn canonicalizeProducedNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         const node = self.find(raw_node);
         const canonical = switch (self.nodes.items[@intFromEnum(node)]) {
-            .list => |element| try self.newNode(.{ .list = self.find(element) }),
-            .box => |element| try self.newNode(.{ .box = self.find(element) }),
-            .tuple => |items| blk: {
-                const roots = try self.arena().alloc(NodeId, items.len);
-                for (items, roots) |item, *root| root.* = self.find(item);
-                break :blk try self.newNode(.{ .tuple = roots });
-            },
+            .list => |element| try self.newProducedList(element),
+            .box => |element| try self.newProducedBox(element),
+            .tuple => |items| try self.newProducedTuple(items),
             .func => |function| try self.newProducedFunction(function.args, function.ret),
             .record => |record| try self.newProducedRecord(record.fields, record.ext),
             .tag_union => |tag_union| try self.newProducedTagUnion(tag_union.tags, tag_union.ext),
@@ -1719,7 +1819,9 @@ pub const InstGraph = struct {
         for (bucket.items) |candidate| {
             const root = self.find(candidate);
             const candidate_content = self.nodes.items[@intFromEnum(root)];
-            if (candidate_content == .record and self.sameRecordShape(candidate_content, record)) return root;
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .record and
+                self.sameRecordShape(candidate_content, record)) return root;
         }
         return null;
     }
@@ -1749,11 +1851,11 @@ pub const InstGraph = struct {
         return switch (self.nodes.items[@intFromEnum(node)]) {
             .tag_union => blk: {
                 const row = try self.flattenTagRow(node);
-                break :blk try self.newProducedTagUnion(row.tags, row.ext);
+                break :blk try self.newProducedTagUnionInner(row.tags, row.ext, false);
             },
             .record => blk: {
                 const row = try self.flattenRecordRow(node);
-                break :blk try self.newProducedRecord(row.fields, row.ext);
+                break :blk try self.newProducedRecordInner(row.fields, row.ext, false);
             },
             .redirect => unreachable,
             .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
@@ -1811,7 +1913,9 @@ pub const InstGraph = struct {
         for (bucket.items) |candidate| {
             const root = self.find(candidate);
             const candidate_content = self.nodes.items[@intFromEnum(root)];
-            if (candidate_content == .named and self.sameNamedIdentity(candidate_content.named, named)) return root;
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .named and
+                self.sameNamedIdentity(candidate_content.named, named)) return root;
         }
         return null;
     }
@@ -1828,7 +1932,7 @@ pub const InstGraph = struct {
 
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        if (node_content == .named) {
+        if (node_content == .named and self.checked_base_construction_depth == 0) {
             if (try self.canonicalizeNamedArguments(node_content.named)) |canonical| {
                 return try self.newNode(.{ .named = canonical });
             }
@@ -1858,8 +1962,8 @@ pub const InstGraph = struct {
             .empty_tag_union => self.empty_tag_union_node = id,
             .empty_record => self.empty_record_node = id,
             .zst => self.zst_node = id,
-            .list => |element| try self.list_nodes_by_element.put(self.find(element), id),
-            .box => |element| try self.box_nodes_by_element.put(self.find(element), id),
+            .list => |element| try self.registerListElement(element, id),
+            .box => |element| try self.registerBoxElement(element, id),
             .tuple => |items| try self.registerTupleShape(id, items),
             .record => try self.registerRecordShape(id, node_content),
             .named => |named| try self.registerNamedIdentity(id, named),
@@ -1933,7 +2037,7 @@ pub const InstGraph = struct {
         if (existing != .unresolved or existing.unresolved.origin != .placeholder) {
             Common.invariant("produced node reservation was completed more than once");
         }
-        const completed_content = if (raw_content == .named)
+        const completed_content = if (raw_content == .named and self.checked_base_construction_depth == 0)
             if (try self.canonicalizeNamedArguments(raw_content.named)) |canonical|
                 InstNode{ .named = canonical }
             else
@@ -1963,8 +2067,8 @@ pub const InstGraph = struct {
             .empty_tag_union => self.empty_tag_union_node = root,
             .empty_record => self.empty_record_node = root,
             .zst => self.zst_node = root,
-            .list => |element| try self.list_nodes_by_element.put(self.find(element), root),
-            .box => |element| try self.box_nodes_by_element.put(self.find(element), root),
+            .list => |element| try self.registerListElement(element, root),
+            .box => |element| try self.registerBoxElement(element, root),
             .tuple => |items| try self.registerTupleShape(root, items),
             .record => try self.registerRecordShape(root, completed_content),
             .tag_union => |tag_union| try self.registerTagUnionShape(root, tag_union),
@@ -3104,8 +3208,8 @@ pub const InstGraph = struct {
         }
         if (!try self.replaceRootContent(root, new_content)) return;
         switch (new_content) {
-            .list => |element| try self.list_nodes_by_element.put(self.find(element), root),
-            .box => |element| try self.box_nodes_by_element.put(self.find(element), root),
+            .list => |element| try self.registerListElement(element, root),
+            .box => |element| try self.registerBoxElement(element, root),
             .tuple => |items| try self.registerTupleShape(root, items),
             .record => try self.registerRecordShape(root, new_content),
             .tag_union => |tag_union| try self.registerTagUnionShape(root, tag_union),

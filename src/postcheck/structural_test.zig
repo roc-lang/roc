@@ -774,7 +774,7 @@ test "Monotype producers return and compose exact graph nodes directly" {
     );
     try expectContains(tuple, "produced_item.* = try self.builder.completePendingProducedNode(");
     try expectContains(tuple, "try self.exprTypeCell(item).toGraphNode(self.graph),");
-    try expectContains(tuple, "self.graph.newNode(.{ .tuple = produced_items })");
+    try expectContains(tuple, "self.graph.newProducedTuple(produced_items)");
 
     const list = sourceSliceBetween(
         lower_source,
@@ -785,7 +785,7 @@ test "Monotype producers return and compose exact graph nodes directly" {
     try expectContains(list, "const produced_element = try self.builder.completePendingProducedNode(");
     try expectContains(list, "try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph)");
     try expectContains(list, "DraftTypeCell.fromGraphNode(produced_element)");
-    try expectContains(list, "self.graph.newNode(.{ .list = produced_element })");
+    try expectContains(list, "self.graph.newProducedList(produced_element)");
     try expectNotContains(list, "requireSameExactProducedValue(");
 
     const tag = sourceSliceBetween(
@@ -802,7 +802,7 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerProducedLowLevelExprAtNode(",
         "fn lowerExprAtTypeCellInner(",
     );
-    try expectContains(low_level, ".box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] })");
+    try expectContains(low_level, ".box_from_item => |box| try self.graph.newProducedBox(arg_nodes[box.item_arg])");
     try expectContains(low_level, ".box_item => |box| try self.graph.boxElementNode(arg_nodes[box.box_arg])");
 
     const lookup = sourceSliceBetween(
@@ -923,6 +923,9 @@ test "Monotype pattern statements retain graph provenance" {
     try expectContains(statement, "lowerShapeFreePatternAtCell(pattern, value_cell)");
     try expectContains(statement, "try value_cell.toGraphNode(self.graph)");
     try expectContains(statement, "try self.lowerPatternAtNode(");
+    try expectContains(statement, "else if (has_annotation)");
+    try expectContains(statement, "try self.lowerExprAtExactRequest(");
+    try expectNotContains(statement, "checkedTypeIsClosed(self.view.bodies.pattern(pattern).ty)");
     try expectNotContains(statement, "activeTypeFromCell(value_cell)");
     try expectNotContains(statement, "lowerPatternAtType(pattern");
 }
@@ -934,7 +937,9 @@ test "Monotype expanded record-rest statements retain graph provenance" {
         "fn appendExpandedPatternStatement(",
         "fn checkedStatementHasRuntimeEffect(",
     );
-    try expectContains(record_rest, "const value = try self.lowerExpr(expr)");
+    try expectContains(record_rest, "const value = if (has_annotation)");
+    try expectContains(record_rest, "try self.lowerExprAtExactRequest(");
+    try expectContains(record_rest, "try self.lowerExpr(expr)");
     try expectContains(record_rest, "const value_cell = self.exprTypeCell(value)");
     try expectContains(record_rest, "const value_node = try value_cell.toGraphNode(self.graph)");
     try expectContains(record_rest, "addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null)");

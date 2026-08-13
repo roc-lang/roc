@@ -5273,27 +5273,27 @@ const Builder = struct {
                 .queued => {
                     body_ctx.draft.template_specs.items[spec_index].state = .lowering;
                     try self.lowerQueuedTemplateSpec(body_ctx.draft, body_ctx.graph, spec_index);
-                    return body_ctx.graph.rootNode(raw_node);
                 },
                 // A recursive use observes the producer's one stable forward
                 // result cell. The active body will complete that exact node;
                 // no checked request subtree is substituted for it.
                 .lowering => return result_node,
-                .lowered => return body_ctx.graph.rootNode(raw_node),
+                .lowered => {},
                 .deferred, .resolved => Common.invariant("a hosted specialization owned a live Roc result node"),
             }
+            return try body_ctx.graph.canonicalizeProducedNode(raw_node);
         }
         if (body_ctx.draft.deferred_const_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_const_uses.items[boundary_index].preparation_state) {
                 .queued => {
                     try self.finalizeDraftConstUse(body_ctx.draft, body_ctx.graph, boundary_index);
-                    return body_ctx.graph.rootNode(raw_node);
                 },
                 // A recursive use observes the constant's one stable forward
                 // result cell. The active restoration owns its completion.
                 .preparing => return result_node,
-                .prepared => return body_ctx.graph.rootNode(raw_node),
+                .prepared => {},
             }
+            return try body_ctx.graph.canonicalizeProducedNode(raw_node);
         }
         if (body_ctx.draft.structural_serialization_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_structural_serializations.items[boundary_index].preparation_state) {
@@ -5304,13 +5304,13 @@ const Builder = struct {
                         body_ctx.graph,
                         boundary_index,
                     );
-                    return body_ctx.graph.rootNode(raw_node);
                 },
                 .preparing => return result_node,
-                .prepared => return body_ctx.graph.rootNode(raw_node),
+                .prepared => {},
             }
+            return try body_ctx.graph.canonicalizeProducedNode(raw_node);
         }
-        return result_node;
+        return try body_ctx.graph.canonicalizeProducedNode(result_node);
     }
 
     fn hasQueuedTemplateSpecs(body_draft: *const BodyDraftStore) bool {
@@ -16069,11 +16069,10 @@ const BodyContext = struct {
         }
         try self.putScopedNodeState(scoped_ty, .{ .building = null });
         errdefer self.removeScopedNodeState(scoped_ty);
-        const build = if (self.instantiation.authority == .checked_base) build: {
-            self.graph.beginCheckedBaseConstruction();
-            defer self.graph.endCheckedBaseConstruction();
-            break :build try self.instNodeBuild(checked_ty);
-        } else try self.instNodeBuild(checked_ty);
+        const constructs_checked_base = self.instantiation.authority == .checked_base;
+        if (constructs_checked_base) self.graph.beginCheckedBaseConstruction();
+        defer if (constructs_checked_base) self.graph.endCheckedBaseConstruction();
+        const build = try self.instNodeBuild(checked_ty);
 
         const state = self.scopedNodeState(scoped_ty) orelse
             Common.invariant("checked node construction lost its scoped state");
@@ -16365,18 +16364,34 @@ const BodyContext = struct {
                     .use = .inspectable,
                 },
             } } },
-            .record_unbound => |fields| .{ .content = .{ .record = .{
-                .fields = try self.instFields(fields),
-                .ext = if (self.consumesProducedDefaults())
-                    try self.graph.newNode(.empty_record)
-                else
-                    try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-            } } },
-            .record => |record| .{ .content = .{ .record = .{
-                .fields = try self.instFields(record.fields),
-                .ext = try self.instNode(record.ext),
-            } } },
-            .tuple => |items| .{ .content = .{ .tuple = try self.instNodeSlice(items) } },
+            .record_unbound => |fields| blk: {
+                const instantiated_fields = try self.instFields(fields);
+                if (self.consumesProducedDefaults()) {
+                    break :blk .{ .existing = try self.graph.newProducedRecord(
+                        instantiated_fields,
+                        try self.graph.newNode(.empty_record),
+                    ) };
+                }
+                break :blk .{ .content = .{ .record = .{
+                    .fields = instantiated_fields,
+                    .ext = try self.graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
+                } } };
+            },
+            .record => |record| blk: {
+                const fields = try self.instFields(record.fields);
+                const ext = try self.instNode(record.ext);
+                if (self.consumesProducedDefaults()) {
+                    break :blk .{ .existing = try self.graph.newProducedRecord(fields, ext) };
+                }
+                break :blk .{ .content = .{ .record = .{ .fields = fields, .ext = ext } } };
+            },
+            .tuple => |items| blk: {
+                const item_nodes = try self.instNodeSlice(items);
+                if (self.consumesProducedDefaults()) {
+                    break :blk .{ .existing = try self.graph.newProducedTuple(item_nodes) };
+                }
+                break :blk .{ .content = .{ .tuple = item_nodes } };
+            },
             .function => |function| blk: {
                 const args = try self.instNodeSlice(function.args);
                 const ret = try self.instNode(function.ret);
@@ -16506,11 +16521,19 @@ const BodyContext = struct {
                 .bool_tag_union => {},
                 .list => {
                     if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                    return .{ .content = .{ .list = try self.instNode(nominal.args[0]) } };
+                    const element = try self.instNode(nominal.args[0]);
+                    if (self.consumesProducedDefaults()) {
+                        return .{ .existing = try self.graph.newProducedList(element) };
+                    }
+                    return .{ .content = .{ .list = element } };
                 },
                 .box => {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                    return .{ .content = .{ .box = try self.instNode(nominal.args[0]) } };
+                    const element = try self.instNode(nominal.args[0]);
+                    if (self.consumesProducedDefaults()) {
+                        return .{ .existing = try self.graph.newProducedBox(element) };
+                    }
+                    return .{ .content = .{ .box = element } };
                 },
                 .try_nominal,
                 .iterator,
@@ -16849,7 +16872,11 @@ const BodyContext = struct {
         try self.instantiation.field_kind_decl_scopes.append(self.allocator, &field_kind_scope);
         defer _ = self.instantiation.field_kind_decl_scopes.pop();
         const backing = self.scopedCheckedType(declaration.backing);
-        if (self.scopedNodeState(backing) != null) {
+        // A recursive occurrence may be instantiating the same declaration
+        // with different exact arguments in an outer declaration scope. The
+        // new argument scope deliberately shadows that occurrence; only a
+        // duplicate reservation in this scope would be invalid.
+        if (scope.get(backing) != null) {
             Common.invariant("nominal declaration backing was already instantiated before its reservation");
         }
         try self.putScopedNode(backing, placeholder);
@@ -25513,7 +25540,10 @@ const BodyContext = struct {
         missing_local: DraftLocalId,
         missing_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return try self.tryErr(ret_ty, try self.localExpr(missing_local, missing_ty));
+        const target_err_ty = self.tryInfo(ret_ty).err_ty;
+        const missing = try self.localExpr(missing_local, missing_ty);
+        const injected = try self.injectErrorRow(missing, missing_ty, target_err_ty);
+        return try self.tryErr(ret_ty, injected);
     }
 
     fn parseTagExactMatch(
@@ -26293,7 +26323,6 @@ const BodyContext = struct {
             selections,
             root.checked,
         );
-
         if (root_base.checked) |raw_cell| {
             const cell = self.graph.rootNode(raw_cell);
             if (self.graph.sameClass(cell, materialized)) return cell;
@@ -31818,10 +31847,7 @@ const BodyContext = struct {
             const segment_node = try self.internIteratorOccurrence(
                 try self.checkedExprOccurrenceNode(first.following_segment),
             );
-            break :item try self.graph.newNode(.{ .tuple = try self.graph.arena().dupe(
-                NodeId,
-                &.{ value_node, segment_node },
-            ) });
+            break :item try self.graph.newProducedTuple(&.{ value_node, segment_node });
         };
         return try self.generatedIteratorNode(request_node, item_node);
     }
@@ -32408,7 +32434,7 @@ const BodyContext = struct {
         if (self.graph.sameClass(try self.graph.listElementNode(list_node), element_node)) {
             return list_node;
         }
-        return try self.graph.newNode(.{ .list = element_node });
+        return try self.graph.newProducedList(element_node);
     }
 
     fn lowLevelReplaceResultNode(
@@ -32482,7 +32508,7 @@ const BodyContext = struct {
         var produced_type_source: ?DraftExprId = null;
         const produced_node = switch (flow) {
             .none => unreachable,
-            .box_from_item => |box| try self.graph.newNode(.{ .box = arg_nodes[box.item_arg] }),
+            .box_from_item => |box| try self.graph.newProducedBox(arg_nodes[box.item_arg]),
             .box_item => |box| try self.graph.boxElementNode(arg_nodes[box.box_arg]),
             .list_item => |list| try self.graph.listElementNode(arg_nodes[list.list_arg]),
             .list_from_enclosing_function_arg_result => |source| blk: {
@@ -32493,7 +32519,7 @@ const BodyContext = struct {
                 }
                 produced_type_source = try self.enclosingFunctionTypeSource(source.function_arg);
                 const callable = try self.graph.functionNodes(enclosing.args[source.function_arg]);
-                break :blk try self.graph.newNode(.{ .list = callable.ret });
+                break :blk try self.graph.newProducedList(callable.ret);
             },
             .enclosing_function_list_item => |source| blk: {
                 const enclosing = self.enclosing_function orelse
@@ -34395,7 +34421,7 @@ const BodyContext = struct {
                 try self.exprTypeCell(item).toGraphNode(self.graph),
             );
         }
-        const structural_node = try self.graph.newNode(.{ .tuple = produced_items });
+        const structural_node = try self.graph.newProducedTuple(produced_items);
         // Tuple syntax can construct a nominal whose declaration backing is a
         // tuple (notably generated `Iter`). Preserve that atomic nominal
         // identity while replacing only its direct backing with the exact
@@ -34468,7 +34494,7 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(produced_element),
             );
         }
-        const produced_node = try self.graph.newNode(.{ .list = produced_element });
+        const produced_node = try self.graph.newProducedList(produced_element);
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_node),
             .{ .list = try self.addExprSpan(lowered) },
@@ -42588,7 +42614,7 @@ const BodyContext = struct {
         set_node: NodeId,
         elem_node: NodeId,
     ) Allocator.Error!bool {
-        const list_node = try self.graph.newNode(.{ .list = elem_node });
+        const list_node = try self.graph.newProducedList(elem_node);
         return switch (kind) {
             .parser => try self.prepareOwnedCodecMethodCall(
                 boundary_expr,
@@ -42619,8 +42645,8 @@ const BodyContext = struct {
         key_node: NodeId,
         value_node: NodeId,
     ) Allocator.Error!bool {
-        const entry_node = try self.graph.newNode(.{ .tuple = try self.graph.arena().dupe(NodeId, &.{ key_node, value_node }) });
-        const entries_node = try self.graph.newNode(.{ .list = entry_node });
+        const entry_node = try self.graph.newProducedTuple(&.{ key_node, value_node });
+        const entries_node = try self.graph.newProducedList(entry_node);
         return switch (kind) {
             .parser => blk: {
                 const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
@@ -44175,6 +44201,7 @@ const BodyContext = struct {
             result_cell: DraftTypeCell,
             state_cell: DraftTypeCell,
             merge_binders: []const MergeBinder,
+            destination_relation: ControlFlowDestinationRelation,
         },
         state_only: struct {
             state_cell: DraftTypeCell,
@@ -44206,6 +44233,7 @@ const BodyContext = struct {
                 state.result_cell,
                 state.state_cell,
                 state.merge_binders,
+                state.destination_relation,
             ),
             .state_only => |state| try self.lowerBodyThenStateOnlyAtTypeCell(
                 body,
@@ -44367,6 +44395,7 @@ const BodyContext = struct {
             .result_cell = result_cell,
             .state_cell = state_cell,
             .merge_binders = merge_binders,
+            .destination_relation = destination_relation,
         } }, comptime_site);
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
@@ -46242,6 +46271,7 @@ const BodyContext = struct {
                 result_cell,
                 &.{},
                 comptime_site,
+                destination_relation,
                 &selection,
             );
             return try self.addExprWithTypeCell(
@@ -46253,7 +46283,15 @@ const BodyContext = struct {
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
         const state_expr = try self.addExprWithTypeCell(
             state_cell,
-            try self.lowerIfAtTypeCells(if_, result_cell, state_cell, merge_binders, comptime_site, null),
+            try self.lowerIfAtTypeCells(
+                if_,
+                result_cell,
+                state_cell,
+                merge_binders,
+                comptime_site,
+                destination_relation,
+                null,
+            ),
         );
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
@@ -46373,7 +46411,7 @@ const BodyContext = struct {
             nodes[index] = try merge.ty.toGraphNode(self.graph);
         }
         nodes[merge_binders.len] = try result_cell.toGraphNode(self.graph);
-        return DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = nodes }));
+        return DraftTypeCell.fromGraphNode(try self.graph.newProducedTuple(nodes));
     }
 
     fn unwrapStateResultAtTypeCells(
@@ -46412,7 +46450,7 @@ const BodyContext = struct {
         if (merge_binders.len == 1) return merge_binders[0].ty;
         const nodes = try self.graph.arena().alloc(NodeId, merge_binders.len);
         for (merge_binders, 0..) |merge, index| nodes[index] = try merge.ty.toGraphNode(self.graph);
-        return DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = nodes }));
+        return DraftTypeCell.fromGraphNode(try self.graph.newProducedTuple(nodes));
     }
 
     fn lowerIfAtTypeCells(
@@ -46422,6 +46460,7 @@ const BodyContext = struct {
         branch_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
         comptime_site: ?DraftComptimeSiteId,
+        destination_relation: ControlFlowDestinationRelation,
         value_selection: ?*ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
@@ -46451,7 +46490,7 @@ const BodyContext = struct {
                         result_cell,
                         branch_cell,
                         merge_binders,
-                        .exact_producer,
+                        destination_relation,
                     );
                 const wrapped = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
@@ -46480,7 +46519,13 @@ const BodyContext = struct {
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         if (merge_binders.len == 0) return try self.lowerBranchValueAtTypeCell(body, result_cell, destination_relation);
-        return try self.lowerBodyThenStateResultAtTypeCells(body, result_cell, branch_cell, merge_binders);
+        return try self.lowerBodyThenStateResultAtTypeCells(
+            body,
+            result_cell,
+            branch_cell,
+            merge_binders,
+            destination_relation,
+        );
     }
 
     fn lowerIfStateOnlyAtTypeCell(
@@ -46523,6 +46568,7 @@ const BodyContext = struct {
         result_cell: DraftTypeCell,
         state_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         if (self.checkedExprDivergesInLoweredRuntime(body)) return try self.lowerDivergentExprAtTypeCell(body, state_cell);
 
@@ -46559,6 +46605,7 @@ const BodyContext = struct {
                         result_cell,
                         state_cell,
                         merge_binders,
+                        destination_relation,
                     ),
                 } });
             },
@@ -46567,7 +46614,13 @@ const BodyContext = struct {
                     const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(body, result_cell);
                     return try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell);
                 }
-                return try self.lowerValueThenStateResultAtTypeCells(body, result_cell, state_cell, merge_binders);
+                return try self.lowerValueThenStateResultAtTypeCells(
+                    body,
+                    result_cell,
+                    state_cell,
+                    merge_binders,
+                    destination_relation,
+                );
             },
         }
     }
@@ -46584,6 +46637,7 @@ const BodyContext = struct {
         result_cell: DraftTypeCell,
         outer_state_cell: DraftTypeCell,
         outer_merge_binders: []const MergeBinder,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const checked_body = self.view.bodies.expr(body);
         switch (checked_body.data) {
@@ -46593,6 +46647,7 @@ const BodyContext = struct {
                 result_cell,
                 outer_state_cell,
                 outer_merge_binders,
+                destination_relation,
             ),
             .match_ => |match| return try self.lowerNestedMatchThenStateResultAtTypeCells(
                 body,
@@ -46600,11 +46655,12 @@ const BodyContext = struct {
                 result_cell,
                 outer_state_cell,
                 outer_merge_binders,
+                destination_relation,
             ),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
 
-        const value = try self.lowerBranchValueAtTypeCell(body, result_cell, .exact_producer);
+        const value = try self.lowerBranchValueAtTypeCell(body, result_cell, destination_relation);
         return try self.stateResultAfterValueAtTypeCells(
             outer_state_cell,
             result_cell,
@@ -46620,6 +46676,7 @@ const BodyContext = struct {
         result_cell: DraftTypeCell,
         outer_state_cell: DraftTypeCell,
         outer_merge_binders: []const MergeBinder,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const nested_merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(nested_merge_binders);
@@ -46632,6 +46689,7 @@ const BodyContext = struct {
                     result_cell,
                     &.{},
                     try self.ifComptimeSite(expr_id, if_),
+                    destination_relation,
                     null,
                 ),
             );
@@ -46652,6 +46710,7 @@ const BodyContext = struct {
                 nested_state_cell,
                 nested_merge_binders,
                 try self.ifComptimeSite(expr_id, if_),
+                destination_relation,
                 null,
             ),
         );
@@ -46672,6 +46731,7 @@ const BodyContext = struct {
         result_cell: DraftTypeCell,
         outer_state_cell: DraftTypeCell,
         outer_merge_binders: []const MergeBinder,
+        destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const nested_merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(nested_merge_binders);
@@ -46679,7 +46739,7 @@ const BodyContext = struct {
         if (nested_merge_binders.len == 0) {
             const value = try self.lowerMatchExprWithOutput(match, .{ .value = .{
                 .cell = result_cell,
-                .destination_relation = .exact_producer,
+                .destination_relation = destination_relation,
             } }, comptime_site);
             return try self.stateResultAfterValueAtTypeCells(
                 outer_state_cell,
@@ -46694,6 +46754,7 @@ const BodyContext = struct {
             .result_cell = result_cell,
             .state_cell = nested_state_cell,
             .merge_binders = nested_merge_binders,
+            .destination_relation = destination_relation,
         } }, comptime_site);
         return try self.composeNestedStateResultAtTypeCells(
             nested_state,
@@ -47082,13 +47143,13 @@ const BodyContext = struct {
         defer self.builder.program.current_region = saved_region;
         self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         self.builder.program.current_region = statement.source_region;
-        const pattern, const expr, const reassigned_binders = switch (statement.data) {
+        const pattern, const expr, const reassigned_binders, const has_annotation = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
-                break :blk .{ decl.pattern, decl.expr, null };
+                break :blk .{ decl.pattern, decl.expr, null, decl.has_annotation };
             },
-            .var_ => |decl| .{ decl.pattern, decl.expr, null },
-            .reassign => |decl| .{ decl.pattern, decl.expr, decl.reassigned_binders },
+            .var_ => |decl| .{ decl.pattern, decl.expr, null, decl.has_annotation },
+            .reassign => |decl| .{ decl.pattern, decl.expr, decl.reassigned_binders, false },
             .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return false,
         };
 
@@ -47098,6 +47159,7 @@ const BodyContext = struct {
             expr,
             statement.source_region,
             reassigned_binders,
+            has_annotation,
             lowered,
         )) return true;
 
@@ -47114,7 +47176,13 @@ const BodyContext = struct {
         if (!self.recordDestructsNeedExplicitRest(destructs) and
             !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs)) return false;
 
-        const value = try self.lowerExpr(expr);
+        const value = if (has_annotation)
+            try self.lowerExprAtExactRequest(
+                expr,
+                DraftTypeCell.fromGraphNode(try self.checkedPatternOccurrenceNode(pattern)),
+            )
+        else
+            try self.lowerExpr(expr);
         const value_cell = self.exprTypeCell(value);
         const value_node = try value_cell.toGraphNode(self.graph);
         try self.publishExactCheckedPatternAtCell(pattern, value_cell);
@@ -47151,6 +47219,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         source_region: base.Region,
         _: ?[]const checked.PatternBinderId,
+        has_annotation: bool,
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
         const checked_expr = self.view.bodies.expr(expr_id);
@@ -47163,7 +47232,10 @@ const BodyContext = struct {
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) return false;
 
-        const value_cell = DraftTypeCell.fromGraphNode(try self.checkedExprOccurrenceNode(expr_id));
+        const value_cell = DraftTypeCell.fromGraphNode(if (has_annotation)
+            try self.checkedPatternOccurrenceNode(pattern)
+        else
+            try self.checkedExprOccurrenceNode(expr_id));
         try self.publishExactCheckedPatternAtCell(pattern, value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
         const state_value = switch (checked_expr.data) {
@@ -47175,6 +47247,7 @@ const BodyContext = struct {
                     state_cell,
                     merge_binders,
                     try self.ifComptimeSite(expr_id, if_),
+                    if (has_annotation) .exact_request else .exact_producer,
                     null,
                 ),
             ),
@@ -47184,6 +47257,7 @@ const BodyContext = struct {
                     .result_cell = value_cell,
                     .state_cell = state_cell,
                     .merge_binders = merge_binders,
+                    .destination_relation = if (has_annotation) .exact_request else .exact_producer,
                 } },
                 try self.matchComptimeSite(expr_id, match),
             ),
@@ -48398,7 +48472,7 @@ const BodyContext = struct {
 
         const nodes = try self.graph.arena().alloc(NodeId, carries.len);
         for (carries, 0..) |carry, i| nodes[i] = try carry.ty.toGraphNode(self.graph);
-        return DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .tuple = nodes }));
+        return DraftTypeCell.fromGraphNode(try self.graph.newProducedTuple(nodes));
     }
 
     fn unitType(self: *BodyContext) Allocator.Error!Type.TypeId {
@@ -48721,12 +48795,26 @@ const BodyContext = struct {
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
                 }
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges, null);
+                const lowered = try self.lowerPatternStatement(
+                    decl.pattern,
+                    decl.expr,
+                    statement.source_region,
+                    statement_diverges,
+                    null,
+                    decl.has_annotation,
+                );
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
             },
             .var_ => |decl| blk: {
-                const lowered = try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region, statement_diverges, null);
+                const lowered = try self.lowerPatternStatement(
+                    decl.pattern,
+                    decl.expr,
+                    statement.source_region,
+                    statement_diverges,
+                    null,
+                    decl.has_annotation,
+                );
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
             },
@@ -48738,6 +48826,7 @@ const BodyContext = struct {
                     statement.source_region,
                     statement_diverges,
                     decl.reassigned_binders,
+                    false,
                 );
                 termination = lowered.termination;
                 break :blk lowered.stmt orelse return .{ .stmt = null, .termination = termination };
@@ -48855,6 +48944,7 @@ const BodyContext = struct {
         source_region: base.Region,
         statement_diverges: bool,
         reassigned_binders: ?[]const checked.PatternBinderId,
+        has_annotation: bool,
     ) Allocator.Error!LoweredPatternStatement {
         // A divergent initializer never produces a value to bind, so emitting a
         // pattern or reading the initializer's dead checked type would invent a
@@ -48899,6 +48989,11 @@ const BodyContext = struct {
                 .runtime_value,
                 false,
                 .exact_producer,
+            )
+        else if (has_annotation)
+            try self.lowerExprAtExactRequest(
+                expr,
+                DraftTypeCell.fromGraphNode(try self.checkedPatternOccurrenceNode(pattern)),
             )
         else
             // A declaration consumes the exact value its initializer

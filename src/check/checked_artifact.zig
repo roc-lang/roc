@@ -9799,9 +9799,9 @@ pub const CheckedStrPatternStep = struct {
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
-    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_uninitialized: struct { pattern: CheckedPatternId },
+    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId, has_annotation: bool = false },
+    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId, has_annotation: bool = false },
+    var_uninitialized: struct { pattern: CheckedPatternId, has_annotation: bool = false },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -10233,9 +10233,9 @@ pub const StoredCheckedPatternData = union(enum) {
 /// Internal, relocation-invariant (POD) form of `CheckedStatementData`.
 pub const StoredCheckedStatementData = union(enum) {
     pending,
-    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_uninitialized: struct { pattern: CheckedPatternId },
+    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId, has_annotation: bool = false },
+    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId, has_annotation: bool = false },
+    var_uninitialized: struct { pattern: CheckedPatternId, has_annotation: bool = false },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: CheckedBodyRange },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -10456,9 +10456,9 @@ fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedSta
         .type_anno => .type_anno,
         .type_var_alias => .type_var_alias,
         .runtime_error => .runtime_error,
-        .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
-        .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
-        .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
+        .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .has_annotation = s.has_annotation } },
+        .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr, .has_annotation = s.has_annotation } },
+        .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern, .has_annotation = s.has_annotation } },
         .reassign => |s| .{ .reassign = .{
             .pattern = s.pattern,
             .expr = s.expr,
@@ -11905,9 +11905,9 @@ pub const CheckedBodyStore = struct {
             .type_anno => .type_anno,
             .type_var_alias => .type_var_alias,
             .runtime_error => .runtime_error,
-            .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr } },
-            .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
-            .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
+            .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .has_annotation = s.has_annotation } },
+            .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr, .has_annotation = s.has_annotation } },
+            .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern, .has_annotation = s.has_annotation } },
             .reassign => |s| .{ .reassign = .{
                 .pattern = s.pattern,
                 .expr = s.expr,
@@ -13917,14 +13917,25 @@ const CheckedBodyPayloadCopier = struct {
     fn copyStatementData(self: *@This(), statement_idx: CIR.Statement.Idx) Allocator.Error!CheckedStatementData {
         const statement = self.module.getStatement(statement_idx);
         return switch (statement) {
-            .s_decl => |decl| .{ .decl = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } },
+            .s_decl => |decl| .{ .decl = .{
+                .pattern = self.checkedPattern(decl.pattern),
+                .expr = self.checkedExpr(decl.expr),
+                .has_annotation = decl.anno != null,
+            } },
             .s_var => |var_| blk: {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
-                break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
+                break :blk .{ .var_ = .{
+                    .pattern = self.checkedPattern(var_.pattern_idx),
+                    .expr = self.checkedExpr(var_.expr),
+                    .has_annotation = var_.anno != null,
+                } };
             },
             .s_var_uninitialized => |var_| blk: {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
-                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
+                break :blk .{ .var_uninitialized = .{
+                    .pattern = self.checkedPattern(var_.pattern_idx),
+                    .has_annotation = var_.anno != null,
+                } };
             },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
