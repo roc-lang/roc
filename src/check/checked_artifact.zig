@@ -20103,6 +20103,36 @@ fn publishSpecializationCallShapeForCallable(
     return by_type[raw];
 }
 
+fn localProcedureUseCallable(
+    resolved_value_refs: *const ResolvedValueRefTable,
+    ref_id: ResolvedValueRefId,
+) CheckedTypeId {
+    const raw_ref = @intFromEnum(ref_id);
+    if (raw_ref >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("local-procedure specialization relation exceeded the resolved value table", .{});
+    }
+    const record = resolved_value_refs.records[raw_ref];
+    return switch (record.ref) {
+        .local_proc => record.checked_ty,
+        .local_param,
+        .local_value,
+        .local_mutable_version,
+        .pattern_binder,
+        .selected_hoisted_const,
+        .top_level_const,
+        .imported_const,
+        .top_level_proc,
+        .imported_proc,
+        .hosted_proc,
+        .platform_required_declaration,
+        .platform_required_checked_error,
+        .platform_required_const,
+        .platform_required_proc,
+        .promoted_top_level_proc,
+        => checkedArtifactInvariant("local-procedure specialization relation referenced a non-local value", .{}),
+    };
+}
+
 fn collectBidirectionalCallIdentityRelations(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
@@ -21821,7 +21851,30 @@ fn publishSpecializationCallPlans(
                 &root_edges,
             );
         },
-        .type_equality, .call, .local_proc_use => {},
+        .local_proc_use => |ref_id| {
+            const callable = localProcedureUseCallable(resolved_value_refs, ref_id);
+            if (checkedFunctionPayloadOrDiagnostic(
+                &checked_types.store,
+                callable,
+                "local-procedure use specialization call shape",
+            ) == null) continue;
+            _ = try publishSpecializationCallShapeForCallable(
+                allocator,
+                checked_types,
+                &concrete_sources,
+                &target_relations,
+                callable,
+                by_type,
+                &shape_by_key,
+                &shapes,
+                &target_source_roots,
+                &slots,
+                &occurrences,
+                &projections,
+                &root_edges,
+            );
+        },
+        .type_equality, .call => {},
     };
     for (static_dispatch_plans.evidence_nodes) |node| switch (node.instantiation) {
         .monomorphic => {},
@@ -38190,16 +38243,16 @@ test "target source roots exclude explicit concrete checked sources" {
     const concrete = testIndexId(CheckedTypeId, 0);
     const runtime = testIndexId(CheckedTypeId, 1);
     const dependent = testIndexId(CheckedTypeId, 2);
-    const relations = [_]SpecializationTargetIdentityRelation{
+    var relations = [_]SpecializationTargetIdentityRelation{
         .{ .source = concrete, .dependent = dependent, .source_kind = .concrete_checked },
         .{ .source = runtime, .dependent = dependent, .source_kind = .exact_selection },
     };
-    const entries = [_]SpecializationTargetRelationEntry{.{
+    var entries = [_]SpecializationTargetRelationEntry{.{
         .target_artifact = .{},
         .target_callable = dependent,
         .relations = .{ .start = 0, .len = relations.len },
     }};
-    const by_type = [_]artifact_serialize.Span{
+    var by_type = [_]artifact_serialize.Span{
         .{ .start = 0, .len = entries.len },
         .{},
         .{},
@@ -38426,6 +38479,21 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
         @as(?DispatchScopeId, null),
         refs.records[1].ref.local_proc.dispatch_scope,
     );
+}
+
+test "local procedure use callable is the checked occurrence type" {
+    const callable: CheckedTypeId = @enumFromInt(40);
+    var records = [_]ResolvedValueRefRecord{.{
+        .expr = @enumFromInt(10),
+        .ref = .{ .local_proc = .{
+            .binder = @enumFromInt(20),
+            .expr = @enumFromInt(30),
+        } },
+        .checked_ty = callable,
+        .scope_depth = 0,
+    }};
+    const refs = ResolvedValueRefTable{ .records = &records };
+    try std.testing.expectEqual(callable, localProcedureUseCallable(&refs, @enumFromInt(0)));
 }
 
 test "nested procedure sites inherit exact producer-recorded lexical scopes" {
@@ -40028,8 +40096,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE7, 0xF5, 0xC3, 0xE7, 0xEE, 0x13, 0x46, 0x6D, 0x29, 0xCC, 0x91, 0xFB, 0x77, 0x84, 0xFD, 0x71,
-        0x46, 0xC0, 0x32, 0x97, 0x96, 0xD2, 0xE1, 0x3C, 0xE2, 0x6D, 0x58, 0x71, 0xDC, 0x1E, 0x70, 0xAA,
+        0x5A, 0x5F, 0xA0, 0xAF, 0x92, 0x33, 0x67, 0xFE, 0x98, 0x3C, 0x8F, 0x60, 0x76, 0xD6, 0x05, 0x73,
+        0x02, 0xE0, 0xC4, 0x3B, 0x67, 0x35, 0xE5, 0xB7, 0xB9, 0x5F, 0x27, 0xF6, 0xDB, 0xDB, 0xD2, 0xF7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

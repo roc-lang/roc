@@ -4123,6 +4123,13 @@ to rediscover whether it can return an exact generated type. An exact local
 procedure lowers its result as a produced value even when its initial request
 still has the public return shape, so the body can replace that public result
 with the generated identity it constructs before the specialization is sealed.
+Every checker-recorded generalized local-procedure use also publishes the
+shared call shape for that use occurrence's checked callable. The use relation
+already names its resolved-value record, and that record's checked type is the
+immutable source contract passed to local-procedure specialization. Monotype
+indexes the dense call-shape column with that exact checked id; it never
+substitutes the declaration callable, synthesizes a missing shape, or walks the
+local procedure body to recover one.
 
 Match lowering projects exact field and payload cells from the exact scrutinee
 and binds its pre-registered locals to those cells before the guard or branch
