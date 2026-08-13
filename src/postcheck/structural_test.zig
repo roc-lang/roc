@@ -521,6 +521,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_call_identity, "for (plan.selection_edges");
     try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
     try expectContains(generated_call_identity, "self.materializeCheckedCallNode(");
+    try expectContains(generated_call_identity, ".request_occurrence,");
+    try expectNotContains(generated_call_identity, ".produced_occurrence,");
     try expectContains(generated_call_identity, ".concrete_checked => try self.persistentConcreteCheckedNode(");
     try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
     try expectContains(generated_call_identity, "generatedFieldNominalNode(");
@@ -743,12 +745,13 @@ test "record literals request and retain only immediate exact field nodes" {
     try expectContains(record_literal, "var selections = std.ArrayList(solve.DirectRequestSelection).empty;");
     try expectContains(record_literal, "self.refineDirectSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
-    try expectContains(exact_record, "const produced_value_node = try self.builder.completePendingProducedNode(");
-    try expectContains(exact_record, "try self.exprTypeCell(value).toGraphNode(self.graph),");
-    try expectContains(exact_record, "produced_fields[index].ty = produced_value_node;");
+    try expectContains(exact_record, "const produced_fields: ?[]InstField = if (preserve_request)");
+    try expectContains(exact_record, "if (produced_fields) |produced| {");
+    try expectContains(exact_record, "produced[index].ty = produced_value_node;");
     try expectContains(exact_record, "optionalSlotPresentExprFromExactValue(pre)");
     try expectContains(exact_record, "self.graph.newProducedRecord(");
     try expectContains(exact_record, "try self.producedConstructorNode(record_node, structural_node)");
+    try expectContains(exact_record, "} else record_node;");
     try expectNotContains(exact_record, "requires_distinct_witness");
     try expectNotContains(record_literal, "checkedRecordLiteralFieldType");
     try expectNotContains(lower_source, "instantiateCheckedTypeWithSelectionsAtAuthority");
@@ -758,6 +761,15 @@ test "record literals request and retain only immediate exact field nodes" {
 test "Monotype producers return and compose exact graph nodes directly" {
     const lower_source = @embedFile("monotype/lower.zig");
     const solve_source = @embedFile("monotype/solve.zig");
+
+    const nominal_constructor = sourceSliceBetween(
+        lower_source,
+        "fn producedConstructorNode(",
+        "fn completedProducedRecordField(",
+    );
+    try expectContains(nominal_constructor, "produced_named.backing =");
+    try expectNotContains(nominal_constructor, "checkedDefaultNode(");
+    try expectNotContains(nominal_constructor, "completePendingProducedNode(");
 
     const lower_expr = sourceSliceBetween(
         lower_source,
@@ -794,6 +806,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerTupleConstructorAtNodeWithRelation(",
         "fn lowerListConstructorAtNode(",
     );
+    try expectContains(tuple, "if (destination_relation == .exact_request)");
+    try expectContains(tuple, "return try self.addConstructorExprAtNode(tuple_node");
     try expectContains(tuple, "produced_item.* = try self.builder.completePendingProducedNode(");
     try expectContains(tuple, "try self.exprTypeCell(item).toGraphNode(self.graph),");
     try expectContains(tuple, "self.graph.newProducedTuple(produced_items)");
@@ -803,6 +817,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerListConstructorAtNodeWithRelation(",
         "fn lowerRecordConstructorAtNode(",
     );
+    try expectContains(list, "if (destination_relation == .exact_request)");
+    try expectContains(list, "DraftTypeCell.fromGraphNode(list_node)");
     try expectContains(list, "specializationValueFlowForExpr(item) == .produced");
     try expectContains(list, "const produced_element = try self.builder.completePendingProducedNode(");
     try expectContains(list, "try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph)");
@@ -817,6 +833,12 @@ test "Monotype producers return and compose exact graph nodes directly" {
     );
     try expectContains(tag, "produced_payload.* = try self.builder.completePendingProducedNode(");
     try expectContains(tag, "try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
+    try expectContains(tag, "const request_row = try self.graph.tagConstructionRow(tag_node)");
+    try expectContains(tag, "const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags)");
+    try expectContains(tag, "produced_tag.payloads = produced_payloads");
+    try expectContains(tag, "if (destination_relation == .exact_request)");
+    try expectContains(tag, "self.addConstructorExprAtNode(tag_node");
+    try expectNotContains(tag, "checkedDefaultNode(");
     try expectContains(tag, "self.graph.newProducedTagUnion(");
 
     const low_level = sourceSliceBetween(
@@ -1000,7 +1022,8 @@ test "Monotype expanded record-rest statements retain graph provenance" {
     try expectContains(record_rest, "try self.lowerExprAtExactRequest(");
     try expectContains(record_rest, "try self.lowerExpr(expr)");
     try expectContains(record_rest, "const value_cell = self.exprTypeCell(value)");
-    try expectContains(record_rest, "const value_node = try value_cell.toGraphNode(self.graph)");
+    try expectContains(record_rest, "completePendingProducedRepresentationNode(");
+    try expectContains(record_rest, "try value_cell.toGraphNode(self.graph)");
     try expectContains(record_rest, "addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null)");
     try expectContains(record_rest, "self.graph.recordFieldNode(value_node, name)");
     try expectContains(record_rest, "self.lowerPatternAtNode(child, field_node)");
@@ -1377,6 +1400,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn callRepresentationSelection(",
         "fn generatedNominalFromSelectedArguments(",
     );
+    try expectContains(representation_selection, "completePendingProducedNode(self, selection.node)");
     try expectContains(representation_selection, ".checked_variable, .row_extension =>");
     try expectContains(representation_selection, ".placeholder => try self.callArgumentSelection(");
 
@@ -1397,12 +1421,54 @@ test "Monotype call requests retain defaults in explicit forward cells" {
     try expectContains(active_selection, "self.internProducedSelectionsAtMeeting(existing.node, candidate.node)");
 }
 
+test "Monotype callable requests keep explicit independent body result authority" {
+    const lower_source = @embedFile("monotype/lower.zig");
+
+    const source_request = sourceSliceBetween(
+        lower_source,
+        "fn exactFunctionRequestFromCheckedSource(",
+        "fn recordProcedureTargetSelections(",
+    );
+    try expectContains(source_request, "functionResultRelation(request_fn_node)");
+    try expectContains(source_request, "scopedFunctionRequest(");
+    try expectContains(source_request, "result_relation,");
+    try expectNotContains(source_request, ".exact_destination,");
+
+    const callable_relation = sourceSliceBetween(
+        lower_source,
+        "fn ensureCallableRequestResultRelation(",
+        "fn enclosingFunctionTypeSource(",
+    );
+    try expectContains(callable_relation, "functionResultRelation(request_node) != null");
+    try expectContains(callable_relation, ".exact_request => .exact_destination");
+    try expectContains(callable_relation, ".checked_mapping, .exact_producer => .produced");
+    try expectContains(callable_relation, "callable value request had no explicit result authority");
+
+    const restore = sourceSliceBetween(
+        lower_source,
+        "fn restoreConstFnAtNodeWithStaticRoot(",
+        "fn restoreConstParserRuntimeFnAtNode(",
+    );
+    try expectContains(restore, "registerFunctionResultRelation(request_root, .produced)");
+}
+
+test "control-flow alternatives produce the selected request without root normalization" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const include_result = sourceSliceBetween(
+        lower_source,
+        "fn includeControlFlowResult(",
+        "fn finishControlFlowResultSelection(",
+    );
+    try expectContains(include_result, "self.graph.sameClass(selected_node, value_node)");
+    try expectNotContains(include_result, "internProducedNode(");
+}
+
 test "Monotype runtime demands snapshot pass-local compositional impossibility proofs" {
     const lower_source = @embedFile("monotype/lower.zig");
     const demand_source = sourceSliceBetween(
         lower_source,
         "fn requireLoweredExpr(",
-        "fn nodeIsProvenUninhabited(",
+        "fn newExactCheckedSelections(",
     );
     try expectContains(demand_source, ".impossibility_proof = try self.currentRuntimeImpossibilityProof(expr_proof)");
     try expectContains(demand_source, ".frames = self.runtime_demand_guard_frames");

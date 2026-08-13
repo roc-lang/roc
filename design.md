@@ -2613,6 +2613,13 @@ top-level procedure, the registry records that procedure's source definition
 explicitly; graph participation belongs to the body that executes, not to the
 aliasing associated declaration.
 
+A block-local method target records the checked statement for its own procedure
+declaration as its lexical context anchor. The enclosing nominal or alias
+declaration is only the method owner and is never a substitute for that lexical
+anchor. Restoring the target therefore enters exactly the binder scope that was
+active where the local procedure was declared; Monotype does not search an
+enclosing declaration or reconstruct a context from source nesting.
+
 Compiler-generated body-local functions are exact producers too. Iterator step
 closures, field-iteration steps, parser runtimes, encoder runtimes, and encoder
 callbacks retain the complete Monotype function graph supplied when they are
@@ -3603,6 +3610,12 @@ absent; the next refinement that records that producer executes the same
 checker-authored operation. This is scheduling, not a fallback: no alternative
 source is tried and no checked or produced graph is inspected to discover one.
 
+Constructing a compound public argument from checked substitutions uses request
+authority. It preserves every unresolved selected child as the exact forward
+cell supplied by the call and cannot consume a language default. Only the
+explicit operand producer, or an independently checker-proven concrete source,
+may complete such a child before the generated identity is interned.
+
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
 exact producer and may fill its recorded child edges. A requested operand does
@@ -3662,6 +3675,12 @@ Every stored selection retains whether it is only a request seed or an exact
 produced node. A produced node may replace a request seed; a request can never
 replace a produced node, including when the environment is persisted on a
 completed function.
+Only checked identity variables and row variables occupy this body-local
+selection column. A generated nominal is an atomic produced type, so its exact
+identity travels on the explicit value, call, storage, or control-flow edge
+that carries that occurrence. Recording it under the public nominal's
+body-wide `CheckedTypeId` would let one independent occurrence preselect
+another and is forbidden.
 Call schedules do not scan these columns by slot. They consult only the
 checker-authored contextual bindings for the current operation, so an operand
 refinement performs no body-wide invalidation or unchanged-slot rescan.
@@ -3974,6 +3993,9 @@ the component's later exact substitutions. This source-order rule is the
 checked source-order choice for a cyclic or source-free component, not a lowering
 heuristic or a fallback for missing metadata. Every exact binding source must
 occur in the recorded record shape, or CheckedModule construction fails.
+When a requested field and a completed producer field already use the same
+checked identity, their occurrences in that shape are the explicit edge; no
+redundant identity-to-itself consumer binding or checked seed is emitted.
 
 The `?` operator follows the same producer direction. It lowers its operand to
 the exact produced `Try`, binds patterns from that exact tag, and returns the
@@ -4208,6 +4230,24 @@ lowering completes the queued producer and stores the resulting exact node.
 Recursive children retain their one stable forward cell, which their active
 producer completes; no checked child recipe is substituted for it.
 
+Tag syntax obtains its full runtime row from the operation's explicit request.
+An independently lowered constructor receives its own checked occurrence as
+that request. A constructor in a branch or other storage context receives the
+already selected common row for that context. Using the common row is necessary
+representation work, not a containment query: the constructor touches only the
+row's immediate variants, never traverses any payload node. An independent
+producer replaces only the selected tag's immediate payloads with the exact
+nodes it just produced. Every unselected payload and open extension remains the
+same forward request cell for its own eventual producer. A contextual
+constructor lowers the selected payloads directly at the common request and
+returns that request; it does not build a second row around a still-running
+recursive child. A literal consumes a checker-recorded language default only
+when that literal produces its own exact leaf, never while an enclosing
+constructor visits a sibling edge. If checking promoted the tag to a nominal,
+the producer applies the nominal requested by that same operation. Nominal
+construction preserves its immediate public argument cells and interns the
+nominal without traversing either an argument or the backing.
+
 Every item of a non-empty list meets one flat exact-root storage requirement;
 the list node stores the first item's exact root and final validation proves
 that the remaining producers converged to it. Record scheduling similarly
@@ -4234,6 +4274,20 @@ source on the request's structural function root.
 Named callable wrappers are normalized to that root before provenance is
 recorded, so body lowering consumes the explicit source mapping instead of
 deriving it from the request shape.
+
+The outer callable value request and the callable body's result direction are
+two independent pieces of data. The function node records the exact argument
+and result cells of the value being stored or passed. An independently
+produced body receives one mutable result request materialized from the
+checker-authored call plan; this is its construction schema and is distinct
+from the stable forward output cell observed by callers. A separate mandatory
+`FunctionResultRelation` records whether body lowering consumes an exact result
+destination or produces its result independently. Every callable boundary
+authors that relation once and every rebasing, wrapper, and `ConstStore`
+restoration preserves it. A call site may author `exact_destination`; a lambda,
+closure, or stored callable used merely as a value authors `produced`. Lowering
+never derives this direction from the outer container or silently replaces an
+already-authored relation.
 
 Checked output records exact-result production for local procedures as well as
 top-level and imported procedures. Direct calls, first-class uses, recursive
@@ -4309,17 +4363,18 @@ It is invalid to change the loop result type after rewriting only a terminating
 spine or a subset of exits; every selected exit must transfer exactly the
 explicitly selected tuple items.
 
-Iterator classification in this pass consumes the explicit iterator
-representation field (or the checked public `Builtin.Iter` identity). It does
-not identify generated iterator types solely from a nullable generated digest.
+Iterator classification in this pass consumes the content-addressed generated
+nominal together with its generated-private backing and explicit iterator
+topology (or the checked public `Builtin.Iter` identity). A nullable generated
+digest alone is not enough to classify an arbitrary nominal as an iterator.
 The checked public identity is an interned module-and-declaration identity, not
 a comparison against type-name text. Adapter-specific rewrites consume the
 exact checker-authored `IteratorProcedureId` on the call. The procedure id
 identifies the operation; that operation's declared lowering contract supplies
 its producer/non-producer role and operand roles, while the solved result type
-supplies its explicit representation. A result type's `iterator_kind` describes
-the representation but does not by itself prove that an arbitrary expression
-constructed it.
+supplies its exact representation. The generated type describes the value's
+representation, but does not by itself prove that an arbitrary expression
+performed a particular iterator operation.
 
 Monotype Lifted remains source-shaped when SpecConstr begins: calls and other
 strict computations can still occur inside constructor operands and branch

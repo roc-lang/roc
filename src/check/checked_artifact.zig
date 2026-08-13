@@ -20602,6 +20602,32 @@ fn specializationRecordBindingSourceDeclared(
     return false;
 }
 
+/// Whether every exact identity selected by one record field is already
+/// available from another completed field. Equal checked ids need no explicit
+/// consumer binding, so the field's own published occurrences are the
+/// authority for this case.
+fn specializationRecordFieldSelectionsReady(
+    shape: SpecializationCallShape,
+    field_index: usize,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    selection_edges: []const SpecializationSelectionEdge,
+    available_slots: []const bool,
+) bool {
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    if (available_slots.len != shape_slots.len) {
+        checkedArtifactInvariant("record specialization selection column had the wrong length", .{});
+    }
+    const shape_selection_edges = selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len];
+    for (shape_slots, available_slots) |slot, available| {
+        const selected_by_field = for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (specializationRecordOccurrenceArgumentIndex(shape_selection_edges, occurrence) == field_index) break true;
+        } else false;
+        if (selected_by_field and !available) return false;
+    }
+    return true;
+}
+
 /// Publish the exact evaluation roots for a record's contextual fields. A
 /// completed producer makes only its checker-authored slot occurrences
 /// available. Requested fields whose bindings are then ready extend that set.
@@ -20676,7 +20702,14 @@ fn finalizeSpecializationRecordFieldSchedule(
                 },
             };
             if (!ready) continue;
-            if (field_bindings.len == 0) {
+            if (field_bindings.len == 0 and !specializationRecordFieldSelectionsReady(
+                shape,
+                field_index,
+                slots,
+                occurrences,
+                selection_edges,
+                available_slots,
+            )) {
                 flow.* = specializationRecordCheckedSeedFlow(flow.*);
             }
             is_pending.* = false;
@@ -38747,6 +38780,42 @@ test "record specialization schedule publishes explicit source-order component s
     try std.testing.expectEqual(artifact_serialize.Span{}, spans[0]);
     try std.testing.expectEqual(artifact_serialize.Span{ .start = 1, .len = 1 }, spans[1]);
     try std.testing.expectEqual(artifact_serialize.Span{}, spans[2]);
+}
+
+test "record specialization schedule reuses an equal checked identity from a produced field" {
+    const identity = testIndexId(CheckedTypeId, 0);
+    const selection_edges = [_]SpecializationSelectionEdge{
+        .{ .checked = identity, .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .argument },
+        .{ .checked = identity, .parent = no_specialization_selection_edge_parent, .index = 1, .payload_index = 0, .step = .argument },
+    };
+    const occurrences = [_]SpecializationOccurrence{
+        .{ .checked = identity, .selection_edge = 0, .root_selection_edge = 0, .production = .producer },
+        .{ .checked = identity, .selection_edge = 1, .root_selection_edge = 1, .production = .producer },
+    };
+    const slots = [_]SpecializationCallSlot{.{
+        .checked = identity,
+        .kind = .identity,
+        .exact_identity = false,
+        .generated_source = .producer,
+        .generated_argument_source = .exact_selection,
+        .occurrences = .{ .start = 0, .len = 2 },
+    }};
+    var spans = [_]artifact_serialize.Span{ .{}, .{} };
+    var flows = [_]SpecializationOperandFlow{ .requested_value, .produced };
+
+    try finalizeSpecializationRecordFieldSchedule(
+        std.testing.allocator,
+        .{ .slots = .{ .start = 0, .len = 1 }, .selection_edges = .{ .start = 0, .len = 2 } },
+        &slots,
+        &occurrences,
+        &selection_edges,
+        &flows,
+        &spans,
+        &.{},
+    );
+
+    try std.testing.expectEqual(SpecializationOperandFlow.requested_value, flows[0]);
+    try std.testing.expectEqual(SpecializationOperandFlow.produced, flows[1]);
 }
 
 test "directional specialization relations publish a transparent alias backing edge" {

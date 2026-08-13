@@ -661,7 +661,7 @@ pub const LowLevel = enum(u16) {
     /// Whether the operation's result representation is supplied by its
     /// explicit destination rather than by any runtime operand. For example,
     /// `list_with_capacity` allocates an empty list, so no argument value can
-    /// determine the list's element representation. Checking publishes this
+    /// determine the list's element representation. Checking records this
     /// semantic direction and post-check lowering consumes it directly.
     pub fn consumesResultTypeRequest(self: LowLevel) bool {
         return self == .list_with_capacity;

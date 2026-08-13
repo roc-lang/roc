@@ -665,7 +665,6 @@ pub const MethodRegistry = struct {
             } else if (localProcedureTargetForMethodBinding(
                 module,
                 checked_bodies,
-                entry.key.owner,
                 entry.value,
                 method_requires_exact_graph,
             )) |local|
@@ -784,7 +783,6 @@ fn unsupportedGeneratedMethodBinding(
 fn localProcedureTargetForMethodBinding(
     module: TypedCIR.Module,
     checked_bodies: anytype,
-    owner_statement: CIR.Statement.Idx,
     binding: ModuleEnv.MethodBinding,
     graph_participating: bool,
 ) ?LocalProcedureMethodTarget {
@@ -818,11 +816,11 @@ fn localProcedureTargetForMethodBinding(
         unreachable;
     };
 
-    const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
+    const context_anchor = checked_bodies.statementIdForSource(statement) orelse {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic(
-                "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
-                .{@intFromEnum(owner_statement)},
+                "checked static dispatch registry invariant violated: local method declaration statement {d} has no checked statement",
+                .{@intFromEnum(statement)},
             );
         }
         unreachable;

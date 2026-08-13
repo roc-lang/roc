@@ -1,3 +1,5 @@
+//! Structural invariants for checked-module artifact construction.
+
 const std = @import("std");
 
 test "shared call shapes are looked up before compilation" {

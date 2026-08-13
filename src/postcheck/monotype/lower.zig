@@ -2315,6 +2315,14 @@ const Builder = struct {
         defer ctx.deinit();
 
         var root_node = try ctx.instNode(request.checked_type);
+        // A root procedure is an independent runtime producer. The checked
+        // root supplies its callable shell, while the procedure body owns the
+        // exact result it returns.
+        try ctx.ensureCallableRequestResultRelation(
+            request.checked_type,
+            root_node,
+            .exact_producer,
+        );
         root_node = try ctx.exactFunctionRequestFromCheckedSource(request.checked_type, root_node);
         const initial_fn = try graph.functionNodes(root_node);
         const args = try self.allocator.alloc(DraftTypedLocal, initial_fn.args.len);
@@ -12404,7 +12412,6 @@ const ControlFlowDestinationRelation = enum {
 };
 
 const ControlFlowResultSelection = struct {
-    checked: checked.CheckedTypeId,
     declared: DraftTypeCell,
     selected: DraftTypeCell,
     destination_relation: ControlFlowDestinationRelation,
@@ -15692,7 +15699,12 @@ const BodyContext = struct {
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
         if (self.active_checked_selections) |selections| {
-            try self.recordExactExpressionRoot(selections, checked_ty, try self.graph.importMono(mono_ty));
+            try self.recordCheckedIdentitySelection(
+                selections,
+                checked_ty,
+                try self.graph.importMono(mono_ty),
+                .produced,
+            );
         }
     }
 
@@ -15716,7 +15728,27 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     ) Allocator.Error!void {
         if (self.active_checked_selections) |selections| {
-            try self.recordExactExpressionRoot(selections, checked_ty, try cell.toGraphNode(self.graph));
+            try self.recordCheckedIdentitySelection(
+                selections,
+                checked_ty,
+                try cell.toGraphNode(self.graph),
+                .produced,
+            );
+        }
+    }
+
+    fn recordRequestedCheckedExprAtCell(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        cell: DraftTypeCell,
+    ) Allocator.Error!void {
+        if (self.active_checked_selections) |selections| {
+            try self.recordCheckedIdentitySelection(
+                selections,
+                self.view.bodies.expr(expr_id).ty,
+                try cell.toGraphNode(self.graph),
+                .request,
+            );
         }
     }
 
@@ -15803,6 +15835,25 @@ const BodyContext = struct {
         self.instantiation = self.produced_instantiation;
         defer {
             self.produced_instantiation = self.instantiation;
+            self.instantiation = previous_instantiation;
+        }
+        return try self.instNode(checked_ty);
+    }
+
+    /// Construct the explicit request owned by one compound producer. Checked
+    /// defaults remain forward cells until the constructor that actually
+    /// produces that immediate edge encounters them. The request is graph
+    /// owned after this short-lived instantiation scope ends.
+    fn requestOccurrenceNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        const previous_instantiation = self.instantiation;
+        self.instantiation = TypeInstantiationContext.init(
+            self.allocator,
+            self.builder.allocateInstantiationScope(),
+            self.view.key.bytes,
+            .request_occurrence,
+        );
+        defer {
+            self.instantiation.deinit();
             self.instantiation = previous_instantiation;
         }
         return try self.instNode(checked_ty);
@@ -17369,7 +17420,6 @@ const BodyContext = struct {
         const saved_return_target = self.current_return_target;
         defer self.current_return_target = saved_return_target;
         var return_selection = try self.initControlFlowResultSelection(
-            self.view.bodies.expr(checked_body).ty,
             ret_cell,
             ret_destination_relation,
         );
@@ -17531,10 +17581,11 @@ const BodyContext = struct {
 
         const produced_ret_cell = try self.finishControlFlowResultSelection(return_selection);
         self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
-        try self.recordExactExpressionRoot(
+        try self.recordCheckedIdentitySelection(
             argument_selections,
             self.view.bodies.expr(checked_body).ty,
             try produced_ret_cell.toGraphNode(self.graph),
+            .produced,
         );
         const procedure_relation = self.view.templates.specializationProcedureRelationForExpr(lambda_id);
         try self.applyRecordedCheckedSelections(
@@ -17633,7 +17684,12 @@ const BodyContext = struct {
         self.function_entry_demand_guards = entry_guards;
         const return_relation = try self.functionRequestReturnRelation(fn_node);
         var lowered = switch (expr.data) {
-            .lambda => |lambda| try self.lowerNestedLambdaTemplateAtNode(expr_id, lambda, fn_node, return_relation),
+            .lambda => |lambda| try self.lowerNestedLambdaTemplateAtNode(
+                expr_id,
+                lambda,
+                fn_node,
+                return_relation,
+            ),
             .closure => |closure| blk: {
                 const lambda_expr = self.view.bodies.expr(closure.lambda);
                 if (lambda_expr.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
@@ -17932,10 +17988,10 @@ const BodyContext = struct {
             },
             .tag => |tag| return try self.lowerTagConstructorAtNode(
                 tag,
-                try self.lowerExprTypeNode(expr_id),
+                try self.requestOccurrenceNode(expr.ty),
             ),
             .zero_argument_tag => |tag| {
-                const expr_node = try self.lowerExprTypeNode(expr_id);
+                const expr_node = try self.requestOccurrenceNode(expr.ty);
                 return try self.lowerZeroArgumentTagAtNode(tag, expr_node, .exact_producer);
             },
             .nominal => |nominal| return try self.lowerNominalConstructorAtNode(
@@ -17968,7 +18024,7 @@ const BodyContext = struct {
                 return try self.lowerRecordExprAtNode(expr_id, .{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
-                }, expr_node, &.{});
+                }, expr_node, &.{}, false);
             },
             .str_segment => |str| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -18028,15 +18084,16 @@ const BodyContext = struct {
                 DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)),
                 .exact_producer,
             ),
-            .lambda => return try self.lowerLambdaExprAtNode(
-                expr_id,
-                try self.lowerExprTypeNode(expr_id),
-            ),
-            .closure => |closure| return try self.lowerClosureAtNode(
-                expr_id,
-                closure,
-                try self.lowerExprTypeNode(expr_id),
-            ),
+            .lambda => {
+                const request = try self.lowerExprTypeNode(expr_id);
+                try self.ensureCallableRequestResultRelation(expr.ty, request, .exact_producer);
+                return try self.lowerLambdaExprAtNode(expr_id, request);
+            },
+            .closure => |closure| {
+                const request = try self.lowerExprTypeNode(expr_id);
+                try self.ensureCallableRequestResultRelation(expr.ty, request, .exact_producer);
+                return try self.lowerClosureAtNode(expr_id, closure, request);
+            },
             .pending, .match_, .if_, .call, .block, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
@@ -18287,22 +18344,25 @@ const BodyContext = struct {
         return selections;
     }
 
-    /// Record only the identity leaves that checking explicitly selected
-    /// from this completed value. Ordinary compound and nominal roots never
-    /// become substitutions merely because an identity may occur below them.
-    fn recordExactExpressionRoot(
+    /// Record only the identity leaves that checking explicitly selected at
+    /// this request or producer boundary. Ordinary compound and nominal roots
+    /// never become substitutions merely because an identity may occur below
+    /// them.
+    fn recordCheckedIdentitySelection(
         self: *BodyContext,
         selections: *ActiveCheckedSelections,
         checked_ty: checked.CheckedTypeId,
-        produced_node: NodeId,
+        node: NodeId,
+        authority: solve.DirectRequestSelectionAuthority,
     ) Allocator.Error!void {
         const records_identity = switch (checkedPayload(self.view, checked_ty)) {
             .flex, .rigid => true,
-            .nominal => |nominal| if (nominal.builtin) |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .iterator, .parse_tag_union_spec, .fields, .field => true,
-                .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
-            } else false,
-            .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
+            // Generated-private nominals are atomic runtime values, not
+            // substitutions for their public checked nominal. Their exact
+            // identity travels only on the explicit producer/call edge that
+            // carries the value; recording it in a body-wide checked-ID
+            // column would leak one occurrence into an independent call.
+            .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union, .nominal => false,
         };
         if (!records_identity) return;
         const key = solve.CheckedBaseKey{
@@ -18310,7 +18370,9 @@ const BodyContext = struct {
             .checked = checked_ty,
         };
         const entry = try selections.getOrPut(key);
-        if (!entry.found_existing or entry.value_ptr.authority == .request) {
+        if (!entry.found_existing or
+            (entry.value_ptr.authority == .request and authority == .produced))
+        {
             // A checked expression can be lowered at several exact runtime
             // occurrences in one body. The first completed occurrence
             // establishes the body-local contextual binding; a later one is
@@ -18318,8 +18380,8 @@ const BodyContext = struct {
             // does, however, replace a request-only seed before this binding
             // is persisted on a completed function.
             selections.setEntryValue(entry, .{
-                .node = self.graph.rootNode(produced_node),
-                .authority = .produced,
+                .node = self.graph.rootNode(node),
+                .authority = authority,
             });
         }
     }
@@ -26771,22 +26833,24 @@ const BodyContext = struct {
         self: *BodyContext,
         selection: ActiveCheckedSelection,
     ) Allocator.Error!ActiveCheckedSelection {
-        if (selection.authority == .request or
-            self.graph.content(selection.node) != .unresolved)
-        {
+        if (selection.authority == .request) {
             return selection;
         }
-        const unresolved = self.graph.content(selection.node).unresolved;
+        const produced = try self.builder.completePendingProducedNode(self, selection.node);
+        if (self.graph.content(produced) != .unresolved) {
+            return .{ .node = produced, .authority = .produced };
+        }
+        const unresolved = self.graph.content(produced).unresolved;
         // A checked-variable or row-extension cell is itself the explicit
         // request shared by this call component. Only a producer placeholder
         // needs the separate immutable representation request registered by
         // its still-running producer.
         return switch (unresolved.origin) {
             .checked_variable, .row_extension => .{
-                .node = selection.node,
+                .node = produced,
                 .authority = .request,
             },
-            .placeholder => try self.callArgumentSelection(selection.node),
+            .placeholder => try self.callArgumentSelection(produced),
         };
     }
 
@@ -26830,11 +26894,14 @@ const BodyContext = struct {
                 // occurrence's whole call root. Construct the public argument
                 // once from the call's flat substitution span at the point
                 // where generated-nominal construction consumes that child.
+                // It remains a request recipe: consuming language defaults
+                // here would invent a producer before the exact operand that
+                // owns an unresolved descendant has run.
                 break :blk try self.materializeCheckedCallNode(
                     plan,
                     selections,
                     selection_edge.checked,
-                    .produced_occurrence,
+                    .request_occurrence,
                 );
             },
             .concrete_checked => try self.persistentConcreteCheckedNode(nominal.args[0]),
@@ -26986,7 +27053,7 @@ const BodyContext = struct {
             selections,
         );
         defer self.active_checked_selections = inherited;
-        return try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(request));
+        return try self.lowerExprAtProducedValueRequest(expr, request);
     }
 
     fn lowerExprAtCallConsumerRequestInView(
@@ -27007,6 +27074,24 @@ const BodyContext = struct {
             );
         }
         defer self.active_checked_selections = inherited;
+        return try self.lowerExprAtProducedValueRequest(expr, request);
+    }
+
+    /// Lower a value that consumes an exact outer request while retaining
+    /// ownership of any callable body's result. A caller may already have
+    /// authored a more specific callable-result relation; otherwise this
+    /// producer boundary records `.produced` before ordinary exact-request
+    /// lowering consumes the value shell.
+    fn lowerExprAtProducedValueRequest(
+        self: *BodyContext,
+        expr: checked.CheckedExprId,
+        request: NodeId,
+    ) Allocator.Error!DraftExprId {
+        try self.ensureCallableRequestResultRelation(
+            self.view.bodies.expr(expr).ty,
+            request,
+            .exact_producer,
+        );
         return try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(request));
     }
 
@@ -27293,10 +27378,7 @@ const BodyContext = struct {
                 root,
                 selections,
                 .{ .checked = null },
-                if (self.graph.functionResultRelation(source_request) == .produced)
-                    .checked_base
-                else
-                    .request_occurrence,
+                .request_occurrence,
             );
         };
         const request = try self.graphFunctionNode(args, ret);
@@ -27327,10 +27409,11 @@ const BodyContext = struct {
         if (produced_args.len != checked_fn.args.len or available.len != produced_args.len) {
             Common.invariant("completed call edges had a different arity from the checked callable");
         }
-        // An exact destination is an input edge. A produced call's request
-        // retains only its instantiated checked result recipe; the callee body
-        // owns a separate forward output cell and this request result never
-        // records selections as though it were that output.
+        // An exact destination is an input edge. A produced call also owns one
+        // mutable request occurrence for its body result, distinct from the
+        // forward output cell observed by callers. Constructors fill that
+        // request directionally; it never becomes the call's output merely by
+        // being materialized.
         const result_base = self.graph.rootNode(request_ret);
         const result_authority: ?solve.DirectRequestSelectionAuthority = if (result_relation == .exact_destination)
             .request
@@ -27368,7 +27451,7 @@ const BodyContext = struct {
             self.callResultRootEdge(plan, checked_fn.ret),
             completed_selections,
             .{ .checked = null },
-            if (result_relation == .produced) .checked_base else .request_occurrence,
+            .request_occurrence,
         );
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
@@ -27846,7 +27929,7 @@ const BodyContext = struct {
     fn directCallInstantiationSourceFnType(
         self: *BodyContext,
         target: checked.ResolvedValueId,
-        fallback: checked.CheckedTypeId,
+        call_site_source_fn_type: checked.CheckedTypeId,
     ) checked.CheckedTypeId {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
@@ -27855,7 +27938,7 @@ const BodyContext = struct {
         return switch (self.view.resolved_refs.records[raw].ref) {
             .platform_required_proc => |required| required.procedure.source_fn_ty_payload orelse
                 Common.invariant("platform-required procedure call missing relation-owned requested function type"),
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => fallback,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => call_site_source_fn_type,
         };
     }
 
@@ -29060,18 +29143,22 @@ const BodyContext = struct {
         };
     }
 
-    /// A callable producer already returned its exact request. Checked source
-    /// identity is provenance for specialization lookup; it is not permission
-    /// to traverse or copy the completed callable.
+    /// Preserve the callable request's explicit body-result authority while
+    /// attaching its checked source. Checked source identity is provenance for
+    /// specialization lookup; it is not permission to traverse or copy the
+    /// completed callable.
     fn exactFunctionRequestFromCheckedSource(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
         raw_request_fn_node: NodeId,
     ) Allocator.Error!NodeId {
+        const request_fn_node = try self.graph.functionRequestRoot(raw_request_fn_node);
+        const result_relation = self.graph.functionResultRelation(request_fn_node) orelse
+            Common.invariant("exact callable request had no explicit result authority");
         return try self.scopedFunctionRequest(
             source_fn_ty,
-            raw_request_fn_node,
-            .exact_destination,
+            request_fn_node,
+            result_relation,
         );
     }
 
@@ -29201,7 +29288,7 @@ const BodyContext = struct {
     fn draftFnSlotTypeNode(
         self: *BodyContext,
         slot: DraftFnSlot,
-        imported_fallback: NodeId,
+        imported_request_node: NodeId,
     ) Allocator.Error!NodeId {
         return switch (slot) {
             .local => |local| switch (local) {
@@ -29217,16 +29304,16 @@ const BodyContext = struct {
             // Imported slots were selected from this exact request. Their
             // durable signature belongs to another shard, while the active
             // graph request is already the local representation witness.
-            .imported => imported_fallback,
+            .imported => imported_request_node,
         };
     }
 
     fn completeDraftFnSlotTypeNode(
         self: *BodyContext,
         slot: DraftFnSlot,
-        imported_fallback: NodeId,
+        imported_request_node: NodeId,
     ) Allocator.Error!NodeId {
-        const fn_node = try self.draftFnSlotTypeNode(slot, imported_fallback);
+        const fn_node = try self.draftFnSlotTypeNode(slot, imported_request_node);
         const function = try self.graph.functionNodes(fn_node);
         _ = try self.builder.completePendingProducedNode(self, function.ret);
         return fn_node;
@@ -30360,6 +30447,13 @@ const BodyContext = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
+        const request_root = try self.graph.functionRequestRoot(request_fn_node);
+        if (self.graph.functionResultRelation(request_root) == null) {
+            // A stored function is a runtime value producer. Its outer
+            // container supplies only the callable shell; absent an explicit
+            // call-site destination, the restored body owns its exact result.
+            self.graph.registerFunctionResultRelation(request_root, .produced);
+        }
         switch (fn_value.fn_def) {
             .parser_runtime => return try self.restoreConstParserRuntimeFnAtNode(
                 store_view,
@@ -32403,6 +32497,11 @@ const BodyContext = struct {
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
         const expected_node = try cell.toGraphNode(self.graph);
+        try self.ensureCallableRequestResultRelation(
+            expr.ty,
+            expected_node,
+            destination_relation,
+        );
         const graph_cell = DraftTypeCell.fromGraphNode(expected_node);
         const lowered = if (expr_diverges)
             try self.lowerDivergentExprAtTypeCell(checked_expr, graph_cell)
@@ -32414,6 +32513,43 @@ const BodyContext = struct {
                 destination_relation,
             );
         return try self.requireLoweredExprAtCell(checked_expr, expr, graph_cell, demand, lowered);
+    }
+
+    /// The function node carries the outer callable value interface, while its
+    /// mandatory result relation independently tells the callable body whether
+    /// it owns its result or consumes an exact destination. A call-site request
+    /// may already have authored that relation; otherwise this explicit
+    /// lowering boundary authors it exactly once.
+    fn ensureCallableRequestResultRelation(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        raw_request_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!void {
+        if (resolvedPayload(self.view, checked_ty).payload != .function) return;
+        const request_node = try self.graph.functionRequestRoot(raw_request_node);
+        if (self.graph.functionResultRelation(request_node) != null) return;
+        self.graph.registerFunctionResultRelation(request_node, switch (destination_relation) {
+            .exact_request => .exact_destination,
+            .checked_mapping, .exact_producer => .produced,
+        });
+    }
+
+    fn callableRequestResultRelation(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        raw_request_node: NodeId,
+        destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!solve.FunctionResultRelation {
+        if (resolvedPayload(self.view, checked_ty).payload != .function) {
+            return switch (destination_relation) {
+                .exact_request => .exact_destination,
+                .checked_mapping, .exact_producer => .produced,
+            };
+        }
+        const request_node = try self.graph.functionRequestRoot(raw_request_node);
+        return self.graph.functionResultRelation(request_node) orelse
+            Common.invariant("callable value request had no explicit result authority");
     }
 
     fn enclosingFunctionTypeSource(self: *BodyContext, index: usize) Allocator.Error!DraftExprId {
@@ -32538,19 +32674,19 @@ const BodyContext = struct {
                         checked_expr,
                         lookup.resolved,
                         expected_node,
-                        if (destination_relation == .exact_request) .exact_destination else .produced,
+                        try self.callableRequestResultRelation(expr.ty, expected_node, destination_relation),
                     ),
                     .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(
                         checked_expr,
                         resolved,
                         expected_node,
-                        if (destination_relation == .exact_request) .exact_destination else .produced,
+                        try self.callableRequestResultRelation(expr.ty, expected_node, destination_relation),
                     ),
                     .lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(
                         checked_expr,
                         resolved,
                         expected_node,
-                        if (destination_relation == .exact_request) .exact_destination else .produced,
+                        try self.callableRequestResultRelation(expr.ty, expected_node, destination_relation),
                     ),
                     .lambda => break :blk try self.lowerLambdaExprAtNode(checked_expr, expected_node),
                     .closure => |closure| break :blk try self.lowerClosureAtNode(checked_expr, closure, expected_node),
@@ -32650,11 +32786,16 @@ const BodyContext = struct {
         numeral: checked.CheckedNumeralData,
         target_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const primitive = (try self.graph.primitiveAtNode(target_node)) orelse
+        // The literal is the producer for this exact identity leaf. Consume
+        // its checker-recorded language default here, at that leaf, rather
+        // than defaulting sibling edges when their enclosing compound is
+        // constructed.
+        const produced_node = (try self.graph.checkedDefaultNode(target_node)) orelse target_node;
+        const primitive = (try self.graph.primitiveAtNode(produced_node)) orelse
             Common.invariant("graph-native custom numeral lowering requires its recorded dispatch request");
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse
             BodyExprData{ .crash = try self.addStringLiteral("invalid numeric literal") };
-        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(target_node), data);
+        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), data);
     }
 
     fn lowerPrimitiveQuoteAtNode(
@@ -32662,16 +32803,17 @@ const BodyContext = struct {
         quote: checked.CheckedQuoteData,
         target_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const primitive = (try self.graph.primitiveAtNode(target_node)) orelse
+        const produced_node = (try self.graph.checkedDefaultNode(target_node)) orelse target_node;
+        const primitive = (try self.graph.primitiveAtNode(produced_node)) orelse
             Common.invariant("graph-native custom quote lowering requires its recorded dispatch request");
         if (primitive != .str) {
             return try self.addExprWithTypeCell(
-                DraftTypeCell.fromGraphNode(target_node),
+                DraftTypeCell.fromGraphNode(produced_node),
                 .{ .crash = try self.addStringLiteral("invalid string literal") },
             );
         }
         return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(target_node),
+            DraftTypeCell.fromGraphNode(produced_node),
             .{ .str_lit = try self.lowerStringLiteral(quote.literal) },
         );
     }
@@ -33742,13 +33884,20 @@ const BodyContext = struct {
         record: anytype,
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
+        preserve_request: bool,
     ) Allocator.Error!DraftExprId {
         const representation_node = self.constructorRepresentationNode(record_node);
         if (self.graph.content(representation_node) == .named) {
             const named = self.graph.namedNodes(representation_node);
             const backing = named.backing orelse
                 Common.invariant("named record expression had no runtime backing");
-            const backing_expr = try self.lowerRecordExprAtNode(checked_expr, record, backing.node, pre_lowered);
+            const backing_expr = try self.lowerRecordExprAtNode(
+                checked_expr,
+                record,
+                backing.node,
+                pre_lowered,
+                preserve_request,
+            );
             const produced_node = try self.producedConstructorNode(
                 representation_node,
                 try self.builder.completePendingProducedNode(
@@ -33779,8 +33928,13 @@ const BodyContext = struct {
                 raw_base_shape
             else
                 try self.exprTypeCell(base_expr).toGraphNode(self.graph);
-            const base_fields = (try self.graph.recordConstructionNodes(base_node)).fields;
-            const produced_fields = try self.graph.arena().dupe(InstField, base_fields);
+            const produced_fields = if (preserve_request)
+                null
+            else
+                try self.graph.arena().dupe(
+                    InstField,
+                    (try self.graph.recordConstructionNodes(base_node)).fields,
+                );
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
@@ -33796,22 +33950,26 @@ const BodyContext = struct {
                     .name = name,
                     .value = value,
                 };
-                const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
-                for (produced_fields) |*produced_field| {
-                    if (!self.builder.program.names.recordFieldLabelTextEql(produced_field.name, name)) continue;
-                    produced_field.ty = value_node;
-                    if (produced_field.value_ty != null) {
-                        produced_field.value_ty = try self.exprTypeCell(pre).toGraphNode(self.graph);
-                    }
-                    break;
-                } else Common.invariant("record update named a field absent from its exact base value");
+                if (produced_fields) |produced| {
+                    const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+                    for (produced) |*produced_field| {
+                        if (!self.builder.program.names.recordFieldLabelTextEql(produced_field.name, name)) continue;
+                        produced_field.ty = value_node;
+                        if (produced_field.value_ty != null) {
+                            produced_field.value_ty = try self.exprTypeCell(pre).toGraphNode(self.graph);
+                        }
+                        break;
+                    } else Common.invariant("record update named a field absent from its exact base value");
+                }
             }
-            self.completeProducedRecordFields(produced_fields);
-            const structural_node = try self.graph.newProducedRecord(
-                produced_fields,
-                try self.graph.newNode(.empty_record),
-            );
-            const produced_node = try self.producedConstructorNode(record_node, structural_node);
+            const produced_node = if (produced_fields) |produced| blk: {
+                self.completeProducedRecordFields(produced);
+                const structural_node = try self.graph.newProducedRecord(
+                    produced,
+                    try self.graph.newNode(.empty_record),
+                );
+                break :blk try self.producedConstructorNode(record_node, structural_node);
+            } else record_node;
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .record_update = .{
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
@@ -33821,8 +33979,11 @@ const BodyContext = struct {
         const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_fields.len);
         defer self.allocator.free(lowered);
-        const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
-        defer self.allocator.free(produced_fields);
+        const produced_fields: ?[]InstField = if (preserve_request)
+            null
+        else
+            try self.allocator.alloc(InstField, target_fields.len);
+        defer if (produced_fields) |produced| self.allocator.free(produced);
 
         const base_record = if (record.ext) |ext|
             self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
@@ -33861,25 +34022,29 @@ const BodyContext = struct {
                 const pre = self.preLoweredChildAt(pre_lowered, field_value) orelse
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 if (field_kind == .optional) {
-                    produced_fields[index] = field;
-                    produced_fields[index].value_ty = try self.exprTypeCell(pre).toGraphNode(self.graph);
+                    if (produced_fields) |produced| {
+                        produced[index] = field;
+                        produced[index].value_ty = try self.exprTypeCell(pre).toGraphNode(self.graph);
+                    }
                     break :blk try self.optionalSlotPresentExprFromExactValue(pre);
                 }
-                const child_node = self.preLoweredChildNodeAt(pre_lowered, field_value) orelse
-                    Common.invariant("record graph constructor lost its field node");
-                produced_fields[index] = .{
-                    .name = field.name,
-                    .ty = child_node,
-                    .value_ty = if (field.value_ty != null) child_node else null,
-                    .kind = field.kind,
-                    .default = field.default,
-                };
+                if (produced_fields) |produced| {
+                    const child_node = self.preLoweredChildNodeAt(pre_lowered, field_value) orelse
+                        Common.invariant("record graph constructor lost its field node");
+                    produced[index] = .{
+                        .name = field.name,
+                        .ty = child_node,
+                        .value_ty = if (field.value_ty != null) child_node else null,
+                        .kind = field.kind,
+                        .default = field.default,
+                    };
+                }
                 break :blk pre;
             } else if (base_expr) |base_value| blk: {
                 // Record update copies unmentioned slots verbatim—for an
                 // optional field that copies the tagged slot, presence state
                 // included.
-                produced_fields[index] = field;
+                if (produced_fields) |produced| produced[index] = field;
                 const read_cell = DraftTypeCell.fromGraphNode(field.ty);
                 const read = try self.addExprWithTypeCell(read_cell, .{ .field_access = .{
                     .receiver = base_value,
@@ -33889,7 +34054,7 @@ const BodyContext = struct {
                 spread_reads[index] = .{ .local = read_local, .cell = read_cell, .value = read };
                 break :blk try self.addExprWithTypeCell(read_cell, .{ .local = read_local });
             } else omitted: {
-                produced_fields[index] = field;
+                if (produced_fields) |produced| produced[index] = field;
                 if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
                     const value_node = field.value_ty orelse field.ty;
                     break :omitted (try self.defaultedFieldValueFromDefaultAtNode(default, value_node)) orelse
@@ -33906,20 +34071,24 @@ const BodyContext = struct {
                     .required => Common.invariant("closed record graph constructor was missing a required field value"),
                 };
             };
-            const produced_value_node = try self.builder.completePendingProducedNode(
-                self,
-                try self.exprTypeCell(value).toGraphNode(self.graph),
-            );
-            produced_fields[index].ty = produced_value_node;
-            produced_fields[index] = self.completedProducedRecordField(produced_fields[index]);
+            if (produced_fields) |produced| {
+                const produced_value_node = try self.builder.completePendingProducedNode(
+                    self,
+                    try self.exprTypeCell(value).toGraphNode(self.graph),
+                );
+                produced[index].ty = produced_value_node;
+                produced[index] = self.completedProducedRecordField(produced[index]);
+            }
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
-        const structural_node = try self.graph.newProducedRecord(
-            produced_fields,
-            try self.graph.newNode(.empty_record),
-        );
-        const produced_node = try self.producedConstructorNode(record_node, structural_node);
+        const produced_node = if (produced_fields) |produced| blk: {
+            const structural_node = try self.graph.newProducedRecord(
+                produced,
+                try self.graph.newNode(.empty_record),
+            );
+            break :blk try self.producedConstructorNode(record_node, structural_node);
+        } else record_node;
         var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
         var spread_index: usize = target_fields.len;
         while (spread_index > 0) {
@@ -33946,7 +34115,7 @@ const BodyContext = struct {
     /// absorption can make an empty checked literal produce runtime optional
     /// slots and defaulted fields. Those fields are part of the value this
     /// expression constructs, so materialize them here and store their exact
-    /// completed child nodes directly in the produced record node.
+    /// child requests directly in the exact record node.
     fn lowerEmptyRecordAtNode(
         self: *BodyContext,
         checked_expr: checked.CheckedExprId,
@@ -33959,10 +34128,8 @@ const BodyContext = struct {
 
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_fields.len);
         defer self.allocator.free(lowered);
-        const produced_fields = try self.graph.arena().alloc(InstField, target_fields.len);
 
-        for (target_fields, produced_fields, lowered) |field, *produced_field, *lowered_field| {
-            produced_field.* = field;
+        for (target_fields, lowered) |field, *lowered_field| {
             const value = if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| blk: {
                 const value_node = field.value_ty orelse field.ty;
                 break :blk (try self.defaultedFieldValueFromDefaultAtNode(default, value_node)) orelse
@@ -33976,21 +34143,10 @@ const BodyContext = struct {
                 .optional => try self.optionalSlotMissingExprAtNode(field.ty),
                 .required => Common.invariant("empty record was requested to construct a required field"),
             };
-            const produced_value_node = try self.builder.completePendingProducedNode(
-                self,
-                try self.exprTypeCell(value).toGraphNode(self.graph),
-            );
-            produced_field.ty = produced_value_node;
-            produced_field.* = self.completedProducedRecordField(produced_field.*);
             lowered_field.* = .{ .name = field.name, .value = value };
         }
 
-        const produced_structural_node = try self.graph.newProducedRecord(
-            produced_fields,
-            try self.graph.newNode(.empty_record),
-        );
-        const produced_node = try self.producedConstructorNode(record_node, produced_structural_node);
-        return try self.addConstructorExprAtNode(produced_node, .{
+        return try self.addConstructorExprAtNode(record_node, .{
             .record = try self.addFieldExprSpan(lowered),
         });
     }
@@ -34016,19 +34172,17 @@ const BodyContext = struct {
             if (request_tag.payloads.len != 0) {
                 Common.invariant("zero-argument tag constructor had payloads in its exact row");
             }
-            const produced_ext = switch (destination_relation) {
-                .exact_request => request_row.ext,
-                .checked_mapping, .exact_producer => try self.graph.checkedDefaultNode(request_row.ext) orelse
-                    Common.invariant("zero-argument tag producer had no exact row remainder"),
-            };
+            if (destination_relation == .exact_request) {
+                return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
+                    .name = name,
+                    .payloads = .empty(),
+                } });
+            }
             const structural_node = try self.graph.newProducedTagUnion(
                 request_row.tags,
-                produced_ext,
+                request_row.ext,
             );
-            const produced_node = if (destination_relation == .exact_request)
-                tag_node
-            else
-                try self.producedConstructorNode(tag_node, structural_node);
+            const produced_node = try self.producedConstructorNode(tag_node, structural_node);
             return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
                 .name = name,
                 .payloads = .empty(),
@@ -34065,44 +34219,45 @@ const BodyContext = struct {
                     arg,
                     DraftTypeCell.fromGraphNode(payload_nodes[index]),
                 ),
-                .checked_mapping, .exact_producer => try self.lowerExpr(arg),
+                .checked_mapping, .exact_producer => if (self.view.templates.specializationValueFlowForExpr(arg) == .produced)
+                    try self.lowerExpr(arg)
+                else
+                    try self.lowerExprAtProducedValueRequest(arg, payload_nodes[index]),
             };
         }
-        const produced_tags = try self.graph.arena().alloc(InstTag, request_row.tags.len);
-        var found = false;
-        for (request_row.tags, produced_tags) |request_tag, *produced_tag| {
-            produced_tag.* = request_tag;
-            if (!self.builder.program.names.tagLabelTextEql(request_tag.name, name)) continue;
-            found = true;
-            if (request_tag.payloads.len != lowered.len) {
-                Common.invariant("tag constructor payload count differed from its exact row");
-            }
-            const produced_payloads = try self.graph.arena().alloc(NodeId, lowered.len);
-            for (lowered, request_tag.payloads, produced_payloads) |payload_expr, _, *produced_payload| {
-                produced_payload.* = try self.builder.completePendingProducedNode(
-                    self,
-                    try self.exprTypeCell(payload_expr).toGraphNode(self.graph),
-                );
-            }
-            produced_tag.payloads = produced_payloads;
+        if (destination_relation == .exact_request) {
+            return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
+                .name = name,
+                .payloads = try self.addExprSpan(lowered),
+            } });
         }
-        if (!found) Common.invariant("tag constructor was absent from its exact row");
-        const produced_ext = switch (destination_relation) {
-            .exact_request => request_row.ext,
-            .checked_mapping, .exact_producer => try self.graph.checkedDefaultNode(request_row.ext) orelse
-                Common.invariant("tag producer had no exact row remainder"),
-        };
-        // An independent producer owns the flattened exact row it constructs.
-        // A contextual constructor instead preserves the explicit destination
-        // (including unfinished row-tail cells) as its returned identity.
+        const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags);
+        var found = false;
+        for (produced_tags) |*produced_tag| {
+            if (self.builder.program.names.tagLabelTextEql(produced_tag.name, name)) {
+                found = true;
+                if (produced_tag.payloads.len != lowered.len) {
+                    Common.invariant("tag constructor payload count differed from its produced row");
+                }
+                const produced_payloads = try self.graph.arena().alloc(NodeId, lowered.len);
+                for (lowered, produced_payloads) |payload_expr, *produced_payload| {
+                    produced_payload.* = try self.builder.completePendingProducedNode(
+                        self,
+                        try self.exprTypeCell(payload_expr).toGraphNode(self.graph),
+                    );
+                }
+                produced_tag.payloads = produced_payloads;
+            }
+        }
+        if (!found) Common.invariant("tag constructor was absent from its produced row");
+        // The checked expression or exact consumer request supplies the full
+        // runtime row needed by control flow. Only immediate row children are
+        // completed; no descendant or unrelated type is traversed.
         const structural_node = try self.graph.newProducedTagUnion(
             produced_tags,
-            produced_ext,
+            request_row.ext,
         );
-        const produced_node = if (destination_relation == .exact_request)
-            tag_node
-        else
-            try self.producedConstructorNode(tag_node, structural_node);
+        const produced_node = try self.producedConstructorNode(tag_node, structural_node);
         return try self.addConstructorExprAtNode(produced_node, .{ .tag = .{
             .name = name,
             .payloads = try self.addExprSpan(lowered),
@@ -34248,8 +34403,16 @@ const BodyContext = struct {
                     item,
                     DraftTypeCell.fromGraphNode(item_nodes[index]),
                 ),
-                .checked_mapping, .exact_producer => try self.lowerExpr(item),
+                .checked_mapping, .exact_producer => if (self.view.templates.specializationValueFlowForExpr(item) == .produced)
+                    try self.lowerExpr(item)
+                else
+                    try self.lowerExprAtProducedValueRequest(item, item_nodes[index]),
             };
+        }
+        if (destination_relation == .exact_request) {
+            return try self.addConstructorExprAtNode(tuple_node, .{
+                .tuple = try self.addExprSpan(lowered),
+            });
         }
         const produced_items = try self.graph.arena().alloc(NodeId, lowered.len);
         for (lowered, produced_items) |item, *produced_item| {
@@ -34289,37 +34452,41 @@ const BodyContext = struct {
             .{ .list = try self.addExprSpan(lowered) },
         );
 
+        if (destination_relation == .exact_request) {
+            for (items, 0..) |item, index| {
+                lowered[index] = try self.lowerExprAtExactRequest(
+                    item,
+                    DraftTypeCell.fromGraphNode(element_node),
+                );
+            }
+            return try self.addExprWithTypeCell(
+                DraftTypeCell.fromGraphNode(list_node),
+                .{ .list = try self.addExprSpan(lowered) },
+            );
+        }
+
         // A homogeneous runtime sequence has one element producer. Checking's
         // explicit value-flow column chooses a real producer when one exists;
         // otherwise the first requested value consumes the checked element
         // request as the component's seed. Once that value returns its exact
         // node, every other item consumes that node directly. Source order in
         // the emitted list is independent of this lowering schedule.
-        const producer_index = switch (destination_relation) {
-            .exact_request => 0,
-            .checked_mapping, .exact_producer => producer: {
-                for (items, 0..) |item, index| {
-                    if (self.view.templates.specializationValueFlowForExpr(item) == .produced) {
-                        break :producer index;
-                    }
+        const producer_index = producer: {
+            for (items, 0..) |item, index| {
+                if (self.view.templates.specializationValueFlowForExpr(item) == .produced) {
+                    break :producer index;
                 }
-                break :producer 0;
-            },
+            }
+            break :producer 0;
         };
         const producer = items[producer_index];
-        lowered[producer_index] = switch (destination_relation) {
-            .exact_request => try self.lowerExprAtExactRequest(
+        lowered[producer_index] = if (self.view.templates.specializationValueFlowForExpr(producer) == .produced)
+            try self.lowerExpr(producer)
+        else
+            try self.lowerExprAtExactRequest(
                 producer,
                 DraftTypeCell.fromGraphNode(element_node),
-            ),
-            .checked_mapping, .exact_producer => if (self.view.templates.specializationValueFlowForExpr(producer) == .produced)
-                try self.lowerExpr(producer)
-            else
-                try self.lowerExprAtExactRequest(
-                    producer,
-                    DraftTypeCell.fromGraphNode(element_node),
-                ),
-        };
+            );
         const produced_element = try self.builder.completePendingProducedNode(
             self,
             try self.exprTypeCell(lowered[producer_index]).toGraphNode(self.graph),
@@ -34402,7 +34569,13 @@ const BodyContext = struct {
                     ),
                 });
             }
-            return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
+            return try self.lowerRecordLiteralFromExactChildren(
+                checked_expr,
+                record,
+                constructor_node,
+                children.items,
+                true,
+            );
         }
 
         var has_requested_field = false;
@@ -34424,7 +34597,13 @@ const BodyContext = struct {
                     ),
                 });
             }
-            return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
+            return try self.lowerRecordLiteralFromExactChildren(
+                checked_expr,
+                record,
+                constructor_node,
+                children.items,
+                false,
+            );
         }
 
         const plan = self.view.templates.specializationRecordPlanForExpr(checked_expr);
@@ -34520,7 +34699,13 @@ const BodyContext = struct {
             );
         }
 
-        return try self.lowerRecordLiteralFromExactChildren(checked_expr, record, constructor_node, children.items);
+        return try self.lowerRecordLiteralFromExactChildren(
+            checked_expr,
+            record,
+            constructor_node,
+            children.items,
+            false,
+        );
     }
 
     fn lowerRecordLiteralFromExactChildren(
@@ -34529,8 +34714,15 @@ const BodyContext = struct {
         record: anytype,
         constructor_node: NodeId,
         children: []const PreLoweredChild,
+        preserve_request: bool,
     ) Allocator.Error!DraftExprId {
-        return try self.lowerRecordExprAtNode(checked_expr, record, constructor_node, children);
+        return try self.lowerRecordExprAtNode(
+            checked_expr,
+            record,
+            constructor_node,
+            children,
+            preserve_request,
+        );
     }
 
     fn lowerRecordUpdateDirect(
@@ -34545,7 +34737,14 @@ const BodyContext = struct {
         var children = std.ArrayList(PreLoweredChild).empty;
         defer children.deinit(self.allocator);
 
-        const base_value = try self.lowerExpr(ext);
+        const result_request = switch (destination_relation) {
+            .exact_request => request_node orelse Common.invariant("exact record-update destination had no request node"),
+            .checked_mapping, .exact_producer => null,
+        };
+        const base_value = if (result_request) |request|
+            try self.lowerExprAtExactRequest(ext, DraftTypeCell.fromGraphNode(request))
+        else
+            try self.lowerExpr(ext);
         const base_node = try self.builder.completePendingProducedNode(
             self,
             try self.exprTypeCell(base_value).toGraphNode(self.graph),
@@ -34556,7 +34755,16 @@ const BodyContext = struct {
             .node = base_node,
         });
         for (record.fields) |field| {
-            const value = try self.lowerExpr(field.value);
+            const value = if (result_request) |request|
+                try self.lowerExprAtExactRequest(
+                    field.value,
+                    DraftTypeCell.fromGraphNode(try self.graph.recordConstructionFieldValueNode(
+                        request,
+                        try self.builder.recordFieldName(self.view, field.label),
+                    )),
+                )
+            else
+                try self.lowerExpr(field.value);
             try children.append(self.allocator, .{
                 .checked_expr = field.value,
                 .expr = value,
@@ -34566,11 +34774,13 @@ const BodyContext = struct {
                 ),
             });
         }
-        const result_request = switch (destination_relation) {
-            .exact_request => request_node orelse Common.invariant("exact record-update destination had no request node"),
-            .checked_mapping, .exact_producer => base_node,
-        };
-        return try self.lowerRecordExprAtNode(checked_expr, record, result_request, children.items);
+        return try self.lowerRecordExprAtNode(
+            checked_expr,
+            record,
+            result_request orelse base_node,
+            children.items,
+            result_request != null,
+        );
     }
 
     fn recordUpdateFieldValue(
@@ -43873,7 +44083,7 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         request_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
-        try self.recordExactCheckedExprAtCell(checked_expr, request_cell);
+        try self.recordRequestedCheckedExprAtCell(checked_expr, request_cell);
         const lowered = try self.lowerExprAtTypeCellWithDemandAndRelation(
             checked_expr,
             request_cell,
@@ -43916,7 +44126,6 @@ const BodyContext = struct {
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
             var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
                 result_cell,
                 destination_relation,
             );
@@ -44746,7 +44955,10 @@ const BodyContext = struct {
         success_guard: ?PatternSuccessGuard,
     ) Allocator.Error!DraftExprId {
         try self.recordExactCheckedPatternAtCell(pattern_id, value_cell);
-        const value_node = try value_cell.toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedRepresentationNode(
+            self,
+            try value_cell.toGraphNode(self.graph),
+        );
         try self.preRegisterPatternBindersAtNode(pattern_id, value_node);
         const previous_reuse = self.reuse_pre_registered_pattern_binders;
         defer self.reuse_pre_registered_pattern_binders = previous_reuse;
@@ -44895,7 +45107,10 @@ const BodyContext = struct {
         miss: DraftExprId,
         success_guard: ?PatternSuccessGuard,
     ) Allocator.Error!DraftExprId {
-        const value_node = try value_cell.toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedRepresentationNode(
+            self,
+            try value_cell.toGraphNode(self.graph),
+        );
         const elem_node = try self.graph.listElementNode(value_node);
         const elem_cell = DraftTypeCell.fromGraphNode(elem_node);
         const values = try self.allocator.alloc(DraftExprId, list.patterns.len);
@@ -44992,7 +45207,10 @@ const BodyContext = struct {
             shell: DraftPatId,
             pending: std.ArrayList(PendingMaterializedPattern),
         };
-        const value_node = try value_cell.toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedRepresentationNode(
+            self,
+            try value_cell.toGraphNode(self.graph),
+        );
         const prepared = try self.allocator.alloc(?PreparedChild, destructs.len);
         defer {
             for (prepared) |*entry| {
@@ -45813,7 +46031,6 @@ const BodyContext = struct {
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
             var selection = try self.initControlFlowResultSelection(
-                self.view.bodies.expr(expr_id).ty,
                 result_cell,
                 destination_relation,
             );
@@ -45853,12 +46070,10 @@ const BodyContext = struct {
     /// cell; every later branch consumes the completed selection directly.
     fn initControlFlowResultSelection(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
         declared: DraftTypeCell,
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!ControlFlowResultSelection {
         return .{
-            .checked = checked_ty,
             .declared = declared,
             .selected = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{
                 .unresolved = InstVariable.placeholder(),
@@ -45903,20 +46118,11 @@ const BodyContext = struct {
                 .exact_producer,
             )
         else requested: {
-            // A producer-owned result cell has no caller-supplied shape. If
-            // this component contains only requested values, its first value
-            // consumes the checker-authored result occurrence as the explicit
-            // seed. This is the sole type-only construction permitted by the
-            // checked value-flow schedule; an enclosing exact request remains
-            // immutable and is never completed here.
-            if (selection.destination_relation != .exact_request) {
-                const declared_node = try selection.declared.toGraphNode(self.graph);
-                if (self.graph.content(declared_node) == .unresolved) {
-                    selection.declared = DraftTypeCell.fromGraphNode(
-                        try self.instNode(selection.checked),
-                    );
-                }
-            }
+            // A producer-owned callable receives one mutable result request
+            // materialized from the checker-authored call plan. If this
+            // component contains only requested values, its first value
+            // consumes that request directly; later values consume the exact
+            // result selected from it.
             break :requested try self.lowerBranchValueAtTypeCell(
                 checked_expr,
                 selection.declared,
@@ -45956,10 +46162,7 @@ const BodyContext = struct {
             // Two pending recursive producers cannot supply representation to
             // each other. A later concrete alternative, or the body operation
             // that owns one of these cells, must complete the selected cell.
-        } else if (!self.graph.sameClass(
-            try self.graph.internProducedNode(selected_node),
-            try self.graph.internProducedNode(value_node),
-        )) {
+        } else if (!self.graph.sameClass(selected_node, value_node)) {
             Common.invariant("control-flow result did not consume its exact produced request");
         }
         self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
@@ -46783,7 +46986,10 @@ const BodyContext = struct {
         else
             try self.lowerExpr(expr);
         const value_cell = self.exprTypeCell(value);
-        const value_node = try value_cell.toGraphNode(self.graph);
+        const value_node = try self.builder.completePendingProducedRepresentationNode(
+            self,
+            try value_cell.toGraphNode(self.graph),
+        );
         try self.recordExactCheckedPatternAtCell(pattern, value_cell);
         const source_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
