@@ -468,7 +468,7 @@ const BuiltinsObjects = struct {
     const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins.o");
     const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins.o");
 
-    /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
+    /// WebAssembly target builtins (wasm32-freestanding)
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins.o");
 
     /// Cross-compilation target builtins (Windows targets)
@@ -8485,6 +8485,179 @@ fn mergeBoxyRuntimeWasm(
     };
 }
 
+fn mergeBoxySidecarWasm(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    lir_result: *const lir.Program.Result,
+    mode: backend.wasm.WasmModule.MergeMode,
+) CliMainError!void {
+    if (!lirResultNeedsBoxyRuntime(lir_result)) return;
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
+    defer sidecar_blob.deinit(ctx.gpa);
+    backend.wasm.BoxyRuntimeLink.mergeSidecar(
+        ctx.gpa,
+        module,
+        sidecar_blob.bytes,
+        sidecar_blob.sidecar,
+        mode,
+    ) catch |err| {
+        std.log.err("Failed to merge wasm Boxy sidecar: {}", .{err});
+        return err;
+    };
+}
+
+fn preparedWasmHostCacheKey(
+    platform_files_pre: []const []const u8,
+    platform_files_post: []const []const u8,
+    builtins_bytes: []const u8,
+    boxy_runtime_bytes: ?[]const u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-prepared-wasm-host-v1");
+    updateHashU32(&hasher, @intCast(platform_files_pre.len));
+    for (platform_files_pre) |bytes| updateHashBytes(&hasher, bytes);
+    updateHashU32(&hasher, @intCast(platform_files_post.len));
+    for (platform_files_post) |bytes| updateHashBytes(&hasher, bytes);
+    updateHashBytes(&hasher, builtins_bytes);
+    updateHashBool(&hasher, boxy_runtime_bytes != null);
+    if (boxy_runtime_bytes) |bytes| updateHashBytes(&hasher, bytes);
+    return hasher.finalResult();
+}
+
+test "prepared Wasm host cache key covers ordered inputs and runtime variant" {
+    const pre = [_][]const u8{ "host-a", "host-b" };
+    const reversed_pre = [_][]const u8{ "host-b", "host-a" };
+    const post = [_][]const u8{"host-post"};
+    const baseline_key = preparedWasmHostCacheKey(&pre, &post, "builtins", null);
+    const repeated_key = preparedWasmHostCacheKey(&pre, &post, "builtins", null);
+    const reordered_key = preparedWasmHostCacheKey(&reversed_pre, &post, "builtins", null);
+    const regrouped_key = preparedWasmHostCacheKey(&post, &pre, "builtins", null);
+    const changed_builtins_key = preparedWasmHostCacheKey(&pre, &post, "other-builtins", null);
+    const boxy_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+
+    try std.testing.expectEqual(baseline_key, repeated_key);
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &reordered_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &regrouped_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &changed_builtins_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &boxy_key));
+}
+
+const PreparedWasmHost = union(enum) {
+    cached: compile.manager.CacheModule.CacheData,
+    owned: []u8,
+
+    fn bytes(self: PreparedWasmHost) []const u8 {
+        return switch (self) {
+            .cached => |data| data.data(),
+            .owned => |data| data,
+        };
+    }
+
+    fn deinit(self: PreparedWasmHost, allocator: Allocator) void {
+        switch (self) {
+            .cached => |data| data.deinit(allocator),
+            .owned => |data| allocator.free(data),
+        }
+    }
+};
+
+/// Run the platform inputs through a real relocatable link exactly once for
+/// each content-addressed base/Boxy variant. The returned object has already
+/// had Wasm's strong/weak and COMDAT rules applied, so later surgical links do
+/// not need to reconstruct linker semantics.
+fn loadPreparedWasmHost(
+    ctx: *CliCtx,
+    cache_manager: *CacheManager,
+    cache_dir: []const u8,
+    link_inputs: PlatformLinkInputs,
+    needs_boxy_runtime: bool,
+) CliMainError!PreparedWasmHost {
+    var host_inputs: std.ArrayList([]u8) = .empty;
+    defer freeOwnedWasmInputs(ctx, &host_inputs);
+
+    for (link_inputs.platform_files_pre) |path| {
+        _ = try appendOwnedWasmInput(ctx, &host_inputs, path);
+    }
+    const pre_end = host_inputs.items.len;
+    for (link_inputs.platform_files_post) |path| {
+        _ = try appendOwnedWasmInput(ctx, &host_inputs, path);
+    }
+    const post_end = host_inputs.items.len;
+
+    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+    const runtime_bytes = if (needs_boxy_runtime)
+        BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget
+    else
+        null;
+    const cache_key = preparedWasmHostCacheKey(
+        host_inputs.items[0..pre_end],
+        host_inputs.items[pre_end..post_end],
+        builtins_bytes,
+        runtime_bytes,
+    );
+    if (cache_manager.loadRawBytesMapped(cache_key, cache_dir)) |cached| {
+        return .{ .cached = cached };
+    }
+
+    const temp_dir = try createUniqueTempDir(ctx);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    var linker_inputs = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len + 2,
+    );
+
+    for (host_inputs.items[0..pre_end], 0..) |bytes, i| {
+        const extension = if (backend.wasm.ObjectArchive.isArchive(bytes)) ".a" else ".o";
+        const filename = try std.fmt.allocPrint(ctx.arena, "platform-pre-{d}{s}", .{ i, extension });
+        const path = try std.fs.path.join(ctx.arena, &.{ temp_dir, filename });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch |err| {
+            std.log.err("Failed to stage Wasm host input for preparation: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+        linker_inputs.appendAssumeCapacity(path);
+    }
+
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_builtins.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, builtins_bytes) catch |err| {
+        std.log.err("Failed to write Wasm builtins for prepared host: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+    linker_inputs.appendAssumeCapacity(builtins_path);
+
+    if (runtime_bytes) |bytes| {
+        const runtime_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_boxy_runtime.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+            std.log.err("Failed to write Boxy runtime for prepared host: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+        linker_inputs.appendAssumeCapacity(runtime_path);
+    }
+    for (host_inputs.items[pre_end..post_end], 0..) |bytes, i| {
+        const extension = if (backend.wasm.ObjectArchive.isArchive(bytes)) ".a" else ".o";
+        const filename = try std.fmt.allocPrint(ctx.arena, "platform-post-{d}{s}", .{ i, extension });
+        const path = try std.fs.path.join(ctx.arena, &.{ temp_dir, filename });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch |err| {
+            std.log.err("Failed to stage Wasm host input for preparation: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+        linker_inputs.appendAssumeCapacity(path);
+    }
+
+    const prepared_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_prepared_host.o" });
+    linker.linkWasmRelocatable(ctx, prepared_path, linker_inputs.items) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
+
+    const prepared_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, prepared_path, ctx.gpa, .unlimited);
+    cache_manager.storeRawBytes(cache_key, prepared_bytes, cache_dir);
+    return .{ .owned = prepared_bytes };
+}
+
 fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
     const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
     const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
@@ -8724,69 +8897,6 @@ fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) CliMainErro
     try module.exportGlobalSymbols();
 }
 
-fn addWasmObject(
-    ctx: *CliCtx,
-    module: *backend.wasm.WasmModule,
-    path: []const u8,
-    member_name: ?[]const u8,
-    bytes: []const u8,
-    loaded_module: *bool,
-) (backend.wasm.WasmModule.ParseError || backend.wasm.WasmModule.MergeError)!void {
-    var next_module = try preloadWasmObject(ctx, path, member_name, bytes);
-
-    if (!loaded_module.*) {
-        module.* = next_module;
-        loaded_module.* = true;
-        return;
-    }
-
-    defer next_module.deinit();
-
-    var merge_result = try module.mergeModule(&next_module);
-    merge_result.deinit();
-}
-
-fn addWasmInput(
-    ctx: *CliCtx,
-    module: *backend.wasm.WasmModule,
-    owned_inputs: *std.ArrayList([]u8),
-    path: []const u8,
-    loaded_module: *bool,
-) CliMainError!void {
-    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
-
-    if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
-        try addWasmObject(ctx, module, path, null, bytes, loaded_module);
-        return;
-    }
-
-    if (!backend.wasm.ObjectArchive.isArchive(bytes)) {
-        std.log.err("Failed to preload wasm input {s}: {}", .{ path, error.InvalidMagic });
-        return error.InvalidMagic;
-    }
-
-    var member_count: usize = 0;
-    var iter = backend.wasm.ObjectArchive.Iterator.init(bytes) catch |err| {
-        std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
-        return err;
-    };
-
-    while (true) {
-        const maybe_member = iter.next() catch |err| {
-            std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
-            return err;
-        };
-        const member = maybe_member orelse break;
-        member_count += 1;
-        try addWasmObject(ctx, module, path, member.name, member.bytes, loaded_module);
-    }
-
-    if (member_count == 0) {
-        std.log.err("Wasm archive {s} does not contain object members", .{path});
-        return error.EmptyArchive;
-    }
-}
-
 fn appendUniqueWasmExportName(exports: *std.array_list.Managed([]const u8), name: []const u8) Allocator.Error!void {
     for (exports.items) |existing| {
         if (std.mem.eql(u8, existing, name)) return;
@@ -8980,6 +9090,8 @@ fn rocBuildWasmSurgical(
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     build_cache_dir: []const u8,
+    cache_manager: *CacheManager,
+    wasm_host_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -9051,33 +9163,23 @@ fn rocBuildWasmSurgical(
         return;
     }
 
+    const prepared_host = try loadPreparedWasmHost(
+        ctx,
+        cache_manager,
+        wasm_host_cache_dir,
+        link_inputs,
+        lirResultNeedsBoxyRuntime(&lowered.lir_result),
+    );
+    defer prepared_host.deinit(ctx.gpa);
+
     var loaded_module = true;
-    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    var wasm_module = try preloadWasmObject(ctx, "prepared Wasm host", null, prepared_host.bytes());
     configureWasmDataBase(&wasm_module, link_inputs.wasm);
     errdefer if (loaded_module) wasm_module.deinit();
 
-    for (link_inputs.platform_files_pre) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-    for (link_inputs.platform_files_post) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-
     try exportConfiguredWasmEntrypoints(&wasm_module);
-    wasm_module.removeMemoryAndTableImports();
-
-    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModule(&builtins_module);
-        merge_result.deinit();
-    }
-    try mergeBoxyRuntimeWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
+    try wasm_module.prepareObjectAbiForFinalLink();
+    try mergeBoxySidecarWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after merge: {}", .{err});
@@ -9472,6 +9574,7 @@ fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
     artifact_dir: []const u8,
     app_object_path: []const u8,
+    lir_result: *const lir.Program.Result,
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
@@ -9488,6 +9591,7 @@ fn writeCombinedLlvmWasmObject(
     var app_merge = try wasm_module.mergeModuleForObject(&app_module);
     app_merge.deinit();
 
+    try mergeBoxyRuntimeWasm(ctx, &wasm_module, lir_result, .relocatable_object);
     try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
     try wasm_module.verifyNoLinkObjectContract();
 
@@ -9547,7 +9651,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, static_data_exports, args.opt, &owned_inputs);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -9557,104 +9661,42 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    if (link_inputs.wasm != null) {
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
-        const object_files = try ctx.arena.alloc([]const u8, 1);
-        object_files[0] = combined_obj;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, static_data_exports, args.opt, &owned_inputs);
+    const object_files = try ctx.arena.alloc([]const u8, 1);
+    object_files[0] = combined_obj;
+    const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
 
-        const link_config = linker.LinkConfig{
-            .target_format = .wasm,
-            .target_abi = null,
-            .target_os = .freestanding,
-            .target_arch = .wasm32,
-            .output_path = final_output_path,
-            .object_files = object_files,
-            .platform_files_pre = link_inputs.platform_files_pre,
-            .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = &.{},
-            .can_exit_early = false,
-            .disable_output = false,
-            .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-            .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-            .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-            .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-            .wasm_debug_info = args.debug,
-            .wasm_optimize = wasmOptimizeMode(args.opt),
-            .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-            .wasm_exports = wasm_exports,
-            .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = app_object.artifact_dir,
-        };
-
-        linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
-        };
-        return;
-    }
-
-    var loaded_module = true;
-    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
-    configureWasmDataBase(&wasm_module, link_inputs.wasm);
-    errdefer if (loaded_module) wasm_module.deinit();
-
-    for (link_inputs.platform_files_pre) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-    for (link_inputs.platform_files_post) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-
-    try exportConfiguredWasmEntrypoints(&wasm_module);
-    wasm_module.removeMemoryAndTableImports();
-
-    const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
-    var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
-    defer app_module.deinit();
-    var app_merge = try wasm_module.mergeModule(&app_module);
-    app_merge.deinit();
-
-    try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .final_link);
-
-    var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
-    defer host_to_app_map.deinit(ctx.gpa);
-    try host_to_app_map.ensureTotalCapacity(ctx.gpa, entrypoints.len);
-
-    for (entrypoints) |entry| {
-        const fn_index = try wasm_module.findDefinedFunctionIndexExact(entry.symbol_name);
-        host_to_app_map.appendAssumeCapacity(.{
-            .name = entry.symbol_name,
-            .fn_index = fn_index,
-        });
-    }
-
-    try wasm_module.linkHostToAppCalls(host_to_app_map.items);
-
-    const memory_config = configuredWasmMemory(args, link_inputs.wasm);
-    try wasm_module.finalizeMemoryAndTableWithConfig(memory_config);
-    try wasm_module.resolveRelocations();
-
-    const called_fns = try ctx.gpa.alloc(bool, wasm_module.liveFunctionCount());
-    defer ctx.gpa.free(called_fns);
-    @memset(called_fns, false);
-    try wasm_module.eliminateDeadCode(called_fns);
-
-    try wasm_module.verifyNoBuiltinImports();
-    try wasm_module.materializeFuncBodies();
-
-    const wasm_bytes = try wasm_module.encode(ctx.gpa);
-    defer ctx.gpa.free(wasm_bytes);
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, final_output_path, wasm_bytes) catch |err| {
-        std.log.err("Failed to write wasm output: {}", .{err});
-        return error.WasmOutputWriteFailed;
+    const link_config = linker.LinkConfig{
+        .target_format = .wasm,
+        .target_abi = null,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = final_output_path,
+        .object_files = object_files,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+        .wasm_debug_info = args.debug,
+        .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_exports = wasm_exports,
+        .platform_files_dir = link_inputs.platform_files_dir,
+        .scratch_dir = app_object.artifact_dir,
     };
 
-    wasm_module.deinit();
-    loaded_module = false;
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
 }
 
 fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
@@ -9997,13 +10039,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
     const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
+    const wasm_host_cache_dir = try cache_manager.config.getWasmHostCacheDir(ctx.arena);
     ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.AccessDenied,
@@ -10186,6 +10229,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             link_type,
             final_output_path,
             build_cache_dir,
+            &cache_manager,
+            wasm_host_cache_dir,
             platform_dir,
             resolved_targets_config,
             &lowered,

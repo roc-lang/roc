@@ -1017,6 +1017,45 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
+/// Combine Wasm objects and archives into one relocatable object.
+///
+/// This is the one-time correctness link used to prepare a platform host for
+/// later surgical dev links. Whole-archive preserves the surgical linker's
+/// previous contract of loading every declared archive member, while LLD owns
+/// normal strong/weak and COMDAT resolution.
+pub fn linkWasmRelocatable(
+    ctx: *CliCtx,
+    output_path: []const u8,
+    input_paths: []const []const u8,
+) LinkError!void {
+    if (comptime !llvm_available) {
+        return LinkError.LLVMNotAvailable;
+    }
+
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 7) catch
+        return LinkError.OutOfMemory;
+    try args.append("wasm-ld");
+    try args.append("-r");
+    try args.append("-o");
+    try args.append(output_path);
+    try args.append("--whole-archive");
+    try args.appendSlice(input_paths);
+    try args.append("--no-whole-archive");
+
+    std.log.debug("Relocatable Wasm linker command:", .{});
+    for (args.items) |arg| {
+        std.log.debug("  {s}", .{arg});
+    }
+
+    embedded_lld.link(ctx.arena, .wasm, args.items, .{
+        .can_exit_early = false,
+        .disable_output = false,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        error.LinkFailed => return LinkError.LinkFailed,
+    };
+}
+
 fn binaryenStatusName(status: c_int) []const u8 {
     return switch (status) {
         1 => "invalid arguments",
