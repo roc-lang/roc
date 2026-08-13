@@ -706,8 +706,31 @@ pub const ModuleState = struct {
 
 /// Exact source selected by one public package module name.
 pub const PublicModuleTarget = struct {
-    logical_module: []const u8,
-    nested_type: ?[]const u8,
+    /// Owned `logical_module` or `logical_module.nested_type` spelling.
+    /// Keeping both spellings in one allocation leaves room for the exact CIR
+    /// selector without making this structure larger than its old two-slice
+    /// representation.
+    source_target: []u8,
+    logical_module_len: usize,
+    selection: Selection,
+
+    pub const Selection = union(enum) {
+        whole_module,
+        unresolved_nested_type,
+        /// Stable exact declaration selected from the completed source CIR.
+        type_decl: CIR.Statement.Idx,
+    };
+
+    pub fn logicalModule(self: PublicModuleTarget) []const u8 {
+        return self.source_target[0..self.logical_module_len];
+    }
+
+    pub fn unresolvedNestedType(self: PublicModuleTarget) ?[]const u8 {
+        if (self.selection != .unresolved_nested_type) return null;
+        std.debug.assert(self.source_target.len > self.logical_module_len + 1);
+        std.debug.assert(self.source_target[self.logical_module_len] == '.');
+        return self.source_target[self.logical_module_len + 1 ..];
+    }
 };
 
 /// State of a package in the workspace
@@ -728,6 +751,9 @@ pub const PackageState = struct {
     module_names: std.StringHashMap(ModuleId),
     /// Public package name -> exact source module and optional nested type.
     public_module_targets: std.StringHashMap(PublicModuleTarget),
+    /// Pointers into the immutable map above, sorted by logical source module.
+    /// Built once when public-module registration closes.
+    public_module_targets_by_source: []*PublicModuleTarget,
     /// Whether the package header's complete public module map was registered.
     public_modules_ready: bool,
     /// Directory entries beneath the package root, cached with their exact spelling.
@@ -751,6 +777,7 @@ pub const PackageState = struct {
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
             .public_module_targets = std.StringHashMap(PublicModuleTarget).init(thread_safe_allocator),
+            .public_module_targets_by_source = &.{},
             .public_modules_ready = false,
             .source_entries = null,
             .physical_module_paths = std.StringHashMap([]const u8).init(thread_safe_allocator),
@@ -779,9 +806,9 @@ pub const PackageState = struct {
         var public_it = self.public_module_targets.iterator();
         while (public_it.next()) |entry| {
             gpa.free(entry.key_ptr.*);
-            gpa.free(entry.value_ptr.logical_module);
-            if (entry.value_ptr.nested_type) |nested_type| gpa.free(nested_type);
+            gpa.free(entry.value_ptr.source_target);
         }
+        if (self.public_module_targets_by_source.len > 0) gpa.free(self.public_module_targets_by_source);
         self.public_module_targets.deinit();
 
         if (self.source_entries) |entries| {
@@ -854,7 +881,7 @@ pub const PackageState = struct {
     /// Resolve a package consumer's public name to its internal logical module.
     pub fn getPublicModuleId(self: *PackageState, name: []const u8) ?ModuleId {
         const target = self.public_module_targets.get(name) orelse return null;
-        return self.module_names.get(target.logical_module);
+        return self.module_names.get(target.logicalModule());
     }
 
     pub fn getPublicModuleTarget(self: *const PackageState, name: []const u8) ?PublicModuleTarget {
@@ -868,20 +895,46 @@ pub const PackageState = struct {
         target: []const u8,
         nested_type: ?[]const u8,
     ) Allocator.Error!void {
+        if (self.public_modules_ready) {
+            std.debug.panic("cannot add public module '{s}' after registration closed", .{name});
+        }
         if (self.public_module_targets.contains(name)) return;
         const owned_name = try gpa.dupe(u8, name);
         errdefer gpa.free(owned_name);
-        const owned_target = try gpa.dupe(u8, target);
-        errdefer gpa.free(owned_target);
-        const owned_nested_type = if (nested_type) |nested| try gpa.dupe(u8, nested) else null;
-        errdefer if (owned_nested_type) |nested| gpa.free(nested);
+        const owned_source_target = if (nested_type) |nested|
+            try std.fmt.allocPrint(gpa, "{s}.{s}", .{ target, nested })
+        else
+            try gpa.dupe(u8, target);
+        errdefer gpa.free(owned_source_target);
         try self.public_module_targets.put(owned_name, .{
-            .logical_module = owned_target,
-            .nested_type = owned_nested_type,
+            .source_target = owned_source_target,
+            .logical_module_len = target.len,
+            .selection = if (nested_type != null)
+                .unresolved_nested_type
+            else
+                .whole_module,
         });
     }
 
-    pub fn finishPublicModules(self: *PackageState) void {
+    pub fn finishPublicModules(self: *PackageState, gpa: Allocator) Allocator.Error!void {
+        if (self.public_modules_ready) {
+            std.debug.panic("cannot close public module registration twice for package '{s}'", .{self.name});
+        }
+        const targets = try gpa.alloc(*PublicModuleTarget, self.public_module_targets.count());
+        errdefer gpa.free(targets);
+
+        var index: usize = 0;
+        var target_it = self.public_module_targets.iterator();
+        while (target_it.next()) |entry| : (index += 1) {
+            targets[index] = entry.value_ptr;
+        }
+        std.mem.sort(*PublicModuleTarget, targets, {}, struct {
+            fn lessThan(_: void, a: *PublicModuleTarget, b: *PublicModuleTarget) bool {
+                return std.mem.order(u8, a.logicalModule(), b.logicalModule()) == .lt;
+            }
+        }.lessThan);
+
+        self.public_module_targets_by_source = targets;
         self.public_modules_ready = true;
     }
 
@@ -1393,7 +1446,7 @@ pub const Coordinator = struct {
         for (public_surface.modules.items) |module| {
             try pkg.addPublicModule(self.gpa, module.name, module.target, module.nested_type);
         }
-        pkg.finishPublicModules();
+        try pkg.finishPublicModules(self.gpa);
     }
 
     /// Read an app `.roc` file's header, register the app + platform +
@@ -3282,6 +3335,8 @@ pub const Coordinator = struct {
             );
         }
 
+        try self.resolvePublicTargetsForModule(pkg, mod);
+
         mod.phase = .Done;
         mod.completion = .succeeded;
         mod.visit_color = .black;
@@ -3297,6 +3352,51 @@ pub const Coordinator = struct {
         }
         try self.wakeCrossPackageDependents(pkg.name, module_id);
         try self.wakeAppsWaitingOnPlatformRequirements();
+    }
+
+    /// Resolve nested public selections exactly once, before any dependent can
+    /// consume them. Declaration indices are stable within the completed CIR
+    /// environment and avoid reconstructing qualified names in every importer.
+    fn resolvePublicTargetsForModule(
+        self: *Coordinator,
+        pkg: *PackageState,
+        mod: *ModuleState,
+    ) Allocator.Error!void {
+        const env = mod.moduleEnv() orelse
+            coordinatorInvariant("successful module '{s}' had no module environment", .{mod.name});
+
+        const targets = pkg.public_module_targets_by_source;
+        var low: usize = 0;
+        var high = targets.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (std.mem.order(u8, targets[mid].logicalModule(), mod.name) == .lt)
+                low = mid + 1
+            else
+                high = mid;
+        }
+
+        for (targets[low..]) |target| {
+            if (!std.mem.eql(u8, target.logicalModule(), mod.name)) break;
+            switch (target.selection) {
+                .unresolved_nested_type => {
+                    const nested_type = target.unresolvedNestedType() orelse unreachable;
+                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse
+                        coordinatorInvariant(
+                            "public nested type '{s}.{s}' had no exposed declaration",
+                            .{ mod.name, nested_type },
+                        );
+                    target.source_target = try self.gpa.realloc(target.source_target, target.logical_module_len);
+                    target.selection = .{ .type_decl = statement };
+                },
+                .whole_module => {
+                    if (compile_package.resolveMainType(env)) |statement| {
+                        target.selection = .{ .type_decl = statement };
+                    }
+                },
+                .type_decl => {},
+            }
+        }
     }
 
     /// Complete modules with failure and propagate that explicit outcome through
@@ -4299,7 +4399,14 @@ pub const Coordinator = struct {
                     try imports.append(allocator, .{
                         .import_name = ext_name,
                         .module_env = ext_env,
-                        .nested_type = public_target.nested_type,
+                        .selected_type_decl = switch (public_target.selection) {
+                            .type_decl => |statement| statement,
+                            .whole_module => null,
+                            .unresolved_nested_type => coordinatorInvariant(
+                                "successful external import '{s}' had an unresolved public nested type",
+                                .{ext_name},
+                            ),
+                        },
                     });
                 },
                 .waiting, .failed => |readiness| coordinatorInvariant(
@@ -4592,7 +4699,7 @@ pub const Coordinator = struct {
             coordinatorInvariant("external import reached package '{s}' before its public module map was registered", .{target_pkg_name});
         }
         const public_target = target_pkg.getPublicModuleTarget(qualified.module) orelse return .not_public;
-        const logical_module = public_target.logical_module;
+        const logical_module = public_target.logicalModule();
         const path = try self.resolveModulePath(target_pkg.root_dir, logical_module);
         defer self.gpa.free(path);
 
@@ -7330,11 +7437,17 @@ test "PackageState keeps public names separate from logical module identity" {
     const private_id = try pkg.ensureModule(allocator, "Parser", "/pkg/Parser.roc");
     const public_target_id = try pkg.ensureModule(allocator, "Internal/Parser", "/pkg/Internal/Parser.roc");
     try pkg.addPublicModule(allocator, "Parser", "Internal/Parser", null);
-    pkg.finishPublicModules();
+    try pkg.addPublicModule(allocator, "Result", "Internal/Parser", "Result");
+    try pkg.finishPublicModules(allocator);
 
     try std.testing.expectEqual(private_id, pkg.getModuleId("Parser").?);
     try std.testing.expectEqual(public_target_id, pkg.getPublicModuleId("Parser").?);
+    try std.testing.expectEqual(public_target_id, pkg.getPublicModuleId("Result").?);
     try std.testing.expect(pkg.getPublicModuleId("Internal/Parser") == null);
+
+    const nested_target = pkg.getPublicModuleTarget("Result").?;
+    try std.testing.expectEqualStrings("Internal/Parser", nested_target.logicalModule());
+    try std.testing.expectEqualStrings("Result", nested_target.unresolvedNestedType().?);
 }
 
 test "exact path spelling preserves case and honors platform separators" {

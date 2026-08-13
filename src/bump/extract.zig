@@ -26,7 +26,7 @@ const CheckedTypeId = CheckedArtifact.CheckedTypeId;
 const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
 const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
 
-/// One public namespace of the package being extracted.
+/// One exact public namespace used for API extraction or reference routing.
 pub const ModuleInput = struct {
     /// The public namespace name, e.g. "Parser" or a platform root's name.
     exposed_name: []const u8,
@@ -34,6 +34,8 @@ pub const ModuleInput = struct {
     artifact: *const CheckedModuleArtifact,
     /// Restrict a non-type root module to these names and their children.
     exposed_names: ?[]const []const u8 = null,
+    /// Exact source type represented by this public namespace.
+    public_type_decl: ?can.CIR.Statement.Idx = null,
 };
 
 /// Resolves an origin module identity (as recorded in checked types) to the
@@ -101,25 +103,46 @@ pub const Failure = struct {
     }
 };
 
-/// Extract the public API of a package from its exposed modules' checked
-/// artifacts. On `error.ExtractFailed`, `failure` describes the problem.
+/// Extract the public API from the first `api_input_count` namespaces. Any
+/// remaining inputs are exact dependency projections used only to route named
+/// references. On `error.ExtractFailed`, `failure` describes the problem.
 pub fn extractPackageApi(
     gpa: Allocator,
     inputs: []const ModuleInput,
+    api_input_count: usize,
     origins: *const OriginMap,
     failure: *?Failure,
 ) ExtractError!PackageApi {
+    std.debug.assert(api_input_count <= inputs.len);
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
+
+    var public_input_order = std.ArrayList(usize).empty;
+    defer public_input_order.deinit(gpa);
+    for (inputs, 0..) |input, input_index| {
+        if (input.public_type_decl != null) try public_input_order.append(gpa, input_index);
+    }
+    std.mem.sort(usize, public_input_order.items, inputs, struct {
+        fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
+            const a = all_inputs[a_index];
+            const b = all_inputs[b_index];
+            const owner_order = std.mem.order(u8, &a.artifact.key.bytes, &b.artifact.key.bytes);
+            if (owner_order != .eq) return owner_order == .lt;
+            return a_index < b_index;
+        }
+    }.lessThan);
 
     var extractor = Extractor{
         .gpa = gpa,
         .api = &api,
         .origins = origins,
         .failure = failure,
+        .inputs = inputs,
+        .public_input_order = public_input_order.items,
     };
 
-    for (inputs) |input| {
+    for (inputs[0..api_input_count], 0..) |input, input_index| {
+        extractor.current_input = input_index;
         try extractor.extractModule(input);
     }
 
@@ -134,6 +157,10 @@ const Extractor = struct {
     api: *PackageApi,
     origins: *const OriginMap,
     failure: *?Failure,
+    inputs: []const ModuleInput,
+    /// Public type inputs sorted by owning checked artifact for binary routing.
+    public_input_order: []const usize,
+    current_input: usize = 0,
     /// Current module context for failure reporting.
     current_module: []const u8 = "",
     current_item: []const u8 = "",
@@ -190,7 +217,7 @@ const Extractor = struct {
             const name = module_env.getIdentText(header.relative_name);
             if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
-            const path = try self.api.allocator().dupe(u8, name);
+            const path = try publicItemPath(self.api.allocator(), input, name);
             self.current_item = path;
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
@@ -222,7 +249,7 @@ const Extractor = struct {
             const name = module_env.getIdentText(ident);
             if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
-            const path = try self.api.allocator().dupe(u8, name);
+            const path = try publicItemPath(self.api.allocator(), input, name);
             self.current_item = path;
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
@@ -322,6 +349,8 @@ const Extractor = struct {
                     view,
                     names,
                     alias.origin_module,
+                    alias.owner_module,
+                    alias.source_decl,
                     names.typeNameText(alias.name),
                     alias.builtin_origin,
                     alias.args,
@@ -335,6 +364,8 @@ const Extractor = struct {
                     view,
                     names,
                     nominal.origin_module,
+                    nominal.owner_module,
+                    nominal.source_decl,
                     names.typeNameText(nominal.name),
                     nominal.builtin != null,
                     nominal.args,
@@ -429,6 +460,8 @@ const Extractor = struct {
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         origin_module: check.CanonicalNames.ModuleIdentityId,
+        owner_module: CheckedArtifact.ModuleId,
+        source_decl: ?u32,
         type_name: []const u8,
         is_builtin: bool,
         args: []const CheckedTypeId,
@@ -459,7 +492,11 @@ const Extractor = struct {
             return self.fail(.unknown_origin_module, detail);
         };
 
-        const path = try qualifiedPath(alloc, origin, path_module, type_name);
+        const projected_path = try self.publicReferencePath(owner_module, source_decl);
+        const path = if (projected_path) |public_path|
+            public_path
+        else
+            try qualifiedPath(alloc, origin, path_module, type_name);
         if (origin == .self) {
             try self.self_refs.put(self.api.allocator(), path, {});
         }
@@ -474,6 +511,52 @@ const Extractor = struct {
             .path = path,
             .args = api_args,
         } });
+    }
+
+    fn publicReferencePath(
+        self: *Extractor,
+        owner_module: CheckedArtifact.ModuleId,
+        source_decl: ?u32,
+    ) Allocator.Error!?[]const u8 {
+        const raw_statement = source_decl orelse return null;
+        const statement: can.CIR.Statement.Idx = @enumFromInt(raw_statement);
+
+        const current = self.inputs[self.current_input];
+        if (publicInputOwnsType(current, owner_module, statement)) {
+            const source_name = typeDeclName(current.module_env, statement) orelse return null;
+            return try publicItemPath(self.api.allocator(), current, source_name);
+        }
+
+        var selected: ?ModuleInput = null;
+        var selected_root_len: usize = 0;
+        var low: usize = 0;
+        var high = self.public_input_order.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const input = self.inputs[self.public_input_order[mid]];
+            if (std.mem.order(u8, &input.artifact.key.bytes, &owner_module.bytes) == .lt)
+                low = mid + 1
+            else
+                high = mid;
+        }
+        for (self.public_input_order[low..]) |input_index| {
+            const input = self.inputs[input_index];
+            if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
+            if (!publicInputOwnsType(input, owner_module, statement)) continue;
+            const root_statement = input.public_type_decl orelse unreachable;
+            const root_len = (typeDeclName(input.module_env, root_statement) orelse unreachable).len;
+            // The nearest public root owns the reference. Equal roots retain
+            // the package header order encoded by the input array.
+            if (selected == null or root_len > selected_root_len) {
+                selected = input;
+                selected_root_len = root_len;
+            }
+        }
+        if (selected) |input| {
+            const source_name = typeDeclName(input.module_env, statement) orelse return null;
+            return try publicItemPath(self.api.allocator(), input, source_name);
+        }
+        return null;
     }
 
     /// Every `.self` named reference in a public signature must resolve to an
@@ -497,6 +580,57 @@ const Extractor = struct {
     }
 };
 
+fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
+    const statement = module_env.store.getStatement(statement_idx);
+    const header_idx = switch (statement) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_where_alias_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
+    };
+    return module_env.getIdentText(module_env.store.getTypeHeader(header_idx).relative_name);
+}
+
+fn publicInputOwnsType(
+    input: ModuleInput,
+    owner_module: CheckedArtifact.ModuleId,
+    statement: can.CIR.Statement.Idx,
+) bool {
+    const root_statement = input.public_type_decl orelse return false;
+    if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) return false;
+    const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
+    const type_name = typeDeclName(input.module_env, statement) orelse return false;
+    return nameIsPublic(type_name, root_name);
+}
+
+fn publicItemPath(alloc: Allocator, input: ModuleInput, source_name: []const u8) Allocator.Error![]const u8 {
+    const root_statement = input.public_type_decl orelse return try alloc.dupe(u8, source_name);
+    const root_name = typeDeclName(input.module_env, root_statement) orelse unreachable;
+    std.debug.assert(nameIsPublic(source_name, root_name));
+    return if (source_name.len == root_name.len)
+        try alloc.dupe(u8, input.exposed_name)
+    else
+        try std.fmt.allocPrint(alloc, "{s}{s}", .{ input.exposed_name, source_name[root_name.len..] });
+}
+
 fn inputIncludesName(
     input: ModuleInput,
     exposed_names: *const std.StringHashMapUnmanaged(void),
@@ -506,6 +640,10 @@ fn inputIncludesName(
     if (input.exposed_names != null) {
         const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
         return exposed_names.contains(root_name);
+    }
+    if (input.public_type_decl) |root_statement| {
+        const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
+        return nameIsPublic(name, root_name);
     }
     return module_kind != .type_module or nameIsPublic(name, input.exposed_name);
 }

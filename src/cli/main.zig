@@ -17323,19 +17323,21 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         }
     }
 
-    const public_modules = try build_env.getPublicRootModules(ctx.gpa);
-    defer ctx.gpa.free(public_modules);
-
     var inputs = std.ArrayListUnmanaged(bump.extract.ModuleInput).empty;
     defer inputs.deinit(ctx.gpa);
 
-    for (public_modules) |module| {
-        const artifact = module.semantic.checked_artifact orelse return error.Internal;
-        try inputs.append(ctx.gpa, .{
-            .exposed_name = module.name,
-            .module_env = module.semantic.env,
-            .artifact = artifact,
-        });
+    {
+        const public_modules = try build_env.getPublicRootModules(ctx.gpa);
+        defer ctx.gpa.free(public_modules);
+        for (public_modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse return error.Internal;
+            try inputs.append(ctx.gpa, .{
+                .exposed_name = module.name,
+                .module_env = module.semantic.env,
+                .artifact = artifact,
+                .public_type_decl = module.public_type_decl,
+            });
+        }
     }
 
     if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
@@ -17349,8 +17351,25 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
+    const api_input_count = inputs.items.len;
 
-    if (inputs.items.len == 0) {
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(ctx.gpa);
+        defer ctx.gpa.free(routing_modules);
+        for (routing_modules) |module| {
+            if (std.mem.eql(u8, module.package_name, root_name)) continue;
+            if (module.public_type_decl == null) continue;
+            const artifact = module.semantic.checked_artifact orelse return error.Internal;
+            try inputs.append(ctx.gpa, .{
+                .exposed_name = module.name,
+                .module_env = module.semantic.env,
+                .artifact = artifact,
+                .public_type_decl = module.public_type_decl,
+            });
+        }
+    }
+
+    if (api_input_count == 0) {
         return ctx.fail(.{ .bump_failed = .{
             .title = "No Exposed Modules",
             .message = try std.fmt.allocPrint(
@@ -17362,7 +17381,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
     }
 
     var extract_failure: ?bump.extract.Failure = null;
-    return bump.extract.extractPackageApi(ctx.gpa, inputs.items, &origins, &extract_failure) catch |err| switch (err) {
+    return bump.extract.extractPackageApi(ctx.gpa, inputs.items, api_input_count, &origins, &extract_failure) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.ExtractFailed => {
             const info = extract_failure.?;
@@ -17526,6 +17545,26 @@ fn generateDocs(
     };
     defer ctx.gpa.free(modules);
 
+    var public_type_projections = std.ArrayList(extract.PublicTypeProjection).empty;
+    defer public_type_projections.deinit(ctx.gpa);
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(ctx.gpa);
+        defer ctx.gpa.free(routing_modules);
+        for (routing_modules) |module_info| {
+            const source_decl = module_info.public_type_decl orelse continue;
+            const artifact = module_info.semantic.checked_artifact orelse unreachable;
+            try public_type_projections.append(ctx.gpa, .{
+                .public_name = module_info.name,
+                .package_name = build_env.displayNameForPackage(module_info.package_name),
+                .source_env = module_info.semantic.env,
+                .source_identity = &artifact.key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = module_info.public_order,
+            });
+        }
+    }
+    extract.sortPublicTypeProjections(public_type_projections.items);
+
     for (modules) |module_info| {
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
@@ -17534,6 +17573,16 @@ fn generateDocs(
 
         var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
             .exposed_names = module_info.docs_exposed_names,
+            .public_type = if (module_info.public_type_decl) |source_decl| .{
+                .public_name = module_info.name,
+                .package_name = sched_pkg_name,
+                .source_env = module_info.semantic.env,
+                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = module_info.public_order,
+            } else null,
+            .public_types = public_type_projections.items,
+            .checked_artifact = module_info.semantic.checked_artifact,
         }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
