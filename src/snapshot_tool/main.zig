@@ -5924,6 +5924,8 @@ test "no Builtin module leaks in snapshots" {
     // This test searches all snapshot files for the string "Builtin" (case-sensitive)
     // to detect any leaks. We use case-sensitive search because lowercase "builtin"
     // appears in harmless contexts like "(builtin)" annotations in debug output.
+    // The report title "Builtin Type Shadowed" is legitimate user-facing wording
+    // (it talks about builtin types, not the Builtin module) and is exempt.
 
     const allocator = std.testing.allocator;
 
@@ -5978,9 +5980,16 @@ fn searchDirectoryForBuiltin(
                     const content = try dir.readFileAlloc(std.testing.io, entry.name, allocator, .limited(10 * 1024 * 1024));
                     defer allocator.free(content);
 
-                    // Search for "Builtin" (case-sensitive)
-                    if (std.mem.find(u8, content, "Builtin")) |_| {
+                    // Search for "Builtin" (case-sensitive), ignoring the
+                    // legitimate "Builtin Type Shadowed" report title.
+                    var search_start: usize = 0;
+                    while (std.mem.findPos(u8, content, search_start, "Builtin")) |index| {
+                        if (std.mem.startsWith(u8, content[index..], "Builtin Type Shadowed")) {
+                            search_start = index + "Builtin Type Shadowed".len;
+                            continue;
+                        }
                         try files_with_builtin.append(try allocator.dupe(u8, full_path));
+                        break;
                     }
                 }
             },
