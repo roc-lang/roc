@@ -6258,38 +6258,23 @@ pub const Interpreter = struct {
             },
 
             // ── Numeric to_str ops ──
-            .u8_to_str => self.numToStr(u8, args[0], ll.ret_layout),
-            .i8_to_str => self.numToStr(i8, args[0], ll.ret_layout),
-            .u16_to_str => self.numToStr(u16, args[0], ll.ret_layout),
-            .i16_to_str => self.numToStr(i16, args[0], ll.ret_layout),
-            .u32_to_str => self.numToStr(u32, args[0], ll.ret_layout),
-            .i32_to_str => self.numToStr(i32, args[0], ll.ret_layout),
-            .u64_to_str => self.numToStr(u64, args[0], ll.ret_layout),
             .i64_to_str => blk: {
                 trace.log("i64_to_str: arg={d} ret_layout={any}", .{ args[0].read(i64), ll.ret_layout });
-                break :blk self.numToStr(i64, args[0], ll.ret_layout);
+                break :blk self.numberToString(comptime numeric_conversion.getStringConversionSpec(.i64_to_str).?, args[0], ll.ret_layout);
             },
-            .u128_to_str => self.numToStr(u128, args[0], ll.ret_layout),
-            .i128_to_str => self.numToStr(i128, args[0], ll.ret_layout),
-            .dec_to_str => blk: {
-                const dec = RocDec{ .num = args[0].read(i128) };
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return error.Crash;
-                const result = builtins.dec.to_str(dec, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f32_to_str => blk: {
-                const bits: u64 = @as(u64, @as(u32, @bitCast(args[0].read(f32))));
-                const result = builtins.str.floatToStrFromBits(bits, true, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
-            .f64_to_str => blk: {
-                const bits: u64 = @bitCast(args[0].read(f64));
-                const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
-                break :blk self.rocStrToValue(result, ll.ret_layout);
-            },
+            inline .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            => |op| self.numberToString(comptime numeric_conversion.getStringConversionSpec(op).?, args[0], ll.ret_layout),
             .f32_to_bits => blk: {
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].read(f32))));
@@ -8545,6 +8530,27 @@ pub const Interpreter = struct {
                 .trunc, .@"try" => unreachable,
             },
             .dec => unreachable,
+        };
+    }
+
+    /// Render a number as its decimal text.
+    fn numberToString(self: *LirInterpreter, comptime spec: numeric_conversion.StringConversion, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
+        comptime std.debug.assert(spec.direction == .to_str);
+        return switch (comptime spec.num.class()) {
+            .int => self.numToStr(spec.num.ZigType(), arg, ret_layout),
+            .float => blk: {
+                const is_f32 = comptime spec.num == .f32;
+                const bits: u64 = if (is_f32) @as(u32, @bitCast(arg.read(f32))) else @bitCast(arg.read(f64));
+                break :blk self.rocStrToValue(builtins.str.floatToStrFromBits(bits, is_f32, &self.roc_ops), ret_layout);
+            },
+            .dec => blk: {
+                const dec = RocDec{ .num = arg.read(i128) };
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                break :blk self.rocStrToValue(builtins.dec.to_str(dec, &self.roc_ops), ret_layout);
+            },
         };
     }
 
