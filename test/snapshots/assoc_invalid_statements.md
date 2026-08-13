@@ -24,53 +24,53 @@ Counter := [].{
 }
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - assoc_invalid_statements.md:2:5:2:10
-NOT IMPLEMENTED - assoc_invalid_statements.md:4:5:4:17
-NOT IMPLEMENTED - assoc_invalid_statements.md:6:5:6:13
-NOT IMPLEMENTED - assoc_invalid_statements.md:8:5:10:6
-NOT IMPLEMENTED - assoc_invalid_statements.md:12:5:14:6
-NOT IMPLEMENTED - assoc_invalid_statements.md:16:5:16:10
+INVALID STATEMENT - assoc_invalid_statements.md:2:5:2:10
+INVALID STATEMENT - assoc_invalid_statements.md:4:5:4:17
+INVALID STATEMENT - assoc_invalid_statements.md:6:5:6:13
+INVALID STATEMENT - assoc_invalid_statements.md:8:5:10:6
+INVALID STATEMENT - assoc_invalid_statements.md:12:5:14:6
+INVALID STATEMENT - assoc_invalid_statements.md:16:5:16:10
 # PROBLEMS
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: dbg statements in ──┐
-└┬────────────────┘  associated blocks.                                       │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `dbg` is not allowed in an associated ───┐
+└┬──────────────────┘  block.                                                 │
  │                                                                            │
  │  dbg 5                                                                     │
  │  ‾‾‾‾‾                                                                     │
  └─────────────────────────────────────────── assoc_invalid_statements.md:2:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: crash statements ───┐
-└┬────────────────┘  in associated blocks.                                    │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `crash` is not allowed in an ────────────┐
+└┬──────────────────┘  associated block.                                      │
  │                                                                            │
  │  crash "boom"                                                              │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────── assoc_invalid_statements.md:4:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: return statements ──┐
-└┬────────────────┘  in associated blocks.                                    │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `return` is not allowed in an ───────────┐
+└┬──────────────────┘  associated block.                                      │
  │                                                                            │
  │  return 5                                                                  │
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └─────────────────────────────────────────── assoc_invalid_statements.md:6:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: for statements in ──┐
-└┬────────────────┘  associated blocks.                                       │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `for` is not allowed in an associated ───┐
+└┬──────────────────┘  block.                                                 │
  │                                                                            │
  │  for x in [1, 2] {                                                         │
  │      dbg x                                                                 │
@@ -78,13 +78,13 @@ NOT IMPLEMENTED - assoc_invalid_statements.md:16:5:16:10
  │                                                                            │
  └─────────────────────────────────────────── assoc_invalid_statements.md:8:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: while statements ───┐
-└┬────────────────┘  in associated blocks.                                    │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `while` is not allowed in an ────────────┐
+└┬──────────────────┘  associated block.                                      │
  │                                                                            │
  │  while 1 == 2 {                                                            │
  │      dbg 3                                                                 │
@@ -92,20 +92,20 @@ NOT IMPLEMENTED - assoc_invalid_statements.md:16:5:16:10
  │                                                                            │
  └────────────────────────────────────────── assoc_invalid_statements.md:12:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: break statements ───┐
-└┬────────────────┘  in associated blocks.                                    │
+┌───────────────────┐
+│ INVALID STATEMENT ├─ The statement `break` is not allowed in an ────────────┐
+└┬──────────────────┘  associated block.                                      │
  │                                                                            │
  │  break                                                                     │
  │  ‾‾‾‾‾                                                                     │
  └────────────────────────────────────────── assoc_invalid_statements.md:16:5 ┘
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+    Only associated values, type declarations, and type annotations are allowed
+    in an associated block.
 
 # TOKENS
 ~~~zig

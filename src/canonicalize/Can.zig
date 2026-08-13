@@ -3690,16 +3690,17 @@ fn recordAssociatedValue(
 ///
 /// The parser rejects some statements before canonicalization gets to them, but not
 /// all of them: the ones routed here reach this point silently, so without this they
-/// would be dropped without any diagnostic at all.
+/// would be dropped without any diagnostic at all. This mirrors how the top level
+/// rejects the same statements.
 fn reportInvalidAssociatedStatement(
     self: *Self,
-    feature_text: []const u8,
+    keyword: []const u8,
     region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!void {
-    const feature = try self.env.insertString(feature_text);
+    const string_idx = try self.env.insertString(keyword);
     try self.env.pushDiagnostic(Diagnostic{
-        .not_implemented = .{
-            .feature = feature,
+        .invalid_associated_statement = .{
+            .stmt = string_idx,
             .region = self.parse_ir.tokenizedRegionToRegion(region),
         },
     });
@@ -4065,12 +4066,12 @@ fn canonicalizeAssociatedItems(
                     },
                 });
             },
-            .crash => |crash_stmt| try self.reportInvalidAssociatedStatement("crash statements in associated blocks", crash_stmt.region),
-            .dbg => |dbg_stmt| try self.reportInvalidAssociatedStatement("dbg statements in associated blocks", dbg_stmt.region),
-            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement("for statements in associated blocks", for_stmt.region),
-            .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while statements in associated blocks", while_stmt.region),
-            .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return statements in associated blocks", return_stmt.region),
-            .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break statements in associated blocks", break_stmt.region),
+            .crash => |crash_stmt| try self.reportInvalidAssociatedStatement("crash", crash_stmt.region),
+            .dbg => |dbg_stmt| try self.reportInvalidAssociatedStatement("dbg", dbg_stmt.region),
+            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement("for", for_stmt.region),
+            .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
+            .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
+            .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
             .@"var", .expr, .expect, .file_import, .malformed => {
                 // var, expr, file_import and malformed are already reported by the parser.
                 // expect is not reported by anything today; see #10730 for whether it should
