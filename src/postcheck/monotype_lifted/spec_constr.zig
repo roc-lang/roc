@@ -680,14 +680,14 @@ const SpecAdmission = enum {
     denied_spec_count,
 };
 
-/// The phase that owns a clone. Loop-exit projection is deliberately separate
+/// The phase that owns a clone. Loop-exit selection is deliberately separate
 /// from specialization and ordinary rewrites: their full lexical clones can
 /// expose another projectable loop through an inlined callee, so only the final
-/// call-opaque projection phase may initiate another selected exit ABI.
+/// call-opaque exit-selection phase may initiate another selected exit ABI.
 const ClonePurpose = enum {
     specialization,
     rewrite,
-    loop_exit_projection,
+    loop_exit_selection,
 };
 
 const InlineCallMode = enum {
@@ -3679,7 +3679,7 @@ const Pass = struct {
             const aggregate_projectable = try self.bodyHasAggregateProjectableLoopResult(body);
             if (!tuple_projectable and !aggregate_projectable) continue;
 
-            var cloner = Cloner.initForLoopExitProjection(self);
+            var cloner = Cloner.initForLoopExitSelection(self);
             defer cloner.deinit();
             const cloned = try cloner.cloneExpr(body);
             self.program.setFn(fn_id, .{
@@ -4671,9 +4671,9 @@ const Cloner = struct {
         };
     }
 
-    fn initForLoopExitProjection(pass: *Pass) Cloner {
+    fn initForLoopExitSelection(pass: *Pass) Cloner {
         var cloner = initForRewrite(pass);
-        cloner.purpose = .loop_exit_projection;
+        cloner.purpose = .loop_exit_selection;
         cloner.inline_calls = .none;
         cloner.rewrite_call_patterns = false;
         cloner.emit_callable_workers = false;
@@ -5952,7 +5952,7 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
-        if (self.purpose == .loop_exit_projection) {
+        if (self.purpose == .loop_exit_selection) {
             if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
         }
 
@@ -12528,7 +12528,7 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
     );
 }
 
-test "loop exit projection clone is isolated from ordinary rewrites" {
+test "loop exit selection clone is isolated from ordinary rewrites" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
@@ -12543,12 +12543,12 @@ test "loop exit projection clone is isolated from ordinary rewrites" {
     try std.testing.expect(rewrite.rewrite_call_patterns);
     try std.testing.expect(rewrite.emit_callable_workers);
 
-    var projection = Cloner.initForLoopExitProjection(&pass);
-    defer projection.deinit();
-    try std.testing.expectEqual(ClonePurpose.loop_exit_projection, projection.purpose);
-    try std.testing.expectEqual(InlineCallMode.none, projection.inline_calls);
-    try std.testing.expect(!projection.rewrite_call_patterns);
-    try std.testing.expect(!projection.emit_callable_workers);
+    var exit_selection = Cloner.initForLoopExitSelection(&pass);
+    defer exit_selection.deinit();
+    try std.testing.expectEqual(ClonePurpose.loop_exit_selection, exit_selection.purpose);
+    try std.testing.expectEqual(InlineCallMode.none, exit_selection.inline_calls);
+    try std.testing.expect(!exit_selection.rewrite_call_patterns);
+    try std.testing.expect(!exit_selection.emit_callable_workers);
 }
 
 test "SpecConstr preserves record update ordering while exposing its final shape" {
