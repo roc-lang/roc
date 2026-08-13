@@ -5941,32 +5941,6 @@ Builtin :: [].{
 			}
 		}
 
-		## Iterate over the key-value pairs of a dictionary, in the same order
-		## as [Dict.to_list].
-		## ```roc
-		## expect List.from_iter(Dict.empty()
-		##            .insert("Apples", 12.U64)
-		##            .insert("Oranges", 24)
-		##            .iter()) == [("Apples", 12), ("Oranges", 24)]
-		## ```
-		iter : Dict(k, v) -> Iter((k, v))
-		iter = |dict| match dict {
-			HashMap(data) => {
-				entries_len = List.len(data.entries)
-
-				Iter.custom(
-					0,
-					Known(entries_len),
-					|index|
-						if index == entries_len {
-							Err(NoMore)
-						} else {
-							Ok((list_get_unsafe(data.entries, index), index + 1))
-						},
-				)
-			}
-		}
-
 		## Build a value by folding through each key-value pair in the
 		## dictionary. Starting with a given `state` value, this runs the
 		## given `step` function on each pair, using its return value as
