@@ -103,6 +103,7 @@ const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
 const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
 const NonConcreteDefaultValue = problem_mod.NonConcreteDefaultValue;
 const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
+const CircularValueDefinition = problem_mod.CircularValueDefinition;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
@@ -1030,6 +1031,7 @@ pub const ReportBuilder = struct {
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
             .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
             .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
+            .circular_value_definition => |data| return self.buildCircularValueDefinitionReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
@@ -3128,6 +3130,26 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
         try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
+
+        return report;
+    }
+
+    fn buildCircularValueDefinitionReport(
+        self: *Self,
+        data: CircularValueDefinition,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Circular Value Definition", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The value"),
+            D.ident(data.ident),
+            D.bytes("is part of a recursive non-function definition cycle."),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
 
         return report;
     }
