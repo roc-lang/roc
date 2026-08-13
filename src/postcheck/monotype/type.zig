@@ -1344,6 +1344,7 @@ pub const Store = struct {
         node: Content,
         open: []const TypeId,
     ) ?usize {
+        if (open.len == 0) return null;
         if (node != .named) return null;
         const named = node.named;
         if (named.kind == .alias) return null;
