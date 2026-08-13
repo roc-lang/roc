@@ -48,11 +48,11 @@ r = 1..<n + 1
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 227)
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 237)
 			(receiver
 				(e-num (value "1")))
 			(args
-				(e-dispatch-call (method "plus") (constraint-fn-var 221)
+				(e-dispatch-call (method "plus") (constraint-fn-var 231)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
@@ -64,8 +64,8 @@ r = 1..<n + 1
 (inferred-types
 	(defs
 		(patt (type "Dec"))
-		(patt (type "Iter(Dec)")))
+		(patt (type "Range(Dec)")))
 	(expressions
 		(expr (type "Dec"))
-		(expr (type "Iter(Dec)"))))
+		(expr (type "Range(Dec)"))))
 ~~~

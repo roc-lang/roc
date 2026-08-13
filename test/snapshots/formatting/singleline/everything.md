@@ -491,7 +491,7 @@ NO CHANGE
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 354)
+					(e-call (constraint-fn-var 364)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local
