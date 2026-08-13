@@ -495,6 +495,379 @@ test "check type - record - opt - field supplied with wrong type" {
     );
 }
 
+test "check type - record - opt - absent field infers as optional" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\{ hello: Str, world ?: _field }
+    );
+}
+
+test "check type - record - opt - absent field unifies with optional field anno" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset field unifies with optional field anno" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset field errors if presence mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The base field's kind resolved `required`, so the unset is rejected by
+    // the judgment (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Required Field**
+        \\The `world` field is required, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record_b = { ..my_record_a, world: _  }
+        \\```
+        \\                               ^^^^^^^^
+        \\
+        \\Unsetting a field selects the missing state of an optional field—but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - unset of defaulted field rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 ?? 7 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The base field's kind resolved `defaulted`: an inline slot with no
+    // missing state, so the unset is rejected with the construction hint
+    // (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Defaulted Field**
+        \\The `world` field has a default value, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record_b = { ..my_record_a, world: _  }
+        \\```
+        \\                               ^^^^^^^^
+        \\
+        \\A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - unset of missing field is a mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, wrold: _  }
+    ;
+    // Typo'd field name against a closed base row: the kind-flexible probe
+    // must NOT be absorbed (a concrete `optional` demand would be), so this
+    // is an ordinary missing-field mismatch (design.md "In Progress:
+    // Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This record does not have a `wrold` field.
+        \\```roc
+        \\my_record_b = { ..my_record_a, wrold: _  }
+        \\```
+        \\                  ^^^^^^^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `world`
+        \\    - `hello`
+        \\
+        \\So maybe `wrold` should be `world`?
+        \\
+        \\__Note:__ You cannot add new fields to a record with the record update syntax.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - mixed set and unset in one update" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, hello: "b", world: _ }
+    ;
+    // Each mentioned field runs its own probe against the base, then one
+    // wholesale base ~ result unify: the set field checks at the payload
+    // type, the unset field selects the missing state, and the result type
+    // equals the base type (design.md "In Progress: Unsetting an Optional
+    // Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset pins an undetermined base kind to optional" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record_a = { world: 15 }
+        \\
+        \\my_record_b = { ..my_record_a, world: _ }
+    ;
+    // The base literal's field kind is still flex when the unset probes it.
+    // An unset is presence-evidence for optionality, so the judgment pins
+    // the kind to `optional` (before the literal defaulting sweep could
+    // commit `required`), and BOTH records carry `world ?:` (design.md "In
+    // Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\{ world ?: Dec }
+    );
+}
+
+test "check type - record - opt - unset through generalized function accepted at optional row" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\unset_world = |r| { ..r, world: _ }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = unset_world(my_record_a)
+    ;
+    // The unset's kind evidence is judged at the lambda's generalization
+    // boundary: the still-flex kind pins to `optional` BEFORE the scheme
+    // forms, so the scheme's row carries `world ?:` and instantiates
+    // cleanly at an optional caller row (design.md "In Progress: Unsetting
+    // an Optional Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset through generalized function rejects required row" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\unset_world = |r| { ..r, world: _ }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = unset_world(my_record_a)
+    ;
+    // The scheme's row committed `world ?:` at the lambda's generalization
+    // boundary, so instantiating it at a row whose `world` is required is
+    // an ordinary call-site mismatch—the judgment cannot be escaped through
+    // generalization (design.md "In Progress: Unsetting an Optional
+    // Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\my_record_b = unset_world(my_record_a)
+        \\```
+        \\                          ^^^^^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    MyRecord
+        \\
+        \\But `unset_world` needs the first argument to be:
+        \\
+        \\    { world ?: U8, .. }
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - construction unset rejected by required annotation" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // A construction unset joins the literal row with a flex kind; the
+    // annotation pins that kind `required`, and the judgment rejects the
+    // unset through the same path as updates (design.md "In Progress:
+    // Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Required Field**
+        \\The `world` field is required, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record = { hello : "world", world : _ }
+        \\```
+        \\                               ^^^^^^^^^
+        \\
+        \\Unsetting a field selects the missing state of an optional field—but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - construction unset rejected by defaulted annotation" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 ?? 7 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // Same judgment as above with the kind pinned `defaulted`: an unset
+    // cannot select a missing state the inline slot does not have
+    // (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Defaulted Field**
+        \\The `world` field has a default value, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record = { hello : "world", world : _ }
+        \\```
+        \\                               ^^^^^^^^^
+        \\
+        \\A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - required field where optional expected rejected (presence is invariant)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyReq : { hello : Str, world : U8 }
+        \\MyOpt : { hello : Str, world ?: U8 }
+        \\
+        \\req_record : MyReq
+        \\req_record = { hello : "a", world : 15 }
+        \\
+        \\opt_record : MyOpt
+        \\opt_record = req_record
+    ;
+    // Presence is INVARIANT: a committed `required` kind does NOT subsume
+    // into an `optional` demand (`required ~ optional` is a mismatch in
+    // both directions—the two kinds have different runtime slot layouts).
+    // There is no "a required field can be used where an optional one is
+    // expected" rule; only a still-FLEX kind (creation semantics) can join
+    // an optional row.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\opt_record = req_record
+        \\```
+        \\             ^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    MyReq
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    MyOpt
+        \\
+        \\**Hint:** The `world` field is optional, so it may be missing. It cannot be used as if it is always present—access it with `.?` instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - optional field where required expected rejected (presence is invariant)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyReq : { hello : Str, world : U8 }
+        \\MyOpt : { hello : Str, world ?: U8 }
+        \\
+        \\opt_record : MyOpt
+        \\opt_record = { hello : "a", world : 15 }
+        \\
+        \\req_record : MyReq
+        \\req_record = opt_record
+    ;
+    // The mirror of the invariance test above: a committed `optional` kind
+    // does not subsume into a `required` demand either.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\req_record = opt_record
+        \\```
+        \\             ^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    MyOpt
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    MyReq
+        \\
+        \\**Hint:** The `world` field is optional here, so it may be missing—but I expected a record whose `world` field is always present.
+        \\
+        \\
+    );
+}
+
 test "check type - record - opt - direct access rejected" {
     const source =
         \\main! = |_| {}

@@ -244,6 +244,8 @@ pub const Store = struct {
                     .tuple_access_needs_annotation,
                     .invalid_tuple_access,
                     .optional_access_of_required_field,
+                    .unset_of_required_field,
+                    .unset_of_defaulted_field,
                     .effectful_default_value,
                     .non_concrete_default_value,
                     .recursive_default_value,
