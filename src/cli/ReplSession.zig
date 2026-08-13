@@ -3160,7 +3160,7 @@ test "Repl - issue 10576 generalized record update rejects an optional field" {
 
     const result = try repl.step("f(v)");
     defer testing.allocator.free(result);
-    try testing.expect(std.mem.find(u8, result, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, result, "type mismatch") != null);
 }
 
 test "Repl - top-level destructure definitions publish their binders" {

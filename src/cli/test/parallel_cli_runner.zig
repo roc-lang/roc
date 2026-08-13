@@ -1412,8 +1412,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test --verbose caches failure reports (dev)", .backend = .dev, .body = .{ .custom = .verbose_caches_failure_reports } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test non-verbose run caches verbose failure reports for later verbose run (interpreter)", .backend = .interpreter, .body = .{ .custom = .non_verbose_caches_verbose_reports } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test non-verbose run caches verbose failure reports for later verbose run (dev)", .backend = .dev, .body = .{ .custom = .non_verbose_caches_verbose_reports } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test with nested list chunks does not panic on layout upgrade (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/issue8699.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "FAIL" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "overflow" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test with nested list chunks does not panic on layout upgrade (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/issue8699.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "FAIL" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "overflow" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test with nested list chunks does not panic on layout upgrade (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/issue8699.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "fail" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "overflow" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test with nested list chunks does not panic on layout upgrade (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/issue8699.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "fail" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "overflow" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains source snippet (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "add(1, 1) == 3" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test failure output contains source snippet (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "add(1, 1) == 3" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 4633: failed expect prints mentioned values (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue4633ExpectContext.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Mentioned values:" }, .{ .stream = .stderr, .text = "x = 5" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -6368,7 +6368,7 @@ fn customOptimizedTranscriptDeterministicBeforeSummary(io: std.Io, allocator: Al
 fn customOptimizedFailureTranscriptDeterministicBeforeSummary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const roc_file = "test/cli/SomeFailTests.roc";
     const expected_failure = [_]OutputNeedle{
-        .{ .stream = .stderr, .text = "FAIL" },
+        .{ .stream = .stderr, .text = "fail" },
         .{ .stream = .stderr, .text = "add(1, 1) == 3" },
     };
     const not_cached = [_]OutputNeedle{
@@ -6410,7 +6410,7 @@ fn customOptimizedFailureTranscriptDeterministicBeforeSummary(io: std.Io, alloca
     };
 
     const expected_cached_failure = [_]OutputNeedle{
-        .{ .stream = .stderr, .text = "FAIL" },
+        .{ .stream = .stderr, .text = "fail" },
         .{ .stream = .stderr, .text = "add(1, 1) == 3" },
         .{ .stream = .stderr, .text = "(cached)" },
     };
@@ -6434,7 +6434,7 @@ fn customOptimizedFailureTranscriptDeterministicBeforeSummary(io: std.Io, alloca
 fn customOptimizedColorModeCacheReplay(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const roc_file = "test/cli/SomeFailTests.roc";
     const expected_failure = [_]OutputNeedle{
-        .{ .stream = .stderr, .text = "FAIL" },
+        .{ .stream = .stderr, .text = "fail" },
         .{ .stream = .stderr, .text = "add(1, 1) == 3" },
     };
 
@@ -6472,7 +6472,7 @@ fn customOptimizedColorModeCacheReplay(io: std.Io, allocator: Allocator, env: *c
         .roc_file = roc_file,
         .exit = .{ .code = 1 },
         .contains = &.{
-            .{ .stream = .stderr, .text = "FAIL" },
+            .{ .stream = .stderr, .text = "fail" },
             .{ .stream = .stderr, .text = "add(1, 1) == 3" },
             .{ .stream = .stderr, .text = "(cached)" },
         },
@@ -6549,8 +6549,8 @@ fn customVerboseWorksFromCache(io: std.Io, allocator: Allocator, env: *const Cas
 fn customVerboseCachesFailureReports(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "FAIL" }} })) |failure| return failure;
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "FAIL" } } })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "fail" }} })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--verbose" }, .roc_file = "test/cli/SomeFailTests.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "(cached)" }, .{ .stream = .stderr, .text = "fail" } } })) |failure| return failure;
     return null;
 }
 
@@ -7761,9 +7761,9 @@ fn runGlueRuntimeCase(
                 .args = &.{},
                 .contains = &.{.{ .stream = .stderr, .text = "PASS glue-runtime" }},
                 .not_contains = &.{
-                    .{ .stream = .stderr, .text = "FAIL" },
+                    .{ .stream = .stderr, .text = "fail" },
                     .{ .stream = .stderr, .text = "panic" },
-                    .{ .stream = .stdout, .text = "FAIL" },
+                    .{ .stream = .stdout, .text = "fail" },
                 },
             })) |failure| {
                 return addPreservedWorkDirMessage(allocator, failure, env.dirs.work_dir);

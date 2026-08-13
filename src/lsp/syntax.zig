@@ -832,7 +832,6 @@ pub const SyntaxChecker = struct {
         const range = self.rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
-
             .runtime_error, .fatal => 1,
         };
 
