@@ -8512,36 +8512,35 @@ fn preparedWasmHostCacheKey(
     platform_files_pre: []const []const u8,
     platform_files_post: []const []const u8,
     builtins_bytes: []const u8,
-    boxy_runtime_bytes: ?[]const u8,
+    boxy_runtime_bytes: []const u8,
 ) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-prepared-wasm-host-v2");
+    updateHashBytes(&hasher, "roc-prepared-wasm-host-v3");
     updateHashU32(&hasher, @intCast(platform_files_pre.len));
     for (platform_files_pre) |bytes| updateHashBytes(&hasher, bytes);
     updateHashU32(&hasher, @intCast(platform_files_post.len));
     for (platform_files_post) |bytes| updateHashBytes(&hasher, bytes);
     updateHashBytes(&hasher, builtins_bytes);
-    updateHashBool(&hasher, boxy_runtime_bytes != null);
-    if (boxy_runtime_bytes) |bytes| updateHashBytes(&hasher, bytes);
+    updateHashBytes(&hasher, boxy_runtime_bytes);
     return hasher.finalResult();
 }
 
-test "prepared Wasm host cache key covers ordered inputs and runtime variant" {
+test "prepared Wasm host cache key covers ordered inputs and Boxy runtime bytes" {
     const pre = [_][]const u8{ "host-a", "host-b" };
     const reversed_pre = [_][]const u8{ "host-b", "host-a" };
     const post = [_][]const u8{"host-post"};
-    const baseline_key = preparedWasmHostCacheKey(&pre, &post, "builtins", null);
-    const repeated_key = preparedWasmHostCacheKey(&pre, &post, "builtins", null);
-    const reordered_key = preparedWasmHostCacheKey(&reversed_pre, &post, "builtins", null);
-    const regrouped_key = preparedWasmHostCacheKey(&post, &pre, "builtins", null);
-    const changed_builtins_key = preparedWasmHostCacheKey(&pre, &post, "other-builtins", null);
-    const boxy_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+    const baseline_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+    const repeated_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+    const reordered_key = preparedWasmHostCacheKey(&reversed_pre, &post, "builtins", "boxy-runtime");
+    const regrouped_key = preparedWasmHostCacheKey(&post, &pre, "builtins", "boxy-runtime");
+    const changed_builtins_key = preparedWasmHostCacheKey(&pre, &post, "other-builtins", "boxy-runtime");
+    const changed_runtime_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "other-runtime");
 
     try std.testing.expectEqual(baseline_key, repeated_key);
     try std.testing.expect(!std.mem.eql(u8, &baseline_key, &reordered_key));
     try std.testing.expect(!std.mem.eql(u8, &baseline_key, &regrouped_key));
     try std.testing.expect(!std.mem.eql(u8, &baseline_key, &changed_builtins_key));
-    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &boxy_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &changed_runtime_key));
 }
 
 const PreparedWasmHost = union(enum) {
@@ -8563,16 +8562,15 @@ const PreparedWasmHost = union(enum) {
     }
 };
 
-/// Run the platform inputs through a real relocatable link exactly once for
-/// each content-addressed base/Boxy variant. The returned object has already
-/// had Wasm's strong/weak and COMDAT rules applied, so later surgical links do
-/// not need to reconstruct linker semantics.
+/// Link the platform, builtins, and Boxy runtime exactly once for each
+/// content-addressed input set. The returned object has already had Wasm's
+/// strong/weak and COMDAT rules applied, so later surgical links do not need
+/// to reconstruct linker semantics.
 fn loadPreparedWasmHost(
     ctx: *CliCtx,
     cache_manager: *CacheManager,
     cache_dir: []const u8,
     link_inputs: PlatformLinkInputs,
-    needs_boxy_runtime: bool,
 ) CliMainError!PreparedWasmHost {
     var host_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &host_inputs);
@@ -8587,10 +8585,7 @@ fn loadPreparedWasmHost(
     const post_end = host_inputs.items.len;
 
     const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
-    const runtime_bytes = if (needs_boxy_runtime)
-        BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget
-    else
-        null;
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
     const cache_key = preparedWasmHostCacheKey(
         host_inputs.items[0..pre_end],
         host_inputs.items[pre_end..post_end],
@@ -8654,14 +8649,12 @@ fn loadPreparedWasmHost(
     };
     linker_inputs.appendAssumeCapacity(builtins_path);
 
-    if (runtime_bytes) |bytes| {
-        const runtime_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_boxy_runtime.o" });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
-            std.log.err("Failed to write Boxy runtime for prepared host: {}", .{err});
-            return error.WasmOutputWriteFailed;
-        };
-        linker_inputs.appendAssumeCapacity(runtime_path);
-    }
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_boxy_runtime.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch |err| {
+        std.log.err("Failed to write Boxy runtime for prepared host: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+    linker_inputs.appendAssumeCapacity(runtime_path);
     for (host_inputs.items[pre_end..post_end], 0..) |bytes, i| {
         const extension = if (backend.wasm.ObjectArchive.isArchive(bytes)) ".a" else ".o";
         const filename = try std.fmt.allocPrint(ctx.arena, "platform-post-{d}{s}", .{ i, extension });
@@ -8924,6 +8917,59 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
         if (config.global_base) |global_base| {
             module.setDataBase(global_base);
         }
+    }
+}
+
+fn addWasmObject(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    path: []const u8,
+    member_name: ?[]const u8,
+    bytes: []const u8,
+) (backend.wasm.WasmModule.ParseError || backend.wasm.WasmModule.MergeError)!void {
+    var next_module = try preloadWasmObject(ctx, path, member_name, bytes);
+    defer next_module.deinit();
+
+    var merge_result = try module.mergeModule(&next_module);
+    merge_result.deinit();
+}
+
+fn addWasmInput(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    owned_inputs: *std.ArrayList([]u8),
+    path: []const u8,
+) CliMainError!void {
+    const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
+
+    if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
+        try addWasmObject(ctx, module, path, null, bytes);
+        return;
+    }
+
+    if (!backend.wasm.ObjectArchive.isArchive(bytes)) {
+        std.log.err("Failed to preload wasm input {s}: {}", .{ path, error.InvalidMagic });
+        return error.InvalidMagic;
+    }
+
+    var member_count: usize = 0;
+    var iter = backend.wasm.ObjectArchive.Iterator.init(bytes) catch |err| {
+        std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+        return err;
+    };
+
+    while (true) {
+        const member = (iter.next() catch |err| {
+            std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
+            return err;
+        }) orelse break;
+        member_count += 1;
+        try addWasmObject(ctx, module, path, member.name, member.bytes);
+    }
+
+    if (member_count == 0) {
+        std.log.err("Wasm archive {s} does not contain object members", .{path});
+        return error.EmptyArchive;
     }
 }
 
@@ -9222,21 +9268,48 @@ fn rocBuildWasmSurgical(
         return;
     }
 
-    const prepared_host = try loadPreparedWasmHost(
-        ctx,
-        cache_manager,
-        wasm_host_cache_dir,
-        link_inputs,
-        lirResultNeedsBoxyRuntime(&lowered.lir_result),
-    );
-    defer prepared_host.deinit(ctx.gpa);
+    const needs_boxy_runtime = lirResultNeedsBoxyRuntime(&lowered.lir_result);
+    var prepared_host: ?PreparedWasmHost = null;
+    defer if (prepared_host) |host| host.deinit(ctx.gpa);
+    var wasm_module_owned_here = true;
+    var wasm_module = if (needs_boxy_runtime) blk: {
+        prepared_host = try loadPreparedWasmHost(
+            ctx,
+            cache_manager,
+            wasm_host_cache_dir,
+            link_inputs,
+        );
+        break :blk try preloadWasmObject(ctx, "Boxy-prepared Wasm host", null, prepared_host.?.bytes());
+    } else backend.wasm.WasmModule.init(ctx.gpa);
+    errdefer if (wasm_module_owned_here) wasm_module.deinit();
 
-    var loaded_module = true;
-    var wasm_module = try preloadWasmObject(ctx, "prepared Wasm host", null, prepared_host.bytes());
+    if (needs_boxy_runtime) {
+        try wasm_module.prepareObjectAbiForFinalLink();
+    } else {
+        for (link_inputs.platform_files_pre) |path| {
+            try addWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+        for (link_inputs.platform_files_post) |path| {
+            try addWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+
+        try wasm_module.exportGlobalSymbols();
+        try wasm_module.prepareObjectAbiForFinalLink();
+
+        const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+        if (builtins_bytes.len > 0) {
+            var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+                std.log.err("Failed to preload wasm builtins: {}", .{err});
+                return err;
+            };
+            defer builtins_module.deinit();
+
+            var merge_result = try wasm_module.mergeModule(&builtins_module);
+            merge_result.deinit();
+        }
+    }
     configureWasmDataBase(&wasm_module, link_inputs.wasm);
-    errdefer if (loaded_module) wasm_module.deinit();
 
-    try wasm_module.prepareObjectAbiForFinalLink();
     try mergeBoxySidecarWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
@@ -9254,7 +9327,7 @@ fn rocBuildWasmSurgical(
         target.cpuLevel(),
     );
     defer codegen.deinit();
-    loaded_module = false;
+    wasm_module_owned_here = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
     codegen.configureStaticDataAddressTracking();
 
@@ -9264,7 +9337,7 @@ fn rocBuildWasmSurgical(
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
-    if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
+    if (needs_boxy_runtime) try codegen.registerBoxySymbolTargets();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 

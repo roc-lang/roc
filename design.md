@@ -7874,19 +7874,20 @@ Machine-code backends lower the complete Boxy statement surface to the shared
 object and an object containing the serialized sidecar. Optimized Wasm links
 the relocatable Boxy runtime object and a static-data module containing that
 same sidecar into the emitted app object, then resolves the complete app and
-host link with Wasm LLD. Standalone Wasm dev builds prepare each distinct host
-through a content-addressed relocatable LLD link with the builtins object and,
-when LIR explicitly requires Boxy, the relocatable Boxy runtime object. Later
-builds load that cached prepared-host variant and surgically merge only the
-generated app code and its exact sidecar. The cache identity includes every
-ordered input's bytes and the selected runtime variant; changing any input or
-the explicit LIR requirement produces a different prepared host. The cached
-object preserves only the platform's original function exports, leaving
-builtins and Boxy runtime functions internal and eligible for dead-code
-elimination during the surgical link. Preparation is serialized per content
-identity across compiler processes and remains available when the checked
-module cache and generated app-object cache are disabled: it is the exact
-prepared platform link output, not a cached app result. The
+host link with Wasm LLD. When standalone Wasm dev LIR explicitly requires
+Boxy, the build prepares each distinct host through a content-addressed
+relocatable LLD link with the builtins object and relocatable Boxy runtime
+object. Later builds load that cached prepared-host variant and surgically
+merge only the generated app code and its exact sidecar. Non-Boxy dev builds
+directly use the fast surgical merge because no runtime object needs LLD
+symbol resolution. The cache identity includes every ordered input's bytes;
+changing any input produces a different prepared host. The cached object
+preserves only the platform's original function exports, leaving builtins and
+Boxy runtime functions internal and eligible for dead-code elimination during
+the surgical link. Preparation is serialized per content identity across
+compiler processes and remains available when the checked module cache and
+generated app-object cache are disabled: it is the exact prepared platform
+link output, not a cached app result. The
 standalone Wasm runtime uses direct
 data-symbol relocations rather than PIC GOT
 globals, so the partial link preserves its unresolved sidecar references for
