@@ -67,6 +67,8 @@ pub const Problem = union(enum) {
     tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
     invalid_tuple_access: InvalidTupleAccess,
     optional_access_of_required_field: OptionalAccessOfRequiredField,
+    unset_of_required_field: UnsetOfRequiredField,
+    unset_of_defaulted_field: UnsetOfDefaultedField,
     effectful_default_value: EffectfulDefaultValue,
     non_concrete_default_value: NonConcreteDefaultValue,
     recursive_default_value: RecursiveDefaultValue,
@@ -286,6 +288,23 @@ pub const TupleAccessNeedsAnnotation = struct {
 /// almost certainly not what the user intended (design.md "Existential
 /// Presence", definitely-present optional access).
 pub const OptionalAccessOfRequiredField = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// Unset (`x: _`) of a field whose presence resolved to `required`: the
+/// field is always present, so there is no missing state to select
+/// (design.md "In Progress: Unsetting an Optional Field").
+pub const UnsetOfRequiredField = struct {
+    region: base.Region,
+    field_name: Ident.Idx,
+};
+
+/// Unset (`x: _`) of a field whose presence resolved to `defaulted`: the
+/// field is an inline slot with no missing state, and "unsetting" it would
+/// have to rematerialize the default—construction behavior, not update
+/// (design.md "In Progress: Unsetting an Optional Field").
+pub const UnsetOfDefaultedField = struct {
     region: base.Region,
     field_name: Ident.Idx,
 };

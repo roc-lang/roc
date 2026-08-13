@@ -4590,7 +4590,7 @@ The kind rules:
   owning generalization boundary commits to `required` before the scheme
   forms; a generic update therefore has one stable field layout instead of
   adopting a different kind per caller. This realizes the SET side of the
-  typing frame in "Deferred: Unsetting an Optional Field" below.
+  typing frame in "In Progress: Unsetting an Optional Field" below.
 - Record DESTRUCTURE (IMPLEMENTED) is kind-flexible the same way: each
   destructured field probes the record with a fresh presence var and a
   FRESH payload var, and the binder stays unbound until the deferred
@@ -4842,7 +4842,7 @@ Deferred (explicitly not yet implemented):
   bullet above. SETTING an optional field in an update is IMPLEMENTED—
   see the record-update bullet above.)
   UNSETTING a field in an update (`{ ..r, x: _ }`) has its typing rule
-  sketched in "Deferred: Unsetting an Optional Field" below.
+  in "In Progress: Unsetting an Optional Field" below (CHECK implemented).
 
 Pinned by tests in src/check/test/type_checking_integration.zig: accepted—
 a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
@@ -5045,7 +5045,7 @@ materializes its default.
 
 ### In Progress: Unsetting an Optional Field (`{ ..r, x: _ }`, `{ x: _ }`)
 
-PARSE and CAN are IMPLEMENTED; CHECK and LOWER remain (sketches below).
+PARSE, CAN, and CHECK are IMPLEMENTED; LOWER remains (sketch below).
 `x: _` marks a field UNSET, in BOTH record update and record construction:
 the result carries `x` as an optional slot in the Missing state. Unsetting
 does NOT remove the field from the row—the `absent` presence state is gone
@@ -5162,10 +5162,15 @@ Interactions:
 
 Diagnostics (Title Case, cf. "Optional Access Of Required Field"): "Unset
 Of Required Field" and "Unset Of Defaulted Field" at check (the latter with
-the construction hint). The update probe unifies under its own
-`record_unset` context so a missing-field mismatch renders against the
-update site. (Unset in a record builder reuses the builder's existing
-not-implemented rejection at canonicalization.)
+the construction hint), both emitted by the judgment—never by unify, whose
+presence unification always merges against the probe's flex kind. The
+update probe unifies under the existing `record_update` context (no
+separate `record_unset` context): the probe passes the unset field's node
+as the context's field region, so a missing-field mismatch renders the
+typo-suggestions report against the update site, and any mismatch reaching
+the context's shared-field arm is a payload-type mismatch by construction.
+(Unset in a record builder reuses the builder's existing not-implemented
+rejection at canonicalization.)
 
 Phasing (each stage lands with its pins before the next): (1) PARSE
 (DONE)—the `_` field value as an explicit `AST.RecordField.Value` state;
@@ -5173,7 +5178,7 @@ snapshots pin the accepted form and `_` still rejected elsewhere. (2) CAN
 (DONE)—an explicit unset representation on `e_record`: a SEPARATE span of
 unset field names (name + region, no value expression; a new span, not a
 sentinel `Expr.Idx`, per AGENTS.md explicitness), valid with or without
-`..base`, plus the record-builder rejection. (3) CHECK—the
+`..base`, plus the record-builder rejection. (3) CHECK (DONE)—the
 probe, the queue's use marker, and the judgment split; pinned in
 src/check/test/type_checking_integration.zig: accepted—unset of a
 `?:`-annotated field (result keeps `x ?: τ`), unset pinning an undetermined

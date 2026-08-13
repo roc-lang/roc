@@ -1032,6 +1032,8 @@ pub const ReportBuilder = struct {
             .tuple_access_needs_annotation => |data| return self.buildTupleAccessNeedsAnnotationReport(data),
             .invalid_tuple_access => |data| return self.buildInvalidTupleAccessReport(data),
             .optional_access_of_required_field => |data| return self.buildOptionalAccessOfRequiredFieldReport(data),
+            .unset_of_required_field => |data| return self.buildUnsetOfRequiredFieldReport(data),
+            .unset_of_defaulted_field => |data| return self.buildUnsetOfDefaultedFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
             .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
             .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
@@ -3193,6 +3195,68 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for unsetting (`x: _`) a field whose presence resolved
+    /// to `required`: the field is always present, so there is no missing
+    /// state to select (design.md "In Progress: Unsetting an Optional Field").
+    fn buildUnsetOfRequiredFieldReport(
+        self: *Self,
+        data: problem_mod.UnsetOfRequiredField,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unset Of Required Field", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field is required, but it is being unset as if it were optional."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Unsetting a field selects the missing state of an optional field\u{2014}but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.");
+
+        return report;
+    }
+
+    /// Build a report for unsetting (`x: _`) a field whose presence resolved
+    /// to `defaulted`: the field is an inline slot with no missing state, and
+    /// "unsetting" it would have to rematerialize the default—construction
+    /// behavior, not update (design.md "In Progress: Unsetting an Optional
+    /// Field").
+    fn buildUnsetOfDefaultedFieldReport(
+        self: *Self,
+        data: problem_mod.UnsetOfDefaultedField,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Unset Of Defaulted Field", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(data.field_name).withAnnotation(.inline_code),
+            D.bytes("field has a default value, but it is being unset as if it were optional."),
+        }, self, &report, &report.headline);
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.");
+
+        return report;
+    }
+
     /// Build a report for direct access of an optional (`?:`) field: the
     /// field exists, but its presence is not guaranteed, so treating it as
     /// always present is the actual error—not a missing field or a typo.
@@ -3383,16 +3447,14 @@ pub const ReportBuilder = struct {
                 };
 
                 if (mb_expected_field) |expected_field| {
-                    // A supplied update field has creation semantics: its
-                    // kind-flexible probe joins an optional base field, so a
-                    // mismatch that lands here on an optional field is a
-                    // PAYLOAD-type mismatch, rendered below like any other
-                    // incompatible field type (design.md "Field Kinds").
-
-                    // If the expected  field exist, but we're here in a
-                    // type mismatch, then it must mean that the fields are
-                    // incompatible
-
+                    // A mismatch that lands here is a PAYLOAD-type mismatch:
+                    // every update probe's kind is flexible (a fresh
+                    // `.unknown` presence var), so presence unification
+                    // always merges. Rejecting an unset of a
+                    // `required`/`defaulted` base field is the judgment's
+                    // job (`judgeOptionalFieldAccesses`), reported as Unset
+                    // Of Required/Defaulted Field (design.md "Field Kinds",
+                    // "In Progress: Unsetting an Optional Field").
                     return try self.makeMismatchReport(
                         ProblemRegion{ .simple = ctx.field_region_idx },
                         &.{

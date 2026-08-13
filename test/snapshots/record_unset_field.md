@@ -94,9 +94,9 @@ NO CHANGE
 	(defs
 		(patt (type "{ opt ?: Str }"))
 		(patt (type "{ opt ?: Str }"))
-		(patt (type "{ other: Dec }")))
+		(patt (type "{ opt ?: _field, other: Dec }")))
 	(expressions
 		(expr (type "{ opt ?: Str }"))
 		(expr (type "{ opt ?: Str }"))
-		(expr (type "{ other: Dec }"))))
+		(expr (type "{ opt ?: _field, other: Dec }"))))
 ~~~

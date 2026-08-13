@@ -7176,6 +7176,12 @@ const OptionalFieldAccess = struct {
     presence_var: Var,
     field_name: Ident.Idx,
     region: Region,
+    /// Which construct produced this presence-evidence: a `.?` access or a
+    /// `x: _` unset. Both pin a still-flex kind to `optional` and reject a
+    /// kind resolved `required`/`defaulted`—the marker only selects which
+    /// problem the judgment reports (design.md "In Progress: Unsetting an
+    /// Optional Field").
+    use: enum { access, unset },
 };
 
 /// One record-literal field's minted kind var (see `literal_field_kinds`).
@@ -16404,10 +16410,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // pin as before. If no context decides a still-flex kind,
                     // the update judgment commits it to required before its
                     // owning generalization boundary.
-                    //
-                    // TODO(optional-fields): `{ x: _ }` UNSET syntax is
-                    // designed in design.md "Deferred: Unsetting an Optional
-                    // Field (`{ ..r, x: _ }`)".
                     const field_kind_var = try self.fresh(env, expr_region);
                     try self.pending_record_updates.append(self.gpa, .{
                         .presence_var = field_kind_var,
@@ -16428,6 +16430,46 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
                         .field_name = field.name,
                         .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
+                        .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
+                        .record_name = record_being_updated_name,
+                    } });
+                }
+
+                // Process each unset field. The probe mirrors `.?`-access
+                // EXACTLY (design.md "In Progress: Unsetting an Optional
+                // Field"): a kind-FLEXIBLE presence var—NOT a concrete
+                // `optional` demand, which width absorption would admit into
+                // a closed base that lacks the field, silently accepting
+                // typo'd unsets. The access is recorded and JUDGED at every
+                // generalization boundary (finalize as backstop): a kind
+                // resolved `required`/`defaulted` is rejected, a still-flex
+                // kind pins to `optional` BEFORE the scheme forms—an unset
+                // is presence-evidence for optionality, exactly like `.?`.
+                for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
+                    const field = self.cir.store.getUnsetField(field_idx);
+                    const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+
+                    const field_var = try self.fresh(env, expr_region);
+                    const presence_var = try self.fresh(env, expr_region);
+                    try self.optional_field_accesses.append(self.gpa, .{
+                        .presence_var = presence_var,
+                        .field_name = field.name,
+                        .region = field_region,
+                        .use = .unset,
+                    });
+                    const single_field_record = try self.freshFromContent(.{
+                        .structure = .{
+                            .record_unbound = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                                .name = field.name,
+                                .presence = .unknown(presence_var, field_var),
+                            }}),
+                        },
+                    }, env, expr_region);
+
+                    // Unify this record update with the record we're updating
+                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                        .field_name = field.name,
+                        .field_region_idx = @enumFromInt(@intFromEnum(field_idx)),
                         .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
                         .record_name = record_being_updated_name,
                     } });
@@ -16467,6 +16509,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     try self.scratch_record_fields.append(types_mod.RecordField{
                         .name = field.name,
                         .presence = .unknown(field_kind_var, field_value.var_),
+                    });
+                }
+
+                // Process each unset (ie absent) field: it joins the literal
+                // row directly with a kind-flexible presence var and a fresh
+                // flex payload var, and is enqueued in the SAME
+                // `optional_field_accesses` queue as `.?` and update unsets.
+                // Deliberately NOT in `literal_field_kinds`: that sweep
+                // commits never-pinned kinds to `required`, and an unset
+                // field's kind must default to `optional` instead—which the
+                // judgment's flex-pin does. An annotation demanding
+                // `required`/`defaulted` is rejected through the same
+                // judgment as updates (design.md "In Progress: Unsetting an
+                // Optional Field").
+                for (self.cir.store.sliceUnsetFields(e.unsets)) |field_idx| {
+                    const field = self.cir.store.getUnsetField(field_idx);
+                    const field_region = self.getRegionAt(ModuleEnv.varFrom(field_idx));
+
+                    const field_var = try self.fresh(env, expr_region);
+                    const presence_var = try self.fresh(env, expr_region);
+                    try self.optional_field_accesses.append(self.gpa, .{
+                        .presence_var = presence_var,
+                        .field_name = field.name,
+                        .region = field_region,
+                        .use = .unset,
+                    });
+
+                    // Append it to the scratch records array
+                    try self.scratch_record_fields.append(types_mod.RecordField{
+                        .name = field.name,
+                        .presence = .unknown(presence_var, field_var),
                     });
                 }
 
@@ -17505,6 +17578,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .presence_var = presence_var,
                                     .field_name = access.name,
                                     .region = access_region,
+                                    .use = .access,
                                 });
                                 saw_optional = true;
                                 break :blk .unknown(presence_var, access_var);
@@ -22564,11 +22638,29 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
         const resolved = self.types.resolveVar(access.presence_var);
         switch (resolved.desc.content) {
             .field_presence => |field_presence| switch (field_presence) {
-                .required, .defaulted => {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .optional_access_of_required_field = .{
-                        .region = access.region,
-                        .field_name = access.field_name,
-                    } });
+                .required => {
+                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                        .access => .{ .optional_access_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                        .unset => .{ .unset_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                    });
+                },
+                .defaulted => {
+                    _ = try self.problems.appendProblem(self.gpa, switch (access.use) {
+                        .access => .{ .optional_access_of_required_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                        .unset => .{ .unset_of_defaulted_field = .{
+                            .region = access.region,
+                            .field_name = access.field_name,
+                        } },
+                    });
                 },
                 .optional => {},
             },
