@@ -118,6 +118,19 @@ pub fn call(
                 },
             },
             .stack_value => |stack_value| {
+                if (stack_value.extend != .none) {
+                    // The slot carries the promoted C scalar, not the Roc
+                    // value's own bytes.
+                    const end = @as(usize, stack_value.offset) + promoted_stack_size;
+                    if (end > max_stack_bytes) return Error.TooManyStackBytes;
+                    const promoted = promote(
+                        readUnaligned(u64, value, @intCast(stack_value.size)),
+                        @intCast(stack_value.size),
+                        stack_value.extend,
+                    );
+                    @memcpy(stack[stack_value.offset..end], std.mem.asBytes(&promoted)[0..promoted_stack_size]);
+                    continue;
+                }
                 const end = @as(usize, stack_value.offset) + stack_value.size;
                 if (end > max_stack_bytes) return Error.TooManyStackBytes;
                 @memcpy(stack[stack_value.offset..end], value[0..stack_value.size]);
@@ -126,7 +139,11 @@ pub fn call(
                 for (pieces) |assigned| {
                     const piece = assigned.piece;
                     switch (piece.class) {
-                        .integer => gp[assigned.register_index] = readUnaligned(u64, value + piece.offset, piece.size),
+                        .integer => gp[assigned.register_index] = promote(
+                            readUnaligned(u64, value + piece.offset, piece.size),
+                            piece.size,
+                            piece.extend,
+                        ),
                         .float, .vector => sse[assigned.register_index] = readUnaligned(u128, value + piece.offset, piece.size),
                     }
                 }
@@ -168,6 +185,21 @@ pub fn call(
             }
         },
     }
+}
+
+/// Bytes a promoted C scalar occupies in an overflow slot: C promotes to `int`.
+const promoted_stack_size: usize = 4;
+
+/// Apply the C promotion an argument owes its slot. `bits` already holds the
+/// value's own bytes zero-filled, which is what an unpromoted value and a
+/// zero-extended scalar both need.
+fn promote(bits: u64, size: u8, extend: layout.abi.RegExtension) u64 {
+    if (extend != .sign) return bits;
+    // C promotes to `int`, so the promotion fills exactly 32 bits, which is
+    // also what the compiled backends' sign-extending loads produce.
+    const shift: u5 = @intCast(32 - @as(u16, size) * 8);
+    const narrowed: i32 = @as(i32, @bitCast(@as(u32, @truncate(bits)) << shift)) >> shift;
+    return @as(u32, @bitCast(narrowed));
 }
 
 fn readUnaligned(comptime T: type, ptr: [*]const u8, size: u8) T {

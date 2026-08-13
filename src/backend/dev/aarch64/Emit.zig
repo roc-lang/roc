@@ -1149,6 +1149,65 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// LDURSB (load register byte unscaled, sign-extend) with signed offset
+        pub fn ldursbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
+            // LDURSB <Wt>, [<Xn|SP>, #<simm>]
+            // 00 111 0 00 11 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b00 << 30) | // size = 00 for byte
+                (0b111000 << 24) |
+                (0b11 << 22) | // opc = 11 for sign-extending load into Wt
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDRSB (load register byte, sign-extend) with unsigned offset
+        pub fn ldrsbRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            // LDRSB <Wt>, [<Xn|SP>, #<pimm>]
+            // 00 111 0 01 11 imm12 Rn Rt
+            const inst: u32 = (0b00 << 30) |
+                (0b111001 << 24) |
+                (0b11 << 22) |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDURSH (load register halfword unscaled, sign-extend) with signed offset
+        pub fn ldurshRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i9) Allocator.Error!void {
+            // LDURSH <Wt>, [<Xn|SP>, #<simm>]
+            // 01 111 0 00 11 0 imm9 00 Rn Rt
+            const imm9: u9 = @bitCast(offset);
+            const inst: u32 = (0b01 << 30) | // size = 01 for halfword
+                (0b111000 << 24) |
+                (0b11 << 22) | // opc = 11 for sign-extending load into Wt
+                (0 << 21) |
+                (@as(u32, imm9) << 12) |
+                (0b00 << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// LDRSH (load register halfword, sign-extend) with unsigned offset
+        pub fn ldrshRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            // LDRSH <Wt>, [<Xn|SP>, #<pimm>]
+            // 01 111 0 01 11 imm12 Rn Rt
+            // Note: uoffset is scaled by 2 (halfword), caller must divide offset by 2
+            const inst: u32 = (0b01 << 30) |
+                (0b111001 << 24) |
+                (0b11 << 22) |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// LDRH (load register halfword, zero-extend) with unsigned offset
         pub fn ldrhRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDRH <Wt>, [<Xn|SP>, #<pimm>]
@@ -1277,6 +1336,24 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.ldurbRegMem(dst, scratch, 0);
         }
 
+        /// LDRSB with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrsbRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldursbRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0 and offset <= 4095) {
+                try self.ldrsbRegMem(dst, base, @intCast(@as(u32, @intCast(offset))));
+                return;
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldursbRegMem(dst, scratch, 0);
+        }
+
         /// STRB with signed offset (i32).
         /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
         pub fn strbRegMemSoff(self: *Self, src: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
@@ -1317,6 +1394,30 @@ pub fn Emit(comptime target: RocTarget) type {
             const scratch = addressScratchReg(base, null);
             try self.emitAddressOffset(scratch, base, offset);
             try self.ldurhRegMem(dst, scratch, 0);
+        }
+
+        /// LDRSH with signed offset (i32).
+        /// Handles arbitrary signed offsets by choosing the shortest exact encoding.
+        pub fn ldrshRegMemSoff(self: *Self, dst: GeneralReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= -256 and offset <= 255) {
+                try self.ldurshRegMem(dst, base, @intCast(offset));
+                return;
+            }
+
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 1) == 0) {
+                    const scaled = uoff >> 1;
+                    if (scaled <= 4095) {
+                        try self.ldrshRegMem(dst, base, @intCast(scaled));
+                        return;
+                    }
+                }
+            }
+
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldurshRegMem(dst, scratch, 0);
         }
 
         /// STRH with signed offset (i32).

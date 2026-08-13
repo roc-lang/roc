@@ -11999,6 +11999,15 @@ pub const MonoLlvmCodeGen = struct {
                 const src = try self.offsetPtr(arg_ptr, piece.offset);
                 const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
                 const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
+                // A narrow C scalar owes its argument register a promotion, and
+                // LLVM performs it only for a parameter marked with it. A
+                // widened carrier already carries the promotion in its own
+                // conversion below.
+                if (carrier_ty == piece_ty) switch (piece.extend) {
+                    .none => {},
+                    .zero => try attrs.addParamAttr(param_types.items.len, .zeroext, builder),
+                    .sign => try attrs.addParamAttr(param_types.items.len, .signext, builder),
+                };
                 try param_types.append(self.allocator, carrier_ty);
                 try call_args.append(self.allocator, try self.coerceCAbiPiece(val, carrier_ty, piece, self.cAbiPieceIsSigned(arg_layout)));
             },
