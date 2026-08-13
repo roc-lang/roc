@@ -125,6 +125,21 @@ pub fn getConversionSpec(op: LowLevel) ?Conversion {
     return conversion_by_op[@intFromEnum(op)];
 }
 
+/// A number to text, or text to a number.
+pub const StringDirection = enum { to_str, from_str };
+
+/// A conversion between a number type and its decimal text.
+pub const StringConversion = struct {
+    num: NumType,
+    direction: StringDirection,
+};
+
+/// Look up the number type and direction of `op`, or null if it does not
+/// convert between a number and its text.
+pub fn getStringConversionSpec(op: LowLevel) ?StringConversion {
+    return string_conversion_by_op[@intFromEnum(op)];
+}
+
 /// Look up a `NumType` by name. Returns null when no variant has that name.
 /// Hand-rolled because `std.meta.stringToEnum` builds a comptime map on every
 /// call, which costs most of the branch budget.
@@ -163,6 +178,32 @@ fn rebuildName(comptime conversion: Conversion) []const u8 {
     return if (conversion.mode == .exact) stem else stem ++ "_" ++ @tagName(conversion.mode);
 }
 
+/// Split an op name into a number type and a direction. Returns null unless the
+/// prefix is a `NumType` and the name ends in `_to_str` or `_from_str`.
+fn stringConversionFromName(name: []const u8) ?StringConversion {
+    inline for (@typeInfo(StringDirection).@"enum".fields) |field| {
+        const direction: StringDirection = @enumFromInt(field.value);
+        const affix = switch (direction) {
+            .to_str => "_to_str",
+            .from_str => "_from_str",
+        };
+        if (std.mem.endsWith(u8, name, affix)) {
+            const num = numTypeFromName(name[0 .. name.len - affix.len]) orelse return null;
+            return .{ .num = num, .direction = direction };
+        }
+    }
+    return null;
+}
+
+/// Rebuild a name from its number type and direction, inverting
+/// `stringConversionFromName`.
+fn rebuildStringName(comptime conversion: StringConversion) []const u8 {
+    return @tagName(conversion.num) ++ switch (conversion.direction) {
+        .to_str => "_to_str",
+        .from_str => "_from_str",
+    };
+}
+
 /// Every op's `Conversion`, indexed by enum value; null where the op is not a
 /// numeric conversion. Built by parsing every name at comptime.
 const conversion_by_op = blk: {
@@ -173,28 +214,27 @@ const conversion_by_op = blk: {
     break :blk entries;
 };
 
+/// Every op's `StringConversion`, indexed by enum value; null where the op does
+/// not convert between a number and its text.
+const string_conversion_by_op = blk: {
+    @setEvalBranchQuota(eval_branch_quota);
+    const fields = @typeInfo(LowLevel).@"enum".fields;
+    var entries: [fields.len]?StringConversion = @splat(null);
+    for (fields) |field| entries[field.value] = stringConversionFromName(field.name);
+    break :blk entries;
+};
+
 /// Check every `LowLevel` variant.
 pub fn assertTableConforms() void {
     assertClassificationIsComplete();
     assertClassificationIsLossless();
+    assertStringClassificationIsLossless();
 }
 
-/// Ops whose names contain `_to_` but do not convert between two number types.
+/// Ops whose names contain `_to_` but convert neither between two number types
+/// nor between a number and its text.
 const not_conversions = [_]LowLevel{
     .str_to_utf8,
-    .u8_to_str,
-    .i8_to_str,
-    .u16_to_str,
-    .i16_to_str,
-    .u32_to_str,
-    .i32_to_str,
-    .u64_to_str,
-    .i64_to_str,
-    .u128_to_str,
-    .i128_to_str,
-    .dec_to_str,
-    .f32_to_str,
-    .f64_to_str,
     .num_to_str,
     .f32_to_bits,
     .f64_to_bits,
@@ -202,13 +242,14 @@ const not_conversions = [_]LowLevel{
     .dec_to_attos,
 };
 
-/// Every op whose name contains `_to_` is classified as a conversion, or is
-/// listed in `not_conversions`.
+/// Every op whose name contains `_to_` is classified as a numeric or a string
+/// conversion, or is listed in `not_conversions`.
 fn assertClassificationIsComplete() void {
     @setEvalBranchQuota(eval_branch_quota);
     for (@typeInfo(LowLevel).@"enum".fields) |field| {
         if (std.mem.find(u8, field.name, "_to_") == null) continue;
         if (conversion_by_op[field.value] != null) continue;
+        if (string_conversion_by_op[field.value] != null) continue;
         for (not_conversions) |excluded| {
             if (field.value == @intFromEnum(excluded)) break;
         } else {
@@ -226,6 +267,19 @@ fn assertClassificationIsLossless() void {
         if (!std.mem.eql(u8, rebuildName(conversion), field.name)) {
             @compileError("numeric conversion '" ++ field.name ++ "' parses as '" ++
                 rebuildName(conversion) ++ "', so its name and its parts disagree");
+        }
+    }
+}
+
+/// Rebuilding a `*_to_str` or `*_from_str` name from its parts reproduces the
+/// original.
+fn assertStringClassificationIsLossless() void {
+    @setEvalBranchQuota(eval_branch_quota);
+    for (@typeInfo(LowLevel).@"enum".fields) |field| {
+        const conversion = string_conversion_by_op[field.value] orelse continue;
+        if (!std.mem.eql(u8, rebuildStringName(conversion), field.name)) {
+            @compileError("string conversion '" ++ field.name ++ "' parses as '" ++
+                rebuildStringName(conversion) ++ "', so its name and its parts disagree");
         }
     }
 }
@@ -258,6 +312,23 @@ test "ops that share the naming shape but not the meaning classify as null" {
     try std.testing.expectEqual(@as(?Conversion, null), getConversionSpec(.u8_to_str));
     try std.testing.expectEqual(@as(?Conversion, null), getConversionSpec(.dec_to_attos));
     try std.testing.expectEqual(@as(?Conversion, null), getConversionSpec(.simd_to_u128_bits));
+}
+
+test "getStringConversionSpec reads the number type and the direction" {
+    try std.testing.expectEqual(
+        StringConversion{ .num = .dec, .direction = .to_str },
+        getStringConversionSpec(.dec_to_str).?,
+    );
+    try std.testing.expectEqual(
+        StringConversion{ .num = .u128, .direction = .from_str },
+        getStringConversionSpec(.u128_from_str).?,
+    );
+}
+
+test "a number and its text are separate classifications" {
+    try std.testing.expectEqual(@as(?Conversion, null), getConversionSpec(.u8_to_str));
+    try std.testing.expectEqual(@as(?StringConversion, null), getStringConversionSpec(.u8_to_i16));
+    try std.testing.expectEqual(@as(?StringConversion, null), getStringConversionSpec(.num_to_str));
 }
 
 test "the widths a conversion computes at come from its types" {
