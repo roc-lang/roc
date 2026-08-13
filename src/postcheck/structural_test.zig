@@ -587,9 +587,11 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "const DraftTemplateSpec = struct",
     );
     try expectContains(open_request_key, "graph.directRequestSelections(request_fn_node)");
+    try expectContains(open_request_key, "graph.functionNodes(request_fn_node)");
+    try expectContains(open_request_key, "for (function.args) |arg|");
     try expectContains(open_request_key, "selection.base.checked");
     try expectContains(open_request_key, "selection.produced");
-    try expectNotContains(open_request_key, "graph.functionNodes");
+    try expectNotContains(open_request_key, "function.ret");
     try expectNotContains(open_request_key, "writeNode");
 
     const dispatch_instantiation = sourceSliceBetween(
@@ -612,12 +614,12 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn methodTargetRequestFromCallsiteEdges(",
         "fn exactMethodTargetNode(",
     );
-    try expectContains(target_request, "const no_new_callsite_arguments");
-    try expectContains(target_request, "callsite.args,\n            no_new_callsite_arguments,");
     try expectContains(target_request, "callsite.args,\n            available,");
-    try expectContains(target_request, "const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty)");
+    try expectContains(target_request, "const include_result = result_relation == .exact_destination;");
+    try expectContains(target_request, "const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty);");
     try expectContains(target_request, "const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty)");
-    try expectContains(target_request, "null,\n            null,\n            callsite.ret,");
+    try expectContains(target_request, "null,\n            callsite.ret,");
+    try expectNotContains(target_request, "active_checked_selections");
     try expectNotContains(target_request, "methodTargetSignatureNode(lookup)");
     try expectNotContains(target_request, "const checked_target = try self.instNode(");
 }
@@ -626,11 +628,11 @@ test "contextual call bindings read their exact source without a plan scan" {
     const lower_source = @embedFile("monotype/lower.zig");
     const source_lookup = sourceSliceBetween(
         lower_source,
-        "fn callConsumerExactSourceNode(",
-        "fn persistentCheckedBaseNode(",
+        "fn callConsumerExactSourceSelection(",
+        "fn callConsumerBindingsReady(",
     );
     try expectContains(source_lookup, "directSelectionForSlot(selections,");
-    try expectContains(source_lookup, "active.get(");
+    try expectContains(source_lookup, "active.getSelection(");
     try expectNotContains(source_lookup, "for (plan.slots)");
     try expectNotContains(source_lookup, "specializationSlotOccurrences");
 }
@@ -638,20 +640,24 @@ test "contextual call bindings read their exact source without a plan scan" {
 test "checked calls share one interned shape and have no whole-value plans" {
     const CheckedArtifact = check.CheckedArtifact;
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallPlan, "shape"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "source_callable"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "slots"));
+    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "source_callable"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "projections"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "materialization_nodes"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "materializations"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "argument_roots"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "result_root"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "dispatcher_root"));
-    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "target_argument_roots"));
-    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "target_result_root"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "target_argument_roots"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "target_result_root"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "slots"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "projections"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallConsumerBinding, "source_kind"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_shapes_by_type"));
+    try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_nominal_plans_by_expr"));
+    try std.testing.expect(@sizeOf(CheckedArtifact.SpecializationNominalPlan) < @sizeOf(CheckedArtifact.SpecializationCallPlan));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_root_edges"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_materialization_nodes"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
@@ -1003,7 +1009,7 @@ test "Monotype does not attach durable request types as active snapshots" {
     try expectNotContains(solve_source, "pub fn addMonoView");
     try expectContains(lower_source, "const lowered = try body_ctx.lowerTemplateBodyAtNode(");
     try expectContains(lower_source, "signature_relation,");
-    try expectContains(lower_source, "lowerStrInspectIntrinsicAtNode(fn_nodes, ret_cell)");
+    try expectContains(lower_source, "lowerStrInspectIntrinsicAtNode(fn_nodes)");
 }
 
 test "Monotype pairs stored record children in lexicographic field order" {
@@ -1151,7 +1157,7 @@ test "Monotype open specialization lookup reuses only exact function interfaces"
     );
     inline for (.{ template_source, nested_source }) |lookup_source| {
         try expectContains(lookup_source, "draftSelectionRequestKey(source_ctx.graph, request_fn_node)");
-        try expectContains(lookup_source, "sameDirectRequestSelections(spec.body_request_fn_node, request_fn_node)");
+        try expectContains(lookup_source, "sameFunctionRequestInputs(spec.body_request_fn_node, request_fn_node)");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "selection.add(raw_spec);");
@@ -1201,19 +1207,18 @@ test "Monotype method type instantiation does not construct body contexts" {
     try expectNotContains(type_only, "BodyContext.init");
     try expectNotContains(type_only, "BinderMap.init");
 
-    const signature = sourceSliceBetween(
+    const target_request = sourceSliceBetween(
         lower_source,
-        "fn methodTargetSignatureNode(",
-        "const DispatchCrashReason",
+        "fn methodTargetRequestFromCallsiteEdges(",
+        "fn exactMethodTargetNode(",
     );
-    try expectContains(signature, "for (plan.slots) |slot|");
-    try expectContains(signature, "active.get(key) orelse continue");
-    try expectContains(signature, "self.appendDirectSelectionMaterializationNodes(");
-    try expectContains(signature, "const selected_scope = self.enterDirectSelectionInstantiation(");
-    try expectContains(signature, "const signature = try self.instNode(source.callable_ty)");
-    try expectNotContains(signature, "self.materializeCallProjectionSubtree(");
-    try expectNotContains(signature, "self.typeOnlyCheckedNode(");
-    try expectNotContains(signature, "BodyContext.init");
+    try expectContains(target_request, "self.enterTypeOnlyInstantiation(\n            lookup.view,\n            null,");
+    try expectContains(target_request, "self.directCallSelectionsFromPublishedPlan(");
+    try expectContains(target_request, "callsite.args,\n            available,");
+    try expectContains(target_request, "self.materializeCallSelectionSpan(");
+    try expectNotContains(target_request, "active_checked_selections");
+    try expectNotContains(target_request, "methodTargetSignatureNode");
+    try expectNotContains(target_request, "BodyContext.init");
 
     const template_request = sourceSliceBetween(
         lower_source,
@@ -1387,13 +1392,19 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     );
     try expectContains(closed_low_level, "const planned = try self.lowerDispatchOperandsByPlan(");
     try expectContains(closed_low_level, "planned.request");
-    try expectContains(closed_low_level, "try self.publishCompletedCallResult(");
     try expectContains(closed_low_level, "try self.lowerDispatchOperandsAtNodes(");
     try expectNotContains(closed_low_level, "prepareDispatchOperandsAtNodes");
     try expectNotContains(closed_low_level, "lowerPreparedDispatchOperandsAtNodes");
     try expectNotContains(closed_low_level, "applyProducedTypeToRequest");
     try expectNotContains(closed_low_level, "lowerClosedDispatchOperandsAtTypes");
     try expectNotContains(closed_low_level, "functionRequestFromAvailableProducedArgumentsWithGeneratedInterner");
+
+    const function_completion = sourceSliceBetween(
+        lower_source,
+        "fn completedFunctionNodeForLoweredBody(",
+        "fn recordActiveCheckedSelectionsOnFunction(",
+    );
+    try expectContains(function_completion, "try self.publishCompletedCallResult(");
 
     const dispatch = sourceSliceBetween(
         lower_source,
@@ -1427,10 +1438,11 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
 
     const active_checked_selections = sourceSliceBetween(
         lower_source,
-        "const ActiveCheckedSelectionColumn = struct",
+        "const ActiveCheckedSelection = struct",
         "const ActiveGeneratedIterator = struct",
     );
-    try expectContains(active_checked_selections, "DenseMap(checked.CheckedTypeId, NodeId)");
+    try expectContains(active_checked_selections, "DenseMap(checked.CheckedTypeId, ActiveCheckedSelection)");
+    try expectContains(active_checked_selections, "authority: solve.DirectRequestSelectionAuthority");
     try expectContains(active_checked_selections, "DenseMap(checked.CheckedTypeId, void)");
     try expectContains(active_checked_selections, "additional: std.ArrayList(ActiveCheckedSelectionColumn)");
     try expectNotContains(active_checked_selections, "AutoHashMap");

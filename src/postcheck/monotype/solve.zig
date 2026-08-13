@@ -316,12 +316,22 @@ pub const CheckedBaseKey = struct {
     checked: checked.CheckedTypeId,
 };
 
-/// One checker-published call slot and the one exact node produced for it.
-/// Selection is single-assignment: another producer must name the same graph
-/// class rather than competing by priority.
+pub const DirectRequestSelectionAuthority = enum(u8) {
+    /// Context used to lower a value before its exact result exists. The
+    /// value's producer replaces this seed when it completes.
+    request,
+    /// Exact node returned by a runtime value edge or constructed from an
+    /// immutable substitution-free checked recipe.
+    produced,
+};
+
+/// One checker-published call slot and its current exact node. Producer
+/// selections are single-assignment; a producer may replace only an earlier
+/// request seed for the same slot.
 pub const DirectRequestSelection = struct {
     base: CheckedBaseKey,
     produced: NodeId,
+    authority: DirectRequestSelectionAuthority = .produced,
 };
 
 const DirectRequestSelectionSpan = struct {
@@ -828,10 +838,10 @@ pub const InstGraph = struct {
         destination.* = source;
     }
 
-    /// Whether two requests select the same exact runtime nodes for every
-    /// checker-published identity slot. Callers compare the immutable checked
-    /// callable base separately; this span is the complete variable part of a
-    /// specialization request.
+    /// Whether two requests carry the same node and authority for every
+    /// checker-published identity slot. A request seed and a produced edge are
+    /// not interchangeable even when they currently name the same graph node.
+    /// Callers compare the immutable checked callable base separately.
     pub fn sameDirectRequestSelections(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) bool {
         const left = self.directRequestSelections(left_fn);
         const right = self.directRequestSelections(right_fn);
@@ -841,9 +851,20 @@ pub const InstGraph = struct {
                 if (candidate.base.checked == left_selection.base.checked and
                     std.mem.eql(u8, &candidate.base.module_bytes, &left_selection.base.module_bytes)) break candidate;
             } else return false;
+            if (left_selection.authority != right_selection.authority) return false;
             if (!self.sameClass(left_selection.produced, right_selection.produced)) return false;
         }
         return true;
+    }
+
+    pub fn sameFunctionRequestInputs(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) Allocator.Error!bool {
+        const left = try self.functionNodes(left_fn);
+        const right = try self.functionNodes(right_fn);
+        if (left.args.len != right.args.len) return false;
+        for (left.args, right.args) |left_arg, right_arg| {
+            if (!self.sameClass(left_arg, right_arg)) return false;
+        }
+        return self.sameDirectRequestSelections(left_fn, right_fn);
     }
 
     /// Resolve the stable result cell held by callers and recursive references
@@ -2610,22 +2631,15 @@ pub const InstGraph = struct {
         var retained = std.ArrayList(InstField).empty;
         defer retained.deinit(self.allocator);
         try retained.ensureTotalCapacity(self.allocator, row.fields.len);
-        var matched = try self.allocator.alloc(bool, excluded.len);
-        defer self.allocator.free(matched);
-        @memset(matched, false);
         for (row.fields) |field| {
             var remove = false;
-            for (excluded, 0..) |name, index| {
+            for (excluded) |name| {
                 if (field.name != name) continue;
-                matched[index] = true;
                 remove = true;
                 break;
             }
             if (!remove) retained.appendAssumeCapacity(field);
         }
-        for (matched) |present| if (!present) {
-            Common.invariant("instantiation record-remainder edge named an absent field");
-        };
         if (retained.items.len == 0) return self.find(row.ext);
         return try self.newProducedRecord(retained.items, row.ext);
     }
@@ -2714,22 +2728,15 @@ pub const InstGraph = struct {
         var retained = std.ArrayList(InstTag).empty;
         defer retained.deinit(self.allocator);
         try retained.ensureTotalCapacity(self.allocator, row.tags.len);
-        var matched = try self.allocator.alloc(bool, excluded.len);
-        defer self.allocator.free(matched);
-        @memset(matched, false);
         for (row.tags) |tag| {
             var remove = false;
-            for (excluded, 0..) |name, index| {
+            for (excluded) |name| {
                 if (tag.name != name) continue;
-                matched[index] = true;
                 remove = true;
                 break;
             }
             if (!remove) retained.appendAssumeCapacity(tag);
         }
-        for (matched) |present| if (!present) {
-            Common.invariant("instantiation tag-remainder edge named an absent tag");
-        };
         if (retained.items.len == 0) return self.find(row.ext);
         return try self.newProducedTagUnion(retained.items, row.ext);
     }
@@ -5024,6 +5031,39 @@ test "open draft function interfaces use related graph classes directly" {
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
+}
+
+test "function request identity distinguishes request seeds from produced edges" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+    const right = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+    const key = CheckedBaseKey{
+        .module_bytes = [_]u8{0xA5} ** 32,
+        .checked = testCheckedTypeId(7),
+    };
+    try graph.recordDirectRequestSelections(left, &.{.{
+        .base = key,
+        .produced = ret,
+        .authority = .request,
+    }});
+    try graph.recordDirectRequestSelections(right, &.{.{
+        .base = key,
+        .produced = ret,
+        .authority = .produced,
+    }});
+
+    try std.testing.expect(!graph.sameDirectRequestSelections(left, right));
+    try std.testing.expect(!try graph.sameFunctionRequestInputs(left, right));
 }
 
 test "completed functions with the same exact children share one runtime node" {

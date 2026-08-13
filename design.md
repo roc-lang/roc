@@ -3567,11 +3567,13 @@ source is tried and no checked or produced graph is inspected to discover one.
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
 exact producer and may fill its recorded child edges. A requested operand does
-not remain a consumer after it has returned a value. Likewise, materializing a
-call request creates the call's own exact result graph node and immediately
-records the result edges supplied by that node, even when the callee will
-finish its contents later. A type-only dispatch has no value operand, so its
-checked plan records the one direct self-edge from the enclosing procedure's
+not remain a consumer after it has returned a value. An enclosing exact result
+destination is also only a request: it may seed result-context edges before the
+callee runs, but it is not the call's produced result. Materializing a call
+request constructs the result recipe needed to lower the callee without
+publishing that recipe as output. The completed body later publishes the one
+produced result edge. A type-only dispatch has no value operand, so its checked
+plan records the one direct self-edge from the enclosing procedure's
 substitution span to its dispatcher slot.
 
 Applying a completed argument, result, or dispatcher edge is directed
@@ -3594,13 +3596,13 @@ artifact-local `CheckedTypeId` directly indexes that namespace's live column.
 It does not hash the composite `(module digest, CheckedTypeId)` on every
 lookup. Lexically nested environments retain their parent explicitly, and an
 owned-but-unfilled local slot shadows the same numeric ID in that parent.
-Every lexical chain also owns one exact mutation clock. Publishing a selection
-or a new shadowing owner advances that clock. A call schedule records the
-clock value after consulting its active slots and consults them again only
-after a real mutation; repeated operand refinements against unchanged active
-state never rescan the plan's slots. Because every environment in the chain
-shares the clock, a mutation in any visible ancestor or descendant invalidates
-the observation directly rather than relying on a guessed dependency set.
+Every stored selection retains whether it is only a request seed or an exact
+produced node. A produced node may replace a request seed; a request can never
+replace a produced node, including when the environment is persisted on a
+completed function.
+Call schedules do not scan these columns by slot. They consult only the
+checker-authored contextual bindings for the current operation, so an operand
+refinement performs no body-wide invalidation or unchanged-slot rescan.
 
 An ordinary nominal's identity is its declaration plus its exact public type
 arguments. Its declaration backing is a function of those arguments, not an
@@ -3665,20 +3667,24 @@ root that checking proved needs no runtime substitution. Only the former is a
 call-plan slot; Monotype materializes the latter directly from the exact checked
 root named by the binding. It cannot consult an ambient substitution table when
 an `exact_selection` source edge is absent; absence is an invariant violation
-in checked data. At body entry, Monotype consumes that immutable span directly.
+in checked data. Each relation also declares whether its source is a callable
+input or output. Inputs must exist when the target is selected. Outputs remain
+absent until the selected body produces them, unless an enclosing exact
+destination has supplied a request seed. At body entry, Monotype consumes that
+immutable span directly.
 It does not compare the caller's complete function graph with the target's
 complete checked function, and it does not reconstruct substitutions from
 either graph.
 
-The same rule constructs a selected method's callable signature. Monotype
-enters one fresh type-only instantiation with only the target slots named by
-the active checker-published substitution span. At each checked node,
-instantiation returns the selected exact node immediately when the span names
-one; otherwise it constructs that ordinary compound once from its exact
-children. It does not start from a completed checked graph, project back into
-that graph, or rebuild ancestors after applying a selection. Request
-construction reuses that one exact target signature instead of constructing it
-a second time.
+A selected method's checker-published callable plan is the operation interface.
+For a direct dispatch this is the selected instantiation recorded by checking;
+for evidence-dependent dispatch it is the instantiation carried by the chosen
+evidence target. The syntax-level plan continues to own evaluation order and
+whether each syntax operand is produced or requested, but it is not a second
+callable-type authority. Monotype interprets the selected plan in the checked
+artifact that owns its IDs, supplies its positional argument and result nodes
+directly, and restores the source artifact before lowering syntax expressions.
+It does not build, compare, merge, or retain a separate target signature.
 
 Each completed argument is its own value authority, so two independent
 concrete `Iter(U64)` parameters retain distinct value cells while selecting the
@@ -3736,8 +3742,8 @@ a call result, descend through a field or tuple receiver, or query a local as
 return. A producer enters a call's exact substitution span only after its one
 real lowering pass has returned the produced node. A stored generated body that
 has not yet restored its operands carries checked formal shells with every
-operand marked unavailable; only its explicit result destination and checked
-target signature may affect that preliminary request.
+operand marked unavailable; only its explicit result destination may affect
+that preliminary request.
 
 A requested lambda keeps that destination as immutable input while lowering
 its body, but the function value owns a distinct forward result cell. The body
@@ -3752,10 +3758,17 @@ the same produced identity when the body completes.
 The call schedule has one result-authority field, not a second
 `include_result` flag that can contradict it. Only `exact_destination` may
 publish the enclosing result as a call-plan source before the callee runs. A
-`produced` call materializes its result from the immutable checked recipe and
-the substitutions supplied by completed operands, then publishes that newly
-constructed result root. It never injects an enclosing checker-public cell as
-if it were the call's exact produced value.
+`produced` call materializes only an immutable checked result recipe from the
+substitutions supplied by completed inputs. It publishes no result selection.
+The callable owns a distinct forward result cell, body lowering completes that
+cell with the exact returned node, and that completion point publishes the
+result's checker-authored slot edges with produced authority. A
+compiler-authored operation whose result is determined directly from completed
+operands publishes at that explicit producer operation instead. Direct,
+indirect, dispatch, iterator, and synthetic calls all obey the same rule: only
+the operation that determines the exact output can publish it. There is no
+optional republishing step, and no result request is ever mistaken for the
+completed output.
 
 Compound construction does not apply one complete type graph to another. It
 lowers each runtime child once, constructs the parent directly from those exact
@@ -3765,6 +3778,14 @@ nominal-backing read selects the child directly from the already
 completed receiver. No parent asks whether a child or descendant is generated,
 and no ordinary node participates in generated-representation work merely
 because such a descendant is possible.
+
+Nominal construction follows the same rule at its constructor boundary.
+Checking publishes the direct identities that flow from the completed backing
+into the declaration's public arguments. Monotype lowers the backing once,
+applies those direct edges, constructs the ordinary nominal identity from the
+resulting argument nodes, and attaches that exact backing. It does not first
+instantiate a checker-public nominal and then reconcile it with the produced
+backing.
 
 Operations whose generated IR depends on a fully closed runtime type—inspect,
 structural equality, structural hashing, parser generation, and encoder
