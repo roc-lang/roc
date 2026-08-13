@@ -10,8 +10,17 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
+/// Selected by the root module (like `std_options`): declaring
+/// `pub const roc_disable_tracy = true;` at the root keeps the tracy client out
+/// of that compilation. Objects that are linked into compiled Roc programs
+/// rather than into the compiler declare it: the profiler client is a
+/// compiler-side dependency, so instrumenting them would both bundle it into
+/// every Roc program and require it to build for every target roc ships to.
+const disabled_by_root = @hasDecl(@import("root"), "roc_disable_tracy") and
+    @import("root").roc_disable_tracy;
+
 /// Whether or not tracy profiling is enabled.
-pub const enable = if (builtin.is_test) false else build_options.enable_tracy;
+pub const enable = if (builtin.is_test or disabled_by_root) false else build_options.enable_tracy;
 /// Whether recording allocations and frees with tracy is enabled.
 pub const enable_allocation = enable and build_options.enable_tracy_allocation;
 /// Whether sampling callstacks at each zone and allocatino is enabled (expensive).

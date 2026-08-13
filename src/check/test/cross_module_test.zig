@@ -94,6 +94,211 @@ test "cross-module - check type - polymorphic function with multiple uses passes
     try test_env_b.assertLastDefType("U64");
 }
 
+test "cross-module - settled weak-receiver scheme remains polymorphic" {
+    const source_a =
+        \\top_str = "a,b,c"
+        \\main! = |g| top_str.split_on(",").map(g)
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertDefType("main!", "(Str -> b) -> List(b)");
+
+    // Module publication happens after A's weak receiver has settled. Its
+    // discharged root scheme must retain the same independent quantified
+    // result variable even though checker-local pending requirements are gone.
+    const source_b =
+        \\import A
+        \\lengths = A.main!(|s| s.count_utf8_bytes())
+        \\selves = A.main!(|s| s)
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertDefType("lengths", "List(U64)");
+    try test_env_b.assertDefType("selves", "List(Str)");
+}
+
+test "cross-module - nested capturing closure publishes its dispatch relation" {
+    const source_a =
+        \\main! : a -> a where [a.plus : a, Dec -> a]
+        \\main! = |x| {
+        \\  add_x = |y| x + y
+        \\  add_x(10)
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertDefType("main!", "a -> a where [a.plus : a, Dec -> a]");
+
+    const source_b =
+        \\import A
+        \\answer = A.main!(42)
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertDefType("answer", "Dec");
+
+    const source_c =
+        \\import A
+        \\bad = A.main!("not a number")
+    ;
+    var test_env_c = try TestEnv.initWithImport("C", source_c, "A", &test_env_a);
+    defer test_env_c.deinit();
+    try test_env_c.assertOneTypeError("Missing Method");
+}
+
+test "cross-module - optional record - one optional value shared by two exports unifies" {
+    // `other = orig` shares `orig`'s type; both exports carry the same
+    // structural `optional` field kind, so their imported copies unify
+    // (design.md "Field Kinds (All-Dynamic Optional Fields)").
+    const source_a =
+        \\orig! : { world ?: U8 }
+        \\orig! = { world: 5 }
+        \\
+        \\other! = orig!
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertLastDefType("{ world ?: U8 }");
+
+    const source_b =
+        \\import A
+        \\
+        \\lst = [A.orig!, A.other!]
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("List({ world ?: U8 })");
+}
+
+test "cross-module - optional record - two same-shape optional annotations are one type" {
+    // A field kind is structural, not a hidden per-definition witness: two
+    // `?:` annotations of the same shape are the same type, so separately
+    // annotated values mix freely (design.md "Field Kinds (All-Dynamic
+    // Optional Fields)").
+    const source_a =
+        \\orig! : { world ?: U8 }
+        \\orig! = { world: 5 }
+        \\
+        \\separate! : { world ?: U8 }
+        \\separate! = { world: 5 }
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\
+        \\lst = [A.orig!, A.separate!]
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("List({ world ?: U8 })");
+}
+
+test "cross-module - optional record - imported optional value still requires optional access" {
+    // The `optional` kind crosses the module boundary: a direct `.world`
+    // read of the imported value is rejected, `.?world` binds.
+    const source_a =
+        \\orig! : { world ?: U8 }
+        \\orig! = { world: 5 }
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_direct =
+        \\import A
+        \\
+        \\bad = A.orig!.world
+    ;
+    var test_env_direct = try TestEnv.initWithImport("B", source_direct, "A", &test_env_a);
+    defer test_env_direct.deinit();
+    try test_env_direct.assertOneTypeError("Type Mismatch");
+
+    const source_optional =
+        \\import A
+        \\
+        \\good = A.orig!.?world
+    ;
+    var test_env_optional = try TestEnv.initWithImport("C", source_optional, "A", &test_env_a);
+    defer test_env_optional.deinit();
+    try test_env_optional.assertLastDefType("Try(U8, [MissingField])");
+}
+
+test "cross-module - optional record - imported type declaration keeps the optional kind" {
+    // The `optional` kind is pinned by the DECLARATION's annotation and
+    // crosses the module boundary with the type: B constructs at A's alias
+    // omitting the optional field (opt-in width absorption), and reading it
+    // demands `.?` (design.md "Field Kinds (All-Dynamic Optional Fields)").
+    const source_a =
+        \\Thing : { world ?: U8 }
+        \\
+        \\mk! : Thing
+        \\mk! = {}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertLastDefType("Thing");
+
+    const source_b =
+        \\import A
+        \\
+        \\use = A.mk!.?world
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("Try(U8, [MissingField])");
+}
+
+test "cross-module - defaulted record - imported alias default crosses the boundary (review M3)" {
+    // The DefaultId's origin half is env-local and must rebase across the
+    // store boundary (design.md "Defaulted Fields"): B constructs at A's
+    // alias, omitting the defaulted field.
+    const source_a =
+        \\Cfg : { count : U8 ?? 10, name : Str }
+        \\
+        \\get_count! : Cfg -> U8
+        \\get_count! = |c| c.count
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertLastDefType("Cfg -> U8");
+
+    const source_b =
+        \\import A
+        \\
+        \\use_it = A.get_count!({ name: "b" })
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertLastDefType("U8");
+}
+
+test "cross-module - defaulted record - textually identical local default does not merge (review M3)" {
+    // One written default is one identity: B declaring its own `?? 10` is a
+    // DIFFERENT default than A's even though the text matches, so the two
+    // record types mismatch (design.md "Defaulted Fields").
+    const source_a =
+        \\Cfg : { count : U8 ?? 10 }
+        \\
+        \\mk! : Cfg
+        \\mk! = {}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\
+        \\local : { count : U8 ?? 10 }
+        \\local = {}
+        \\
+        \\lst = [A.mk!, local]
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertOneTypeError("Type Mismatch");
+}
+
 test "cross-module - check type - static dispatch" {
     const source_a =
         \\A := [A(Str)].{

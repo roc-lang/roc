@@ -6,7 +6,6 @@ const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
-const types = @import("types");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
@@ -34,8 +33,6 @@ const ScalarInfo = layout_mod.ScalarInfo;
 const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
-const Var = types.Var;
-const TypeScope = types.TypeScope;
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
@@ -2598,50 +2595,6 @@ pub const Store = struct {
 
     pub fn rcHelperTagUnionVariantPlan(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
         return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
-    }
-
-    /// Note: the caller must verify ahead of time that the given variable does not
-    /// resolve to a flex var or rigid var, unless that flex var or rigid var is
-    /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
-    ///
-    /// For example, when checking types that are exposed to the host, they should
-    /// all have been verified to be either monomorphic or boxed. Same with repl
-    /// code like this:
-    ///
-    /// ```
-    /// val : a
-    ///
-    /// val
-    /// ```
-    ///
-    /// This flex var should be replaced by an Error type before calling this function.
-    ///
-    /// The module_idx parameter specifies which module the type variable belongs to.
-    /// This is essential for cross-module layout computation where different modules
-    /// may have type variables with the same numeric value referring to different types.
-    ///
-    /// The caller_module_idx parameter specifies the module that owns the type variables
-    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
-    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
-    /// for cross-module polymorphic function calls.
-    pub fn fromTypeVar(
-        self: *Self,
-        module_idx: u32,
-        unresolved_var: Var,
-        type_scope: *const TypeScope,
-        caller_module_idx: ?u32,
-    ) std.mem.Allocator.Error!Idx {
-        // Shared ordinary-data layout resolution now lives in TypeLayoutResolver.
-        // Keep the legacy store-owned implementation below only as transitional
-        // dead code until the remaining store-owned state is fully removed.
-        if (self.layouts.len() >= num_primitives) {
-            const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-
-            var resolver = TypeLayoutResolver.init(self);
-            defer resolver.deinit();
-            return resolver.resolve(module_idx, unresolved_var, type_scope, caller_module_idx);
-        }
-        unreachable;
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {

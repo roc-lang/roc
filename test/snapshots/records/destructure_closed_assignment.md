@@ -34,8 +34,11 @@ TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
 
     But you are trying to use it as:
 
-        { x: _field, y: a }
-          where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        { x: a, y: b }
+          where [
+            a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+            b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+          ]
     Hint: This pattern doesn't bind the `z` field. Match it explicitly with `z:
     _`, or add `..` to match all the remaining fields.
 
@@ -105,7 +108,7 @@ compute = {
 							(e-num (value "2")))
 						(field (name "z")
 							(e-num (value "3"))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 240)
+			(e-dispatch-call (method "plus") (constraint-fn-var 247)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

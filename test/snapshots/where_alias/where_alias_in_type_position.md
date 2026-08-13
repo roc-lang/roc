@@ -72,10 +72,7 @@ describe = |value| value.to_str()
 (can-ir
 	(d-let
 		(p-assign (ident "describe"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Stringable") (local))

@@ -20,6 +20,939 @@ const simd_tests = @import("eval_simd_tests.zig");
 ///
 /// Every value-producing test is observed solely through `Str.inspect(...)`.
 const core_tests = [_]TestCase{
+    .{
+        .name = "defaulted record field: omitted at construction materializes the default",
+        .source_kind = .module,
+        .source =
+        \\my_record : { hello : Str, count : U8 ?? 10 }
+        \\my_record = { hello: "hi" }
+        \\
+        \\main = my_record.count
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: supplied value wins over the default",
+        .source_kind = .module,
+        .source =
+        \\my_record : { count : U8 ?? 10 }
+        \\my_record = { count: 5 }
+        \\
+        \\main = my_record.count
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: supplied literal does not adopt a default identity",
+        .source_kind = .module,
+        .source =
+        \\A : { x : U64 ?? 3 }
+        \\B : { x : U64 ?? 4 }
+        \\
+        \\fa : A -> U64
+        \\fa = |r| r.x
+        \\
+        \\fb : B -> U64
+        \\fb = |r| r.x
+        \\
+        \\main = {
+        \\    lit = { x: 7 }
+        \\    annotated : { x : U64 }
+        \\    annotated = { x: 7 }
+        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "28" },
+    },
+    .{
+        .name = "defaulted record field: alias-carried default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 0 }
+        \\
+        \\cfg : Cfg
+        \\cfg = { verbose: 1 }
+        \\
+        \\main = cfg.retries + cfg.verbose
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "defaulted record field: empty literal materializes the default",
+        .source_kind = .module,
+        .source =
+        \\x : { a : U8 ?? 10 }
+        \\x = {}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: empty literal materializes every alias-carried default",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 40 }
+        \\
+        \\cfg : Cfg
+        \\cfg = {}
+        \\
+        \\main = cfg.retries + cfg.verbose
+        ,
+        .expected = .{ .inspect_str = "43" },
+    },
+    .{
+        .name = "defaulted record field: empty literal in a function body materializes the default",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { a : U8 ?? 10 }
+        \\make = |_n| {}
+        \\
+        \\main = make(1).a + make(2).a
+        ,
+        .expected = .{ .inspect_str = "20" },
+    },
+    .{
+        .name = "defaulted record field: partial literal in a function body keeps supplied and defaults omitted",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
+        \\make = |n| { supplied: n }
+        \\
+        \\main = make(30).supplied + make(30).defaulted
+        ,
+        .expected = .{ .inspect_str = "37" },
+    },
+    .{
+        .name = "defaulted record field: expect-block local materializes multiple omitted defaults",
+        .source_kind = .module,
+        .source =
+        \\T1 := [].{}
+        \\
+        \\expect {
+        \\    c : { x : U8 ?? 3, y : U8 ?? 4 }
+        \\    c = {}
+        \\    c.x == 3
+        \\}
+        \\
+        \\main : U8
+        \\main = 0
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "optional record field: supplied at construction and .? hits",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name : Str, age ?: U8 }
+        \\my_record = { name: "a", age: 30 }
+        \\
+        \\main = my_record.?age ?? 5
+        ,
+        .expected = .{ .inspect_str = "30" },
+    },
+    .{
+        .name = "optional record field: omitted at construction and .? misses to the fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name : Str, age ?: U8 }
+        \\my_record = { name: "a" }
+        \\
+        \\main = my_record.?age ?? 5
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "optional record field: .? produces a real Try to match on",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = { age: 2 }
+        \\
+        \\main = match my_record.?age {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "optional record field: empty literal against an all-optional row is all missing",
+        .source_kind = .module,
+        .source =
+        \\x : { a ?: U8, b ?: U8 }
+        \\x = {}
+        \\
+        \\main = (x.?a ?? 7) + (x.?b ?? 8)
+        ,
+        .expected = .{ .inspect_str = "15" },
+    },
+    .{
+        .name = "optional record field: required segment after .? rides the Ok path",
+        .source_kind = .module,
+        .source =
+        \\o : { b ?: { c : U8 } }
+        \\o = { b: { c: 42 } }
+        \\
+        \\main = o.?b.c ?? 0
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "optional record field: required segment after a missing .? falls back",
+        .source_kind = .module,
+        .source =
+        \\o : { b ?: { c : U8 } }
+        \\o = {}
+        \\
+        \\main = o.?b.c ?? 9
+        ,
+        .expected = .{ .inspect_str = "9" },
+    },
+    .{
+        .name = "optional record field: two-optional chain hit",
+        .source_kind = .module,
+        .source =
+        \\o : { b ?: { c ?: U8 } }
+        \\o = { b: { c: 4 } }
+        \\
+        \\main = o.?b.?c ?? 11
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "optional record field: two-optional chain short-circuits on the inner missing slot",
+        .source_kind = .module,
+        .source =
+        \\o : { b ?: { c ?: U8 } }
+        \\o = { b: {} }
+        \\
+        \\main = o.?b.?c ?? 11
+        ,
+        .expected = .{ .inspect_str = "11" },
+    },
+    .{
+        .name = "optional record field: required, defaulted, and optional slots in one record (omitting sides)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\r = { req: 1 }
+        \\
+        \\main = r.req + r.def + (r.?opt ?? 100)
+        ,
+        .expected = .{ .inspect_str = "111" },
+    },
+    .{
+        .name = "optional record field: required, defaulted, and optional slots in one record (all supplied)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\r = { req: 1, def: 2, opt: 3 }
+        \\
+        \\main = r.req + r.def + (r.?opt ?? 100)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "optional record field: conditional presence executes both branches",
+        .source_kind = .module,
+        .source =
+        \\make : Bool -> { a ?: U8 }
+        \\make = |cond| if cond { a: 5 } else {}
+        \\
+        \\main = (make(True).?a ?? 0) + (make(False).?a ?? 30)
+        ,
+        .expected = .{ .inspect_str = "35" },
+    },
+    .{
+        .name = "optional record field: heap Str payload supplied and .? hits",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = { name: Str.repeat("ab", 15) }
+        \\
+        \\main = my_record.?name ?? "anon"
+        ,
+        .expected = .{ .inspect_str = "\"ababababababababababababababab\"" },
+    },
+    .{
+        .name = "optional record field: omitted heap Str payload misses to a heap fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = {}
+        \\
+        \\main = my_record.?name ?? Str.repeat("no", 14)
+        ,
+        .expected = .{ .inspect_str = "\"nononononononononononononono\"" },
+    },
+    .{
+        .name = "optional record field: present heap Str payload dropped without being read",
+        .source_kind = .module,
+        .source =
+        \\make : U8 -> { keep : U8, name ?: Str }
+        \\make = |n| { keep: n, name: Str.repeat("xy", 20) }
+        \\
+        \\main = make(7).keep
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "optional record field: List(U8) payload supplied and omitted",
+        .source_kind = .module,
+        .source =
+        \\r : { xs ?: List(U8) }
+        \\r = { xs: [1, 2, 3] }
+        \\
+        \\s : { xs ?: List(U8) }
+        \\s = {}
+        \\
+        \\main = List.len(r.?xs ?? []) + List.len(s.?xs ?? [9])
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "optional record field: nested record's optional reached through a required segment",
+        .source_kind = .module,
+        .source =
+        \\o : { inner : { a ?: U8 } }
+        \\o = { inner: { a: 6 } }
+        \\
+        \\p : { inner : { a ?: U8 } }
+        \\p = { inner: {} }
+        \\
+        \\main = (o.inner.?a ?? 1) + (p.inner.?a ?? 20)
+        ,
+        .expected = .{ .inspect_str = "26" },
+    },
+    .{
+        .name = "optional record field: function taking an optional-field record serves supplying and omitting callers",
+        .source_kind = .module,
+        .source =
+        \\get : { name ?: Str } -> Str
+        \\get = |r| r.?name ?? "anon"
+        \\
+        \\main = Str.concat(Str.concat(get({ name: "amy" }), "/"), get({}))
+        ,
+        .expected = .{ .inspect_str = "\"amy/anon\"" },
+    },
+    .{
+        .name = "optional record field: generic accessor specializes its payload type",
+        .source_kind = .module,
+        .source =
+        \\pick : { x ?: a } -> Try(a, [MissingField])
+        \\pick = |r| r.?x
+        \\
+        \\present : { x ?: U8 }
+        \\present = { x: 7 }
+        \\
+        \\missing : { x ?: U8 }
+        \\missing = {}
+        \\
+        \\main = (pick(present) ?? 0) + (pick(missing) ?? 20)
+        ,
+        .expected = .{ .inspect_str = "27" },
+    },
+    .{
+        .name = "optional record field: record keeps its slots through a generic identity function",
+        .source_kind = .module,
+        .source =
+        \\id : a -> a
+        \\id = |x| x
+        \\
+        \\r : { tag ?: U8 }
+        \\r = { tag: 9 }
+        \\
+        \\s : { tag ?: U8 }
+        \\s = {}
+        \\
+        \\main = (id(r).?tag ?? 1) + (id(s).?tag ?? 20)
+        ,
+        .expected = .{ .inspect_str = "29" },
+    },
+    .{
+        .name = "optional record field: generalized constructor adopts optional slot layout",
+        .source_kind = .module,
+        .source =
+        \\make = |value| { a: value }
+        \\
+        \\record : { a ?: U8 }
+        \\record = make(5)
+        \\
+        \\main = record.?a ?? 0
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "optional record field: generalized update cannot change a committed optional slot",
+        .source_kind = .module,
+        .source =
+        \\set_a = |record| { ..record, a: 5 }
+        \\
+        \\record : { a ?: U64 }
+        \\record = {}
+        \\
+        \\main = set_a(record).?a ?? 0
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "optional record field: runtime miss takes the Err(MissingField) match branch",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = {}
+        \\
+        \\main = match my_record.?age {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 33
+        \\}
+        ,
+        .expected = .{ .inspect_str = "33" },
+    },
+    .{
+        .name = "optional record field: chain result passed to a function expecting Try",
+        .source_kind = .module,
+        .source =
+        \\handle : Try(U8, [MissingField]) -> U8
+        \\handle = |t| match t {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => 50
+        \\}
+        \\
+        \\r : { a ?: U8 }
+        \\r = { a: 4 }
+        \\
+        \\s : { a ?: U8 }
+        \\s = {}
+        \\
+        \\main = handle(r.?a) + handle(s.?a)
+        ,
+        .expected = .{ .inspect_str = "54" },
+    },
+    .{
+        .name = "optional record field: chain result propagates with the ? suffix",
+        .source_kind = .module,
+        .source =
+        \\bump : { a ?: U8 } -> Try(U8, [MissingField])
+        \\bump = |r| Ok(r.?a? + 1)
+        \\
+        \\unwrap : Try(U8, [MissingField]), U8 -> U8
+        \\unwrap = |t, fallback| match t {
+        \\    Ok(v) => v
+        \\    Err(MissingField) => fallback
+        \\}
+        \\
+        \\main = unwrap(bump({ a: 4 }), 0) + unwrap(bump({}), 90)
+        ,
+        .expected = .{ .inspect_str = "95" },
+    },
+    .{
+        .name = "optional record field: record update copies unmentioned optional and defaulted slots verbatim",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, def : U8 ?? 10, name ?: Str }
+        \\
+        \\base1 : Rec
+        \\base1 = { req: 1, name: Str.repeat("amy", 9) }
+        \\
+        \\base2 : Rec
+        \\base2 = { req: 1 }
+        \\
+        \\main = {
+        \\    u1 = { ..base1, req: 2 }
+        \\    u2 = { ..base2, req: 3 }
+        \\    (u1.req + u1.def, Str.count_utf8_bytes(u1.?name ?? ""), u2.req + u2.def, u2.?name ?? "anon")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(12, 27, 13, \"anon\")" },
+    },
+    .{
+        .name = "optional record field: record update sets a missing optional slot",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = {}
+        \\
+        \\main = {
+        \\    u = { ..r, a: 7 }
+        \\    (u.?a ?? 0) + (r.?a ?? 40)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "47" },
+    },
+    .{
+        .name = "optional record field: record update overwrites a present optional slot",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 3 }
+        \\
+        \\main = {
+        \\    u = { ..r, a: 9 }
+        \\    (u.?a ?? 0) + (r.?a ?? 40)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "optional record field: record update sets a missing heap payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, name ?: Str }
+        \\
+        \\base : Rec
+        \\base = { req: 4 }
+        \\
+        \\main = {
+        \\    u = { ..base, name: Str.repeat("cat", 9) }
+        \\    (Str.count_utf8_bytes(u.?name ?? ""), Str.count_utf8_bytes(base.?name ?? ""), u.req)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(27, 0, 4)" },
+    },
+    .{
+        .name = "optional record field: record update replaces a present heap payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { req : U8, name ?: Str }
+        \\
+        \\base : Rec
+        \\base = { req: 1, name: Str.repeat("amy", 9) }
+        \\
+        \\main = {
+        \\    u = { ..base, name: Str.repeat("bo", 9) }
+        \\    (Str.count_utf8_bytes(u.?name ?? ""), Str.count_utf8_bytes(base.?name ?? ""), u.req)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(18, 27, 1)" },
+    },
+    .{
+        .name = "optional record field: destructure of a present slot binds Ok",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = { age: 2 }
+        \\
+        \\main = {
+        \\    { age } = my_record
+        \\    match age {
+        \\        Ok(v) => v
+        \\        Err(MissingField) => 0
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "optional record field: destructure of a missing slot binds Err(MissingField)",
+        .source_kind = .module,
+        .source =
+        \\my_record : { age ?: U8 }
+        \\my_record = {}
+        \\
+        \\main = {
+        \\    { age } = my_record
+        \\    match age {
+        \\        Ok(v) => v
+        \\        Err(MissingField) => 33
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "33" },
+    },
+    .{
+        .name = "optional record field: destructured binder defaults with ??",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 4 }
+        \\
+        \\s : { a ?: U8 }
+        \\s = {}
+        \\
+        \\get : { a ?: U8 } -> U8
+        \\get = |rec| {
+        \\    { a } = rec
+        \\    a ?? 40
+        \\}
+        \\
+        \\main = get(r) + get(s)
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        .name = "optional record field: nested Ok pattern in a match exercises both branches",
+        .source_kind = .module,
+        .source =
+        \\check : { age ?: U8 } -> U8
+        \\check = |r| match r {
+        \\    { age: Ok(v) } => v
+        \\    { age: Err(_) } => 7
+        \\}
+        \\
+        \\main = check({ age: 3 }) + check({})
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "optional record field: destructure in a function parameter pattern",
+        .source_kind = .module,
+        .source =
+        \\get : { age ?: U8 } -> U8
+        \\get = |{ age }| age ?? 40
+        \\
+        \\main = get({ age: 2 }) + get({})
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "optional record field: destructure of a present heap Str payload",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = { name: Str.repeat("ab", 15) }
+        \\
+        \\main = {
+        \\    { name } = my_record
+        \\    name ?? "anon"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"ababababababababababababababab\"" },
+    },
+    .{
+        .name = "optional record field: destructure of a missing heap Str payload takes the heap fallback",
+        .source_kind = .module,
+        .source =
+        \\my_record : { name ?: Str }
+        \\my_record = {}
+        \\
+        \\main = {
+        \\    { name } = my_record
+        \\    name ?? Str.repeat("no", 14)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"nononononononononononononono\"" },
+    },
+    .{
+        .name = "optional record field: destructure mixes required and optional siblings",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, opt ?: U8 }
+        \\r = { req: 1, opt: 2 }
+        \\
+        \\s : { req : U8, opt ?: U8 }
+        \\s = { req: 4 }
+        \\
+        \\get : { req : U8, opt ?: U8 } -> U8
+        \\get = |rec| {
+        \\    { req, opt } = rec
+        \\    req + (opt ?? 10)
+        \\}
+        \\
+        \\main = get(r) + get(s)
+        ,
+        .expected = .{ .inspect_str = "17" },
+    },
+    .{
+        .name = "optional record field: records with optional slots compare by presence and payload",
+        .source_kind = .module,
+        .source =
+        \\Rec : { a ?: U8 }
+        \\
+        \\x : Rec
+        \\x = { a: 1 }
+        \\
+        \\y : Rec
+        \\y = {}
+        \\
+        \\z : Rec
+        \\z = { a: 1 }
+        \\
+        \\w : Rec
+        \\w = {}
+        \\
+        \\main = (x == z, y == w, x == y)
+        ,
+        .expected = .{ .inspect_str = "(True, True, False)" },
+    },
+    .{
+        .name = "optional record field: list of records with mixed presence",
+        .source_kind = .module,
+        .source =
+        \\make : Bool -> { a ?: U8 }
+        \\make = |cond| if cond { a: 5 } else {}
+        \\
+        \\main = List.map([make(True), make(False), make(True)], |r| r.?a ?? 10)
+        ,
+        .expected = .{ .inspect_str = "[5, 10, 5]" },
+    },
+    .{
+        // The annotation's element type seeds the list literal's element
+        // accumulator, so `{}` absorbs `a` as an optional (constructed
+        // missing) slot; at runtime the first element's `a` is present and
+        // the second's is missing (design.md "Field Kinds (All-Dynamic
+        // Optional Fields)").
+        .name = "optional record field: annotated list literal with mixed presence elements",
+        .source_kind = .module,
+        .source =
+        \\xs : List({ a ?: U8 })
+        \\xs = [{ a: 1 }, {}]
+        \\
+        \\main = List.map(xs, |r| r.?a ?? 10)
+        ,
+        .expected = .{ .inspect_str = "[1, 10]" },
+    },
+    .{
+        // Same shape for the defaulted kind: the omitting element's slot is
+        // constructed missing, and a direct read materializes the default.
+        .name = "defaulted record field: annotated list literal materializes the default for omitting elements",
+        .source_kind = .module,
+        .source =
+        \\xs : List({ a : U8 ?? 7 })
+        \\xs = [{ a: 1 }, {}]
+        \\
+        \\main = List.map(xs, |r| r.a)
+        ,
+        .expected = .{ .inspect_str = "[1, 7]" },
+    },
+    .{
+        .name = "optional record field: inspect renders a present slot as the plain value",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8, b : U8 }
+        \\r = { a: 5, b: 2 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ a: 5, b: 2 }" },
+    },
+    .{
+        .name = "optional record field: inspect renders a missing slot as <missing>",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8, b : U8 }
+        \\r = { b: 2 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ a: <missing>, b: 2 }" },
+    },
+    .{
+        .name = "optional record field: inspect quotes a present Str payload like a required Str field",
+        .source_kind = .module,
+        .source =
+        \\r : { name ?: Str, tag : Str }
+        \\r = { name: "hi", tag: "ok" }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ name: \"hi\", tag: \"ok\" }" },
+    },
+    .{
+        .name = "optional record field: inspect of required+defaulted+optional record (omitting sides)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\r = { req: 1 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ def: 10, opt: <missing>, req: 1 }" },
+    },
+    .{
+        .name = "optional record field: inspect of required+defaulted+optional record (all supplied)",
+        .source_kind = .module,
+        .source =
+        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\r = { req: 1, def: 2, opt: 3 }
+        \\
+        \\main = r
+        ,
+        .expected = .{ .inspect_str = "{ def: 2, opt: 3, req: 1 }" },
+    },
+    .{
+        .name = "optional record field: inspect reaches a nested optional through a present outer slot",
+        .source_kind = .module,
+        .source =
+        \\o : { b ?: { c ?: U8 } }
+        \\o = { b: {} }
+        \\
+        \\main = o
+        ,
+        .expected = .{ .inspect_str = "{ b: { c: <missing> } }" },
+    },
+    // Committed record values have fixed layouts. A closed parameter cannot
+    // widen at a call site to absorb the caller's extra optional slots.
+    .{
+        .name = "optional record field: closed param rejects a wider value's missing optional slot",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\v : { a ?: U64, b : Str }
+        \\v = { b: "hello" }
+        \\
+        \\main = f(v)
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        // The extra optional field sorts BEFORE the accessed field: if the
+        // call dropped `a ?:` from the type while the value kept the wide
+        // layout, reading `b` at the narrow offset would read the `a` slot.
+        .name = "optional record field: closed param rejects a wider value's present optional slot",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\w : { a ?: U64, b : Str }
+        \\w = { a: 7, b: "world" }
+        \\
+        \\main = f(w)
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "optional record field: one closed function rejects separate wide-row instantiation",
+        .source_kind = .module,
+        .source =
+        \\f : { b : Str } -> Str
+        \\f = |r| r.b
+        \\
+        \\narrow : { b : Str }
+        \\narrow = { b: "n" }
+        \\
+        \\wide : { a ?: U64, b : Str }
+        \\wide = { a: 1, b: "w" }
+        \\
+        \\main = Str.concat(f(narrow), f(wide))
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "defaulted record field: heap Str default materializes from the empty literal",
+        .source_kind = .module,
+        .source =
+        \\x : { greeting : Str ?? "this default greeting string is long" }
+        \\x = {}
+        \\
+        \\main = Str.concat(x.greeting, "!")
+        ,
+        .expected = .{ .inspect_str = "\"this default greeting string is long!\"" },
+    },
+    .{
+        .name = "defaulted record field: record-literal default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
+        \\
+        \\c : Cfg
+        \\c = {}
+        \\
+        \\main = c.pos.x + c.pos.y
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "defaulted record field: alias-carried list default materializes at two sites",
+        .source_kind = .module,
+        .source =
+        \\Cfg : { xs : List(U8) ?? [1, 2, 3] }
+        \\
+        \\a : Cfg
+        \\a = {}
+        \\
+        \\b : Cfg
+        \\b = { xs: [5] }
+        \\
+        \\d : Cfg
+        \\d = {}
+        \\
+        \\main = List.len(a.xs) + List.len(b.xs) + List.len(d.xs)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        // Defaults are restricted to closed literals at canonicalization, so
+        // the reference/computed shapes that used to live here are Can
+        // rejections now (type_checking_integration.zig); a tag-application
+        // literal keeps the non-scalar materialization coverage.
+        .name = "defaulted record field: tag-literal default materializes",
+        .source_kind = .module,
+        .source =
+        \\x : { a : [None, Some(U8)] ?? Some(9) }
+        \\x = {}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "Some(9)" },
+    },
+    .{
+        .name = "defaulted record field: negated-numeral default materializes",
+        .source_kind = .module,
+        .source =
+        \\x : { a : I8 ?? -10 }
+        \\x = {}
+        \\
+        \\main = x.a + 1
+        ,
+        .expected = .{ .inspect_str = "-9" },
+    },
+    .{
+        .name = "defaulted record field: custom from_numeral default materializes",
+        .source_kind = .module,
+        .source =
+        \\MyNum := [Value(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
+        \\}
+        \\
+        \\config : { size : MyNum ?? 5 }
+        \\config = {}
+        \\
+        \\main = match config.size {
+        \\    Value(size) => size
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        .name = "defaulted record field: custom from_quote default materializes",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
+        \\}
+        \\
+        \\config : { label : Tag ?? "hello" }
+        \\config = {}
+        \\
+        \\main = match config.label {
+        \\    Tag(label) => label
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "defaulted record field: rejected custom literal is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects this default"))
+        \\}
+        \\
+        \\config : { value : Picky ?? 5 }
+        \\config = {}
+        \\
+        \\main = config.value
+        ,
+        .expected = .problem,
+    },
     // Frontend problems
     .{ .name = "problem: name not in scope", .source = "undefinedVar", .expected = .{ .problem = {} } },
     .{ .name = "problem: dec plus int type mismatch", .source = "1.0.Dec + 2.I64", .expected = .{ .problem = {} } },
@@ -2788,6 +3721,25 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
     },
     .{
+        .name = "defaulted record field: imported alias default survives required access",
+        .source_kind = .module,
+        .source =
+        \\import ConfigMod
+        \\
+        \\main = ConfigMod.get_count!({ name: "Roc" })
+        ,
+        .imports = &.{.{
+            .name = "ConfigMod",
+            .source =
+            \\Cfg : { count : U8 ?? 10, name : Str }
+            \\
+            \\get_count! : Cfg -> U8
+            \\get_count! = |cfg| cfg.count
+            ,
+        }},
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
         .name = "inspect: lambda list param calling List.append",
         .source =
         \\{
@@ -4003,6 +4955,409 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "10" },
     },
+    // A procedure that returns `Iter` hands its caller a callee-authored
+    // representation. Consuming that call directly as a `for` source must
+    // still dispatch against the caller's own iterator request.
+    .{
+        .name = "for loop over a procedure returning a list-backed iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning a range-backed iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : U64 -> Iter(U64)
+        \\mk = |n| 0..<n
+        \\
+        \\sum_it : U64 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in mk(n) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it(4)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning an adapted iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter().map(|x| x * 2)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| if flag { xs.iter() } else { 0..<n }
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "inspect: wrapper iterator with distinct branch producers stays correct",
+        .source_kind = .module,
+        .source =
+        \\Mixed := { xs : List(U64), n : U64 }.{
+        \\    iter : Mixed -> Iter(U64)
+        \\    iter = |mixed| if mixed.n == 0 {
+        \\        mixed.xs.iter()
+        \\    } else {
+        \\        mixed.xs.iter_rev()
+        \\    }
+        \\}
+        \\
+        \\digits : Mixed -> U64
+        \\digits = |mixed| {
+        \\    var $out = 0
+        \\    for x in mixed {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 0 }),
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 1 }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(123, 321)" },
+    },
+    // A list literal builds one element representation for every item, so a
+    // producer-authored iterator reaching a list element must keep the
+    // representation the constructor selected for that element. These cases
+    // put the iterator behind a second container (a nested list, a tuple slot,
+    // a record field) so the element representation is a container rather than
+    // the iterator itself, and build the container in its own procedure so the
+    // whole result cannot be folded before it is lowered.
+    .{
+        .name = "for loop over a procedure returning a list of lists of iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(List(Iter(U64)))
+        \\wrap = |xs| [[xs.iter()]]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of records holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List({ it : Iter(U64) })
+        \\wrap = |xs| [{ it: xs.iter() }]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of tuples holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List((Iter(U64), U64))
+        \\wrap = |xs| [(xs.iter(), 1)]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.0 {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of lists of ranges",
+        .source_kind = .module,
+        .source =
+        \\wrap : U64 -> List(List(Iter(U64)))
+        \\wrap = |n| [[0..<n]]
+        \\
+        \\digits : U64 -> U64
+        \\digits = |n| {
+        \\    var $out = 0
+        \\    for row in wrap(n) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits(3)
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of lists of string iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : Str -> List(List(Iter(U8)))
+        \\wrap = |text| [[Str.iter_utf8(text)]]
+        \\
+        \\total : Str -> U64
+        \\total = |text| {
+        \\    var $sum = 0
+        \\    for row in wrap(text) {
+        \\        for it in row {
+        \\            for byte in it {
+        \\                $sum = $sum + byte.to_u64()
+        \\            }
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = total("ab")
+        ,
+        .expected = .{ .inspect_str = "195" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of tag payloads holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List([Ready(Iter(U64)), Empty])
+        \\wrap = |xs| [Ready(xs.iter()), Empty]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for slot in wrap(xs) {
+        \\        match slot {
+        \\            Ready(it) => {
+        \\                for x in it {
+        \\                    $out = $out * 10 + x
+        \\                }
+        \\            }
+        \\            Empty => {}
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    // Every element of a list literal contributes its own producer
+    // representation. A literal that mixes producers must read each element
+    // back at the representation that element was built with.
+    .{
+        .name = "for loop over a procedure returning mixed forward and reverse list iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [xs.iter(), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "123321" },
+    },
+    .{
+        .name = "for loop over a procedure returning mixed list and range producers",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64), U64 -> List(Iter(U64))
+        \\wrap = |xs, n| [xs.iter(), 1..<n, xs.iter_rev()]
+        \\
+        \\digits : List(U64), U64 -> U64
+        \\digits = |xs, n| {
+        \\    var $out = 0
+        \\    for it in wrap(xs, n) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([7, 8, 9], 4)
+        ,
+        .expected = .{ .inspect_str = "789123987" },
+    },
+    // A direct procedure call relates its produced iterator to the element
+    // slot without merging classes, unlike a dispatch child, so this literal
+    // exercises the constructor's element-witness selection across both
+    // producer paths in the order that leaves the selection to the direct
+    // call.
+    .{
+        .name = "for loop over a list literal mixing direct-call and dispatch iterator producers",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [mk(xs), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "1221" },
+    },
+    // A record update stores its updated field values while typed at the
+    // update's record node, so a producer-authored iterator field must carry
+    // its exact representation through the update.
+    .{
+        .name = "record update storing a dispatch-produced iterator field",
+        .source_kind = .module,
+        .source =
+        \\rewrap : { it : Iter(U64), n : U64 }, List(U64) -> { it : Iter(U64), n : U64 }
+        \\rewrap = |w, items| { ..w, it: items.iter_rev() }
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    base = { it: xs.iter(), n: 7 }
+        \\    updated = rewrap(base, xs)
+        \\    var $out = updated.n
+        \\    for x in updated.it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "721" },
+    },
+    // A fully closed receiver is a static-data hoist candidate; its `.iter()`
+    // dispatch must leave the collection as the hoist root instead of
+    // becoming one itself.
+    .{
+        .name = "for loop over a closed Dict receiver's iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_dict(7)
+        ,
+        .expected = .{ .inspect_str = "40" },
+    },
+    .{
+        .name = "for loop over a closed Set receiver's reverse iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_set(7)
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
     .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
@@ -4174,74 +5529,129 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Unknown" },
     },
     .{
-        .name = "inspect: Iter.rev reverses items",
+        .name = "inspect: List.iter_rev yields items back to front",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    iter = [1.I64, 2, 3].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[3, 2, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev on empty source is empty",
+        .name = "inspect: List.iter_rev on empty list is empty",
         .source =
         \\{
-        \\    iter = [].iter().rev()
+        \\    iter = [].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[]" },
     },
     .{
-        .name = "inspect: Iter.rev on a singleton",
+        .name = "inspect: List.iter_rev on a singleton",
         .source =
         \\{
-        \\    iter = [1.I64].iter().rev()
+        \\    iter = [1.I64].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[1]" },
     },
     .{
-        .name = "inspect: Iter.rev on a range",
+        .name = "inspect: List.iter_rev composed with keep_if",
         .source =
         \\{
-        \\    iter = (1.U64..=5).rev()
+        \\    odds = [1.I64, 2, 3, 4, 5].iter_rev().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev composed with step_by",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().step_by(2)
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev composed with take_first",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().take_first(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter_rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: List.iter_rev on empty list reports zero length",
+        .source = "Iter.size_hint([].iter_rev())",
+        .expected = .{ .inspect_str = "Known(0)" },
+    },
+    .{
+        .name = "inspect: non-list iterator can be collected before reversing",
+        .source = "Iter.fold(List.from_iter(1.U64..=5).iter_rev(), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
+        .name = "inspect: Dict.iter yields pairs in insertion order",
         .source =
         \\{
-        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
-        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
         \\}
         ,
-        .expected = .{ .inspect_str = "[5, 3, 1]" },
+        .expected = .{ .inspect_str = "[(1, \"one\"), (2, \"two\"), (3, \"three\")]" },
     },
     .{
-        .name = "inspect: Iter.rev composed with step_by",
+        .name = "inspect: Dict.iter_rev yields pairs in reverse insertion order",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
-        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter_rev(), [], |acc, pair| acc.append(pair))
         \\}
         ,
-        .expected = .{ .inspect_str = "[5, 3, 1]" },
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\"), (1, \"one\")]" },
     },
     .{
-        .name = "inspect: Iter.rev reports known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .name = "inspect: Dict.remove may reorder remaining iteration entries",
+        .source =
+        \\{
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three").remove(1)
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\")]" },
     },
     .{
-        .name = "inspect: Iter.rev upgrades unknown length to known",
-        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .name = "inspect: Set.fold sums the values",
+        .source = "Set.fold(Set.from_list([1, 2, 3.U64]), 0, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: Set.fold on an empty set returns the initial state",
+        .source = "Set.fold(Set.empty(), 0.U64, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "inspect: Set.iter yields values in insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Set.iter_rev yields values in reverse insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
     },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },

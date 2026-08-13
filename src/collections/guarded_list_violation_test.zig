@@ -328,22 +328,23 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         allocator,
         check.CheckedNames.NameStore.init(allocator),
         Mono.Type.Store.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
+        .empty, // imported_fns
+        .empty, // exprs
+        .empty, // pats
+        .empty, // stmts
+        .empty, // locals
+        .empty, // expr_ids
+        .empty, // pat_ids
+        .empty, // typed_locals
+        .empty, // stmt_ids
+        .empty, // field_exprs
+        .empty, // field_access_segments
+        .empty, // fn_def_captures
+        .empty, // record_destructs
+        .empty, // str_pattern_steps
+        .empty, // branches
+        .empty, // if_branches
+        .empty, // string_literals
         .empty,
         .empty,
         .empty,
@@ -392,5 +393,6 @@ fn dummyMonoTypeField(raw: u32, ty: Mono.Type.TypeId) Mono.Type.Field {
     return .{
         .name = @enumFromInt(raw),
         .ty = ty,
+        .default = null,
     };
 }

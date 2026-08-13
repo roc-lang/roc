@@ -14,8 +14,10 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const types = @import("types");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
+const Var = types.Var;
 
 /// Represents a directed graph of dependencies between top-level definitions.
 /// Edges point from dependent to dependency (A -> B means A depends on B).
@@ -79,6 +81,15 @@ pub const Dependency = struct {
     dependency: CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
+};
+
+/// One literal constraint whose checker-selected same-module method target is
+/// now available to strict-demand analysis. `fn_var` is the exact raw callable
+/// variable for this dispatch edge; scheme-use pairs map generalized source
+/// constraints to these selected instantiations at their forcing call sites.
+pub const ResolvedLiteralTarget = struct {
+    fn_var: Var,
+    target_def: CIR.Def.Idx,
 };
 
 /// The computed evaluation order for all definitions in a module.
@@ -194,10 +205,13 @@ pub fn hasDependency(
 const DemandSummary = struct {
     deps: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
     called_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
+    /// Literal callable vars whose target remains polymorphic in this summary.
+    literal_requirements: std.AutoHashMapUnmanaged(Var, void) = .{},
 
     fn deinit(self: *DemandSummary, allocator: std.mem.Allocator) void {
         self.deps.deinit(allocator);
         self.called_patterns.deinit(allocator);
+        self.literal_requirements.deinit(allocator);
     }
 
     fn addDep(self: *DemandSummary, allocator: std.mem.Allocator, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!bool {
@@ -209,6 +223,13 @@ const DemandSummary = struct {
 
     fn addCalledPattern(self: *DemandSummary, allocator: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) std.mem.Allocator.Error!bool {
         const gop = try self.called_patterns.getOrPut(allocator, pattern_idx);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = {};
+        return true;
+    }
+
+    fn addLiteralRequirement(self: *DemandSummary, allocator: std.mem.Allocator, fn_var: Var) std.mem.Allocator.Error!bool {
+        const gop = try self.literal_requirements.getOrPut(allocator, fn_var);
         if (gop.found_existing) return false;
         gop.value_ptr.* = {};
         return true;
@@ -227,6 +248,11 @@ const DemandSummary = struct {
             if (try self.addCalledPattern(allocator, pattern_idx.*)) changed = true;
         }
 
+        var literal_iter = other.literal_requirements.keyIterator();
+        while (literal_iter.next()) |fn_var| {
+            if (try self.addLiteralRequirement(allocator, fn_var.*)) changed = true;
+        }
+
         return changed;
     }
 };
@@ -239,6 +265,8 @@ const DemandAnalyzer = struct {
     summary_defs: []const CIR.Def.Idx,
     graph_def_set: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
     pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{},
+    resolved_literal_targets: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(CIR.Def.Idx)) = .{},
+    scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
     active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 
@@ -246,6 +274,7 @@ const DemandAnalyzer = struct {
         cir: *const ModuleEnv,
         summary_defs: []const CIR.Def.Idx,
         graph_defs: []const CIR.Def.Idx,
+        resolved_literal_targets: []const ResolvedLiteralTarget,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!DemandAnalyzer {
         var analyzer = DemandAnalyzer{
@@ -264,6 +293,27 @@ const DemandAnalyzer = struct {
             try analyzer.pattern_to_def.put(allocator, def.pattern, def_idx);
         }
 
+        for (resolved_literal_targets) |target| {
+            const fn_root = cir.types.resolveVar(target.fn_var).var_;
+            const entry = try analyzer.resolved_literal_targets.getOrPut(allocator, fn_root);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            for (entry.value_ptr.items) |existing| {
+                if (existing == target.target_def) break;
+            } else {
+                try entry.value_ptr.append(allocator, target.target_def);
+            }
+        }
+
+        for (cir.scheme_uses.items.items, 0..) |record, record_index| {
+            switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
+                .value_use, .shared_value_use => {
+                    const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
+                    if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
+                },
+                .nested_function_use, .dispatch_target => {},
+            }
+        }
+
         return analyzer;
     }
 
@@ -275,6 +325,10 @@ const DemandAnalyzer = struct {
         self.summaries.deinit(self.allocator);
         self.pattern_to_def.deinit(self.allocator);
         self.graph_def_set.deinit(self.allocator);
+        var resolved_iter = self.resolved_literal_targets.valueIterator();
+        while (resolved_iter.next()) |targets| targets.deinit(self.allocator);
+        self.resolved_literal_targets.deinit(self.allocator);
+        self.scheme_use_by_node.deinit(self.allocator);
         self.active_lambdas.deinit(self.allocator);
     }
 
@@ -297,6 +351,9 @@ const DemandAnalyzer = struct {
                 if (lambda_expr == .e_lambda and !self.active_lambdas.contains(lambda_idx)) {
                     try self.active_lambdas.put(self.allocator, lambda_idx, {});
                     defer _ = self.active_lambdas.remove(lambda_idx);
+                    for (self.cir.store.slicePatterns(lambda_expr.e_lambda.args)) |arg_pattern| {
+                        try self.walkPatternDemand(arg_pattern, &computed, &local_callables);
+                    }
                     try self.walkDemand(lambda_expr.e_lambda.body, &computed, &local_callables);
                 }
 
@@ -317,6 +374,7 @@ const DemandAnalyzer = struct {
 
         const def = self.cir.store.getDef(def_idx);
         try self.walkDemand(def.expr, out, &local_callables);
+        try self.walkPatternDemand(def.pattern, out, &local_callables);
     }
 
     fn addGraphDep(self: *DemandAnalyzer, out: *DemandSummary, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
@@ -377,6 +435,8 @@ const DemandAnalyzer = struct {
     const WalkItem = union(enum) {
         /// Pre-order construction visit of one expression node.
         visit: CIR.Expr.Idx,
+        /// Pre-order execution visit of one pattern node.
+        visit_pattern: CIR.Pattern.Idx,
         /// Process one block statement; statements are pushed in reverse so
         /// they execute in source order (local callables register in order).
         visit_stmt: CIR.Statement.Idx,
@@ -394,7 +454,7 @@ const DemandAnalyzer = struct {
         /// Close an inline lambda-execution frame: fold its computed summary
         /// into the parent (graph deps directly; called patterns matched
         /// against the call's arguments) and deactivate the lambda.
-        finish_lambda: struct { lambda: CIR.Expr.Idx, args: CIR.Expr.Span },
+        finish_lambda: struct { lambda: CIR.Expr.Idx, args: CIR.Expr.Span, demand_node: ?CIR.Node.Idx },
     };
 
     const Walk = struct {
@@ -423,17 +483,27 @@ const DemandAnalyzer = struct {
         defer walk.deinit(self.allocator);
         try walk.push(self.allocator, .{ .visit = root_expr });
 
+        try self.drainWalk(&walk, out, local_callables);
+    }
+
+    fn drainWalk(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
         while (walk.work.pop()) |item| {
             const current: *DemandSummary = if (walk.frames.items.len > 0)
                 &walk.frames.items[walk.frames.items.len - 1]
             else
                 out;
             switch (item) {
-                .visit => |expr_idx| try self.visitExpr(&walk, current, expr_idx),
-                .visit_stmt => |stmt_idx| try self.visitStmt(&walk, stmt_idx),
+                .visit => |expr_idx| try self.visitExpr(walk, current, expr_idx),
+                .visit_pattern => |pattern_idx| try self.visitPattern(walk, current, pattern_idx),
+                .visit_stmt => |stmt_idx| try self.visitStmt(walk, stmt_idx),
                 .remember_local => |bind| try self.rememberLocalCallable(bind.pattern, bind.expr, local_callables),
-                .apply_call_target => |call| try self.applyCallTarget(&walk, current, call.func, call.args, local_callables),
-                .apply_called_value => |expr_idx| try self.applyCalledValue(&walk, current, expr_idx, local_callables),
+                .apply_call_target => |call| try self.applyCallTarget(walk, current, call.func, call.args, local_callables),
+                .apply_called_value => |expr_idx| try self.applyCalledValue(walk, current, expr_idx, local_callables),
                 .finish_lambda => |fin| {
                     var computed = walk.frames.pop().?;
                     defer computed.deinit(self.allocator);
@@ -442,10 +512,24 @@ const DemandAnalyzer = struct {
                         &walk.frames.items[walk.frames.items.len - 1]
                     else
                         out;
-                    try self.foldLambdaSummary(&walk, parent, &computed, fin.lambda, fin.args);
+                    try self.foldLambdaSummary(walk, parent, &computed, fin.lambda, fin.args, fin.demand_node);
                 },
             }
         }
+    }
+
+    /// Run the demand walk from `root_pattern`, accumulating into `out`.
+    fn walkPatternDemand(
+        self: *DemandAnalyzer,
+        root_pattern: CIR.Pattern.Idx,
+        out: *DemandSummary,
+        local_callables: *LocalCallables,
+    ) std.mem.Allocator.Error!void {
+        var walk = Walk{};
+        defer walk.deinit(self.allocator);
+        try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
+
+        try self.drainWalk(&walk, out, local_callables);
     }
 
     /// Apply a called lambda's demand summary at a call site. A cached
@@ -458,9 +542,10 @@ const DemandAnalyzer = struct {
         current: *DemandSummary,
         lambda_idx: CIR.Expr.Idx,
         call_args: CIR.Expr.Span,
+        demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
         if (self.summaries.getPtr(lambda_idx)) |summary| {
-            try self.foldLambdaSummary(walk, current, summary, lambda_idx, call_args);
+            try self.foldLambdaSummary(walk, current, summary, lambda_idx, call_args, demand_node);
             return;
         }
         if (self.active_lambdas.contains(lambda_idx)) return;
@@ -469,16 +554,17 @@ const DemandAnalyzer = struct {
 
         try self.active_lambdas.put(self.allocator, lambda_idx, {});
         try walk.frames.append(self.allocator, DemandSummary{});
-        // The finish item pops first-in-last-out: the body's whole walk runs
-        // inside the frame, then the frame folds into its parent.
-        try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args } });
+        // The finish item pops first-in-last-out: argument patterns and the
+        // body run inside the frame, then the frame folds into its parent.
+        try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
         try walk.push(self.allocator, .{ .visit = expr.e_lambda.body });
+        try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
     }
 
     /// Fold one lambda's demand summary into `into` for a call with
-    /// `call_args`: graph deps transfer directly; a called pattern that
-    /// matches a passed argument walks that argument as a called value,
-    /// otherwise it propagates unresolved.
+    /// `call_args`: graph deps transfer directly; called patterns flow through
+    /// the matching argument; and polymorphic literal requirements translate
+    /// through the exact scheme-use pairs recorded at `demand_node`.
     fn foldLambdaSummary(
         self: *DemandAnalyzer,
         walk: *Walk,
@@ -486,6 +572,7 @@ const DemandAnalyzer = struct {
         summary: *const DemandSummary,
         lambda_idx: CIR.Expr.Idx,
         call_args: CIR.Expr.Span,
+        demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
         var dep_iter = summary.deps.keyIterator();
         while (dep_iter.next()) |def_idx| {
@@ -501,6 +588,11 @@ const DemandAnalyzer = struct {
                 _ = try into.addCalledPattern(self.allocator, pattern_idx.*);
             }
         }
+
+        var literal_iter = summary.literal_requirements.keyIterator();
+        while (literal_iter.next()) |fn_var| {
+            try self.applyLiteralRequirement(walk, into, fn_var.*, demand_node);
+        }
     }
 
     fn applyCallTarget(
@@ -514,18 +606,18 @@ const DemandAnalyzer = struct {
         const expr = self.cir.store.getExpr(call_func);
         const tag = std.meta.activeTag(expr);
         if (tag == .e_lambda) {
-            try self.beginApplyLambdaSummary(walk, current, call_func, call_args);
+            try self.beginApplyLambdaSummary(walk, current, call_func, call_args, ModuleEnv.nodeIdxFrom(call_func));
         } else if (tag == .e_closure) {
-            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, call_args);
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
         } else if (tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
             if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
-                try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args);
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
                 return;
             }
             if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
                 if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args);
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
                 }
                 return;
             }
@@ -544,18 +636,18 @@ const DemandAnalyzer = struct {
         const expr = self.cir.store.getExpr(expr_idx);
         const tag = std.meta.activeTag(expr);
         if (tag == .e_lambda) {
-            try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args);
+            try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
         } else if (tag == .e_closure) {
-            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, empty_args);
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
         } else if (tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
             if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
-                try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args);
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
                 return;
             }
             if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
                 if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args);
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
                 }
                 return;
             }
@@ -578,19 +670,25 @@ const DemandAnalyzer = struct {
             .s_decl => |decl| {
                 // Register the callable only after its RHS subtree walked.
                 try walk.push(self.allocator, .{ .remember_local = .{ .pattern = decl.pattern, .expr = decl.expr } });
+                try walk.push(self.allocator, .{ .visit_pattern = decl.pattern });
                 try walk.push(self.allocator, .{ .visit = decl.expr });
             },
             .s_var => |var_stmt| {
                 try walk.push(self.allocator, .{ .remember_local = .{ .pattern = var_stmt.pattern_idx, .expr = var_stmt.expr } });
+                try walk.push(self.allocator, .{ .visit_pattern = var_stmt.pattern_idx });
                 try walk.push(self.allocator, .{ .visit = var_stmt.expr });
             },
             .s_var_uninitialized => {},
-            .s_reassign => |reassign| try walk.push(self.allocator, .{ .visit = reassign.expr }),
+            .s_reassign => |reassign| {
+                try walk.push(self.allocator, .{ .visit_pattern = reassign.pattern_idx });
+                try walk.push(self.allocator, .{ .visit = reassign.expr });
+            },
             .s_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
             .s_expr => |expr_stmt| try walk.push(self.allocator, .{ .visit = expr_stmt.expr }),
             .s_expect => |expect| try walk.push(self.allocator, .{ .visit = expect.body }),
             .s_for => |for_stmt| {
                 try walk.push(self.allocator, .{ .visit = for_stmt.body });
+                try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
             .s_while => |while_stmt| {
@@ -616,6 +714,8 @@ const DemandAnalyzer = struct {
         current: *DemandSummary,
         expr_idx: CIR.Expr.Idx,
     ) std.mem.Allocator.Error!void {
+        try self.visitLiteralNode(walk, current, ModuleEnv.nodeIdxFrom(expr_idx));
+
         switch (self.cir.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
@@ -659,6 +759,13 @@ const DemandAnalyzer = struct {
                     try walk.push(self.allocator, .{ .visit = branch.value });
                     if (branch.guard) |guard_idx| {
                         try walk.push(self.allocator, .{ .visit = guard_idx });
+                    }
+                    const branch_patterns = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
+                    var pattern_i = branch_patterns.len;
+                    while (pattern_i > 0) {
+                        pattern_i -= 1;
+                        const branch_pattern = self.cir.store.getMatchBranchPattern(branch_patterns[pattern_i]);
+                        try walk.push(self.allocator, .{ .visit_pattern = branch_pattern.pattern });
                     }
                 }
             },
@@ -728,6 +835,7 @@ const DemandAnalyzer = struct {
             .e_break => {},
             .e_for => |for_expr| {
                 try walk.push(self.allocator, .{ .visit = for_expr.body });
+                try walk.push(self.allocator, .{ .visit_pattern = for_expr.patt });
                 try walk.push(self.allocator, .{ .visit = for_expr.expr });
             },
             .e_num,
@@ -758,6 +866,126 @@ const DemandAnalyzer = struct {
             .e_runtime_error,
             => {},
         }
+    }
+
+    fn pushPatternSpanReversed(self: *DemandAnalyzer, walk: *Walk, span: CIR.Pattern.Span) std.mem.Allocator.Error!void {
+        const patterns = self.cir.store.slicePatterns(span);
+        var i = patterns.len;
+        while (i > 0) {
+            i -= 1;
+            try walk.push(self.allocator, .{ .visit_pattern = patterns[i] });
+        }
+    }
+
+    fn visitPattern(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        current: *DemandSummary,
+        pattern_idx: CIR.Pattern.Idx,
+    ) std.mem.Allocator.Error!void {
+        try self.visitLiteralNode(walk, current, ModuleEnv.nodeIdxFrom(pattern_idx));
+
+        switch (self.cir.store.getPattern(pattern_idx)) {
+            .as => |as_pattern| try walk.push(self.allocator, .{ .visit_pattern = as_pattern.pattern }),
+            .applied_tag => |tag| try self.pushPatternSpanReversed(walk, tag.args),
+            .nominal => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
+            .nominal_external => |nominal| try walk.push(self.allocator, .{ .visit_pattern = nominal.backing_pattern }),
+            .record_destructure => |record| {
+                const destructs = self.cir.store.sliceRecordDestructs(record.destructs);
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    const destruct = self.cir.store.getRecordDestruct(destructs[i]);
+                    try walk.push(self.allocator, .{ .visit_pattern = destruct.kind.toPatternIdx() });
+                }
+            },
+            .list => |list| {
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pattern| {
+                        try walk.push(self.allocator, .{ .visit_pattern = rest_pattern });
+                    }
+                }
+                try self.pushPatternSpanReversed(walk, list.patterns);
+            },
+            .tuple => |tuple| try self.pushPatternSpanReversed(walk, tuple.patterns),
+            .str_interpolation => |str| {
+                for (0..str.steps.span.len) |offset| {
+                    const step = self.cir.store.getStrPatternStep(str.steps, @intCast(offset));
+                    if (step.capture) |capture| {
+                        try walk.push(self.allocator, .{ .visit_pattern = capture });
+                    }
+                }
+            },
+            .assign,
+            .num_literal,
+            .num_from_numeral_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            .underscore,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn visitLiteralNode(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        current: *DemandSummary,
+        node_idx: CIR.Node.Idx,
+    ) std.mem.Allocator.Error!void {
+        const plan = self.cir.store.literalDispatchPlanForNode(node_idx) orelse return;
+        switch (plan.dispatchResolution()) {
+            .custom_dispatch, .specialization_dispatch => {},
+            .unresolved, .builtin_direct, .checked_error => return,
+        }
+        try self.applyLiteralRequirement(walk, current, @enumFromInt(plan.fn_var), null);
+    }
+
+    fn applyLiteralRequirement(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        current: *DemandSummary,
+        source_fn_var: Var,
+        demand_node: ?CIR.Node.Idx,
+    ) std.mem.Allocator.Error!void {
+        const fn_var = if (demand_node) |node|
+            self.translateLiteralRequirement(source_fn_var, node)
+        else
+            source_fn_var;
+        const fn_root = self.cir.types.resolveVar(fn_var).var_;
+        if (self.resolved_literal_targets.get(fn_root)) |target_defs| {
+            for (target_defs.items) |target_def| {
+                if (self.lambdaFromDef(target_def)) |lambda_idx| {
+                    // Literal conversion arguments contain no callable value
+                    // supplied by source, so only each selected method body's
+                    // explicit top-level demands can flow outward.
+                    const no_source_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, no_source_args, null);
+                }
+            }
+            return;
+        }
+        _ = try current.addLiteralRequirement(self.allocator, fn_var);
+    }
+
+    fn translateLiteralRequirement(
+        self: *const DemandAnalyzer,
+        fn_var: Var,
+        demand_node: CIR.Node.Idx,
+    ) Var {
+        const record_index = self.scheme_use_by_node.get(demand_node) orelse return fn_var;
+        const record = self.cir.scheme_uses.items.items[record_index];
+        const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        const old_root = self.cir.types.resolveVar(fn_var).var_;
+        for (pairs) |pair| {
+            if (self.cir.types.resolveVar(@enumFromInt(pair.old_var)).var_ == old_root) {
+                return @enumFromInt(pair.fresh_var);
+            }
+        }
+        return fn_var;
     }
 
     fn callArgForPattern(
@@ -851,11 +1079,24 @@ pub fn buildDependencyGraph(
     all_defs: CIR.Def.Span,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!DependencyGraph {
+    return buildDependencyGraphWithResolvedLiteralTargets(cir, all_defs, &.{}, allocator);
+}
+
+/// Build the strict-demand graph after checking, applying the exact local
+/// method targets selected for literal conversions. This is the same demand
+/// analysis canonicalization uses; the only additional input is explicit
+/// checker-produced dispatch data.
+pub fn buildDependencyGraphWithResolvedLiteralTargets(
+    cir: *const ModuleEnv,
+    all_defs: CIR.Def.Span,
+    resolved_literal_targets: []const ResolvedLiteralTarget,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!DependencyGraph {
     const defs_slice = cir.store.sliceDefs(all_defs);
     var graph = DependencyGraph.init(allocator, defs_slice);
     errdefer graph.deinit();
 
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, defs_slice, allocator);
+    var analyzer = try DemandAnalyzer.init(cir, defs_slice, defs_slice, resolved_literal_targets, allocator);
     defer analyzer.deinit();
 
     try analyzer.computeSummaries();
@@ -966,7 +1207,7 @@ pub fn getConstantsInDependencyOrder(
     errdefer graph.deinit();
 
     const defs_slice = cir.store.sliceDefs(all_defs);
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, allocator);
+    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, &.{}, allocator);
     defer analyzer.deinit();
 
     try analyzer.computeSummaries();
@@ -1005,7 +1246,7 @@ pub fn getConstantsInDependencyOrder(
 /// dependencies during inference and resolves them at group boundaries.
 ///
 /// The walk is an explicit worklist (zero-recursion policy).
-fn collectNameReferences(
+pub fn collectNameReferences(
     cir: *const ModuleEnv,
     pattern_to_def: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx),
     root_expr: CIR.Expr.Idx,

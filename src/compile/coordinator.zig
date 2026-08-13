@@ -2470,6 +2470,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => {},
             }
         }
@@ -2491,6 +2492,7 @@ pub const Coordinator = struct {
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
+                .field_default,
                 => continue,
             }
             const source_expr = switch (root.source) {

@@ -4394,10 +4394,12 @@ pub const MonoLlvmCodeGen = struct {
             .ptr_load => try self.emitPtrLoad(target, GuardedList.at(arg_locals, 0)),
             .ptr_cast => try self.emitPtrCast(target, GuardedList.at(arg_locals, 0)),
             .crash => try self.emitCrashBytes("Roc crashed"),
+            // Not conversions, and not lowered by this backend.
             .list_split_first,
             .list_split_last,
             .num_log,
             .num_round,
+            => return error.UnsupportedLowLevel,
             .u8_to_i8_wrap,
             .u8_to_i8_try,
             .u8_to_i16,
@@ -4630,7 +4632,6 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,
@@ -4644,7 +4645,7 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => try self.emitNumericConversionOrCrash(target, op, arg_locals),
+            => try self.emitNumericConversion(target, op, arg_locals),
         }
     }
 
@@ -6161,7 +6162,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
     }
 
-    fn emitNumericConversionOrCrash(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
+    fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
         const name = @tagName(op);
         const SpecialConversion = enum {
             f32_to_i8_try_unsafe,
@@ -6194,7 +6195,6 @@ pub const MonoLlvmCodeGen = struct {
             dec_to_i16_try_unsafe,
             dec_to_i32_try_unsafe,
             dec_to_i64_try_unsafe,
-            dec_to_i128_try_unsafe,
             dec_to_u8_try_unsafe,
             dec_to_u16_try_unsafe,
             dec_to_u32_try_unsafe,
@@ -6246,7 +6246,6 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_i16_try_unsafe,
             .dec_to_i32_try_unsafe,
             .dec_to_i64_try_unsafe,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_try_unsafe,
             .dec_to_u32_try_unsafe,
@@ -6284,7 +6283,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeScalar(self.slot(target).ptr, self.localLayout(target), coerced);
             return;
         }
-        try self.emitCrashBytes(name);
+        return error.UnsupportedLowLevel;
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {

@@ -92,15 +92,7 @@ main! = |_| processNested([])
 (can-ir
 	(d-let
 		(p-assign (ident "processNested"))
-		(e-lambda
-			(args
-				(p-assign (ident "_list")))
-			(e-list
-				(elems
-					(e-string
-						(e-literal (string "one")))
-					(e-string
-						(e-literal (string "two"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

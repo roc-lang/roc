@@ -502,31 +502,21 @@ transform = |result|
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "getColor"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-runtime-error (tag "type_from_missing_mod")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processColor"))
-		(e-lambda
-			(args
-				(p-assign (ident "color")))
-			(e-string
-				(e-literal (string "Color processed"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

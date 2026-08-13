@@ -7,12 +7,15 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
+const types = @import("types");
 const snapshot = @import("../snapshot.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
+const DefaultId = types.DefaultId;
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 const SnapshotFlatType = snapshot.SnapshotFlatType;
+const SnapshotRecordField = snapshot.SnapshotRecordField;
 const SnapshotRecordFieldSafeList = snapshot.SnapshotRecordFieldSafeList;
 const SnapshotTagSafeList = snapshot.SnapshotTagSafeList;
 
@@ -24,6 +27,8 @@ pub const Hint = union(enum) {
     tag_typo: TagTypo,
     effect_mismatch: EffectMismatch,
     ext_mismatch: ExtMismatch,
+    field_presence_mismatch: FieldPresenceMismatch,
+    field_default_mismatch: FieldDefaultMismatch,
 };
 
 /// Hint about fn arity mismatch
@@ -53,6 +58,23 @@ pub const TagTypo = struct {
 /// Hint about a function effect/pure mismatch
 pub const EffectMismatch = struct {
     expected: enum { pure, effectful },
+};
+
+/// Hint about a field that both sides have, but one side treats as optional
+/// (`?:`) while the other requires it to always be present.
+pub const FieldPresenceMismatch = struct {
+    field: Ident.Idx,
+    /// Which side of the comparison treats the field as optional.
+    optional_side: enum { expected, actual },
+};
+
+/// Hint about a field that both sides DEFAULT, with different default
+/// identities: two separately written defaults never merge, even when their
+/// values look the same (design.md "Defaulted Fields").
+pub const FieldDefaultMismatch = struct {
+    field: Ident.Idx,
+    expected_default: DefaultId,
+    actual_default: DefaultId,
 };
 
 /// Hint about a mismatch of extension variables
@@ -410,15 +432,15 @@ fn compareStructures(
                 .record_unbound => |act_fields_range| {
                     // Gather expected fields (with extensions), actual is just immediate fields
                     const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
-                    const exp_names = fields.sliceRange(exp_range).items(.name);
-                    const act_names = snap_store.sliceRecordFields(act_fields_range).items(.name);
-                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    const exp_fields = fields.sliceRange(exp_range);
+                    const act_fields = snap_store.sliceRecordFields(act_fields_range);
+                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
                 },
                 .empty_record => {
                     // Actual is empty but expected has fields - gather all missing
                     const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
-                    const exp_names = fields.sliceRange(exp_range).items(.name);
-                    try addMissingFields(exp_names, hints, gpa, fields);
+                    const exp_fields = fields.sliceRange(exp_range);
+                    try addMissingFields(exp_fields, hints, gpa, fields);
                 },
                 .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             }
@@ -427,20 +449,20 @@ fn compareStructures(
             switch (actual) {
                 .record => |act_record| {
                     // Expected is just immediate fields, gather actual (with extensions)
-                    const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
                     const act_range = try gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
-                    const act_names = fields.sliceRange(act_range).items(.name);
-                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
+                    const act_fields = fields.sliceRange(act_range);
+                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
                 },
                 .record_unbound => |act_fields_range| {
                     // Both are just immediate fields, no extensions
-                    const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
-                    const act_names = snap_store.sliceRecordFields(act_fields_range).items(.name);
-                    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
+                    const act_fields = snap_store.sliceRecordFields(act_fields_range);
+                    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
                 },
                 .empty_record => {
-                    const exp_names = snap_store.sliceRecordFields(exp_fields_range).items(.name);
-                    try addMissingFields(exp_names, hints, gpa, fields);
+                    const exp_fields = snap_store.sliceRecordFields(exp_fields_range);
+                    try addMissingFields(exp_fields, hints, gpa, fields);
                 },
                 .box, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_tag_union => {},
             }
@@ -484,13 +506,13 @@ fn compareRecords(
 ) Allocator.Error!void {
     // Gather ALL fields from expected (including extensions)
     const exp_range = try gatherFieldsFromRecord(snap_store, exp_record, gpa, fields);
-    const exp_names = fields.sliceRange(exp_range).items(.name);
 
     // Gather ALL fields from actual (including extensions)
     const act_range = try gatherFieldsFromRecord(snap_store, act_record, gpa, fields);
-    const act_names = fields.sliceRange(act_range).items(.name);
 
-    try compareFieldNames(ident_store, exp_names, act_names, hints, gpa, fields);
+    const exp_fields = fields.sliceRange(exp_range);
+    const act_fields = fields.sliceRange(act_range);
+    try compareFields(ident_store, exp_fields, act_fields, hints, gpa, fields);
 }
 
 /// Gather all fields from a record, following extension chain.
@@ -509,24 +531,60 @@ pub fn gatherFieldsFromRecord(
     return fields.rangeToEnd(start);
 }
 
-/// Compare two sets of field names and generate hints for missing fields and typos.
-fn compareFieldNames(
+/// Compare two sets of fields and generate hints for missing fields and typos.
+fn compareFields(
     ident_store: *const Ident.Store,
-    exp_names: []const Ident.Idx,
-    act_names: []const Ident.Idx,
+    exp_fields: SnapshotRecordFieldSafeList.Slice,
+    act_fields: SnapshotRecordFieldSafeList.Slice,
     hints: *HintList,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
 ) Allocator.Error!void {
-    // Track where missing fields start in buffer
-    const start_idx: u32 = fields.len();
+    const exp_names = exp_fields.items(.name);
+    const act_names = act_fields.items(.name);
 
-    for (exp_names) |exp_name_idx| {
+    // Keep the complete expected fields separate while scanning because either
+    // input slice may point into `fields` and appending could invalidate it.
+    var missing_fields = std.ArrayList(SnapshotRecordField).empty;
+    defer missing_fields.deinit(gpa);
+
+    for (exp_names, 0..) |exp_name_idx, exp_index| {
         var found = false;
 
-        for (act_names) |act_name_idx| {
+        for (act_names, 0..) |act_name_idx, act_index| {
             if (exp_name_idx.eql(act_name_idx)) {
                 found = true;
+
+                // Both sides have the field: check the kind axis. A field
+                // whose kind SOLVED `optional` (`?:`) on one side but
+                // required on the other is a kind mismatch, and without this
+                // hint it reads as a baffling "missing field" for a field
+                // that plainly exists. A still-undetermined kind produces no
+                // hint: it could have become either, so the mismatch lies
+                // elsewhere.
+                const exp_presence = exp_fields.items(.presence)[exp_index];
+                const act_presence = act_fields.items(.presence)[act_index];
+                if (exp_presence == .optional and act_presence == .required) {
+                    hints.append(.{ .field_presence_mismatch = .{
+                        .field = exp_name_idx,
+                        .optional_side = .expected,
+                    } });
+                } else if (exp_presence == .required and act_presence == .optional) {
+                    hints.append(.{ .field_presence_mismatch = .{
+                        .field = exp_name_idx,
+                        .optional_side = .actual,
+                    } });
+                } else if (exp_presence == .defaulted and act_presence == .defaulted and
+                    !exp_presence.defaulted.eql(act_presence.defaulted))
+                {
+                    // Same shape, different default identities: without this
+                    // hint the two rendered types can look identical.
+                    hints.append(.{ .field_default_mismatch = .{
+                        .field = exp_name_idx,
+                        .expected_default = exp_presence.defaulted,
+                        .actual_default = act_presence.defaulted,
+                    } });
+                }
                 break;
             }
         }
@@ -542,15 +600,14 @@ fn compareFieldNames(
                     .suggestion = exp_name_idx,
                 } });
             } else {
-                // No typo found, add to missing fields (with placeholder content)
-                _ = try fields.append(gpa, .{ .name = exp_name_idx, .content = .first });
+                try missing_fields.append(gpa, snapshotRecordFieldAt(exp_fields, exp_index));
             }
         }
     }
 
     // If we collected missing fields, add a hint
-    const missing_range = fields.rangeToEnd(start_idx);
-    if (missing_range.count > 0) {
+    if (missing_fields.items.len > 0) {
+        const missing_range = try fields.appendSlice(gpa, missing_fields.items);
         hints.append(.{ .fields_missing = .{
             .fields = missing_range,
         } });
@@ -559,21 +616,32 @@ fn compareFieldNames(
 
 /// Add a hint for all missing fields.
 fn addMissingFields(
-    exp_names: []const Ident.Idx,
+    exp_fields: SnapshotRecordFieldSafeList.Slice,
     hints: *HintList,
     gpa: Allocator,
     fields: *SnapshotRecordFieldSafeList,
 ) Allocator.Error!void {
-    if (exp_names.len == 0) return;
+    if (exp_fields.len == 0) return;
 
-    const start_idx: u32 = fields.len();
-    for (exp_names) |name| {
-        _ = try fields.append(gpa, .{ .name = name, .content = .first });
+    // Copy first because `exp_fields` can itself point into `fields`.
+    var missing_fields = std.ArrayList(SnapshotRecordField).empty;
+    defer missing_fields.deinit(gpa);
+    try missing_fields.ensureTotalCapacity(gpa, exp_fields.len);
+    for (0..exp_fields.len) |index| {
+        missing_fields.appendAssumeCapacity(snapshotRecordFieldAt(exp_fields, index));
     }
 
     hints.append(.{ .fields_missing = .{
-        .fields = fields.rangeToEnd(start_idx),
+        .fields = try fields.appendSlice(gpa, missing_fields.items),
     } });
+}
+
+fn snapshotRecordFieldAt(fields: SnapshotRecordFieldSafeList.Slice, index: usize) SnapshotRecordField {
+    return .{
+        .name = fields.items(.name)[index],
+        .content = fields.items(.content)[index],
+        .presence = fields.items(.presence)[index],
+    };
 }
 
 fn compareTagUnions(
@@ -813,4 +881,54 @@ test "isLikelyTypo - short strings" {
         const dist = editDistance(typo, actual);
         break :blk !isLikelyTypo(typo.len, actual.len, dist);
     }); // dist=2, but len=1, so no
+}
+
+test "snapshot record field presence is preserved in missing-field hints" {
+    const gpa = std.testing.allocator;
+
+    var idents = try Ident.Store.initCapacity(gpa, 2);
+    defer idents.deinit(gpa);
+    const required_name = try idents.insert(gpa, Ident.for_text("required_field"));
+    const optional_name = try idents.insert(gpa, Ident.for_text("optional_field"));
+    const expected = [_]SnapshotRecordField{
+        .{ .name = required_name, .content = @enumFromInt(7), .presence = .required },
+        .{ .name = optional_name, .content = @enumFromInt(11), .presence = .unknown },
+    };
+
+    var actual_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 0);
+    defer actual_fields.deinit(gpa);
+
+    var compared_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, expected.len);
+    defer compared_fields.deinit(gpa);
+    const compared_expected_range = try compared_fields.appendSlice(gpa, &expected);
+    const compared_expected = compared_fields.sliceRange(compared_expected_range);
+    const actual = actual_fields.sliceRange(.{ .start = .first, .count = 0 });
+    var compared_hints = HintList{};
+    try compareFields(&idents, compared_expected, actual, &compared_hints, gpa, &compared_fields);
+    try expectMissingFieldsMatch(expected[0..], compared_hints.slice(), &compared_fields);
+
+    var added_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, expected.len);
+    defer added_fields.deinit(gpa);
+    const added_expected_range = try added_fields.appendSlice(gpa, &expected);
+    const added_expected = added_fields.sliceRange(added_expected_range);
+    var added_hints = HintList{};
+    try addMissingFields(added_expected, &added_hints, gpa, &added_fields);
+    try expectMissingFieldsMatch(expected[0..], added_hints.slice(), &added_fields);
+}
+
+fn expectMissingFieldsMatch(
+    expected: []const SnapshotRecordField,
+    hints: []const Hint,
+    fields: *const SnapshotRecordFieldSafeList,
+) error{ TestExpectedEqual, TestUnexpectedResult, ExpectedFieldsMissingHint }!void {
+    try std.testing.expectEqual(@as(usize, 1), hints.len);
+    if (hints[0] != .fields_missing) return error.ExpectedFieldsMissingHint;
+    const missing_range = hints[0].fields_missing.fields;
+    const missing = fields.sliceRange(missing_range);
+    try std.testing.expectEqual(expected.len, missing.len);
+    for (expected, 0..) |expected_field, index| {
+        try std.testing.expect(expected_field.name.eql(missing.items(.name)[index]));
+        try std.testing.expectEqual(expected_field.content, missing.items(.content)[index]);
+        try std.testing.expectEqual(expected_field.presence, missing.items(.presence)[index]);
+    }
 }

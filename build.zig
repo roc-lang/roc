@@ -662,10 +662,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 226, .end = 232 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
-        .{ .file = "inspected.zig", .start = 2147, .end = 2147 },
+        .{ .file = "inspected.zig", .start = 2212, .end = 2212 },
         // inspected.zig converts a NUL-terminated dylib path from the linker into a
         // slice. Path bytes, not identifiers.
-        .{ .file = "inspected.zig", .start = 2936, .end = 2940 },
+        .{ .file = "inspected.zig", .start = 3001, .end = 3005 },
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
@@ -2745,7 +2745,9 @@ pub fn build(b: *std.Build) void {
     const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
     const run_test_lambda_mono_differential_step = b.step("run-test-lambda-mono-differential", "Run the Lambda Mono body-lowering differential harness (Debug only)");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
+    const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
+    const build_repl_wasm_archive_step = b.step("build-repl-wasm-archive", "Build repl.wasm and zstd-compress it under zig-out/lib/repl");
     const run_test_repl_wasm_step = b.step("run-test-repl-wasm", "Run the dedicated REPL WebAssembly protocol tests");
     const build_web_step = b.step("build-web", "Build the playground, REPL, and echo web artifacts");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
@@ -2978,11 +2980,18 @@ pub fn build(b: *std.Build) void {
     // Don't omit frame pointer when tracy callstack is enabled (needed for callstack capture)
     const omit_frame_pointer: ?bool = if (flag_tracy_callstack) false else null;
 
+    // Whether the host can execute binaries built for the configured target.
+    // The ABI is deliberately not part of this: Linux builds default to
+    // `.musl` (statically linked) while the build runner itself is gnu, and
+    // such a binary runs fine on a glibc host.
+    const host_can_run_target =
+        target.result.os.tag == builtin.target.os.tag and
+        target.result.cpu.arch == builtin.target.cpu.arch;
+
     const target_is_native =
         // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
         // but we still want to treat those builds as native so macOS can link against real FSEvents.
-        target.result.os.tag == builtin.target.os.tag and
-        target.result.cpu.arch == builtin.target.cpu.arch and
+        host_can_run_target and
         target.result.abi == builtin.target.abi;
     build_options.addOption(bool, "target_is_native", target_is_native);
 
@@ -2993,6 +3002,10 @@ pub fn build(b: *std.Build) void {
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
+        .optimize = optimize,
+    });
+    const host_zstd = b.dependency("zstd", .{
+        .target = b.graph.host,
         .optimize = optimize,
     });
 
@@ -3141,7 +3154,7 @@ pub fn build(b: *std.Build) void {
     // b.addTest site below. They are only passed when the host can execute
     // the configured target and no --test-filter trimmed the test set;
     // otherwise the checker falls back to its import-level check alone.
-    const enumerate_tests_for_wiring_check = target_is_native and test_filters.len == 0;
+    const enumerate_tests_for_wiring_check = host_can_run_target and test_filters.len == 0;
 
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
@@ -3188,7 +3201,6 @@ pub fn build(b: *std.Build) void {
         b,
         roc_modules,
         wasm32_resolved_target,
-        optimize,
         strip,
         omit_frame_pointer,
         "roc_boxy_runtime_wasm32_eval",
@@ -4132,6 +4144,19 @@ pub fn build(b: *std.Build) void {
         run_test_simd_differential_step.dependOn(&lambda_mono_differential_exe.step);
     }
 
+    const wasm_archive_exe = b.addExecutable(.{
+        .name = "wasm_archive",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/wasm_archive.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    configureBackend(wasm_archive_exe, b.graph.host);
+    wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+    wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
+    wasm_archive_exe.root_module.linkLibrary(host_zstd.artifact("zstd"));
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -4162,6 +4187,12 @@ pub fn build(b: *std.Build) void {
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
     build_playground_step.dependOn(&playground_install.step);
+
+    const playground_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
+    playground_wasm_archive_cmd.addFileArg(playground_exe.getEmittedBin());
+    const playground_wasm_archive_out = playground_wasm_archive_cmd.addOutputFileArg("playground.wasm.zst");
+    const playground_wasm_archive_install = b.addInstallFileWithDir(playground_wasm_archive_out, .lib, "playground/playground.wasm.zst");
+    build_playground_wasm_archive_step.dependOn(&playground_wasm_archive_install.step);
 
     const repl_wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -4202,6 +4233,12 @@ pub fn build(b: *std.Build) void {
 
     const repl_wasm_install = b.addInstallFile(repl_wasm.getEmittedBin(), "lib/repl/repl.wasm");
     build_repl_wasm_step.dependOn(&repl_wasm_install.step);
+
+    const repl_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
+    repl_wasm_archive_cmd.addFileArg(repl_wasm.getEmittedBin());
+    const repl_wasm_archive_out = repl_wasm_archive_cmd.addOutputFileArg("repl.wasm.zst");
+    const repl_wasm_archive_install = b.addInstallFileWithDir(repl_wasm_archive_out, .lib, "repl/repl.wasm.zst");
+    build_repl_wasm_archive_step.dependOn(&repl_wasm_archive_install.step);
     inline for (.{ "index.html", "app.js", "cells.js", "worker.js" }) |filename| {
         const install_file = b.addInstallFile(b.path("src/repl_wasm/www/" ++ filename), "lib/repl/" ++ filename);
         build_repl_wasm_step.dependOn(&install_file.step);
@@ -4266,22 +4303,7 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_install = b.addInstallFile(echo_wasm.getEmittedBin(), "lib/echo/echo.wasm");
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
-        // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
-        // the same zstd streaming compressor as `roc bundle` (src/bundle/).
-        const echo_wasm_archive_exe = b.addExecutable(.{
-            .name = "echo_wasm_archive",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/echo_platform/echo_wasm_archive.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        configureBackend(echo_wasm_archive_exe, target);
-        echo_wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
-        echo_wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
-        echo_wasm_archive_exe.root_module.linkLibrary(zstd.artifact("zstd"));
-
-        const echo_wasm_archive_cmd = b.addRunArtifact(echo_wasm_archive_exe);
+        const echo_wasm_archive_cmd = b.addRunArtifact(wasm_archive_exe);
         echo_wasm_archive_cmd.addFileArg(echo_wasm.getEmittedBin());
         const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
         const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo/echo.wasm.zst");
@@ -6706,16 +6728,23 @@ fn addMacosAflFuzzExe(
 /// Build a Boxy runtime object for `target`: the `roc_boxy_*` C-ABI wrappers
 /// plus `roc_boxy_init_embedded`. The selected root configures standalone
 /// extern-symbol calls or evaluator-vtable calls.
+///
+/// This object is linked into user programs, so its optimize mode is pinned
+/// rather than following the compiler's own. A `Debug` compiler would otherwise
+/// emit a `Debug` runtime into every generic program it builds, which enables
+/// builtins' hosted debug diagnostics and grows this object by an order of
+/// magnitude. `strip` still follows the build, so debug info for the runtime
+/// remains available wherever the rest of the build carries it.
 fn buildBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
-    optimize: OptimizeMode,
     strip: bool,
     omit_frame_pointer: ?bool,
     name: []const u8,
     root_source_file: std.Build.LazyPath,
 ) *Step.Compile {
+    const optimize: OptimizeMode = .ReleaseFast;
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -7208,13 +7237,11 @@ fn addMainExe(
                 b,
                 roc_modules,
                 cross_resolved_target,
-                optimize,
                 strip,
                 omit_frame_pointer,
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
                 b.path("src/boxy_runtime/main.zig"),
             );
-            add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
             const boxy_runtime_artifact = if (cross_is_wasm)
                 wasmObjectArtifact(b, cross_boxy_runtime_obj)
             else

@@ -450,7 +450,7 @@ pub const Module = struct {
                                     .{},
                                 ),
                             },
-                            .flex, .rigid, .err => std.debug.panic(
+                            .flex, .rigid, .field_presence, .err => std.debug.panic(
                                 "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
                                 .{},
                             ),
@@ -468,7 +468,7 @@ pub const Module = struct {
                         .{},
                     ),
                 },
-                .flex, .rigid, .err => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => std.debug.panic(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),
@@ -593,7 +593,7 @@ pub const Module = struct {
                                 .empty_tag_union,
                                 => return ret,
                             },
-                            .flex, .rigid, .err => return ret,
+                            .flex, .rigid, .field_presence, .err => return ret,
                         }
                     },
                     .record,
@@ -608,7 +608,7 @@ pub const Module = struct {
                         .{},
                     ),
                 },
-                .flex, .rigid, .err => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => std.debug.panic(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),
