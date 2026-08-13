@@ -312,7 +312,11 @@ fn generateAllReports(
     return reports;
 }
 
-/// Render reports to PROBLEMS section format (markdown and HTML)
+/// Render reports to PROBLEMS section format (markdown and HTML).
+/// The markdown side is the canonical S-expression form (see
+/// src/reporting/report_sexpr.zig), so ordinary snapshots capture diagnostic
+/// semantics independent of any renderer; renderer output is pinned by
+/// `type=reporting` snapshots instead.
 fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) error{WriteFailed}!void {
     // HTML PROBLEMS section
     if (output.html_writer) |writer| {
@@ -328,12 +332,13 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order using the plain terminal layout.
-        for (reports.items) |*report| {
-            reporting.renderReportToPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
-                std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
-            };
+        try output.begin_code_block("clojure");
+        writeReportsSExpr(output.gpa, reports.items, &output.md_writer.writer) catch |err| {
+            std.debug.panic("Failed to render canonical report S-expression: {s}", .{@errorName(err)});
+        };
+        try output.end_code_block();
 
+        for (reports.items) |*report| {
             if (output.html_writer) |writer| {
                 try writer.writer.writeAll("                    <div class=\"problem\">");
                 report.render(&writer.writer, .markdown) catch |err| {
@@ -350,6 +355,16 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
             \\
         );
     }
+}
+
+/// Serialize reports into their canonical S-expression form and write it,
+/// followed by a trailing newline.
+fn writeReportsSExpr(gpa: Allocator, reports: []const reporting.Report, writer: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
+    var tree = SExprTree.init(gpa);
+    defer tree.deinit();
+    try reporting.pushReportsToSExprTree(reports, &tree);
+    try tree.toStringPretty(writer, .skip_linecol);
+    try writer.writeAll("\n");
 }
 
 /// For snapshot files, the EXPECTED `file` field is just the basename.
