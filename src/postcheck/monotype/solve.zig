@@ -861,9 +861,19 @@ pub const InstGraph = struct {
         return true;
     }
 
+    /// Whether two callable requests have the same complete producer inputs.
+    /// A produced result is output and is therefore excluded; an exact result
+    /// destination is immutable contextual input and participates directly.
     pub fn sameFunctionRequestInputs(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) Allocator.Error!bool {
         const left = try self.functionNodes(left_fn);
         const right = try self.functionNodes(right_fn);
+        const left_result_relation = self.functionResultRelation(left_fn) orelse
+            Common.invariant("function request comparison received a left request without result authority");
+        const right_result_relation = self.functionResultRelation(right_fn) orelse
+            Common.invariant("function request comparison received a right request without result authority");
+        if (left_result_relation != right_result_relation) return false;
+        if (left_result_relation == .exact_destination and
+            !self.sameClass(left.ret, right.ret)) return false;
         if (left.args.len != right.args.len) return false;
         for (left.args, right.args) |left_arg, right_arg| {
             if (!self.sameClass(left_arg, right_arg)) return false;
@@ -1507,6 +1517,7 @@ pub const InstGraph = struct {
             .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("completed produced tag row had a non-tag extension"),
             .tag_union => unreachable,
         }
+        ext = try self.internImmediateChild(ext);
         std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
         const interned_tags = try self.arena().dupe(InstTag, tags.items);
         for (interned_tags) |*tag| {
@@ -1570,6 +1581,7 @@ pub const InstGraph = struct {
             .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("completed produced record row had a non-record extension"),
             .record => unreachable,
         }
+        ext = try self.internImmediateChild(ext);
         std.mem.sort(InstField, fields.items, self.name_store, instFieldLessThan);
         const interned_fields = try self.arena().dupe(InstField, fields.items);
         if (intern_children) {
@@ -1838,7 +1850,11 @@ pub const InstGraph = struct {
         const produced = switch (self.nodes.items[@intFromEnum(node)]) {
             .redirect => unreachable,
             .unresolved => Common.invariant("an unresolved checked recipe reached an exact producer child"),
-            .primitive, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
+            .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
+            .named => |named| if (named.def.generated != null)
+                node
+            else
+                try self.newNode(.{ .named = named }),
             .list => |element| try self.newProducedList(
                 try self.producedEquivalentOfCheckedBase(element),
             ),
@@ -1918,8 +1934,6 @@ pub const InstGraph = struct {
                 };
             } else if (variable.row_default) |row_default| switch (row_default) {
                 .empty_record => .empty_record,
-                .empty_tag_union => .empty_tag_union,
-            } else if (variable.specialization_default) |default| switch (default) {
                 .empty_tag_union => .empty_tag_union,
             } else null;
             if (completed) |defaulted| node = try self.newNode(defaulted);
@@ -2353,6 +2367,20 @@ pub const InstGraph = struct {
         return self.find(left) == self.find(right);
     }
 
+    /// Whether two nominal nodes name the same exact identity.
+    /// A nominal's declaration and immediate public argument nodes are its
+    /// identity; backing is deterministic implementation data owned by that
+    /// identity. This comparison is used only when two checker-declared exact
+    /// occurrences meet at one flat specialization slot, so it neither
+    /// searches the graph nor scans an interner bucket.
+    pub fn sameNominalIdentity(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        const left_content = self.content(left);
+        if (left_content != .named) return false;
+        const right_content = self.content(right);
+        if (right_content != .named) return false;
+        return self.sameNamedIdentity(left_content.named, right_content.named);
+    }
+
     /// Collision authority for open function-interface lookup buckets.
     pub fn sameFunctionInterface(self: *InstGraph, left: NodeId, right: NodeId) bool {
         const left_content = self.content(left);
@@ -2735,6 +2763,7 @@ pub const InstGraph = struct {
         excluded: []const names.RecordFieldNameId,
     ) Allocator.Error!NodeId {
         const structural = try self.shapeRoot(raw_record, "record remainder", .inspectable);
+        if (self.content(structural) == .empty_record) return structural;
         if (self.content(structural) != .record) {
             Common.invariant("instantiation record-remainder edge had a non-record node");
         }
@@ -2766,6 +2795,7 @@ pub const InstGraph = struct {
         excluded: []const names.TagNameId,
     ) Allocator.Error!NodeId {
         const structural = try self.shapeRoot(raw_union, "tag remainder", .inspectable);
+        if (self.content(structural) == .empty_tag_union) return structural;
         if (self.content(structural) != .tag_union) {
             Common.invariant("instantiation tag-remainder edge had a non-tag-union node");
         }

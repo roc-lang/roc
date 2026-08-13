@@ -16618,6 +16618,9 @@ pub const SpecializationSelectionEdgeStep = enum(u8) {
     alias_argument,
     alias_backing,
     nominal_argument,
+    /// Read one public argument from the runtime tag-union representation of
+    /// the builtin `Try` nominal: index zero is `Ok`, index one is `Err`.
+    try_argument,
     /// Read one public function argument from the exact callable node.
     function_argument,
     function_result,
@@ -16703,6 +16706,10 @@ pub const SpecializationCallConsumerBinding = extern struct {
 /// must already have been published by an explicit value edge.
 pub const SpecializationCallConsumerSource = enum(u8) {
     exact_selection,
+    /// This component has no producer inside the enclosing record operation.
+    /// Consume the exact identity published by the enclosing procedure or
+    /// call request; lowering must not replace it with a local checked seed.
+    enclosing_selection,
     concrete_checked,
 };
 
@@ -16754,7 +16761,18 @@ pub const SpecializationCallSlot = struct {
     /// selected. The checker publishes this once; lowering reads it directly
     /// from the slot without a shape scan or checked-ID lookup.
     materialization_nodes: artifact_serialize.Span = .{},
+    /// Exact selectable inputs that must exist before checking's recipe can
+    /// construct this slot as an ordinary compound. Exact compound children
+    /// are represented by their own leaf dependencies, so this span is a flat
+    /// producer-input list rather than a graph to traverse during lowering.
+    construction_dependencies: artifact_serialize.Span = .{},
+    /// Exact source slot for an identity-preserving compiler operation. For
+    /// example, every `rest` returned by `Iter.next` is the exact iterator
+    /// argument, not a newly generated public `Iter(item)` occurrence.
+    operation_source: CheckedTypeId = no_specialization_operation_source,
 };
+
+pub const no_specialization_operation_source: CheckedTypeId = @enumFromInt(std.math.maxInt(u32));
 
 /// Dense index of an interned checker-authored call shape.
 pub const SpecializationCallShapeId = enum(u32) { _ };
@@ -19785,6 +19803,7 @@ fn finishSpecializationSelectionEdgeShape(
             .alias_argument,
             .alias_backing,
             .nominal_argument,
+            .try_argument,
             .function_argument,
             .function_result,
             .tuple_item,
@@ -19818,6 +19837,77 @@ fn finishSpecializationSelectionEdgeShape(
     };
 }
 
+fn specializationSlotHasRoot(
+    slot: SpecializationCallSlot,
+    step: SpecializationSelectionEdgeStep,
+    index: u32,
+    occurrences: []const SpecializationOccurrence,
+    selection_edges: []const SpecializationSelectionEdge,
+) bool {
+    for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+        const root = selection_edges[occurrence.root_selection_edge];
+        if (root.step == step and root.index == index) return true;
+    }
+    return false;
+}
+
+fn sameGeneratedNominalDeclarationAndArguments(
+    checked_types: *const CheckedTypePublication,
+    source: CheckedTypeId,
+    destination: CheckedTypeId,
+) bool {
+    const source_nominal = checked_types.store.payload(source).nominal;
+    const destination_nominal = checked_types.store.payload(destination).nominal;
+    if (source_nominal.name != destination_nominal.name or
+        source_nominal.origin_module != destination_nominal.origin_module or
+        !checkedArtifactKeyEql(source_nominal.owner_module, destination_nominal.owner_module) or
+        source_nominal.source_decl != destination_nominal.source_decl or
+        source_nominal.builtin != destination_nominal.builtin or
+        source_nominal.args.len != destination_nominal.args.len)
+    {
+        return false;
+    }
+    for (source_nominal.args, destination_nominal.args) |source_arg, destination_arg| {
+        if (source_arg != destination_arg) return false;
+    }
+    return true;
+}
+
+/// Publish identity-preserving edges intrinsic to one compiler-owned
+/// operation. These are part of the shared callable shape, so direct,
+/// evidence-selected, and iterator-loop calls consume the same explicit
+/// source-to-destination operation without inspecting a runtime type.
+fn publishIteratorOperationSources(
+    checked_types: *const CheckedTypePublication,
+    procedure: ?IteratorProcedureId,
+    shape: SpecializationCallShape,
+    slots: []SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    selection_edges: []const SpecializationSelectionEdge,
+) void {
+    if (procedure != .iter_next) return;
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    const source: CheckedTypeId = for (shape_slots) |slot| {
+        if (slot.kind == .generated_nominal and specializationSlotHasRoot(
+            slot,
+            .argument,
+            0,
+            occurrences,
+            selection_edges,
+        )) break slot.checked;
+    } else checkedArtifactInvariant("Iter.next callable had no generated iterator argument slot", .{});
+
+    for (shape_slots) |*slot| {
+        if (slot.checked == source or
+            slot.kind != .generated_nominal or
+            !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
+        if (!sameGeneratedNominalDeclarationAndArguments(checked_types, source, slot.checked)) {
+            checkedArtifactInvariant("Iter.next result rest used a different public iterator identity", .{});
+        }
+        slot.operation_source = source;
+    }
+}
+
 const SpecializationMaterializationPair = struct {
     selected: CheckedTypeId,
     ancestor: CheckedTypeId,
@@ -19828,6 +19918,13 @@ const SpecializationMaterializationPair = struct {
         if (left_selected != right_selected) return left_selected < right_selected;
         return @intFromEnum(left.ancestor) < @intFromEnum(right.ancestor);
     }
+
+    fn lessThanAncestor(_: void, left: @This(), right: @This()) bool {
+        const left_ancestor = @intFromEnum(left.ancestor);
+        const right_ancestor = @intFromEnum(right.ancestor);
+        if (left_ancestor != right_ancestor) return left_ancestor < right_ancestor;
+        return @intFromEnum(left.selected) < @intFromEnum(right.selected);
+    }
 };
 
 /// Attach the precise affected ancestors directly to each selectable slot
@@ -19836,6 +19933,7 @@ const SpecializationMaterializationPair = struct {
 /// type graph.
 fn publishSpecializationSlotMaterializations(
     allocator: Allocator,
+    checked_types: *const CheckedTypePublication,
     shapes: []const SpecializationCallShape,
     selection_edges: []const SpecializationSelectionEdge,
     slots: *std.ArrayList(SpecializationCallSlot),
@@ -19903,6 +20001,50 @@ fn publishSpecializationSlotMaterializations(
                 .len = @intCast(materialization_nodes.items.len - node_start),
             };
         }
+
+        // Publish the inverse relation needed by exact compound construction:
+        // a flat list of selectable leaf inputs for each exact output. This is
+        // computed once while checking owns the type graph. Monotype consumes
+        // the list directly and never searches a shape or scans a type.
+        std.mem.sort(SpecializationMaterializationPair, pairs.items, {}, SpecializationMaterializationPair.lessThanAncestor);
+        var slot_ids = collections.DenseMap(CheckedTypeId, *SpecializationCallSlot).init(allocator);
+        defer slot_ids.deinit();
+        for (shape_slots) |*slot| try slot_ids.put(slot.checked, slot);
+        for (shape_slots) |*slot| {
+            if (!slot.exact_identity or checkedTypeIsGeneratedNominal(checked_types.store.payload(slot.checked))) continue;
+            const dependency_start: u32 = @intCast(materialization_nodes.items.len);
+            var low: usize = 0;
+            var high = pairs.items.len;
+            const target = @intFromEnum(slot.checked);
+            while (low < high) {
+                const middle = low + (high - low) / 2;
+                if (@intFromEnum(pairs.items[middle].ancestor) < target) {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            var previous_dependency: ?CheckedTypeId = null;
+            var pair_index = low;
+            while (pair_index < pairs.items.len and pairs.items[pair_index].ancestor == slot.checked) : (pair_index += 1) {
+                const dependency = pairs.items[pair_index].selected;
+                if (dependency == slot.checked or
+                    (previous_dependency != null and previous_dependency.? == dependency)) continue;
+                const dependency_slot = slot_ids.get(dependency) orelse continue;
+                const dependency_payload = checked_types.store.payload(dependency);
+                const dependency_is_exact_ordinary_compound = dependency_slot.exact_identity and
+                    !checkedTypePayloadIsIdentity(dependency_payload) and
+                    !checkedTypeIsGeneratedNominal(dependency_payload);
+                if (!dependency_is_exact_ordinary_compound) {
+                    try materialization_nodes.append(allocator, dependency);
+                }
+                previous_dependency = dependency;
+            }
+            slot.construction_dependencies = .{
+                .start = dependency_start,
+                .len = @intCast(materialization_nodes.items.len - dependency_start),
+            };
+        }
     }
 }
 
@@ -19910,6 +20052,7 @@ const SpecializationCallShapeKey = struct {
     callable: CheckedTypeId,
     dispatcher: ?CheckedTypeId,
     target_source_roots: bool,
+    iterator_procedure: ?IteratorProcedureId,
 };
 
 const SpecializationRecordShapeKey = struct {
@@ -20045,6 +20188,14 @@ fn publishSpecializationCallShape(
         root_edges,
     );
     compiled.source_callable = key.callable;
+    publishIteratorOperationSources(
+        checked_types,
+        key.iterator_procedure,
+        compiled,
+        slots.items,
+        occurrences.items,
+        selection_edges.items[compiled.selection_edges.start .. compiled.selection_edges.start + compiled.selection_edges.len],
+    );
     try shapes.append(allocator, compiled);
     try by_key.put(key, shape);
     return shape;
@@ -20083,6 +20234,7 @@ fn publishSpecializationCallShapeForCallable(
                 // identities needed to rebase that value onto its selected
                 // declaration here as well as on call-specific shapes.
                 .target_source_roots = true,
+                .iterator_procedure = null,
             },
             by_key,
             shapes,
@@ -20443,9 +20595,9 @@ fn appendCallConsumerBindings(
     return .{ .start = start, .len = @intCast(pool.items.len - start) };
 }
 
-/// A requested callable consumes only its argument interface. Its result is
-/// an independent producer-owned forward cell completed by the callable body
-/// and published back into the containing operation after lowering.
+/// A requested callable consumes its complete checked interface as contextual
+/// input. Its body still owns the exact result it produces; the result binding
+/// supplies that producer's destination rather than predicting its output.
 fn compileRequestedCallableConsumerBindings(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
@@ -20479,6 +20631,13 @@ fn compileRequestedCallableConsumerBindings(
             &relations,
         );
     }
+    try collectDirectionalCallIdentityRelations(
+        allocator,
+        checked_types,
+        source_fn.ret,
+        consumer_fn.ret,
+        &relations,
+    );
     return appendCallConsumerBindings(
         allocator,
         checked_types,
@@ -20550,6 +20709,7 @@ fn publishSpecializationRecordFieldSelections(
     occurrences: []const SpecializationOccurrence,
     selection_edges: []const SpecializationSelectionEdge,
     available_slots: []bool,
+    include_checked_seed_consumers: bool,
 ) void {
     const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
     if (available_slots.len != shape_slots.len) {
@@ -20559,7 +20719,7 @@ fn publishSpecializationRecordFieldSelections(
     for (shape_slots, available_slots) |slot, *available| {
         if (available.*) continue;
         for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-            if (occurrence.production != .producer) continue;
+            if (occurrence.production != .producer and !include_checked_seed_consumers) continue;
             if (specializationRecordOccurrenceArgumentIndex(shape_selection_edges, occurrence) != field_index) continue;
             available.* = true;
             break;
@@ -20631,10 +20791,11 @@ fn specializationRecordFieldSelectionsReady(
 /// Publish the exact evaluation roots for a record's contextual fields. A
 /// completed producer makes only its checker-authored slot occurrences
 /// available. Requested fields whose bindings are then ready extend that set.
-/// If a dependency component has no incoming exact edge, its first remaining
-/// source-order field becomes the explicit checked-root seed for that
-/// component. Monotype therefore executes a complete schedule chosen here;
-/// it never chooses an authority while lowering.
+/// If a dependency component has no incoming exact edge, only a field with no
+/// consumer bindings may be its explicit checked-root seed. A cycle made only
+/// of consumer bindings is missing a producer; selecting one member by source
+/// order would be a heuristic and would silently discard an exact enclosing
+/// input.
 fn finalizeSpecializationRecordFieldSchedule(
     allocator: Allocator,
     shape: SpecializationCallShape,
@@ -20643,7 +20804,7 @@ fn finalizeSpecializationRecordFieldSchedule(
     selection_edges: []const SpecializationSelectionEdge,
     flows: []SpecializationOperandFlow,
     binding_spans: []artifact_serialize.Span,
-    bindings: []const SpecializationCallConsumerBinding,
+    bindings: []SpecializationCallConsumerBinding,
 ) Allocator.Error!void {
     if (flows.len != binding_spans.len) {
         checkedArtifactInvariant("record specialization schedule had mismatched field columns", .{});
@@ -20675,6 +20836,7 @@ fn finalizeSpecializationRecordFieldSchedule(
                 occurrences,
                 selection_edges,
                 available_slots,
+                false,
             );
         } else {
             pending[field_index] = true;
@@ -20690,6 +20852,10 @@ fn finalizeSpecializationRecordFieldSchedule(
             var ready = true;
             for (field_bindings) |binding| switch (binding.source_kind) {
                 .concrete_checked => {},
+                .enclosing_selection => checkedArtifactInvariant(
+                    "record specialization schedule was finalized twice",
+                    .{},
+                ),
                 .exact_selection => if (!specializationRecordBindingSourceReady(
                     shape,
                     binding.source,
@@ -20722,13 +20888,39 @@ fn finalizeSpecializationRecordFieldSchedule(
                 occurrences,
                 selection_edges,
                 available_slots,
+                flow.* == .requested_callable_checked_seed or
+                    flow.* == .requested_value_checked_seed,
             );
         }
         if (progressed) continue;
 
-        const seed_index: usize = for (pending, 0..) |is_pending, index| {
-            if (is_pending) break index;
-        } else checkedArtifactInvariant("record specialization schedule lost a pending dependency component", .{});
+        const seed_index: usize = for (pending, binding_spans, 0..) |is_pending, span, index| {
+            if (is_pending and span.len == 0) break index;
+        } else {
+            // Every remaining dependency has a checker-published binding but
+            // no producer in this record. Mark that source explicitly as an
+            // enclosing request input. Runtime scheduling then waits for that
+            // exact input; it never selects an arbitrary member of the cycle.
+            for (pending, binding_spans) |*is_pending, span| {
+                if (!is_pending.*) continue;
+                for (bindings[span.start .. span.start + span.len]) |*binding| {
+                    if (binding.source_kind == .exact_selection and
+                        !specializationRecordBindingSourceReady(
+                            shape,
+                            binding.source,
+                            slots,
+                            occurrences,
+                            available_slots,
+                        ))
+                    {
+                        binding.source_kind = .enclosing_selection;
+                    }
+                }
+                is_pending.* = false;
+            }
+            remaining = 0;
+            continue;
+        };
         flows[seed_index] = specializationRecordCheckedSeedFlow(flows[seed_index]);
         binding_spans[seed_index] = .{};
         pending[seed_index] = false;
@@ -20740,6 +20932,7 @@ fn finalizeSpecializationRecordFieldSchedule(
             occurrences,
             selection_edges,
             available_slots,
+            true,
         );
     }
 }
@@ -20983,6 +21176,7 @@ fn appendResultOnlyCallContextBindings(
                 .alias_argument,
                 .alias_backing,
                 .nominal_argument,
+                .try_argument,
                 .function_argument,
                 .function_result,
                 .tuple_item,
@@ -21001,6 +21195,81 @@ fn appendResultOnlyCallContextBindings(
                 start,
             );
         }
+    }
+}
+
+/// `iter_from_step` constructs one generated iterator identity. Its result and
+/// every recursive `rest` accepted from the step callback are the same runtime
+/// identity, even though checking publishes them as distinct `Iter(item)`
+/// occurrences. Record that constructor operation explicitly; Monotype must
+/// never infer it from equal public nominal types.
+fn appendIterFromStepIdentityBindings(
+    allocator: Allocator,
+    procedure: ?IteratorProcedureId,
+    argument_index: ?usize,
+    checked_types: *const CheckedTypePublication,
+    shape: SpecializationCallShape,
+    slots: []const SpecializationCallSlot,
+    occurrences: []const SpecializationOccurrence,
+    selection_edges: []const SpecializationSelectionEdge,
+    pool: *std.ArrayList(SpecializationCallConsumerBinding),
+    start: u32,
+) Allocator.Error!void {
+    if (procedure != .iter_from_step) return;
+    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    const shape_edges = selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len];
+    var result: ?CheckedTypeId = null;
+    for (shape_slots) |slot| {
+        if (slot.kind != .generated_nominal) continue;
+        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (occurrence.production != .producer) continue;
+            if (shape_edges[occurrence.root_selection_edge].step != .result) continue;
+            if (result != null and result.? != slot.checked) {
+                checkedArtifactInvariant("iter_from_step published multiple generated result identities", .{});
+            }
+            result = slot.checked;
+        }
+    }
+    const source = result orelse
+        checkedArtifactInvariant("iter_from_step published no generated result identity", .{});
+    const source_nominal = checked_types.store.payload(source).nominal;
+    for (shape_slots) |slot| {
+        if (slot.kind != .generated_nominal or slot.checked == source) continue;
+        var has_producer = false;
+        var has_selected_argument_consumer = false;
+        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            if (occurrence.production == .producer) has_producer = true;
+            if (occurrence.production == .consumer and
+                shape_edges[occurrence.root_selection_edge].step == .argument and
+                (argument_index == null or
+                    shape_edges[occurrence.root_selection_edge].index == argument_index.?))
+            {
+                has_selected_argument_consumer = true;
+            }
+        }
+        if (has_producer or !has_selected_argument_consumer) continue;
+        const consumer_nominal = checked_types.store.payload(slot.checked).nominal;
+        if (source_nominal.name != consumer_nominal.name or
+            source_nominal.origin_module != consumer_nominal.origin_module or
+            !checkedArtifactKeyEql(source_nominal.owner_module, consumer_nominal.owner_module) or
+            source_nominal.source_decl != consumer_nominal.source_decl or
+            source_nominal.builtin != consumer_nominal.builtin or
+            source_nominal.args.len != consumer_nominal.args.len)
+        {
+            continue;
+        }
+        for (source_nominal.args, consumer_nominal.args) |source_arg, consumer_arg| {
+            if (source_arg != consumer_arg) {
+                checkedArtifactInvariant("iter_from_step recursive iterator used a different public argument identity", .{});
+            }
+        }
+        for (pool.items[start..]) |existing| {
+            if (existing.source == source and existing.consumer == slot.checked) break;
+        } else try pool.append(allocator, .{
+            .source = source,
+            .consumer = slot.checked,
+            .source_kind = .exact_selection,
+        });
     }
 }
 
@@ -21043,6 +21312,19 @@ fn specializationCallSourceCallable(
     };
 }
 
+fn specializationCallIteratorProcedure(
+    call: anytype,
+    resolved_value_refs: *const ResolvedValueRefTable,
+) ?IteratorProcedureId {
+    const target = call.direct_target orelse return null;
+    const raw = @intFromEnum(target);
+    if (raw >= resolved_value_refs.records.len) {
+        checkedArtifactInvariant("direct call target exceeded the resolved value table", .{});
+    }
+    const procedure = procedureUseFromResolvedValue(resolved_value_refs.records[raw].ref) orelse return null;
+    return procedure.iterator_procedure;
+}
+
 fn specializationDispatchSourceCallable(
     table: *const static_dispatch.StaticDispatchPlanTable,
     call: anytype,
@@ -21058,6 +21340,25 @@ fn specializationDispatchSourceCallable(
         .@"unreachable",
         => call.callable_ty,
         .direct_pending => checkedArtifactInvariant("unfinalized dispatch reached specialization source publication", .{}),
+    };
+}
+
+fn specializationDispatchIteratorProcedure(
+    table: *const static_dispatch.StaticDispatchPlanTable,
+    call: anytype,
+) ?IteratorProcedureId {
+    const direct = switch (call.resolution) {
+        .direct_closed, .direct_parametric => |direct| direct,
+        .evidence_dependent,
+        .structural,
+        .checked_error,
+        .@"unreachable",
+        => return null,
+        .direct_pending => checkedArtifactInvariant("unfinalized dispatch reached specialization operation publication", .{}),
+    };
+    return switch (table.evidenceNode(direct.evidence).target.kind) {
+        .procedure => |target| target.runtime_target.iteratorProcedure(),
+        .local_proc, .structural => null,
     };
 }
 
@@ -21782,6 +22083,7 @@ fn publishSpecializationCallPlans(
         const expr = checked_bodies.expr(expr_id);
         if (expr.data != .call or checked_bodies.exprContainsDiagnosticError(expr_id)) continue;
         const source_callable = specializationCallSourceCallable(expr.data.call, resolved_value_refs);
+        const iterator_procedure = specializationCallIteratorProcedure(expr.data.call, resolved_value_refs);
         const flow_span = try appendSpecializationOperandFlowsForOrdinaryCall(
             allocator,
             expr.data.call.args,
@@ -21798,6 +22100,7 @@ fn publishSpecializationCallPlans(
                 .callable = source_callable,
                 .dispatcher = null,
                 .target_source_roots = expr.data.call.direct_target != null,
+                .iterator_procedure = iterator_procedure,
             },
             &shape_by_key,
             &shapes,
@@ -21885,6 +22188,18 @@ fn publishSpecializationCallPlans(
                 &consumer_bindings,
             );
         }
+        try appendIterFromStepIdentityBindings(
+            allocator,
+            iterator_procedure,
+            null,
+            checked_types,
+            shapes.items[@intFromEnum(by_expr[raw_expr].shape)],
+            slots.items,
+            occurrences.items,
+            selection_edges.items,
+            &consumer_bindings,
+            selection_binding_start,
+        );
         by_expr[raw_expr].selection_bindings = .{
             .start = selection_binding_start,
             .len = @intCast(consumer_bindings.items.len - selection_binding_start),
@@ -21896,7 +22211,8 @@ fn publishSpecializationCallPlans(
         );
         for (expr.data.call.args, expr_operand_flows, 0..) |arg, flow, index| {
             if (flow == .produced) continue;
-            consumer_binding_spans.items[by_expr[raw_expr].operand_consumer_binding_spans.start + index] = try compileSpecializationOperandConsumerBindings(
+            const operand_binding_start: u32 = @intCast(consumer_bindings.items.len);
+            _ = try compileSpecializationOperandConsumerBindings(
                 allocator,
                 checked_types,
                 &concrete_sources,
@@ -21905,6 +22221,22 @@ fn publishSpecializationCallPlans(
                 checked_bodies.expr(arg).ty,
                 &consumer_bindings,
             );
+            try appendIterFromStepIdentityBindings(
+                allocator,
+                iterator_procedure,
+                index,
+                checked_types,
+                shapes.items[@intFromEnum(by_expr[raw_expr].shape)],
+                slots.items,
+                occurrences.items,
+                selection_edges.items,
+                &consumer_bindings,
+                operand_binding_start,
+            );
+            consumer_binding_spans.items[by_expr[raw_expr].operand_consumer_binding_spans.start + index] = .{
+                .start = operand_binding_start,
+                .len = @intCast(consumer_bindings.items.len - operand_binding_start),
+            };
         }
         _ = try publishSpecializationCallShapeForCallable(
             allocator,
@@ -22092,6 +22424,10 @@ fn publishSpecializationCallPlans(
             static_dispatch_plans,
             plan,
         );
+        const iterator_procedure = specializationDispatchIteratorProcedure(
+            static_dispatch_plans,
+            plan,
+        );
         by_expr[raw_plan_expr].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
@@ -22101,6 +22437,7 @@ fn publishSpecializationCallPlans(
                 .callable = dispatch_source_callable,
                 .dispatcher = plan.dispatcher_ty,
                 .target_source_roots = true,
+                .iterator_procedure = iterator_procedure,
             },
             &shape_by_key,
             &shapes,
@@ -22328,6 +22665,10 @@ fn publishSpecializationCallPlans(
             static_dispatch_plans,
             plan.iter,
         );
+        const iter_iterator_procedure = specializationDispatchIteratorProcedure(
+            static_dispatch_plans,
+            plan.iter,
+        );
         const iter_flow_span = try appendSpecializationOperandFlowsForIteratorCall(
             allocator,
             plan.iter,
@@ -22344,6 +22685,7 @@ fn publishSpecializationCallPlans(
                 .callable = iter_source_callable,
                 .dispatcher = plan.iter.dispatcher_ty,
                 .target_source_roots = true,
+                .iterator_procedure = iter_iterator_procedure,
             },
             &shape_by_key,
             &shapes,
@@ -22385,6 +22727,10 @@ fn publishSpecializationCallPlans(
             static_dispatch_plans,
             plan.next,
         );
+        const next_iterator_procedure = specializationDispatchIteratorProcedure(
+            static_dispatch_plans,
+            plan.next,
+        );
         next_plans[index].shape = try publishSpecializationCallShape(
             allocator,
             checked_types,
@@ -22394,6 +22740,7 @@ fn publishSpecializationCallPlans(
                 .callable = next_source_callable,
                 .dispatcher = plan.next.dispatcher_ty,
                 .target_source_roots = true,
+                .iterator_procedure = next_iterator_procedure,
             },
             &shape_by_key,
             &shapes,
@@ -22448,6 +22795,7 @@ fn publishSpecializationCallPlans(
                 .callable = callable,
                 .dispatcher = null,
                 .target_source_roots = true,
+                .iterator_procedure = null,
             },
             &shape_by_key,
             &shapes,
@@ -22461,6 +22809,7 @@ fn publishSpecializationCallPlans(
 
     try publishSpecializationSlotMaterializations(
         allocator,
+        checked_types,
         shapes.items,
         selection_edges.items,
         &slots,
@@ -22552,6 +22901,7 @@ fn collectSpecializationCallOccurrences(
         .alias_argument,
         .alias_backing,
         .nominal_argument,
+        .try_argument,
         .function_argument,
         .function_result,
         .tuple_item,
@@ -22563,12 +22913,17 @@ fn collectSpecializationCallOccurrences(
     }
     const payload = checked_types.store.payload(root);
     const generated_nominal = checkedTypeIsGeneratedNominal(payload);
+    const ordinary_nominal = payload == .nominal and !generated_nominal;
     // Every explicit call edge is retained even when it has no identity slot
     // below it. The shared shape publishes direct root IDs by arity; lowering
     // must never search descendants or invent a missing root.
     const required_root = selection_edge.parent == no_specialization_selection_edge_parent;
     var has_output = false;
-    if (checkedTypePayloadIsIdentity(payload)) {
+    // A nominal's definition and exact public arguments form one identity.
+    // Publish the nominal slot after walking those argument dependencies, so
+    // Monotype never records a shell whose children are still producer-owned
+    // forward cells. Generated nominals already use the same post-order rule.
+    if (checkedTypePayloadIsIdentity(payload) and !ordinary_nominal) {
         try appendSpecializationCallOccurrence(
             allocator,
             root,
@@ -22635,7 +22990,7 @@ fn collectSpecializationCallOccurrences(
                     .parent = selection_edge_index,
                     .index = @intCast(index),
                     .payload_index = 0,
-                    .step = .nominal_argument,
+                    .step = if (nominal.builtin == .try_) .try_argument else .nominal_argument,
                 }, produced, active, selection_edges, builds)) != null or has_output;
             }
         },
@@ -22686,7 +23041,7 @@ fn collectSpecializationCallOccurrences(
                     .index = 0,
                     .payload_index = 0,
                     .step = .record_remainder,
-                }, produced, active, selection_edges, builds)) != null or has_output;
+                }, false, active, selection_edges, builds)) != null or has_output;
             }
         },
         .tag_union => |tag_union| {
@@ -22707,19 +23062,19 @@ fn collectSpecializationCallOccurrences(
                 .index = 0,
                 .payload_index = 0,
                 .step = .tag_remainder,
-            }, produced, active, selection_edges, builds)) != null or has_output;
+            }, false, active, selection_edges, builds)) != null or has_output;
         },
         .pending => checkedArtifactInvariant("call specialization occurrence reached an unfinished checked type", .{}),
         .err, .empty_record, .empty_tag_union => {},
     }
-    // Generated nominal construction depends only on its explicit public
-    // arguments. Append its slot after visiting those arguments so Monotype
-    // can construct nested generated identities in one forward pass.
-    if (generated_nominal) {
+    // Nominal identity depends only on its explicit public arguments. Append
+    // its slot after visiting those arguments so Monotype can construct each
+    // ordinary or generated identity in one forward pass.
+    if (ordinary_nominal or generated_nominal) {
         try appendSpecializationCallOccurrence(
             allocator,
             root,
-            @as(?SpecializationCallSlotKind, .generated_nominal),
+            @as(?SpecializationCallSlotKind, if (generated_nominal) .generated_nominal else .identity),
             false,
             selection_edge_index,
             root_selection_edge_index,
@@ -24391,6 +24746,15 @@ pub const CheckedProcedureTemplateTable = struct {
         slot: SpecializationCallSlot,
     ) []const CheckedTypeId {
         return self.specialization_call_materialization_nodes[slot.materialization_nodes.start .. slot.materialization_nodes.start + slot.materialization_nodes.len];
+    }
+
+    /// Flat checker-authored input list for constructing one exact ordinary
+    /// compound slot.
+    pub fn specializationSlotConstructionDependencies(
+        self: *const CheckedProcedureTemplateTable,
+        slot: SpecializationCallSlot,
+    ) []const CheckedTypeId {
+        return self.specialization_call_materialization_nodes[slot.construction_dependencies.start .. slot.construction_dependencies.start + slot.construction_dependencies.len];
     }
 
     /// The exact checked identities whose values cross recursive storage in
@@ -38729,7 +39093,7 @@ test "target source roots exclude explicit concrete checked sources" {
     try std.testing.expectEqualSlices(CheckedTypeId, &.{runtime}, roots.items);
 }
 
-test "record specialization schedule publishes explicit source-order component seeds" {
+test "record specialization schedule preserves bound cycles as enclosing inputs" {
     const a = testIndexId(CheckedTypeId, 0);
     const b = testIndexId(CheckedTypeId, 1);
     const c = testIndexId(CheckedTypeId, 2);
@@ -38748,7 +39112,7 @@ test "record specialization schedule publishes explicit source-order component s
         .{ .checked = b, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
         .{ .checked = c, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
     };
-    const bindings = [_]SpecializationCallConsumerBinding{
+    var bindings = [_]SpecializationCallConsumerBinding{
         .{ .source = b, .consumer = a, .source_kind = .exact_selection },
         .{ .source = a, .consumer = b, .source_kind = .exact_selection },
     };
@@ -38774,12 +39138,14 @@ test "record specialization schedule publishes explicit source-order component s
         &bindings,
     );
 
-    try std.testing.expectEqual(SpecializationOperandFlow.requested_callable_checked_seed, flows[0]);
+    try std.testing.expectEqual(SpecializationOperandFlow.requested_callable, flows[0]);
     try std.testing.expectEqual(SpecializationOperandFlow.requested_value, flows[1]);
     try std.testing.expectEqual(SpecializationOperandFlow.requested_value_checked_seed, flows[2]);
-    try std.testing.expectEqual(artifact_serialize.Span{}, spans[0]);
+    try std.testing.expectEqual(artifact_serialize.Span{ .start = 0, .len = 1 }, spans[0]);
     try std.testing.expectEqual(artifact_serialize.Span{ .start = 1, .len = 1 }, spans[1]);
     try std.testing.expectEqual(artifact_serialize.Span{}, spans[2]);
+    try std.testing.expectEqual(SpecializationCallConsumerSource.enclosing_selection, bindings[0].source_kind);
+    try std.testing.expectEqual(SpecializationCallConsumerSource.enclosing_selection, bindings[1].source_kind);
 }
 
 test "record specialization schedule reuses an equal checked identity from a produced field" {

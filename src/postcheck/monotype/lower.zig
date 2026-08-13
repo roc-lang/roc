@@ -17392,7 +17392,7 @@ const BodyContext = struct {
         _ = self.graph.functionResultRelation(result_fn_node) orelse
             Common.invariant("completed function had no explicit result authority");
         try self.graph.completeFunctionResult(result_fn_node, lowered_ret_node);
-        {
+        if (self.graph.functionResultRelation(result_fn_node).? == .produced) {
             const scope = self.enterSpecializationPlanView(source_view);
             defer scope.leave();
             try self.recordCompletedCallResult(
@@ -17475,6 +17475,17 @@ const BodyContext = struct {
         const argument_selections = try self.newExactCheckedSelections();
         self.active_checked_selections = argument_selections;
         defer self.active_checked_selections = previous_selections;
+        const procedure_relation = self.view.templates.specializationProcedureRelationForExpr(lambda_id);
+        // A contextual lambda consumes its checker-published interface before
+        // lowering its body. In particular, identities nested in the return
+        // type (rows as well as generated-capable nominals) must reach the
+        // body's checked occurrences before any producer is lowered. Reapply
+        // the same flat relation after lowering to publish identities first
+        // produced by an argument or body occurrence.
+        try self.applyRecordedCheckedSelections(
+            argument_selections,
+            self.view.templates.specializationIdentityRelations(procedure_relation),
+        );
         const saved_return_target = self.current_return_target;
         defer self.current_return_target = saved_return_target;
         var return_selection = try self.initControlFlowResultSelection(
@@ -17645,7 +17656,6 @@ const BodyContext = struct {
             try produced_ret_cell.toGraphNode(self.graph),
             .produced,
         );
-        const procedure_relation = self.view.templates.specializationProcedureRelationForExpr(lambda_id);
         try self.applyRecordedCheckedSelections(
             argument_selections,
             self.view.templates.specializationIdentityRelations(procedure_relation),
@@ -25961,6 +25971,7 @@ const BodyContext = struct {
             .alias_argument,
             .alias_backing,
             .nominal_argument,
+            .try_argument,
             .function_argument,
             .function_result,
             .tuple_item,
@@ -25978,7 +25989,28 @@ const BodyContext = struct {
         // supplies that edge.
         if (root.root_source == .concrete_checked) return true;
         if (occurrence.production == .producer) return true;
+        // A checker-designated seed is the explicit request producer for its
+        // whole dependency component. Its declared descendant selections are
+        // therefore outputs of that operation, unlike consumers beneath an
+        // independently produced ordinary argument.
+        if (root.step == .argument and self.callArgumentUsesCheckedSeed(plan, root.index)) {
+            return true;
+        }
         return root.step != .argument;
+    }
+
+    fn callArgumentUsesCheckedSeed(
+        _: *BodyContext,
+        plan: checked.SpecializationSelectionEdgePlanView,
+        index: usize,
+    ) bool {
+        if (plan.operand_flows.len != plan.argument_roots.len or index >= plan.operand_flows.len) {
+            return false;
+        }
+        return switch (plan.operand_flows[index]) {
+            .requested_callable_checked_seed, .requested_value_checked_seed => true,
+            .produced, .requested_callable, .requested_value => false,
+        };
     }
 
     /// Add one complete exact producer edge to a request's flat identity.
@@ -26084,6 +26116,7 @@ const BodyContext = struct {
             .alias_argument,
             .alias_backing,
             .nominal_argument,
+            .try_argument,
             .function_argument,
             .function_result,
             .tuple_item,
@@ -26093,7 +26126,20 @@ const BodyContext = struct {
             .tag_remainder,
             => Common.invariant("call root edge was an immediate-child operation"),
         };
-        if (runtime_node) |node| return node;
+        if (runtime_node) |node| {
+            // A completed positional edge is the exact type already chosen
+            // by its producer or enclosing destination. An unresolved edge,
+            // however, is only a request. When checking published a concrete
+            // source for this root, that source produces the request instead
+            // of letting the open cell mask a fixed declaration type.
+            const fixed_checked_root = root.root_source == .concrete_checked and switch (checkedPayload(self.view, root.checked)) {
+                .nominal => |nominal| nominal.args.len == 0,
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
+            };
+            if (self.graph.content(node) != .unresolved or !fixed_checked_root) {
+                return node;
+            }
+        }
         return switch (root.root_source) {
             .runtime_edge => null,
             .concrete_checked => try self.persistentConcreteCheckedNode(root.checked),
@@ -26209,7 +26255,7 @@ const BodyContext = struct {
         plan: checked.SpecializationCallPlanView,
         selection_edge: checked.SpecializationSelectionEdge,
         parent: NodeId,
-    ) Allocator.Error!NodeId {
+    ) Allocator.Error!?NodeId {
         const parent_selection_edge = plan.selection_edges[selection_edge.parent];
         return switch (selection_edge.step) {
             .alias_argument => Common.invariant("checker emitted a runtime selection edge through a transparent alias argument"),
@@ -26252,6 +26298,20 @@ const BodyContext = struct {
                 .erased,
                 .zst,
                 => Common.invariant("checked nominal selection edge had a non-nominal exact node"),
+            },
+            .try_argument => blk: {
+                if (selection_edge.index > 1) {
+                    Common.invariant("checked Try selection edge exceeded argument arity");
+                }
+                const tag_name = try self.builder.program.names.internTagLabel(
+                    if (selection_edge.index == 0) "Ok" else "Err",
+                );
+                const payloads = try self.graph.tagPayloadNodesOrNull(parent, tag_name) orelse
+                    break :blk null;
+                if (payloads.len != 1) {
+                    Common.invariant("checked Try constructor had an unexpected payload arity");
+                }
+                break :blk payloads[0];
             },
             .function_argument => blk: {
                 const function = try self.graph.functionNodes(parent);
@@ -26338,11 +26398,77 @@ const BodyContext = struct {
         checked_node: checked.CheckedTypeId,
         authority: InstantiationAuthority,
     ) Allocator.Error!NodeId {
+        return self.materializeCheckedCallNodeWithoutRootSelection(
+            plan,
+            selections,
+            checked_node,
+            authority,
+            false,
+        );
+    }
+
+    /// Construct an exact ordinary compound from its checker-authored recipe
+    /// and already-selected children. The compound's own request selection is
+    /// deliberately omitted: it is an input context for this construction,
+    /// not the output that the construction is responsible for producing.
+    fn materializeExactCheckedCallNode(
+        self: *BodyContext,
+        plan: checked.SpecializationSelectionEdgePlanView,
+        selections: []const solve.DirectRequestSelection,
+        checked_node: checked.CheckedTypeId,
+        authority: solve.DirectRequestSelectionAuthority,
+    ) Allocator.Error!NodeId {
+        return self.materializeCheckedCallNodeWithoutRootSelection(
+            plan,
+            selections,
+            checked_node,
+            switch (authority) {
+                .request => .request_occurrence,
+                .produced => .produced_occurrence,
+            },
+            true,
+        );
+    }
+
+    fn exactCheckedCallNodeAuthority(
+        self: *BodyContext,
+        slot: checked.SpecializationCallSlot,
+        selections: []const solve.DirectRequestSelection,
+    ) ?solve.DirectRequestSelectionAuthority {
+        var authority: solve.DirectRequestSelectionAuthority = .produced;
+        for (self.view.templates.specializationSlotConstructionDependencies(slot)) |dependency| {
+            const selection = directSelectionForSlot(selections, .{
+                .module_bytes = self.view.key.bytes,
+                .checked = dependency,
+            }) orelse return null;
+            if (selection.authority == .request) authority = .request;
+        }
+        return authority;
+    }
+
+    fn materializeCheckedCallNodeWithoutRootSelection(
+        self: *BodyContext,
+        plan: checked.SpecializationSelectionEdgePlanView,
+        selections: []const solve.DirectRequestSelection,
+        checked_node: checked.CheckedTypeId,
+        authority: InstantiationAuthority,
+        omit_root_selection: bool,
+    ) Allocator.Error!NodeId {
+        var selected_children = std.ArrayList(solve.DirectRequestSelection).empty;
+        defer selected_children.deinit(self.allocator);
+        const effective_selections = if (omit_root_selection) blk: {
+            for (selections) |selection| {
+                if (moduleBytesEqual(selection.base.module_bytes, self.view.key.bytes) and
+                    selection.base.checked == checked_node) continue;
+                try selected_children.append(self.allocator, selection);
+            }
+            break :blk selected_children.items;
+        } else selections;
         var materialization_nodes = std.ArrayList(checked.CheckedTypeId).empty;
         defer materialization_nodes.deinit(self.allocator);
         try self.appendDirectSelectionMaterializationNodes(
             plan,
-            selections,
+            effective_selections,
             &materialization_nodes,
         );
         // The checked node is an immutable construction recipe, never an
@@ -26351,7 +26477,7 @@ const BodyContext = struct {
         // consumed by a concrete source or runtime producer.
         try self.appendDirectMaterializationNode(&materialization_nodes, checked_node);
         const scope = self.enterDirectSelectionInstantiation(
-            selections,
+            effective_selections,
             plan.slots,
             materialization_nodes.items,
             authority,
@@ -26485,6 +26611,19 @@ const BodyContext = struct {
         if (self.graph.sameClass(existing.produced, candidate.produced)) {
             if (candidate.authority == .produced) existing.authority = .produced;
             existing.produced = self.graph.rootNode(existing.produced);
+            return;
+        }
+        if (self.graph.sameNominalIdentity(existing.produced, candidate.produced)) {
+            // The declaration plus exact immediate arguments are the entire
+            // nominal identity. Prefer the later normalized shell while
+            // retaining produced authority if either occurrence has it.
+            const authority: solve.DirectRequestSelectionAuthority =
+                if (existing.authority == .produced or candidate.authority == .produced)
+                    .produced
+                else
+                    .request;
+            existing.* = candidate;
+            existing.authority = authority;
             return;
         }
 
@@ -26696,6 +26835,11 @@ const BodyContext = struct {
                     }
                 }
             }
+            const construct_exact_ordinary = slot.exact_identity and
+                slot.kind != .generated_nominal and switch (checkedPayload(self.view, slot.checked)) {
+                .flex, .rigid => false,
+                .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .nominal, .function, .tag_union => true,
+            };
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
                 const occurrence_root = self.callOccurrenceRootSelectionEdge(plan, occurrence);
                 if (!self.callOccurrenceHasNewExactSource(
@@ -26720,17 +26864,45 @@ const BodyContext = struct {
                 // completed runtime edge records that node itself; rebuilding
                 // the same checked compound from selected descendants would
                 // create a second value and discard producer identity.
-                const root_authority: solve.DirectRequestSelectionAuthority = switch (occurrence_root.step) {
+                const concrete_checked_produced = occurrence_root.root_source == .concrete_checked and switch (checkedPayload(self.view, occurrence_root.checked)) {
+                    .nominal => |nominal| nominal.args.len == 0,
+                    .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => false,
+                } and switch (occurrence_root.step) {
+                    .result => self.graph.content(request_ret orelse
+                        Common.invariant("concrete result occurrence had no result node")) == .unresolved,
+                    .argument => self.graph.content(produced_args[occurrence_root.index]) == .unresolved,
+                    .dispatcher => self.graph.content((dispatcher orelse
+                        Common.invariant("concrete dispatcher occurrence had no dispatcher node")).node) == .unresolved,
+                    .alias_argument,
+                    .alias_backing,
+                    .nominal_argument,
+                    .try_argument,
+                    .function_argument,
+                    .function_result,
+                    .tuple_item,
+                    .record_field,
+                    .record_remainder,
+                    .tag_payload,
+                    .tag_remainder,
+                    => Common.invariant("concrete call occurrence used a child root"),
+                };
+                const root_authority: solve.DirectRequestSelectionAuthority = if (concrete_checked_produced)
+                    .produced
+                else switch (occurrence_root.step) {
                     .result => result_authority orelse
                         Common.invariant("available result occurrence had no authority"),
-                    .argument => (try self.callArgumentSelection(
-                        produced_args[occurrence_root.index],
-                    )).authority,
+                    .argument => if (self.callArgumentUsesCheckedSeed(plan, occurrence_root.index))
+                        .request
+                    else
+                        (try self.callArgumentSelection(
+                            produced_args[occurrence_root.index],
+                        )).authority,
                     .dispatcher => (dispatcher orelse
                         Common.invariant("available dispatcher occurrence had no dispatcher node")).authority,
                     .alias_argument,
                     .alias_backing,
                     .nominal_argument,
+                    .try_argument,
                     .function_argument,
                     .function_result,
                     .tuple_item,
@@ -26744,6 +26916,15 @@ const BodyContext = struct {
                     .node = occurrence_node,
                     .authority = root_authority,
                 });
+                // An exact ordinary compound is produced once from the
+                // checker-authored recipe after its selected child identities
+                // are available. Runtime roots can be narrower branch values;
+                // they contribute child selections but never define the whole
+                // compound specialization identity.
+                if (construct_exact_ordinary and
+                    !(occurrence_root.step == .argument and
+                        self.callArgumentUsesCheckedSeed(plan, occurrence_root.index) and
+                        occurrence.selection_edge == occurrence.root_selection_edge)) continue;
                 if (slot.kind == .generated_nominal and
                     !self.graph.nodeIsGeneratedNominal(candidate.node)) continue;
                 try self.recordCallSelection(selections, .{
@@ -26755,7 +26936,37 @@ const BodyContext = struct {
                 selected = if (selected_index) |index| selections.items[index] else null;
             }
         }
+        try self.applyCallOperationSources(plan, selections);
         try self.applyCallConsumerBindingsToSelections(plan.selection_bindings, selections, false, null);
+        // Checking places every exact ordinary compound after its identity
+        // leaves. Construct each output directly from those selected inputs;
+        // unresolved inputs simply mean its producer has not run yet.
+        for (plan.slots) |slot| {
+            if (!slot.exact_identity or slot.kind == .generated_nominal) continue;
+            switch (checkedPayload(self.view, slot.checked)) {
+                .flex, .rigid => continue,
+                .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .nominal, .function, .tag_union => {},
+            }
+            const base_id = solve.CheckedBaseKey{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.checked,
+            };
+            if (directSelectionForSlot(selections.items, base_id)) |existing| {
+                if (existing.authority == .produced) continue;
+            }
+            const authority = self.exactCheckedCallNodeAuthority(slot, selections.items) orelse continue;
+            const produced = try self.materializeExactCheckedCallNode(
+                plan,
+                selections.items,
+                slot.checked,
+                authority,
+            );
+            try self.recordCallSelection(selections, .{
+                .base = base_id,
+                .produced = produced,
+                .authority = authority,
+            });
+        }
         // Checking stores generated slots after every generated dependency.
         // One forward pass therefore constructs every identity whose public
         // arguments are available at this call stage; no retry or descendant
@@ -26771,14 +26982,19 @@ const BodyContext = struct {
             // determine this generated nominal. Construct the atomic result
             // from those nodes directly; no intermediate public nominal graph
             // exists to be replaced.
-            const exact = (try self.generatedNominalFromSelectedArguments(
+            const production = (try self.generatedNominalFromSelectedArguments(
                 plan,
                 slot,
                 selections.items,
             )) orelse continue;
+            // Generated identity is atomic after construction, so preserve
+            // the exact public argument as its own flat selection at the
+            // construction boundary. Later consumers receive that explicit
+            // input instead of reopening the generated runtime type.
+            try self.recordCallSelection(selections, production.public_argument);
             try selections.append(self.allocator, .{
                 .base = base_id,
-                .produced = exact,
+                .produced = production.node,
             });
         }
         // Result-context identities may themselves be supplied by an operand
@@ -26804,6 +27020,31 @@ const BodyContext = struct {
             }
         }
         return;
+    }
+
+    /// Apply the checker's direct source slot for an identity-preserving
+    /// compiler operation. This is a flat slot edge, not a query over either
+    /// the checked recipe or the produced runtime representation.
+    fn applyCallOperationSources(
+        self: *BodyContext,
+        plan: checked.SpecializationCallPlanView,
+        selections: *std.ArrayList(solve.DirectRequestSelection),
+    ) Allocator.Error!void {
+        for (plan.slots) |slot| {
+            if (slot.operation_source == checked.no_specialization_operation_source) continue;
+            const source = directSelectionForSlot(selections.items, .{
+                .module_bytes = self.view.key.bytes,
+                .checked = slot.operation_source,
+            }) orelse continue;
+            try self.recordCallSelection(selections, .{
+                .base = .{
+                    .module_bytes = self.view.key.bytes,
+                    .checked = slot.checked,
+                },
+                .produced = source.produced,
+                .authority = source.authority,
+            });
+        }
     }
 
     fn applyCallConsumerBindingsToSelections(
@@ -26866,6 +27107,21 @@ const BodyContext = struct {
                     if (!allow_active_source) continue;
                     const active = self.active_checked_selections orelse continue;
                     const active_selection = active.getSelection(source) orelse continue;
+                    const usable = try self.callRepresentationSelection(active_selection);
+                    try self.recordCallSelection(selections, .{
+                        .base = source,
+                        .produced = usable.node,
+                        .authority = usable.authority,
+                    });
+                    break :blk .{
+                        .base = source,
+                        .produced = usable.node,
+                        .authority = usable.authority,
+                    };
+                },
+                .enclosing_selection => blk: {
+                    if (!allow_active_source) continue;
+                    const active_selection = self.callConsumerEnclosingSourceSelection(binding.source) orelse continue;
                     const usable = try self.callRepresentationSelection(active_selection);
                     try self.recordCallSelection(selections, .{
                         .base = source,
@@ -26946,12 +27202,17 @@ const BodyContext = struct {
     /// Construct an atomic generated identity only for a call slot whose
     /// checked operation explicitly authorizes generation from exact public
     /// arguments. Ordinary public nominal instantiation never calls this.
+    const GeneratedNominalProduction = struct {
+        node: NodeId,
+        public_argument: solve.DirectRequestSelection,
+    };
+
     fn generatedNominalFromSelectedArguments(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         slot: checked.SpecializationCallSlot,
         selections: []const solve.DirectRequestSelection,
-    ) Allocator.Error!?NodeId {
+    ) Allocator.Error!?GeneratedNominalProduction {
         const checked_ty = slot.checked;
         const nominal = switch (checkedPayload(self.view, checked_ty)) {
             .nominal => |nominal| nominal,
@@ -26962,7 +27223,11 @@ const BodyContext = struct {
         if (nominal.args.len != 1) {
             Common.invariant("exact-argument generated call slot had a non-unary public nominal");
         }
-        const public_arg = switch (slot.generated_argument_source) {
+        const public_arg_key = solve.CheckedBaseKey{
+            .module_bytes = self.view.key.bytes,
+            .checked = nominal.args[0],
+        };
+        const public_argument: solve.DirectRequestSelection = switch (slot.generated_argument_source) {
             .exact_selection => self.exactSelectionForChecked(
                 selections,
                 nominal.args[0],
@@ -26986,16 +27251,24 @@ const BodyContext = struct {
                 // It remains a request recipe: consuming language defaults
                 // here would invent a producer before the exact operand that
                 // owns an unresolved descendant has run.
-                break :blk try self.materializeCheckedCallNode(
-                    plan,
-                    selections,
-                    selection_edge.checked,
-                    .request_occurrence,
-                );
+                break :blk .{
+                    .base = public_arg_key,
+                    .produced = try self.materializeCheckedCallNode(
+                        plan,
+                        selections,
+                        selection_edge.checked,
+                        .request_occurrence,
+                    ),
+                    .authority = .request,
+                };
             },
-            .concrete_checked => try self.persistentConcreteCheckedNode(nominal.args[0]),
+            .concrete_checked => .{
+                .base = public_arg_key,
+                .produced = try self.persistentConcreteCheckedNode(nominal.args[0]),
+                .authority = .produced,
+            },
         };
-        if (!try self.graph.typeIsResolved(public_arg)) {
+        if (!try self.graph.typeIsResolved(public_argument.produced)) {
             return null;
         }
         const def = try self.builder.typeDef(
@@ -27005,7 +27278,7 @@ const BodyContext = struct {
             nominal.source_decl,
         );
         const declared_order = try self.instDeclaredOrderForNominal(nominal);
-        return switch (checked.builtinRuntimeEncoding(builtin)) {
+        const node = switch (checked.builtinRuntimeEncoding(builtin)) {
             .iterator => blk: {
                 const owner = builtinOwner(nominal.builtin) orelse
                     Common.invariant("generated iterator slot had no builtin owner");
@@ -27015,7 +27288,7 @@ const BodyContext = struct {
                 break :blk try self.generatedIteratorNominalNode(
                     checked_ty,
                     nominal,
-                    public_arg,
+                    public_argument.produced,
                     def,
                     declared_order,
                 );
@@ -27023,12 +27296,16 @@ const BodyContext = struct {
             .field => try self.generatedFieldNominalNode(
                 checked_ty,
                 nominal,
-                public_arg,
+                public_argument.produced,
                 def,
                 declared_order,
             ),
             .parse_tag_union_spec, .fields => Common.invariant("generated protocol without an exact-argument recipe reached call slot materialization"),
             .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("ordinary builtin reached generated call slot materialization"),
+        };
+        return .{
+            .node = node,
+            .public_argument = public_argument,
         };
     }
 
@@ -27039,17 +27316,23 @@ const BodyContext = struct {
         self: *BodyContext,
         selections: []const solve.DirectRequestSelection,
         checked_ty: checked.CheckedTypeId,
-    ) ?NodeId {
+    ) ?solve.DirectRequestSelection {
         const direct = directSelectionForSlot(selections, .{
             .module_bytes = self.view.key.bytes,
             .checked = checked_ty,
         });
-        if (direct) |selection| return selection.produced;
+        if (direct) |selection| return selection;
         if (self.active_checked_selections) |active| {
-            return active.get(.{
+            const key = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
                 .checked = checked_ty,
-            });
+            };
+            const selection = active.getSelection(key) orelse return null;
+            return .{
+                .base = key,
+                .produced = selection.node,
+                .authority = selection.authority,
+            };
         }
         return null;
     }
@@ -27072,15 +27355,23 @@ const BodyContext = struct {
         if (bindings.len == 0) return consumer;
 
         for (bindings) |binding| {
-            const source_selection = self.callConsumerExactSourceSelection(
-                selections,
-                binding.source,
-            ) orelse switch (binding.source_kind) {
+            const source_selection = switch (binding.source_kind) {
                 .concrete_checked => ActiveCheckedSelection{
-                    .node = try self.persistentConcreteCheckedNode(binding.source),
-                    .authority = .produced,
+                    .node = if (self.callConsumerExactSourceSelection(selections, binding.source)) |selection|
+                        selection.node
+                    else
+                        try self.persistentConcreteCheckedNode(binding.source),
+                    .authority = if (self.callConsumerExactSourceSelection(selections, binding.source)) |selection|
+                        selection.authority
+                    else
+                        .produced,
                 },
-                .exact_selection => Common.invariant("contextual call binding source had no exact checker-recorded selection"),
+                .exact_selection => self.callConsumerExactSourceSelection(
+                    selections,
+                    binding.source,
+                ) orelse Common.invariant("contextual call binding source had no exact checker-recorded selection"),
+                .enclosing_selection => self.callConsumerEnclosingSourceSelection(binding.source) orelse
+                    Common.invariant("contextual call binding had no checker-recorded enclosing selection"),
             };
             const dependent = solve.CheckedBaseKey{
                 .module_bytes = self.view.key.bytes,
@@ -27111,6 +27402,17 @@ const BodyContext = struct {
         });
     }
 
+    fn callConsumerEnclosingSourceSelection(
+        self: *BodyContext,
+        source: checked.CheckedTypeId,
+    ) ?ActiveCheckedSelection {
+        const active = self.active_checked_selections orelse return null;
+        return active.getSelection(.{
+            .module_bytes = self.view.key.bytes,
+            .checked = source,
+        });
+    }
+
     fn callConsumerBindingsReady(
         self: *BodyContext,
         bindings: []const checked.SpecializationCallConsumerBinding,
@@ -27118,6 +27420,10 @@ const BodyContext = struct {
     ) bool {
         for (bindings) |binding| switch (binding.source_kind) {
             .concrete_checked => {},
+            .enclosing_selection => {
+                const source = self.callConsumerEnclosingSourceSelection(binding.source) orelse return false;
+                if (self.graph.content(source.node) == .unresolved) return false;
+            },
             .exact_selection => {
                 const source = self.callConsumerExactSourceSelection(
                     selections,
@@ -27142,6 +27448,13 @@ const BodyContext = struct {
             selections,
         );
         defer self.active_checked_selections = inherited;
+        if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
+            // Nested procedure lowering runs in its own BodyContext after this
+            // operand scope has unwound. Carry the checker's already-mapped
+            // consumer identities on the immutable function request itself;
+            // the nested body then consumes that flat span directly.
+            try self.recordActiveCheckedSelectionsOnFunction(request);
+        }
         return try self.lowerExprAtProducedValueRequest(expr, request);
     }
 
@@ -27163,6 +27476,9 @@ const BodyContext = struct {
             );
         }
         defer self.active_checked_selections = inherited;
+        if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
+            try self.recordActiveCheckedSelectionsOnFunction(request);
+        }
         return try self.lowerExprAtProducedValueRequest(expr, request);
     }
 
@@ -27535,13 +27851,16 @@ const BodyContext = struct {
                 .request_occurrence,
             );
         }
-        const ret = try self.materializeCallSelectionEdgeSubtree(
-            plan,
-            self.callResultRootEdge(plan, checked_fn.ret),
-            completed_selections,
-            .{ .checked = null },
-            .request_occurrence,
-        );
+        const ret = if (result_relation == .exact_destination)
+            result_base
+        else
+            try self.materializeCallSelectionEdgeSubtree(
+                plan,
+                self.callResultRootEdge(plan, checked_fn.ret),
+                completed_selections,
+                .{ .checked = null },
+                .request_occurrence,
+            );
         const request = try self.graphFunctionNode(args, ret);
         try self.graph.registerRequestCheckedSource(request, checked_fn_node);
         self.graph.registerFunctionResultRelation(request, result_relation);
@@ -27670,6 +27989,15 @@ const BodyContext = struct {
         if (!matched) {
             Common.invariant("iterator producer result had no checker-recorded generated-nominal slot");
         }
+        // Constructor-specific generated-result edges are checker-authored in
+        // this binding span. Publish the newly constructed atomic identity to
+        // recursive callback consumers before the callable is materialized.
+        try self.applyCallConsumerBindingsToSelections(
+            plan.selection_bindings,
+            &selections,
+            false,
+            null,
+        );
         return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
     }
 
@@ -28880,10 +29208,9 @@ const BodyContext = struct {
     fn lowerLocalBindingAtNode(
         self: *BodyContext,
         binding: CurrentLocal,
-        expected_node: NodeId,
+        _: NodeId,
     ) Allocator.Error!DraftExprId {
         const local_cell = self.localTypeCell(binding.local);
-        _ = expected_node;
         return try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
     }
 
@@ -32990,9 +33317,10 @@ const BodyContext = struct {
             Common.invariant("checked field access path had no segments");
         }
         const receiver = try self.lowerExpr(field.receiver);
+        const raw_receiver_node = try self.exprTypeCell(receiver).toGraphNode(self.graph);
         const receiver_node = try self.builder.completePendingProducedRepresentationNode(
             self,
-            try self.exprTypeCell(receiver).toGraphNode(self.graph),
+            raw_receiver_node,
         );
 
         if (fieldAccessAnySegmentOptional(field.segments)) {
@@ -43862,8 +44190,8 @@ const BodyContext = struct {
             if (self.graph.sameClass(planned.node, node)) return;
         }
         const callable_node = switch (mode) {
-            .equality => try self.graphFunctionNode(&.{ node, node }, result_node),
-            .hash => try self.graphFunctionNode(&.{ node, result_node }, result_node),
+            .equality => try self.graphFunctionRequestNode(&.{ node, node }, result_node, .exact_destination),
+            .hash => try self.graphFunctionRequestNode(&.{ node, result_node }, result_node, .exact_destination),
         };
         try self.recordExactRequestEdge(
             callable_node,
@@ -44337,6 +44665,8 @@ const BodyContext = struct {
                     if (!self.sameProducedNamedIdentity(requested_named, produced_named)) {
                         Common.invariant("exact nominal destination received a different produced nominal identity");
                     }
+                    self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
+                        DraftTypeCell.fromGraphNode(destination);
                     return produced_expr;
                 },
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
@@ -44347,12 +44677,23 @@ const BodyContext = struct {
                     );
                 },
             },
+            // A function request supplies the callable's input edges, but the
+            // callable producer owns its completed result edge. Replacing the
+            // produced function with the request here would discard that
+            // result before the enclosing call plan can select identities
+            // from it (for example, a callback's generic return value).
+            .func => switch (self.graph.content(produced_node)) {
+                .func => return produced_expr,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {
+                    Common.invariant("exact function destination received a non-function producer");
+                },
+            },
             // Checking has already proved that this value may flow to the
             // destination. Structural requests carry representation identity,
             // not a runtime constructor: retain the value and record the
             // destination directly without comparing, merging, or traversing
             // either graph.
-            .redirect, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
+            .redirect, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
                 self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
                     DraftTypeCell.fromGraphNode(destination);
                 return produced_expr;
@@ -45839,7 +46180,7 @@ const BodyContext = struct {
             }
             const pattern = self.view.bodies.pattern(checked_pattern);
             if (pattern.data != .nominal or self.graph.content(scrutinee_node) == .named) continue;
-            const checked_nominal = try self.persistentCheckedBaseNode(pattern.ty);
+            const checked_nominal = try self.lowerTypeNode(pattern.ty);
             const destination = try self.producedConstructorNode(checked_nominal, scrutinee_node);
             scrutinee = try self.applyProducedExprToExactDestination(scrutinee, destination);
             scrutinee_node = try self.exprTypeCell(scrutinee).toGraphNode(self.graph);
@@ -46433,6 +46774,19 @@ const BodyContext = struct {
         if (self.graph.content(value_node) != .unresolved) {
             value_node = try self.graph.internProducedIdentity(value_node);
         }
+        if (selection.has_exact_producer and
+            self.graph.content(selected_node) != .unresolved and
+            self.graph.content(value_node) != .unresolved and
+            !self.graph.sameClass(selected_node, value_node))
+        {
+            // A deferred producer can complete only after the expression was
+            // first applied to this control-flow request. Consume that same
+            // explicit destination now that its exact output exists; this is
+            // the delayed half of the original directional operation, not a
+            // comparison or reconstruction of either type.
+            _ = try self.applyProducedExprToExactDestination(value, selected_node);
+            value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+        }
         if (!selection.has_exact_producer) {
             try self.graph.completeProducedSelection(selected_node, value_node);
             selection.selected = DraftTypeCell.fromGraphNode(value_node);
@@ -46456,52 +46810,6 @@ const BodyContext = struct {
             // each other. A later concrete alternative, or the body operation
             // that owns one of these cells, must complete the selected cell.
         } else if (!self.graph.sameClass(selected_node, value_node)) {
-            const proc_base = self.view.names.procBase(self.owner_template.proc_base);
-            std.debug.print("control-flow collision proc={s} selected={} {s} value={} {s} relation={s}\n", .{
-                if (proc_base.export_name) |name| self.view.names.exportNameText(name) else "<local>",
-                selected_node,
-                @tagName(self.graph.content(selected_node)),
-                value_node,
-                @tagName(self.graph.content(value_node)),
-                @tagName(selection.destination_relation),
-            });
-            std.debug.print("  value expr={} data={s}\n", .{
-                value,
-                @tagName(self.draft.exprs.items[@intFromEnum(value)].data),
-            });
-            for ([_]NodeId{ selected_node, value_node }) |node| {
-                if (self.graph.content(node) == .named) {
-                    const named = self.graph.content(node).named;
-                    std.debug.print("  named node={} kind={s} generated={} args=", .{
-                        node,
-                        @tagName(named.kind),
-                        named.def.generated != null,
-                    });
-                    for (named.args) |arg| std.debug.print("{}:{s} ", .{ arg, @tagName(self.graph.content(arg)) });
-                    std.debug.print("backing={?}\n", .{if (named.backing) |backing| backing.node else null});
-                    for (named.args) |arg| {
-                        var row = self.graph.rootNode(arg);
-                        var remaining: usize = 16;
-                        while (self.graph.content(row) == .tag_union and remaining > 0) : (remaining -= 1) {
-                            const tag_union = self.graph.content(row).tag_union;
-                            std.debug.print("    row={} tags=", .{row});
-                            for (tag_union.tags) |tag| {
-                                std.debug.print("{}({})[", .{ tag.name, tag.checked_name });
-                                for (tag.payloads) |payload| std.debug.print("{}:{s} ", .{
-                                    payload,
-                                    @tagName(self.graph.content(payload)),
-                                });
-                                std.debug.print("] ", .{});
-                            }
-                            std.debug.print("ext={}:{s}\n", .{
-                                tag_union.ext,
-                                @tagName(self.graph.content(tag_union.ext)),
-                            });
-                            row = self.graph.rootNode(tag_union.ext);
-                        }
-                    }
-                }
-            }
             Common.invariant("control-flow result did not consume its exact produced request");
         }
         self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
@@ -48075,7 +48383,10 @@ const BodyContext = struct {
                         break :blk try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local });
                     },
                 };
-                produced_nodes[operand_index] = try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph);
+                produced_nodes[operand_index] = try self.builder.completePendingProducedNode(
+                    self,
+                    try self.exprTypeCell(produced_exprs[operand_index]).toGraphNode(self.graph),
+                );
                 available[operand_index] = true;
                 newly_available[operand_index] = true;
                 remaining -= 1;
