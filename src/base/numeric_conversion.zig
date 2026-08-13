@@ -62,6 +62,25 @@ pub const NumType = enum {
         };
     }
 
+    /// The Zig type used to read and write values of this `NumType`.
+    pub fn ZigType(comptime self: NumType) type {
+        return switch (self) {
+            .i8 => i8,
+            .i16 => i16,
+            .i32 => i32,
+            .i64 => i64,
+            .i128 => i128,
+            .u8 => u8,
+            .u16 => u16,
+            .u32 => u32,
+            .u64 => u64,
+            .u128 => u128,
+            .f32 => f32,
+            .f64 => f64,
+            .dec => @compileError("Dec has no Zig type; ask for its .i128 payload"),
+        };
+    }
+
     /// Whether this type is an integer, a float, or a `Dec`.
     pub fn class(self: NumType) NumericClass {
         return switch (self) {
