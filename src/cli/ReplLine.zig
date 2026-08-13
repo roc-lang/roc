@@ -1496,7 +1496,7 @@ fn typeBytes(state: *LineState, bytes: []const u8) CommandError!void {
 fn lastCursorColumn(out: []const u8) ?usize {
     var result: ?usize = null;
     var index: usize = 0;
-    while (std.mem.indexOfPos(u8, out, index, "\x1b[")) |start| {
+    while (std.mem.findPos(u8, out, index, "\x1b[")) |start| {
         const digits_start = start + 2;
         var end = digits_start;
         while (end < out.len and std.ascii.isDigit(out[end])) : (end += 1) {}
