@@ -680,6 +680,16 @@ const SpecAdmission = enum {
     denied_spec_count,
 };
 
+/// The phase that owns a clone. Loop-exit projection is deliberately separate
+/// from specialization and ordinary rewrites: its full lexical clone may
+/// revisit calls, so only the final call-opaque projection phase may initiate
+/// another selected exit ABI.
+const ClonePurpose = enum {
+    specialization,
+    rewrite,
+    loop_exit_projection,
+};
+
 const InlineCallMode = enum {
     all,
     iterator_fusion,
@@ -3669,11 +3679,8 @@ const Pass = struct {
             const aggregate_projectable = try self.bodyHasAggregateProjectableLoopResult(body);
             if (!tuple_projectable and !aggregate_projectable) continue;
 
-            var cloner = Cloner.initForRewrite(self);
+            var cloner = Cloner.initForLoopExitProjection(self);
             defer cloner.deinit();
-            cloner.inline_calls = .none;
-            cloner.rewrite_call_patterns = false;
-            cloner.emit_callable_workers = false;
             const cloned = try cloner.cloneExpr(body);
             self.program.setFn(fn_id, .{
                 .symbol = fn_.symbol,
@@ -4507,6 +4514,7 @@ const Subst = struct {
 
 const Cloner = struct {
     pass: *Pass,
+    purpose: ClonePurpose,
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
@@ -4600,6 +4608,7 @@ const Cloner = struct {
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
+            .purpose = .specialization,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = source_fn,
             .pattern = pattern,
@@ -4632,6 +4641,7 @@ const Cloner = struct {
     fn initForRewrite(pass: *Pass) Cloner {
         return .{
             .pass = pass,
+            .purpose = .rewrite,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
@@ -4659,6 +4669,15 @@ const Cloner = struct {
             .current_region = Region.zero(),
             .current_inline_scope = Ast.InlineScopeId.none,
         };
+    }
+
+    fn initForLoopExitProjection(pass: *Pass) Cloner {
+        var cloner = initForRewrite(pass);
+        cloner.purpose = .loop_exit_projection;
+        cloner.inline_calls = .none;
+        cloner.rewrite_call_patterns = false;
+        cloner.emit_callable_workers = false;
+        return cloner;
     }
 
     fn deinit(self: *Cloner) void {
@@ -5933,7 +5952,9 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
-        if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
+        if (self.purpose == .loop_exit_projection) {
+            if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
+        }
 
         var value_bindings: BindingChain = .{};
         const value = try self.cloneExprValueInto(let_.value, &value_bindings);
@@ -12505,6 +12526,29 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // comptime_sites
         0, // next_symbol
     );
+}
+
+test "loop exit projection clone is isolated from ordinary rewrites" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    var rewrite = Cloner.initForRewrite(&pass);
+    defer rewrite.deinit();
+    try std.testing.expectEqual(ClonePurpose.rewrite, rewrite.purpose);
+    try std.testing.expectEqual(InlineCallMode.all, rewrite.inline_calls);
+    try std.testing.expect(rewrite.rewrite_call_patterns);
+    try std.testing.expect(rewrite.emit_callable_workers);
+
+    var projection = Cloner.initForLoopExitProjection(&pass);
+    defer projection.deinit();
+    try std.testing.expectEqual(ClonePurpose.loop_exit_projection, projection.purpose);
+    try std.testing.expectEqual(InlineCallMode.none, projection.inline_calls);
+    try std.testing.expect(!projection.rewrite_call_patterns);
+    try std.testing.expect(!projection.emit_callable_workers);
 }
 
 test "SpecConstr preserves record update ordering while exposing its final shape" {
