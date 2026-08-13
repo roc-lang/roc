@@ -247,6 +247,10 @@ fn cleanupCacheSubdir(std_io: Io, subdir: Dir, now_ns: i128, maybe_stats: ?*Clea
         const entry = (it.next(std_io) catch break) orelse break;
 
         if (entry.kind == .file) {
+            // A lock file names a stable cache identity. Removing it while a
+            // process holds the lock would let another process create a new
+            // inode and enter the same critical section concurrently.
+            if (std.mem.endsWith(u8, entry.name, ".lock")) continue;
             deleteCacheFileIfOld(std_io, subdir, entry.name, now_ns, maybe_stats);
         } else if (entry.kind == .directory and nested_directory_depth > 0) {
             var child = subdir.openDir(std_io, entry.name, .{ .iterate = true }) catch continue;
@@ -502,11 +506,14 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     defer allocator.free(mod_file);
     const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
     defer allocator.free(wasm_host_file);
+    const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
+    defer allocator.free(wasm_host_lock);
 
     (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
 
     const now_ns = nowNs(std.testing.io);
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
@@ -527,4 +534,5 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     Dir.cwd().access(std.testing.io, wasm_host_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     };
+    try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }

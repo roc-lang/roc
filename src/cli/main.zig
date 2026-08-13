@@ -304,6 +304,7 @@ const CliMainError =
     std.Io.Dir.StatFileError ||
     std.Io.Dir.WriteFileError ||
     std.Io.File.OpenError ||
+    std.Io.File.LockError ||
     std.Io.File.ReadPositionalError ||
     std.Io.File.ReadStreamingError ||
     std.Io.File.Reader.Error ||
@@ -8600,6 +8601,25 @@ fn loadPreparedWasmHost(
         return .{ .cached = cached };
     }
 
+    try cache_manager.ensureCacheSubdirIn(cache_key, cache_dir);
+    const cache_path = try cache_manager.computeCacheFilePath(cache_key, cache_dir);
+    defer ctx.gpa.free(cache_path);
+    const lock_path = try std.fmt.allocPrint(ctx.gpa, "{s}.lock", .{cache_path});
+    defer ctx.gpa.free(lock_path);
+    var lock_file = try std.Io.Dir.createFileAbsolute(ctx.io.std_io, lock_path, .{
+        .read = true,
+        .truncate = false,
+    });
+    defer lock_file.close(ctx.io.std_io);
+    try lock_file.lock(ctx.io.std_io, .exclusive);
+    defer lock_file.unlock(ctx.io.std_io);
+
+    // Another process may have prepared this exact host while this process
+    // waited for the content-addressed lock.
+    if (cache_manager.loadRawBytesMapped(cache_key, cache_dir)) |cached| {
+        return .{ .cached = cached };
+    }
+
     var platform_exports = std.array_list.Managed([]const u8).init(ctx.arena);
     for (link_inputs.platform_files_pre, host_inputs.items[0..pre_end]) |path, bytes| {
         try appendWasmInputBytesExportNames(ctx, &platform_exports, path, bytes);
@@ -9186,6 +9206,7 @@ fn rocBuildWasmSurgical(
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
             .wasm_debug_info = args.debug,
             .wasm_optimize = wasmOptimizeMode(args.opt),
+            .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -9648,6 +9669,7 @@ fn writeCombinedLlvmWasmObject(
 fn rocBuildWasmLlvm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
+    target: RocTarget,
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     platform_dir: []const u8,
@@ -9667,7 +9689,7 @@ fn rocBuildWasmLlvm(
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
-        .wasm32,
+        target,
         link_type,
         lowered,
         entrypoints,
@@ -9684,12 +9706,12 @@ fn rocBuildWasmLlvm(
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
         const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, static_data_exports, args.opt, &owned_inputs);
-        try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{combined_obj});
+        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
 
@@ -9722,6 +9744,7 @@ fn rocBuildWasmLlvm(
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
         .wasm_debug_info = args.debug,
         .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_cpu_level = target.cpuLevel(),
         .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
         .wasm_exports = wasm_exports,
         .platform_files_dir = link_inputs.platform_files_dir,
@@ -9915,6 +9938,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try rocBuildWasmLlvm(
             ctx,
             args,
+            target,
             link_type,
             final_output_path,
             platform_dir,
@@ -10081,6 +10105,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    var prepared_host_cache_manager = CacheManager.init(ctx.gpa, .{
+        .enabled = true,
+        .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
+    }, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     const wasm_host_cache_dir = try cache_manager.config.getWasmHostCacheDir(ctx.arena);
@@ -10266,7 +10295,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             link_type,
             final_output_path,
             build_cache_dir,
-            &cache_manager,
+            &prepared_host_cache_manager,
             wasm_host_cache_dir,
             platform_dir,
             resolved_targets_config,
@@ -10690,6 +10719,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
             .wasm_debug_info = args.debug,
             .wasm_optimize = wasmOptimizeMode(args.opt),
+            .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_cache_dir,

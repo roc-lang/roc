@@ -2358,14 +2358,20 @@ fn patchResolvedRelocation(
                 .table_index_rel_sleb,
                 => {
                     const sym = try self.relocationSymbol(idx.symbol_index);
-                    const value = sym.index;
-                    const table_idx = self.findTableIndex(value) orelse value;
+                    if (!sym.isFunction()) return logInvalidRelocation(
+                        "table index relocation references a {s} symbol",
+                        .{@tagName(sym.kind)},
+                    );
+                    const table_idx = try self.ensureTableElement(sym.index);
                     overwritePaddedI32(target_bytes, patch_offset, @intCast(table_idx));
                 },
                 .table_index_i32 => {
                     const sym = try self.relocationSymbol(idx.symbol_index);
-                    const value = sym.index;
-                    const table_idx = self.findTableIndex(value) orelse value;
+                    if (!sym.isFunction()) return logInvalidRelocation(
+                        "table index relocation references a {s} symbol",
+                        .{@tagName(sym.kind)},
+                    );
+                    const table_idx = try self.ensureTableElement(sym.index);
                     writeRawU32Relocation(target_bytes, patch_offset, table_idx);
                 },
                 .global_index_i32 => {
@@ -2432,28 +2438,6 @@ pub fn resolveCodeRelocations(self: *Self) RelocationError!void {
 
 /// Resolve all data relocations in place.
 pub fn resolveDataRelocations(self: *Self) RelocationError!void {
-    // First pass: ensure functions referenced by table_index_* relocations
-    // are present in the element section. This is needed because data segments
-    // can store function pointers (e.g. hosted_function_ptrs) which need valid
-    // table indices, and the functions must be in the table for call_indirect.
-    for (self.reloc_data.entries.items) |entry| {
-        switch (entry) {
-            .index => |idx| {
-                if (idx.type_id == .table_index_i32 or
-                    idx.type_id == .table_index_sleb or
-                    idx.type_id == .table_index_rel_sleb)
-                {
-                    const sym = self.linking.symbol_table.items[idx.symbol_index];
-                    if (sym.isFunction()) {
-                        _ = try self.ensureTableElement(sym.index);
-                    }
-                }
-            },
-            .offset => {},
-        }
-    }
-
-    // Second pass: patch data bytes with resolved values.
     for (self.reloc_data.entries.items) |entry| {
         const segment_idx = switch (entry) {
             .index => |idx| idx.data_segment_index,
@@ -6491,6 +6475,39 @@ test "resolveCodeRelocations—table_index_sleb resolves to table index not func
     // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
     var expected = [_]u8{0} ** 5;
     overwritePaddedI32(&expected, 0, 2);
+    try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
+}
+
+test "resolveCodeRelocations—table index relocation materializes a missing element" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{}, &.{});
+    try module.func_type_indices.append(allocator, 0);
+
+    try module.code_bytes.appendSlice(allocator, &.{ 0x08, 0x00, Op.i32_const });
+    try appendPaddedU32(allocator, &module.code_bytes, 99);
+    try module.code_bytes.append(allocator, Op.end);
+    try module.function_offsets.append(allocator, 0);
+
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_WEAK,
+        .name = "address_taken_fn",
+        .index = 0,
+    });
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .table_index_sleb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    try module.resolveCodeRelocations();
+
+    try std.testing.expectEqualSlices(u32, &.{0}, module.table_func_indices.items);
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedI32(&expected, 0, 0);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
 

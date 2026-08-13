@@ -5114,7 +5114,7 @@ fn customIssue10733WasmBoxyDevCache(
         .{ .stream = .stderr, .text = "panic" },
     };
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "build", "--target=wasm32", "--opt=dev", first_output_arg },
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", first_output_arg },
         .roc_file = "test/wasm/boxed_closure_app.roc",
         .exit = .success,
         .contains = &contains,
@@ -5123,7 +5123,7 @@ fn customIssue10733WasmBoxyDevCache(
     if (validateIssue10733Wasm(io, allocator, timer, first_path)) |failure| return failure;
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "build", "--target=wasm32", "--opt=dev", second_output_arg },
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", second_output_arg },
         .roc_file = "test/wasm/boxed_closure_app.roc",
         .exit = .success,
         .contains = &contains,

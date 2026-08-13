@@ -7883,7 +7883,10 @@ ordered input's bytes and the selected runtime variant; changing any input or
 the explicit LIR requirement produces a different prepared host. The cached
 object preserves only the platform's original function exports, leaving
 builtins and Boxy runtime functions internal and eligible for dead-code
-elimination during the surgical link. The standalone Wasm runtime uses direct
+elimination during the surgical link. Preparation is serialized per content
+identity across compiler processes and remains available when application
+compilation caching is disabled: it is an exact platform artifact, not a
+cached application result. The standalone Wasm runtime uses direct
 data-symbol relocations rather than PIC GOT
 globals, so the partial link preserves its unresolved sidecar references for
 the later surgical merge. Entrypoint wrappers initialize the embedded runtime
