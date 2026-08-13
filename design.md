@@ -3749,6 +3749,14 @@ such a requirement would reconcile two complete graphs after production.
 Recursive references observe the one forward result cell and therefore acquire
 the same produced identity when the body completes.
 
+The call schedule has one result-authority field, not a second
+`include_result` flag that can contradict it. Only `exact_destination` may
+publish the enclosing result as a call-plan source before the callee runs. A
+`produced` call materializes its result from the immutable checked recipe and
+the substitutions supplied by completed operands, then publishes that newly
+constructed result root. It never injects an enclosing checker-public cell as
+if it were the call's exact produced value.
+
 Compound construction does not apply one complete type graph to another. It
 lowers each runtime child once, constructs the parent directly from those exact
 child `NodeId`s and the checker-authored constructor identity, and returns that

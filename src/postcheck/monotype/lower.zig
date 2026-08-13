@@ -18746,7 +18746,6 @@ const BodyContext = struct {
             checked_fn_node,
             call.args,
             request_ret,
-            true,
             result_relation,
             null,
         );
@@ -27427,7 +27426,6 @@ const BodyContext = struct {
                 checked_fn_node,
                 call.args,
                 request_ret,
-                true,
                 result_relation,
                 iterator_procedure,
             );
@@ -27545,7 +27543,7 @@ const BodyContext = struct {
             null,
             null,
             request_ret,
-            true,
+            result_relation == .exact_destination,
             &active_observation,
         );
         const preliminary_args = try self.graph.arena().alloc(NodeId, produced_args.len);
@@ -31322,7 +31320,6 @@ const BodyContext = struct {
         checked_fn_node: NodeId,
         checked_args: []const checked.CheckedExprId,
         request_ret: NodeId,
-        include_result: bool,
         result_relation: solve.FunctionResultRelation,
         iterator_procedure: ?checked.IteratorProcedureId,
     ) Allocator.Error!PlannedCallOperands {
@@ -31350,7 +31347,7 @@ const BodyContext = struct {
             null,
             null,
             request_ret,
-            include_result,
+            result_relation == .exact_destination,
             &active_observation,
         );
         if (iterator_procedure) |procedure| {
@@ -31486,7 +31483,6 @@ const BodyContext = struct {
         dispatcher_arg_index: ?usize,
         type_only_dispatcher: ?NodeId,
         target_signature_node: ?NodeId,
-        include_result: bool,
         result_relation: solve.FunctionResultRelation,
         iterator_procedure: ?checked.IteratorProcedureId,
     ) Allocator.Error!PlannedCallOperands {
@@ -31520,7 +31516,7 @@ const BodyContext = struct {
             if (dispatcher_arg_index) |index| if (index < produced_args.len and available[index]) produced_args[index] else null else type_only_dispatcher,
             target_signature_node,
             request_ret,
-            include_result,
+            result_relation == .exact_destination,
             &active_observation,
         );
         if (iterator_procedure) |procedure| {
@@ -35114,7 +35110,6 @@ const BodyContext = struct {
             },
             null,
             null,
-            true,
             if (destination_relation == .exact_request) .exact_destination else .produced,
             iterator_procedure,
         );
@@ -35267,7 +35262,6 @@ const BodyContext = struct {
             },
             null,
             null,
-            true,
             if (destination_relation == .exact_request) .exact_destination else .produced,
             null,
         );
