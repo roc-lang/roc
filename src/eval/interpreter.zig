@@ -7402,7 +7402,6 @@ pub const Interpreter = struct {
             .dec_to_i16_try_unsafe => self.decToIntTry(i16, args[0], ll.ret_layout),
             .dec_to_i32_try_unsafe => self.decToIntTry(i32, args[0], ll.ret_layout),
             .dec_to_i64_try_unsafe => self.decToIntTry(i64, args[0], ll.ret_layout),
-            .dec_to_i128_try_unsafe => self.decToIntTry(i128, args[0], ll.ret_layout),
             .dec_to_u8_try_unsafe => self.decToIntTry(u8, args[0], ll.ret_layout),
             .dec_to_u16_try_unsafe => self.decToIntTry(u16, args[0], ll.ret_layout),
             .dec_to_u32_try_unsafe => self.decToIntTry(u32, args[0], ll.ret_layout),

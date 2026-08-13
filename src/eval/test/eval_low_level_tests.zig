@@ -702,9 +702,9 @@ pub const tests = [_]TestCase{
         .name = "low_level - Dec boundary rounding to integers",
         .source =
         \\{
-        \\Dec.round_to_i128_try(Dec.highest) == Ok(170141183460469231732)
-        \\    and Dec.floor_to_i128_try(Dec.lowest) == Ok(-170141183460469231732)
-        \\    and Dec.ceiling_to_i128_try(Dec.highest) == Ok(170141183460469231732)
+        \\Dec.round_to_i128(Dec.highest) == 170141183460469231732
+        \\    and Dec.floor_to_i128(Dec.lowest) == -170141183460469231732
+        \\    and Dec.ceiling_to_i128(Dec.highest) == 170141183460469231732
         \\    and Dec.round_to_i64_try(Dec.highest) == Err(OutOfRange)
         \\}
         ,
@@ -7016,7 +7016,7 @@ pub const tests = [_]TestCase{
         \\{
         \\big : Dec
         \\big = 170141183460469231731.0
-        \\Dec.to_i128_wrap(big) == 170141183460469231731
+        \\Dec.to_i128(big) == 170141183460469231731
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
@@ -7025,8 +7025,8 @@ pub const tests = [_]TestCase{
         .name = "low_level - Dec truncates to the 128-bit widths",
         .source =
         \\{
-        \\Dec.to_i128_wrap(42.5) == 42
-        \\    and Dec.to_i128_wrap(-42.5) == -42
+        \\Dec.to_i128(42.5) == 42
+        \\    and Dec.to_i128(-42.5) == -42
         \\    and Dec.to_u128_wrap(42.5) == 42
         \\    and Dec.to_u128_wrap(-42.5) == 340282366920938463463374607431768211414
         \\}
@@ -7092,7 +7092,7 @@ pub const tests = [_]TestCase{
         \\    and Dec.to_i32_wrap(big) == 350287150
         \\    and Dec.to_u32_wrap(big) == 350287150
         \\    and Dec.to_i64_wrap(big) == 6101065172474983726
-        \\    and Dec.to_i128_wrap(big) == -12345678901234567890
+        \\    and Dec.to_i128(big) == -12345678901234567890
         \\    and Dec.to_u128_wrap(big) == 340282366920938463451028928530533643566
         \\}
         ,
@@ -7104,7 +7104,7 @@ pub const tests = [_]TestCase{
         \\{
         \\Dec.to_i64_wrap(Dec.lowest) == -4120486797083267187
         \\    and Dec.to_u64_wrap(Dec.lowest) == 14326257276626284429
-        \\    and Dec.to_i128_wrap(Dec.lowest) == -170141183460469231731
+        \\    and Dec.to_i128(Dec.lowest) == -170141183460469231731
         \\    and Dec.to_u128_wrap(Dec.lowest) == 340282366920938463293233423971298979725
         \\}
         ,
