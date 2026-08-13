@@ -4343,6 +4343,17 @@ The kind rules:
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
   destructure prematurely.
+  Binding a destructure can also ground a deferred static-dispatch receiver
+  without adding an ordinary equality constraint. Every literal-defaulting
+  boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
+  constraints and every now-runnable dispatch relation alternate to a
+  fixpoint before the boundary gathers any default candidates. Defaulting may
+  only classify a literal after the method signatures selected by all
+  pre-boundary type evidence have propagated through the graph. Each defaulting
+  round runs the same joint quiescence after its commits, with default-origin
+  diagnostics enabled for relations grounded by those commits. Still-flex
+  receivers remain parked, so quiescence does not speculatively select or
+  reject a method.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
   optional field they see the Try. Exhaustiveness analysis consumes that
   exact checker-judged sub-pattern type for every record column, rather
