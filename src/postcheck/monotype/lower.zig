@@ -6585,6 +6585,16 @@ const Builder = struct {
             } else null;
             if (template_spec) |spec| {
                 if (spec.state == .resolved) {
+                    if (spec.eager_resolution) |eager| {
+                        const final_request_ty = try sealer.sealNode(eager.request_fn_node);
+                        if (!try self.program.types.typeEql(
+                            &self.program.names,
+                            eager.fn_ty,
+                            final_request_ty,
+                        )) {
+                            Common.invariant("eager procedure specialization request changed before final graph seal");
+                        }
+                    }
                     fn_slots[raw_index] = spec.resolved_slot orelse
                         Common.invariant("resolved draft template demand had no specialization slot");
                     emit_fns[raw_index] = false;
@@ -9680,6 +9690,11 @@ fn draftSelectionRequestKey(graph: *InstGraph, request_fn_node: NodeId) [32]u8 {
     return hasher.finalResult();
 }
 
+const EagerTemplateResolution = struct {
+    request_fn_node: NodeId,
+    fn_ty: Type.TypeId,
+};
+
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     symbol: Common.Symbol,
@@ -9723,7 +9738,15 @@ const DraftTemplateSpec = struct {
     request_key: [32]u8,
     fn_id: DraftFnId,
     resolved_slot: ?Ast.FnSlot = null,
+    /// Mid-lowering iterator-result completion may resolve a body before the
+    /// graph's final seal. Commit re-seals this retained request and proves the
+    /// specialization key did not move afterward.
+    eager_resolution: ?EagerTemplateResolution = null,
 };
+
+fn draftTemplateSpecLookupRequestNode(spec: *const DraftTemplateSpec) NodeId {
+    return spec.lookup_request_fn_node orelse spec.request_fn_node;
+}
 
 const DraftConstUseProvenance = union(enum) {
     declared,
@@ -10618,7 +10641,7 @@ const BodyDraftStore = struct {
     }
 
     fn deinit(self: *BodyDraftStore) void {
-        for (self.template_specs.items) |spec| {
+        for (self.template_specs.items) |*spec| {
             if (spec.lexical) |lexical| {
                 self.allocator.free(lexical.binders);
                 self.allocator.free(lexical.local_procs);
@@ -34163,8 +34186,8 @@ const BodyContext = struct {
             self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
         else
             null;
-        const base_cell = if (base_record) |base_expr|
-            self.exprTypeCell(base_expr)
+        const base_cell = if (base_record) |base_value|
+            self.exprTypeCell(base_value)
         else
             DraftTypeCell.fromGraphNode(record_node);
         const base_local = if (base_record != null)
@@ -35257,7 +35280,7 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         var direct_parametric_low_level: ?can.CIR.Expr.LowLevel = null;
-        var direct_graph_call = false;
+        const direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
         switch (plan.resolution) {
             .direct_closed => |direct| {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
@@ -35273,7 +35296,7 @@ const BodyContext = struct {
                         .procedure => direct_graph_call = true,
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => direct_graph_call = true,
+                    .local_proc => {},
                     .structural => {},
                 }
             },
@@ -35282,10 +35305,10 @@ const BodyContext = struct {
                 switch (node.target.kind) {
                     .procedure => |procedure| switch (procedure.runtime_target) {
                         .low_level => |op| direct_parametric_low_level = op,
-                        .procedure => direct_graph_call = true,
+                        .procedure => {},
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc => direct_graph_call = true,
+                    .local_proc => {},
                     .structural => {},
                 }
             },
@@ -36572,7 +36595,8 @@ const BodyContext = struct {
             .procedure => |procedure| procedure,
             .local_proc, .structural => return null,
         };
-        switch (procedure.runtime_target) {
+        const runtime_target = procedure.runtime_target;
+        switch (runtime_target) {
             .intrinsic, .graph_participating => return null,
             .procedure => return null,
             .low_level => |op| if (op.producedTypeFlow() != .none) return null,
@@ -36583,7 +36607,14 @@ const BodyContext = struct {
             callable_ty,
             "checked closed direct call had a non-function callable type",
         );
-        return function.ret;
+        return switch (runtime_target) {
+            .low_level => function.ret,
+            .procedure => if (try self.builder.program.types.containsIteratorInterface(function.ret))
+                null
+            else
+                function.ret,
+            .intrinsic, .graph_participating => unreachable,
+        };
     }
 
     fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
@@ -38288,6 +38319,46 @@ const BodyContext = struct {
             .exact_destination,
             try self.exactRequestEdgeAtNode(dispatcher_node),
         );
+    }
+
+    /// Lower or reuse an ordinary procedure specialization so its callee-authored
+    /// iterator result is available before the caller chooses
+    /// representation-sensitive lowering. This is an expression-lowering step,
+    /// not a read-only graph query: it may create a draft specialization.
+    fn lowerAndCompleteIteratorMethodResultAtNode(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        request_fn_node: NodeId,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        direct: bool,
+    ) Allocator.Error!NodeId {
+        // The target kind is an O(1) tag compare and rejects every builtin
+        // iterator method (the registry classifies iterator owners as
+        // `.graph_participating`), so it runs before the structural
+        // containment walks below.
+        switch (lookup.target.kind) {
+            .procedure => |procedure| switch (procedure.runtime_target) {
+                .procedure => {},
+                .intrinsic, .low_level, .graph_participating => return request_fn_node,
+            },
+            .local_proc => {},
+            .structural => return request_fn_node,
+        }
+        const request_fn = try self.graph.functionNodes(request_fn_node);
+        if (!try self.graph.containsIteratorInterface(request_fn.ret) or
+            try self.graph.containsGeneratedPrivate(request_fn.ret))
+        {
+            return request_fn_node;
+        }
+        // Materialized only past the guards above: most dispatches return
+        // without consuming evidence, and materialization arena-allocates one
+        // vector per target.
+        const evidence = try self.evidenceForDispatchTarget(plan);
+        const slot = if (direct)
+            try self.methodTargetCalleeDirectAtNode(lookup, request_fn_node, evidence)
+        else
+            try self.methodTargetCalleeAtNode(lookup, request_fn_node, evidence);
+        return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
 
     fn lowerResolvedDispatchAtNode(
@@ -45847,6 +45918,32 @@ const BodyContext = struct {
         return regions;
     }
 
+    fn matchScrutineeTypeNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+    ) Allocator.Error!NodeId {
+        const expr = self.view.bodies.expr(checked_expr);
+        const public_node = try self.instNode(expr.ty);
+        if (!try self.graph.containsIteratorInterface(public_node)) {
+            return try self.lowerExprTypeNode(checked_expr);
+        }
+        // The scrutinee's branches are lowered against this node, so a
+        // deferred iterator result is completed here on purpose: the match
+        // must read the representation the producer actually returns.
+        return switch (expr.data) {
+            .call,
+            .dispatch_call,
+            .field_access,
+            .tuple_access,
+            .interpolation,
+            .type_dispatch_call,
+            .method_eq,
+            => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
+                try self.lowerExprTypeNode(checked_expr),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
+        };
+    }
+
     fn lowerMatch(
         self: *BodyContext,
         match: anytype,
@@ -48050,9 +48147,6 @@ const BodyContext = struct {
         if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
         const lookup = self.iteratorMethodLookup(plan);
-        if (try self.lowerGeneratedIteratorDispatch(lookup, plan, plan_args, loop_iterator, expected_ret_ty)) |generated| {
-            return generated;
-        }
 
         const call_plan = switch (edge) {
             .iter => self.view.templates.specializationIteratorCallPlan(plan_id, .iter),
@@ -48218,6 +48312,7 @@ const BodyContext = struct {
         lookup: MethodLookup,
         plan: static_dispatch.IteratorDispatchCall,
         plan_args: []const static_dispatch.IteratorDispatchOperand,
+        dispatcher_node: NodeId,
         loop_iterator: ?DraftTypedLocal,
         expected_ret_ty: ?DraftTypeCell,
     ) Allocator.Error!?DraftExprId {
@@ -48247,7 +48342,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .iter_custom, .iter_single, .list_iter, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .iter_from_step, .range_done => unreachable,
+            .iter_custom, .iter_single, .list_iter, .list_iter_rev, .str_iter_utf8, .iter_map, .iter_keep_if, .iter_drop_if, .iter_take_first, .iter_drop_first, .iter_concat, .iter_append, .iter_exclusive_range, .iter_inclusive_range, .numeric_range_exclusive, .numeric_range_inclusive, .numeric_to, .numeric_until, .iter_from_step, .range_done => unreachable,
         }
     }
 

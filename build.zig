@@ -2980,11 +2980,18 @@ pub fn build(b: *std.Build) void {
     // Don't omit frame pointer when tracy callstack is enabled (needed for callstack capture)
     const omit_frame_pointer: ?bool = if (flag_tracy_callstack) false else null;
 
+    // Whether the host can execute binaries built for the configured target.
+    // The ABI is deliberately not part of this: Linux builds default to
+    // `.musl` (statically linked) while the build runner itself is gnu, and
+    // such a binary runs fine on a glibc host.
+    const host_can_run_target =
+        target.result.os.tag == builtin.target.os.tag and
+        target.result.cpu.arch == builtin.target.cpu.arch;
+
     const target_is_native =
         // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
         // but we still want to treat those builds as native so macOS can link against real FSEvents.
-        target.result.os.tag == builtin.target.os.tag and
-        target.result.cpu.arch == builtin.target.cpu.arch and
+        host_can_run_target and
         target.result.abi == builtin.target.abi;
     build_options.addOption(bool, "target_is_native", target_is_native);
 
@@ -3147,7 +3154,7 @@ pub fn build(b: *std.Build) void {
     // b.addTest site below. They are only passed when the host can execute
     // the configured target and no --test-filter trimmed the test set;
     // otherwise the checker falls back to its import-level check alone.
-    const enumerate_tests_for_wiring_check = target_is_native and test_filters.len == 0;
+    const enumerate_tests_for_wiring_check = host_can_run_target and test_filters.len == 0;
 
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
@@ -7235,7 +7242,6 @@ fn addMainExe(
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
                 b.path("src/boxy_runtime/main.zig"),
             );
-            add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
             const boxy_runtime_artifact = if (cross_is_wasm)
                 wasmObjectArtifact(b, cross_boxy_runtime_obj)
             else

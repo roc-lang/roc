@@ -3,7 +3,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.Stdin
 import pf.Stdout
 
-# Every Dec-to-integer wrapping conversion, driven by a runtime value so the
+# Every Dec-to-integer truncating conversion, driven by a runtime value so the
 # conversions reach the backends instead of being folded at compile time.
 
 to_u8 : Dec -> U8
@@ -34,7 +34,7 @@ to_u128 : Dec -> U128
 to_u128 = |d| d.to_u128_wrap()
 
 to_i128 : Dec -> I128
-to_i128 = |d| d.to_i128_wrap()
+to_i128 = |d| d.to_i128()
 
 main! = || {
     n = match U64.from_str(Stdin.line!()) {

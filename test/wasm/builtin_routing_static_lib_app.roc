@@ -106,7 +106,7 @@ numeric_report = |seed| {
     whole_dec = if seed == 0 { 42.0 } else { 43.0 }
     wide_dec : Dec
     wide_dec = if seed == 0 { 42.5 } else { 43.5 }
-    dec_to_i128_ok = Dec.to_i128_try(wide_dec) == Ok(whole_i128)
+    dec_to_i128_ok = Dec.to_i128(wide_dec) == whole_i128
     dec_to_u128_ok = Dec.to_u128_try(wide_dec) == Ok(whole_u128)
     i128_to_dec_ok = I128.to_dec_try(whole_i128) == Ok(whole_dec)
     u128_to_dec_ok = U128.to_dec_try(whole_u128) == Ok(whole_dec)

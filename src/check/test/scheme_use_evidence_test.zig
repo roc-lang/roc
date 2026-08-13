@@ -56,6 +56,48 @@ test "value use of a where-clause generic records instantiation evidence" {
     try std.testing.expect(found_resolved_pair);
 }
 
+test "source-forward annotated recursive use records the complete body scheme" {
+    const source =
+        \\weak = "a,b,c"
+        \\forward : (Str -> b), U64 -> List(b)
+        \\forward = |g, n| f(g, n)
+        \\f : (Str -> b), U64 -> List(b)
+        \\f = |g, n|
+        \\    if n == 0
+        \\        weak.split_on(",").map(g)
+        \\    else
+        \\        forward(g, n - 1)
+        \\lengths = forward(|s| s.count_utf8_bytes(), 1)
+        \\selves = forward(|s| s, 1)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    const idents = env.getIdentStoreConst();
+    var f_expr_var: ?u32 = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, idents.getText(pattern.assign.ident), "f")) {
+            f_expr_var = @intFromEnum(ModuleEnv.varFrom(def.expr));
+            break;
+        }
+    }
+    try std.testing.expect(f_expr_var != null);
+
+    var found_complete_forward_use = false;
+    for (env.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(Slot.value_use)) continue;
+        if (record.scheme_root != f_expr_var.?) continue;
+        try std.testing.expect(record.pairs_len > 0);
+        found_complete_forward_use = true;
+    }
+    try std.testing.expect(found_complete_forward_use);
+}
+
 test "discharging a dispatch constraint onto a constrained method target records dispatch_target evidence" {
     const source =
         \\Thing := [Val(Str)].{

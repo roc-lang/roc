@@ -137,7 +137,11 @@ pub const Constants = struct {
     /// 55: Record constructors retain exact checker-selected omitted defaults.
     /// 56: Record field presence uses an explicit sentinel representation.
     /// 57: Field-default roots can own their literal-conversion evaluation.
-    pub const CACHE_VERSION = 57;
+    /// 58: Checked iterator procedure identity includes List.iter_rev, the
+    ///     numeric to/until ranges, and the F32/F64 range helpers, with
+    ///     to/until carrying producer-specific representations distinct from
+    ///     the range helpers they do not delegate to.
+    pub const CACHE_VERSION = 58;
 };
 
 /// Configuration for the Roc cache system.

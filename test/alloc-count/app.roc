@@ -28,6 +28,7 @@ run! = |input| {
 
 	check_iter_allocs!(input, $sum)
 	check_iter_allocs!(large, $sum * 2)
+	check_iter_rev_allocs!(bytes, $sum)
 	check_large_to_utf8_allocs!(large)
 	check_drop_allocs!(large)
 	check_rejected_drop_allocs!(multibyte)
@@ -43,6 +44,25 @@ check_iter_allocs! = |str, expected| {
 	allocs = Host.alloc_count!() - before
 	expect allocs == 0
 	expect sum == expected
+	{}
+}
+
+# Walking a list back to front reads it in place, so neither the reversed
+# iteration nor the early-exiting `find_last` built on it copies the list.
+check_iter_rev_allocs! : List(U8), U64 => {}
+check_iter_rev_allocs! = |bytes, expected| {
+	fold_before = Host.alloc_count!()
+	sum = Iter.fold(bytes.iter_rev(), 0, |acc, byte| acc + byte.to_u64())
+	fold_allocs = Host.alloc_count!() - fold_before
+	expect fold_allocs == 0
+	expect sum == expected
+
+	expected_found = List.last(List.keep_if(bytes, |byte| byte > 0))
+	find_before = Host.alloc_count!()
+	found = List.find_last(bytes, |byte| byte > 0)
+	find_allocs = Host.alloc_count!() - find_before
+	expect find_allocs == 0
+	expect found == expected_found
 	{}
 }
 
