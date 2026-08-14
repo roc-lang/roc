@@ -1093,7 +1093,7 @@ test "Monotype pattern statements retain graph provenance" {
     try expectContains(statement, "try value_cell.toGraphNode(self.graph)");
     try expectContains(statement, "try self.lowerPatternAtNode(");
     try expectContains(statement, "else if (has_annotation)");
-    try expectContains(statement, "try self.lowerExprAtExactRequest(");
+    try expectContains(statement, "try self.lowerExprAtPublicRequest(");
     try expectNotContains(statement, "checkedTypeIsClosed(self.view.bodies.pattern(pattern).ty)");
     try expectNotContains(statement, "activeTypeFromCell(value_cell)");
     try expectNotContains(statement, "lowerPatternAtType(pattern");
@@ -1107,7 +1107,7 @@ test "Monotype expanded record-rest statements retain graph provenance" {
         "fn lowerDivergentExprAtType(",
     );
     try expectContains(record_rest, "const value = if (has_annotation)");
-    try expectContains(record_rest, "try self.lowerExprAtExactRequest(");
+    try expectContains(record_rest, "try self.lowerExprAtPublicRequest(");
     try expectContains(record_rest, "try self.lowerExpr(expr)");
     try expectContains(record_rest, "const value_cell = self.exprTypeCell(value)");
     try expectContains(record_rest, "completePendingProducedRepresentationNode(");
@@ -1551,7 +1551,7 @@ test "Monotype callable requests keep explicit independent body result authority
     );
     try expectContains(callable_relation, "functionResultRelation(request_node) != null");
     try expectContains(callable_relation, ".exact_request => .exact_destination");
-    try expectContains(callable_relation, ".checked_mapping, .exact_producer => .produced");
+    try expectContains(callable_relation, ".checked_mapping, .public_request, .exact_producer => .produced");
     try expectContains(callable_relation, "callable value request had no explicit result authority");
 
     const restore = sourceSliceBetween(
@@ -2138,7 +2138,9 @@ test "Monotype lambda argument patterns retain graph provenance" {
         "const body_loc = self.exprLoc(body);",
     );
     try expectContains(lambda_args, "self.lowerShapeFreePatternAtCell(pattern_id, arg_cell)");
-    try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, arg_node)");
+    try expectContains(lambda_args, "self.functionEntryArgumentView(");
+    try expectContains(lambda_args, "self.lowerPatternAtNode(pattern_id, entry_view.pattern_node)");
+    try expectContains(lambda_args, "self.functionEntryArgumentValue(entry_view, raw_value)");
     try expectContains(lambda_args, ".ty = arg_cell");
     try expectContains(lambda_args, "} }, return_selection.selected);");
     try expectNotContains(lambda_args, "activeTypeFromNode(arg_node)");
