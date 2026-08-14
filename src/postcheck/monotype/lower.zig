@@ -35344,7 +35344,11 @@ const BodyContext = struct {
             try self.lowerExprAtExactRequest(ext, DraftTypeCell.fromGraphNode(request))
         else
             try self.lowerExpr(ext);
-        const base_node = try self.builder.completePendingProducedNode(
+        // A record update must inspect its base's immediate storage shape.
+        // An active recursive call still owns its unresolved output cell, so
+        // use that producer's explicit request recipe only as the shape
+        // witness while retaining `base_value` as the runtime value.
+        const base_node = try self.builder.completePendingProducedRepresentationNode(
             self,
             try self.exprTypeCell(base_value).toGraphNode(self.graph),
         );

@@ -769,6 +769,11 @@ test "record literals request and retain only immediate exact field nodes" {
         "fn lowerRecordExprAtNode(",
         "fn lowerTagConstructorAtNode(",
     );
+    const record_update = sourceSliceBetween(
+        lower_source,
+        "fn lowerRecordUpdateDirect(",
+        "fn recordUpdateFieldValue(",
+    );
     try expectContains(record_literal, "const constructor_node = request_node orelse try self.lowerExprTypeNode(checked_expr);");
     try expectContains(record_literal, "self.graph.recordConstructionFieldValueNode(");
     try expectContains(record_literal, "const request = if (checked_seed)");
@@ -779,6 +784,7 @@ test "record literals request and retain only immediate exact field nodes" {
     try expectContains(record_literal, "var selections = std.ArrayList(solve.DirectRequestSelection).empty;");
     try expectContains(record_literal, "self.refineDirectSelectionsForCall(");
     try expectContains(record_literal, "fn lowerRecordLiteralFromExactChildren(");
+    try expectContains(record_update, "const base_node = try self.builder.completePendingProducedRepresentationNode(");
     try expectContains(exact_record, "const produced_fields: ?[]InstField = if (preserve_request)");
     try expectContains(exact_record, "if (produced_fields) |produced| {");
     try expectContains(exact_record, "produced[index].ty = produced_value_node;");
