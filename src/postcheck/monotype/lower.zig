@@ -27481,7 +27481,7 @@ const BodyContext = struct {
 
     const GeneratedNominalConstructionMode = enum {
         completed_arguments,
-        recursive_reservation,
+        recursive_interface,
     };
 
     fn generatedNominalFromSelectedArguments(
@@ -27580,7 +27580,7 @@ const BodyContext = struct {
                     Common.invariant("generated iterator slot had a non-iterator builtin owner");
                 }
                 break :blk switch (construction_mode) {
-                    .recursive_reservation => if (public_argument.authority == .produced)
+                    .recursive_interface => if (public_argument.authority == .produced)
                         try self.generatedIteratorNominalNode(
                             checked_ty,
                             nominal,
@@ -27606,7 +27606,7 @@ const BodyContext = struct {
                 };
             },
             .field => switch (construction_mode) {
-                .recursive_reservation => Common.invariant("field identity requested a recursive forward argument"),
+                .recursive_interface => Common.invariant("field identity requested a recursive forward argument"),
                 .completed_arguments => try self.generatedFieldNominalNode(
                     checked_ty,
                     nominal,
@@ -28245,7 +28245,7 @@ const BodyContext = struct {
                 plan,
                 slot,
                 selections.items,
-                .recursive_reservation,
+                .recursive_interface,
             )) orelse return null;
             try self.recordCallSelection(&selections, production.public_argument);
             try self.recordExplicitCallProducerOutput(

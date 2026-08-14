@@ -1020,14 +1020,14 @@ test "generated identities are atomic and reserve before backing work" {
     const produced_lookup = std.mem.find(
         u8,
         generated_call_slot,
-        ".recursive_reservation => if (public_argument.authority == .produced)",
+        ".recursive_interface => if (public_argument.authority == .produced)",
     ) orelse return error.TestExpectedEqual;
-    const recursive_reservation = std.mem.find(
+    const request_reservation = std.mem.find(
         u8,
         generated_call_slot,
         "try self.reserveGeneratedIteratorNominalNode(",
     ) orelse return error.TestExpectedEqual;
-    try std.testing.expect(produced_lookup < recursive_reservation);
+    try std.testing.expect(produced_lookup < request_reservation);
 }
 
 test "Monotype graph nodes cannot become TypeId views before freeze" {
