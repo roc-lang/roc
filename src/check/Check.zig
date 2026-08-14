@@ -26053,13 +26053,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     if (constraint_fn_resolved.unwrapFunc() == null) {
-                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        _ = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
                                 .dispatcher_name = nominal_type.ident.ident_idx,
                                 .method_name = constraint.fn_name,
                             },
-                        });
+                        }, .exact);
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                         continue;
@@ -26412,25 +26412,25 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) orelse continue;
 
                     if (constraint_fn_resolved.unwrapFunc() == null) {
-                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        _ = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
                                 .dispatcher_name = alias.ident.ident_idx,
                                 .method_name = constraint.fn_name,
                             },
-                        });
+                        }, .exact);
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                         continue;
                     }
 
-                    const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                    const fn_result = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
                             .dispatcher_name = alias.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
-                    });
+                    }, .exact);
                     if (fn_result.isProblem()) {
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);

@@ -26514,9 +26514,7 @@ const BodyContext = struct {
             .alias_argument => Common.invariant("checker emitted a runtime selection edge through a transparent alias argument"),
             .alias_backing => switch (self.graph.content(parent)) {
                 .named => |named| blk: {
-                    if (named.kind != .alias) {
-                        Common.invariant("checked alias backing selection edge reached an ordinary nominal");
-                    }
+                    if (named.kind != .alias) break :blk parent;
                     break :blk (named.backing orelse
                         Common.invariant("checked alias selection edge had no exact backing")).node;
                 },
@@ -35135,12 +35133,14 @@ const BodyContext = struct {
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!DraftExprId {
         const checked_ty = self.view.bodies.expr(checked_expr).ty;
-        const checked_nominal = switch (checkedPayload(self.view, checked_ty)) {
-            .nominal => |checked_nominal| checked_nominal,
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .function, .tag_union => Common.invariant("checked nominal expression had a non-nominal checked type"),
-        };
-        const generated_iterator = checked_nominal.builtin != null and
-            checked.builtinRuntimeEncoding(checked_nominal.builtin.?) == .iterator;
+        // A transparent annotation may make the checked expression root an
+        // alias even though the syntax still constructs the nominal beneath
+        // it. Constructor representation follows that one explicit alias
+        // backing route, so classify the exact runtime nominal there rather
+        // than requiring source presentation to remain at the checked root.
+        const generated_iterator = self.isGeneratedIteratorConstructionNode(
+            self.constructorRepresentationNode(expected_node),
+        );
 
         if (generated_iterator) {
             // `Iter`'s source constructor is the implementation boundary of an
