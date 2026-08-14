@@ -32,8 +32,7 @@ _x = ok_or(Err(""), Exit(5))?
 
 This expression has type:
 
-    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a,
-    [InvalidNumeral(Str)])]
+    [Exit(a)] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 Tip: Maybe wrap a value using Ok(value) or Err(value).
 

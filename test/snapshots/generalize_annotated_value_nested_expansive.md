@@ -22,9 +22,35 @@ strs = made
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+WEAK TYPE VARIABLE - generalize_annotated_value_nested_expansive.md:6:19:6:20
+TYPE MISMATCH - generalize_annotated_value_nested_expansive.md:10:8:10:12
 # PROBLEMS
-NIL
+── ● weak type variable ──── generalize_annotated_value_nested_expansive.md:6:19
+
+This type variable is in a value's annotation, so it will not be generalized.
+
+made : [Wrap(List(a))]
+                  ^
+
+This binding is a value, not a function, so a is weak: every use of the value
+shares one variable, and the first use that determines it determines it for all
+of them. To make this polymorphic, define a function instead.
+
+── ✗ type mismatch ───────── generalize_annotated_value_nested_expansive.md:10:8
+
+This expression is used in an unexpected way.
+
+nums = made
+       ^^^^
+
+It has the type:
+
+    [Wrap(List(a))]
+
+But the annotation says it should be:
+
+    [Wrap(List(U64))]
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -130,7 +156,7 @@ NO CHANGE
 		(p-assign (ident "made"))
 		(e-tag (name "Wrap")
 			(args
-				(e-call (constraint-fn-var 275)
+				(e-call (constraint-fn-var 270)
 					(e-lookup-local
 						(p-assign (ident "identity")))
 					(e-empty_list))))
@@ -141,8 +167,7 @@ NO CHANGE
 						(ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-lookup-local
-			(p-assign (ident "made")))
+		(e-runtime-error (tag "erroneous_value_use"))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Wrap")
@@ -150,8 +175,7 @@ NO CHANGE
 						(ty-lookup (name "U64") (builtin)))))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-lookup-local
-			(p-assign (ident "made")))
+		(e-runtime-error (tag "erroneous_value_use"))
 		(annotation
 			(ty-tag-union
 				(ty-tag-name (name "Wrap")
@@ -169,13 +193,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "[Wrap(List(a))]"))
+		(patt (type "Error"))
 		(patt (type "[Wrap(List(U64))]"))
 		(patt (type "[Wrap(List(Str))]"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "[Wrap(List(a))]"))
+		(expr (type "Error"))
 		(expr (type "[Wrap(List(U64))]"))
 		(expr (type "[Wrap(List(Str))]"))
 		(expr (type "_arg -> {}"))))

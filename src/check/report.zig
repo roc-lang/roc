@@ -88,6 +88,7 @@ const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
+const WeakTypeVariable = problem_mod.WeakTypeVariable;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -1038,6 +1039,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
+            .weak_type_variable => |data| return self.buildWeakTypeVariableReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
@@ -4279,6 +4281,22 @@ pub const ReportBuilder = struct {
             D.bytes("Add a trailing"),
             D.bytes("!").withAnnotation(.inline_code),
             D.bytes("to this function name."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildWeakTypeVariableReport(self: *Self, data: WeakTypeVariable) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Weak Type Variable", "This type variable is in a value's annotation, so it will not be generalized.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("This binding is a value, not a function, so"),
+            D.ident(data.name).withAnnotation(.inline_code),
+            D.bytes("is weak: every use of the value shares one variable, and the first use that determines it determines it for all of them. To make this polymorphic, define a function instead."),
         }, self, &report);
         return report;
     }

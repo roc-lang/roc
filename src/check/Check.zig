@@ -537,14 +537,6 @@ accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalCon
 /// opening does not apply across the host boundary. Populated once per check
 /// from the module's defs and provides entries.
 host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
-/// Annotations whose *generated* type contains type variables (flex or rigid)
-/// even though the source text mentions none — eg an implicitly-opened
-/// output-position tag union, directly or through an alias. Such an annotation
-/// denotes a scheme, so its value binding must generalize exactly as if the
-/// variable had been written (`[E, ..]`). Recorded by
-/// `predeclareAnnotationScheme`, the one place the annotation type exists
-/// before the generalization decision is made.
-annotation_scheme_has_vars: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
@@ -2404,7 +2396,6 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .host_boundary_annotations = .empty,
-        .annotation_scheme_has_vars = .empty,
         .erroneous_value_patterns = .empty,
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
@@ -2518,7 +2509,6 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
-    self.annotation_scheme_has_vars.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
@@ -10382,82 +10372,6 @@ fn varsHaveUnresolvedInspectContent(
     return false;
 }
 
-/// Whether any flex or rigid var is reachable anywhere in this type — ie
-/// whether the type is a scheme rather than fully concrete. Unlike
-/// `varHasUnresolvedContent`, this looks inside functions and alias args:
-/// every position matters when deciding whether an annotation generalizes.
-fn varContainsTypeVars(
-    self: *Self,
-    var_: Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return false;
-    try visited.put(resolved.var_, {});
-
-    return switch (resolved.desc.content) {
-        .flex, .rigid => true,
-        .err, .field_presence => false,
-        .alias => |alias| blk: {
-            if (try self.varsContainTypeVars(self.types.sliceAliasArgs(alias), visited)) break :blk true;
-            break :blk try self.varContainsTypeVars(self.types.getAliasBackingVar(alias), visited);
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .tuple => |tuple| try self.varsContainTypeVars(self.types.sliceVars(tuple.elems), visited),
-            // A nominal application's own type is determined by its args; the
-            // declaration's backing template is a separate graph whose formals
-            // are always rigid and must not count as this type's variables.
-            .nominal_type => |nominal| try self.varsContainTypeVars(self.types.sliceNominalArgs(nominal), visited),
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
-                if (try self.varsContainTypeVars(self.types.sliceVars(func.args), visited)) break :blk true;
-                if (try self.varContainsTypeVars(func.ret, visited)) break :blk true;
-                break :blk try self.varsContainTypeVars(self.types.sliceVars(func.effect_deps), visited);
-            },
-            .record => |record| blk: {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                // Deciding whether the type generalizes must visit every
-                // reachable variable, including each field's presence-axis var.
-                for (fields.items(.presence)) |presence| {
-                    if (try self.varContainsTypeVars(presence.typeVar(), visited)) break :blk true;
-                    if (presence.presenceVar()) |presence_var| {
-                        if (try self.varContainsTypeVars(presence_var, visited)) break :blk true;
-                    }
-                }
-                break :blk try self.varContainsTypeVars(record.ext, visited);
-            },
-            .record_unbound => |fields_range| blk: {
-                const fields = self.types.getRecordFieldsSlice(fields_range);
-                for (fields.items(.presence)) |presence| {
-                    if (try self.varContainsTypeVars(presence.typeVar(), visited)) break :blk true;
-                    if (presence.presenceVar()) |presence_var| {
-                        if (try self.varContainsTypeVars(presence_var, visited)) break :blk true;
-                    }
-                }
-                break :blk false;
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |args| {
-                    if (try self.varsContainTypeVars(self.types.sliceVars(args), visited)) break :blk true;
-                }
-                break :blk try self.varContainsTypeVars(tag_union.ext, visited);
-            },
-            .empty_record, .empty_tag_union => false,
-        },
-    };
-}
-
-fn varsContainTypeVars(
-    self: *Self,
-    vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    for (vars) |var_| {
-        if (try self.varContainsTypeVars(var_, visited)) return true;
-    }
-    return false;
-}
-
 fn varHasUnresolvedStaticDispatchConstraints(
     self: *Self,
     var_: Var,
@@ -11840,22 +11754,50 @@ fn predeclareAnnotatedDefSchemes(self: *Self, env: *Env) std.mem.Allocator.Error
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         const def = self.cir.store.getDef(def_idx);
         const annotation_idx = def.annotation orelse continue;
-        if (!self.annotationIsPredeclarableScheme(def.pattern, annotation_idx)) continue;
+        if (!self.annotationIsPredeclarableScheme(def_idx, def.pattern, def.expr, annotation_idx)) continue;
         const scheme_var = try self.predeclareAnnotationScheme(annotation_idx, env);
         self.setPredeclaredSchemeVar(def_idx, scheme_var);
     }
 }
 
 /// Whether a def's annotation can be declared as a standalone scheme before
-/// its body is checked: a simple `.assign` binding whose annotation has no
-/// `_` inference hole (a hole is inferred from the body, so the annotation
-/// alone does not determine the scheme). Defs that fail this are simply
-/// checked in graph order like unannotated defs.
+/// its body is checked: a def that GENERALIZES — a function, an
+/// annotation-only def (a pure signature; Builtin intrinsics live here), or
+/// a syntactic value (`exprIsSyntacticValue`) — bound by a simple `.assign`
+/// whose annotation has no `_` inference hole (a hole is inferred from the
+/// body, so the annotation alone does not determine the scheme). EXPANSIVE
+/// defs are excluded: they never generalize (design.md "Polarity"), so
+/// their references must share the def's own weak vars, not instantiate a
+/// scheme — graph order checks a referenced value def first. Defs that fail
+/// this are simply checked in graph order like unannotated defs.
 fn annotationIsPredeclarableScheme(
     self: *Self,
+    def_idx: CIR.Def.Idx,
     pattern_idx: CIR.Pattern.Idx,
+    expr_idx: CIR.Expr.Idx,
     annotation_idx: CIR.Annotation.Idx,
 ) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    // An annotated member of a RECURSIVE group predeclares regardless of
+    // expansiveness: the scheme DECOUPLES the cycle (in-group references
+    // instantiate the annotation instead of sharing an in-flight var), which
+    // compile-time evaluation of mutually recursive values depends on. The
+    // value restriction governs polymorphism, not cycle-breaking.
+    const in_recursive_group = if (self.defGroupIndex(def_idx)) |group_index|
+        self.check_order.?.sccs[group_index].is_recursive
+    else
+        false;
+    const generalizes = in_recursive_group or
+        isFunctionDef(&self.cir.store, expr) or
+        expr == .e_anno_only or
+        // A value alias (`hook = shared_impl`) is a scheme (see
+        // `shouldGeneralize`), and dispatch-discovered references may need
+        // its predeclared annotation before its group checks.
+        expr == .e_lookup_local or
+        expr == .e_lookup_external or
+        (self.exprIsSyntacticValue(expr) and !self.exprIsBareNumericLiteral(expr)) or
+        self.exprAlwaysCrashes(expr_idx);
+    if (!generalizes) return false;
     if (self.cir.store.getPattern(pattern_idx) != .assign) return false;
     return !self.cir.store.getAnnotation(annotation_idx).contains_underscore;
 }
@@ -11896,17 +11838,6 @@ fn predeclareAnnotationScheme(
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
-
-    // The generated type is the ground truth for whether this annotation
-    // denotes a scheme: implicit polarity opening can introduce type
-    // variables the source text never mentions (an extensionless tag union in
-    // an output position, directly or through an alias). Record that here so
-    // the generalization decision treats the binding exactly like one whose
-    // annotation spelled the variable out.
-    self.var_set.clearRetainingCapacity();
-    if (try self.varContainsTypeVars(scheme_var, &self.var_set)) {
-        try self.annotation_scheme_has_vars.put(self.gpa, annotation_idx, {});
-    }
 
     self.problems.truncate(problems_len);
     self.snapshots.truncateToMark(snapshots_mark);
@@ -16188,9 +16119,40 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     if (suppress_group_member_generalize) self.suppress_generalize_expr = null;
 
     // Decide whether this binding generalizes—see `shouldGeneralize` for the
-    // three qualifying paths and why each is sound.
+    // qualifying paths and why each is sound. The syntactic-value path is
+    // additionally gated to ANNOTATED `.assign` bindings whose RHS is not a
+    // bare numeric literal: an unannotated or destructured value binding
+    // stays weak (its type is wholly inferred; generalizing it would change
+    // hoisting and sharing for no declared scheme), and a bare number is
+    // owned by the literal-defaulting path (one shared literal, defaulted
+    // once — not one fresh literal per use).
+    const value_scheme_binding = is_binding_rhs and
+        expected.annotation != null and
+        !self.exprIsBareNumericLiteral(expr) and
+        (if (binding_rhs_pattern) |pattern_idx| self.cir.store.getPattern(pattern_idx) == .assign else false) and
+        // An always-crashing RHS is an unimplemented-signature stub
+        // (`fun : a -> a; fun = crash "NYI"`): it produces no value whose
+        // work could be duplicated, so the annotation is honored as the
+        // scheme it declares.
+        (self.exprIsSyntacticValue(expr) or self.exprAlwaysCrashes(expr_idx));
     const should_generalize = !suppress_group_member_generalize and
-        self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
+        (self.shouldGeneralize(expr, is_binding_rhs, is_call_arg) or value_scheme_binding);
+
+    // A written type variable on an EXPANSIVE binding is WEAK: the binding
+    // never generalizes, so every use shares one variable. Warn so the
+    // author learns before a use pins the variable and a later use
+    // mismatches against seemingly-polymorphic syntax. Function defs
+    // (including the `e_closure` wrapper, whose inner lambda generalizes),
+    // annotation-only defs (pure signatures — schemes by definition), value
+    // aliases, syntactic values, and crash stubs are exempt: they all
+    // generalize. Emitted AFTER the RHS checks (via defer) so the binding's
+    // real errors precede the advisory warning.
+    const warn_weak_type_variables = is_binding_rhs and
+        !isFunctionDef(&self.cir.store, expr) and
+        expr != .e_anno_only and
+        !(expr == .e_lookup_local or expr == .e_lookup_external) and
+        !self.exprIsSyntacticValue(expr) and
+        !self.exprAlwaysCrashes(expr_idx);
 
     // A generalizing expression owns every pending dispatch relation created
     // while its body is checked. Save/restore makes nested generalized lambdas
@@ -18224,6 +18186,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = expr_var_raw, .interface = expr_var });
     }
 
+    // See `warn_weak_type_variables` above — emitted after the RHS checked
+    // so the binding's real errors precede the advisory warning.
+    if (warn_weak_type_variables) {
+        if (expected.annotation) |annotation_idx| {
+            try self.reportWeakTypeVariables(annotation_idx);
+        }
+    }
+
     try hoist_frame.finish(does_fx);
     return does_fx;
 }
@@ -18756,9 +18726,10 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 }
 
 /// Should this expression generalize in its current binding context—i.e. push
-/// a rank so the generalizer can quantify its free vars? Three independent paths
-/// qualify; they are checked in order so the annotation scan runs only when the
-/// cheaper structural checks miss:
+/// a rank so the generalizer can quantify its free vars? Exactly three paths
+/// qualify (design.md "Polarity": generalization and row openness are
+/// orthogonal axes; EXPANSIVE bindings never generalize — the ML value
+/// restriction):
 ///
 ///   - **A function def.** Generalized at the inner lambda level only, not the
 ///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
@@ -18766,50 +18737,178 @@ fn exprDefinesMethod(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
 ///     generalizing one lets its vars escape into the enclosing value.
 ///   - **A value alias**—a binding whose RHS is a bare reference to an already-
 ///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
-///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
-///     none of the duplicate-work/effect concerns that restrict generalization to
-///     syntactic functions. The referenced scheme is a generalized function or
-///     annotated value (numeric literals use the separate defaulting path), never
-///     a bare number or tag union. Restricted to binding-RHS position so bare
-///     lookups in arbitrary subexpressions aren't generalized out from under their
-///     surrounding context.
-///   - **An annotated value binding** whose annotation introduces a free type var
-///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
-///     quantify exactly the generalizable vars—with none (e.g. a concrete
-///     annotation) the generalize call is a no-op and the value stays monomorphic.
+///     non-expansive: it does no work and can hide no `dbg`/`expect`. Restricted
+///     to binding-RHS position so bare lookups in arbitrary subexpressions
+///     aren't generalized out from under their surrounding context.
+///   - **A syntactic value**—literals and constructors of values
+///     (`exprIsSyntacticValue`). No work is duplicated by instantiation, and a
+///     constructed value's widened instantiations share one stored
+///     representation through the produced-value witness.
+///
+/// An EXPANSIVE binding's type variables—implicit (polarity-minted row exts)
+/// or explicitly written—are WEAK shared variables: every use in the module
+/// shares them, pinned or widened through ordinary unification. A written
+/// type variable on an expansive binding warns (Weak Type Variable,
+/// `reportWeakTypeVariables`); generalizing a computation would duplicate its
+/// work per instantiation and break identity with recorded dispatch/codec
+/// evidence.
 fn shouldGeneralize(
     self: *const Self,
     expr: CIR.Expr,
-    annotation: ?CIR.Annotation.Idx,
     is_binding_rhs: bool,
     is_call_arg: bool,
 ) bool {
     if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
     if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
-    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+    return false;
 }
 
-/// True when a value binding generalizes to its annotated scheme: it sits in
-/// binding-RHS position (only a binding's own right-hand side qualifies; a call
-/// argument never generalizes on its own) and has an annotation introducing a
-/// type variable. The polymorphic annotation is the opt-in, honored regardless
-/// of whether the RHS does work (an expansive definition pays per-specialization—
-/// the cost the author chose by writing the scheme).
-///
-/// A variable can be introduced implicitly as well as spelled out: polarity
-/// opening gives an extensionless tag union in an output position a flex
-/// extension (directly, or through an alias whose declaration deferred the
-/// decision). Those annotations denote schemes too, so consult the recorded
-/// generation-time ground truth alongside the syntactic flag.
-fn isGeneralizableValueBinding(
-    self: *const Self,
-    annotation: ?CIR.Annotation.Idx,
-    is_binding_rhs: bool,
-) bool {
-    if (!is_binding_rhs) return false;
-    const annotation_idx = annotation orelse return false;
-    if (self.cir.store.getAnnotation(annotation_idx).mentions_type_var) return true;
-    return self.annotation_scheme_has_vars.contains(annotation_idx);
+/// A bare numeric literal RHS. Owned by the literal-defaulting path: the
+/// binding shares ONE literal var, defaulted once at its owning boundary —
+/// generalizing would mint one fresh literal per use and default each
+/// independently. Numerals nested inside constructors are ordinary value
+/// components and generalize with the constructor.
+fn exprIsBareNumericLiteral(self: *const Self, expr: CIR.Expr) bool {
+    _ = self;
+    return switch (expr) {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        => true,
+        else => false,
+    };
+}
+
+/// Whether an expression is a SYNTACTIC VALUE (the classic ML value
+/// restriction's non-expansive class): literals and constructors of values.
+/// Such an expression does no work — generalizing its binding duplicates no
+/// computation and can hide no effect — and a constructed value's widened
+/// instantiations share one stored representation through the produced-value
+/// witness (design.md "Polarity"). Anything that computes (a call, a
+/// conditional, a match, a block) is EXPANSIVE: it is one computation with
+/// one result, and its binding stays weak.
+fn exprIsSyntacticValue(self: *const Self, expr: CIR.Expr) bool {
+    return switch (expr) {
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_ellipsis,
+        // A lambda is the canonical syntactic value: constructing a closure
+        // does no observable work. (A bare lambda RHS generalizes through the
+        // function-def path; these arms matter for lambdas NESTED in
+        // constructed values, e.g. a record field holding a function.)
+        .e_lambda,
+        .e_closure,
+        => true,
+        // A string is a value only when every segment is a plain segment; an
+        // interpolation references bindings and formats — that is work.
+        .e_str => |str| blk: {
+            for (self.cir.store.sliceExpr(str.span)) |segment_idx| {
+                if (self.cir.store.getExpr(segment_idx) != .e_str_segment) break :blk false;
+            }
+            break :blk true;
+        },
+        .e_tag => |tag| self.exprSpanIsSyntacticValue(tag.args),
+        .e_list => |list| self.exprSpanIsSyntacticValue(list.elems),
+        .e_tuple => |tuple| self.exprSpanIsSyntacticValue(tuple.elems),
+        .e_record => |record| blk: {
+            // A record-update base is a read of another value: work.
+            if (record.ext != null) break :blk false;
+            for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                const field = self.cir.store.getRecordField(field_idx);
+                if (!self.exprIsSyntacticValue(self.cir.store.getExpr(field.value))) break :blk false;
+            }
+            break :blk true;
+        },
+        .e_nominal => |nominal| self.exprIsSyntacticValue(self.cir.store.getExpr(nominal.backing_expr)),
+        .e_nominal_external => |nominal| self.exprIsSyntacticValue(self.cir.store.getExpr(nominal.backing_expr)),
+        else => false,
+    };
+}
+
+fn exprSpanIsSyntacticValue(self: *const Self, span: CIR.Expr.Span) bool {
+    for (self.cir.store.sliceExpr(span)) |expr_idx| {
+        if (!self.exprIsSyntacticValue(self.cir.store.getExpr(expr_idx))) return false;
+    }
+    return true;
+}
+
+/// Warn when a non-function value binding's annotation spells out a type
+/// variable (design.md "Polarity"): the binding never generalizes, so the
+/// variable is WEAK — every use in the module shares it, and the first use
+/// that pins it pins it for all. Anchored at the first user-named
+/// introduction. The `#`-prefixed internal idents minted by anonymous `..`
+/// and polarity deferral are exempt: a weak open row is exactly their
+/// meaning, not a misuse.
+fn reportWeakTypeVariables(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    const annotation = self.cir.store.getAnnotation(annotation_idx);
+    // Cheap syntactic gate: only fresh `.rigid_var` introductions matter. A
+    // `.rigid_var_lookup` references an ENCLOSING function's rigid, which
+    // generalizes with that function and is shared here by design.
+    if (!annotation.introduces_type_var) return;
+    const named_var_anno = self.firstNamedTypeVarAnno(annotation.anno) orelse return;
+    const named_var = self.cir.store.getTypeAnno(named_var_anno).rigid_var.name;
+    _ = try self.problems.appendProblem(self.gpa, .{ .weak_type_variable = .{
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(named_var_anno)),
+        .name = named_var,
+    } });
+}
+
+/// The first `.rigid_var` introduction in this annotation tree whose name is
+/// user-written (not a `#`-prefixed compiler-internal ident).
+fn firstNamedTypeVarAnno(self: *const Self, anno_idx: CIR.TypeAnno.Idx) ?CIR.TypeAnno.Idx {
+    switch (self.cir.store.getTypeAnno(anno_idx)) {
+        .rigid_var => |rigid| {
+            const text = self.cir.getIdentStoreConst().getText(rigid.name);
+            if (text.len > 0 and text[0] != '#') return anno_idx;
+            return null;
+        },
+        .rigid_var_lookup, .underscore, .lookup, .malformed => return null,
+        .apply => |a| return self.firstNamedTypeVarAnnoInSpan(a.args),
+        .tag_union => |tu| {
+            if (self.firstNamedTypeVarAnnoInSpan(tu.tags)) |found| return found;
+            if (tu.ext) |ext| return self.firstNamedTypeVarAnno(ext);
+            return null;
+        },
+        .tag => |t| return self.firstNamedTypeVarAnnoInSpan(t.args),
+        .tuple => |t| return self.firstNamedTypeVarAnnoInSpan(t.elems),
+        .record => |r| {
+            for (self.cir.store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (self.firstNamedTypeVarAnno(self.cir.store.getAnnoRecordField(field_idx).ty)) |found| return found;
+            }
+            if (r.ext) |ext| return self.firstNamedTypeVarAnno(ext);
+            return null;
+        },
+        .@"fn" => |f| {
+            if (self.firstNamedTypeVarAnnoInSpan(f.args)) |found| return found;
+            return self.firstNamedTypeVarAnno(f.ret);
+        },
+        .parens => |p| return self.firstNamedTypeVarAnno(p.anno),
+    }
+}
+
+fn firstNamedTypeVarAnnoInSpan(self: *const Self, annos: CIR.TypeAnno.Span) ?CIR.TypeAnno.Idx {
+    for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (self.firstNamedTypeVarAnno(anno_idx)) |found| return found;
+    }
+    return null;
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -19204,34 +19303,26 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
 
                 const decl_is_fn = isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl_stmt.expr));
 
-                // An annotated local decl's scheme is pre-declared from its
-                // annotation—the same rule as top-level defs; the statement
-                // itself is checked on the ordinary path. For a function the
-                // pre-declared scheme also serves in-flight (recursive)
-                // references; for a value binding the pre-pass exists to
-                // record whether the generated type contains variables
-                // (`annotation_scheme_has_vars`), which the generalization
-                // decision consults before the body pass regenerates the
-                // annotation—implicit polarity opening can mint variables
-                // the source text never mentions.
+                // An annotated local function's scheme is pre-declared from
+                // its annotation so in-flight (recursive) references
+                // instantiate it—the same rule as top-level defs; the
+                // statement itself is checked on the ordinary path. Functions
+                // only: value bindings never generalize (design.md
+                // "Polarity"), so their references share the binding's own
+                // weak vars directly.
                 // Conservatively limited to type-var-free annotations: a
                 // type-var-mentioning local annotation can reference the
                 // ENCLOSING def's rigids (`rigid_var_lookup`), and the
                 // pre-pass generation would merge this annotation's nodes
                 // into the enclosing generation's live classes before the
                 // reset severs them.
-                const decl_predeclared = decl_stmt.anno != null and
+                const decl_predeclared = decl_is_fn and decl_stmt.anno != null and
                     self.cir.store.getPattern(decl_stmt.pattern) == .assign and
                     !self.cir.store.getAnnotation(decl_stmt.anno.?).mentions_type_var and
                     !self.cir.store.getAnnotation(decl_stmt.anno.?).contains_underscore;
                 if (decl_predeclared) {
                     const scheme_var = try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
-                    // Only a function's scheme is looked up in flight: a
-                    // local value cannot reference itself, so its orphan
-                    // copy is not retained.
-                    if (decl_is_fn) {
-                        try self.predeclared_local_scheme_vars.put(self.gpa, decl_stmt.pattern, scheme_var);
-                    }
+                    try self.predeclared_local_scheme_vars.put(self.gpa, decl_stmt.pattern, scheme_var);
                 }
 
                 // A local function def is a binding group of one: its pattern
@@ -28626,12 +28717,17 @@ fn closeUnquantifiedTagRowExts(self: *Self, env: *Env) std.mem.Allocator.Error!v
             const stmt = self.cir.store.getStatement(@enumFromInt(raw_node));
             if (stmt != .s_decl) continue;
             const decl = stmt.s_decl;
-            // Any generalized local decl is a scheme root, not only function
-            // bindings: tier-2 generalization also gives annotated value
-            // bindings quantified row extensions (spelled out or minted by
-            // polarity opening). Closing those exts desyncs the binder's
-            // serialized row from widened uses, and Monotype replays the
-            // recorded use/binder relations as strict equalities.
+            // Only local FUNCTION decls are scheme roots. Under the ML value
+            // restriction, a local value binding never generalizes — its
+            // pattern var can still carry `.generalized` rank because the
+            // ENCLOSING function's scheme quantified it, but within that
+            // scheme its rows behave like any body row: uses share them, and
+            // sweeping them closed is exactly the pre-polarity grounding.
+            // (Keeping every generalized-rank local decl open — the earlier
+            // tier-2 rule — leaks open rows into Monotype for plain locals
+            // like `wrapped = wrap(items)`, splitting representation identity
+            // for values authored by the callee.)
+            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(decl.expr))) continue;
             const pattern_var = ModuleEnv.varFrom(decl.pattern);
             if (self.types.resolveVar(pattern_var).desc.rank != .generalized) continue;
             try worklist.append(self.gpa, pattern_var);

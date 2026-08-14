@@ -36,7 +36,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [A, ..]
+    [A]
 
 # TOKENS
 ~~~zig
@@ -87,7 +87,7 @@ foo = if 1 A
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "[A, ..]")))
+		(patt (type "[A]")))
 	(expressions
-		(expr (type "[A, ..]"))))
+		(expr (type "[A]"))))
 ~~~

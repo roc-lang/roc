@@ -39,7 +39,7 @@ The first pattern is trying to match:
 
 But the expression between the match parenthesis has the type:
 
-    [None, ..]
+    [None]
 
 These can never match! Either the pattern or expression has a problem.
 

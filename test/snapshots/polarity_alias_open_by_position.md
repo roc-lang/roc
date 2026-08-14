@@ -27,22 +27,20 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - polarity_alias_open_by_position.md:16:7:16:7
 # PROBLEMS
+── ✗ type mismatch ──────────────────── polarity_alias_open_by_position.md:16:14
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  bad = handle(SomethingElse)                                               │
- │               ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────── polarity_alias_open_by_position.md:16:14 ┘
+The first argument being passed to this function has the wrong type.
 
-    This argument has the type:
+bad = handle(SomethingElse)
+             ^^^^^^^^^^^^^
 
-        [SomethingElse]
+This argument has the type:
 
-    But `handle` needs the first argument to be:
+    [SomethingElse]
 
-        ParseErrs
+But handle needs the first argument to be:
+
+    ParseErrs
 
 # TOKENS
 ~~~zig

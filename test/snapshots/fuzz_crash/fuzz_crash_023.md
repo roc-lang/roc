@@ -836,7 +836,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Green, Red, ..]
+    [Blue, Green, Red]
 
 ── ✗ missing method ──────────────────────────────────── fuzz_crash_023.md:101:3
 
@@ -848,7 +848,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Green, Red, ..]
+    [Blue, Green, Red]
 
 ── ✗ type mismatch ────────────────────────────────────── fuzz_crash_023.md:84:3
 
@@ -920,7 +920,7 @@ This sixth branch is trying to match:
 
 But the expression between the match parenthesis has the type:
 
-    [Blue, Green, Red, ..]
+    [Blue, Green, Red]
 
 These can never match! Either the pattern or expression has a problem.
 

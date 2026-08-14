@@ -75,6 +75,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     redundant_open_tag_union: RedundantOpenTagUnion,
+    weak_type_variable: WeakTypeVariable,
     unmatchable_pattern: UnmatchablePattern,
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
@@ -189,6 +190,16 @@ pub const EffectfulFunctionName = struct {
 pub const RedundantOpenTagUnion = struct {
     /// The region of the `..` itself
     region: base.Region,
+};
+
+/// Warning for a written type variable in a non-function value binding's
+/// annotation. Value bindings never generalize, so the variable is weak:
+/// every use shares it, and the first use that pins it pins it for all.
+pub const WeakTypeVariable = struct {
+    /// The region of the type variable
+    region: base.Region,
+    /// The variable's name
+    name: Ident.Idx,
 };
 
 // comptime errors //

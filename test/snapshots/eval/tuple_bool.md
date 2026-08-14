@@ -22,7 +22,7 @@ This not method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named not, is:
 
-    [True, ..]
+    [True]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
 
@@ -33,7 +33,7 @@ This not method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named not, is:
 
-    [False, ..]
+    [False]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
 
@@ -44,7 +44,7 @@ This not method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named not, is:
 
-    [True, ..]
+    [True]
 
 ── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
 
@@ -55,7 +55,7 @@ This not method is being called on a value whose type doesn't have that method.
 
 The value's type, which does not have a method named not, is:
 
-    [True, ..]
+    [True]
 
 # TOKENS
 ~~~zig
@@ -121,5 +121,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, ..], [False, ..], Bool, Bool, [True, ..], [False, ..], Bool, Bool)"))
+(expr (type "([True], [False], Bool, Bool, [True], [False], Bool, Bool)"))
 ~~~

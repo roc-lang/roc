@@ -34,7 +34,7 @@ a=(0(0->X)
 
 It is:
 
-    [X(_b), ..]
+    [X(_b)]
 
 But I need a record with a a field.
 

@@ -250,6 +250,7 @@ pub const Store = struct {
                     .literal_defaulted,
                     .redundant_pattern,
                     .redundant_open_tag_union,
+                    .weak_type_variable,
                     .unmatchable_pattern,
                     .unreachable_code,
                     .comptime_unused_branch,

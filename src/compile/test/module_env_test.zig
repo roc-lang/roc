@@ -158,7 +158,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 121), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 122), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

@@ -1881,7 +1881,6 @@ test "check type - tag union - tag typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:8:8:**
         \\```roc
         \\name = to_str(Greeen)
         \\```
@@ -1918,7 +1917,6 @@ test "check type - tag - ext - typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:8:8:**
         \\```roc
         \\name = to_str(Greeen)
         \\```
@@ -2488,7 +2486,7 @@ test "issue 10763 - a stored call result is monomorphic" {
     // `mk` is rank-1 polymorphic: each call may choose a fresh `val`, but the
     // closure returned by one particular call is not itself polymorphic.
     const source =
-        \\mk : {} -> ((() -> val), val -> Try({}, [NotEq, ..])) where [val.is_eq : val, val -> Bool]
+        \\mk : {} -> ((() -> val), val -> Try({}, [NotEq])) where [val.is_eq : val, val -> Bool]
         \\mk = |_| |thunk, expected| if thunk() == expected { Ok({}) } else { Err(NotEq) }
         \\
         \\main = {
@@ -5035,9 +5033,12 @@ test "check type - scoped type variables - fail" {
         \\  result
         \\}
     ;
+    // Two problems: the scoped-variable Type Mismatch, plus a Weak Type
+    // Variable warning — `result = g(x)` is an expansive binding, so the
+    // written `c` never generalizes (design.md "Polarity").
     try checkTypesModule(
         source,
-        .fail,
+        .fail_first,
         "Type Mismatch",
     );
 }
@@ -5843,13 +5844,14 @@ test "check type - try flows error row between open output rows" {
     try checkTypesModule(source, .{ .pass = .{ .def = "outer" } }, "{} -> Try({}, [InnerErr, OuterErr])");
 }
 
-test "check type - implicitly opened local value annotation generalizes like top level" {
-    // An annotation whose generated type gains a variable from polarity
-    // opening denotes a scheme wherever it is written. The local binding `x`
-    // must therefore generalize exactly like the identical top-level
-    // annotation (or the explicit `[Bad, ..]` spelling): each use
-    // instantiates the row fresh, so two uses at incompatible closed
-    // argument rows both check.
+test "check type - expansive binding's implicitly opened row is weak (shared, not generalized)" {
+    // `x = if ...` is EXPANSIVE, so it never generalizes (design.md
+    // "Polarity": the ML value restriction): its polarity-minted row
+    // extension is one weak shared variable. The first use pins the row to
+    // `f`'s closed `[Bad, Worse]`; the second use at the incompatible closed
+    // `[Bad, Other]` is a mismatch. (A SYNTACTIC-VALUE binding — e.g.
+    // `x = Ok(1)` — generalizes and both uses would check; see the
+    // widened-const CLI tests.)
     const source =
         \\f : Try(U8, [Bad, Worse]) -> U64
         \\f = |t| match t {
@@ -5868,6 +5870,34 @@ test "check type - implicitly opened local value annotation generalizes like top
         \\    x : Try(U8, [Bad])
         \\    x = if n > 100 Err(Bad) else Ok(1)
         \\    f(x) + g(x)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - syntactic-value binding's implicitly opened row generalizes" {
+    // The value-restriction counterpart: `x = Ok(1)` is a syntactic value,
+    // so its annotated binding generalizes and each use instantiates the
+    // implicitly opened row fresh — two uses at incompatible closed argument
+    // rows both check.
+    const source =
+        \\f : Try(U8, [Bad, Worse]) -> U64
+        \\f = |t| match t {
+        \\    Ok(_) => 0,
+        \\    Err(_) => 1,
+        \\}
+        \\
+        \\g : Try(U8, [Bad, Other]) -> U64
+        \\g = |t| match t {
+        \\    Ok(_) => 0,
+        \\    Err(_) => 1,
+        \\}
+        \\
+        \\go : U64 -> U64
+        \\go = |n| {
+        \\    x : Try(U8, [Bad])
+        \\    x = Ok(1)
+        \\    f(x) + g(x) + n
         \\}
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "go" } }, "U64 -> U64");
@@ -8700,7 +8730,6 @@ test "check type - tag union - ext hints 1" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:2:13:2:16:**
         \\```roc
         \\foo = |tag| tag
         \\```
@@ -8734,7 +8763,6 @@ test "check type - tag union - ext hints 2" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:5:11:**
         \\```roc
         \\foo = |a| bar(a)
         \\```
@@ -9036,7 +9064,7 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted at
         \\top_str = "a,b,c"
         \\get_first = |_x| top_str.split_on(",").get(0)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds])");
 }
 
 // Nested-frame analogue of the test above—no top-level weak value involved.
@@ -9050,7 +9078,7 @@ test "check type - boundary defaulting - literal behind dispatch chain rooted in
         \\    inner({})
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds])");
 }
 
 // Guard: explicit scheme requirements must not disturb weak top-level literal
@@ -9311,9 +9339,9 @@ test "check type - independent value dispatch sites each receive an ambiguity ju
 }
 
 const principality_result_flow_defs = &[_]DefAndExpectation{
-    .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
-    .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
-    .{ .def = "selves", .expected = "[Mapped(List(Str)), ..]" },
+    .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b))]" },
+    .{ .def = "lengths", .expected = "[Mapped(List(U64))]" },
+    .{ .def = "selves", .expected = "[Mapped(List(Str))]" },
 };
 
 test "check type - principality - annotated requirement result flows into return type" {

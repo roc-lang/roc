@@ -22,9 +22,35 @@ strs = made
 main! = |_| {}
 ~~~
 # EXPECTED
-NIL
+WEAK TYPE VARIABLE - generalize_annotated_value_expansive.md:6:13:6:14
+TYPE MISMATCH - generalize_annotated_value_expansive.md:10:8:10:12
 # PROBLEMS
-NIL
+── ● weak type variable ─────────── generalize_annotated_value_expansive.md:6:13
+
+This type variable is in a value's annotation, so it will not be generalized.
+
+made : List(a)
+            ^
+
+This binding is a value, not a function, so a is weak: every use of the value
+shares one variable, and the first use that determines it determines it for all
+of them. To make this polymorphic, define a function instead.
+
+── ✗ type mismatch ──────────────── generalize_annotated_value_expansive.md:10:8
+
+This expression is used in an unexpected way.
+
+nums = made
+       ^^^^
+
+It has the type:
+
+    List(a)
+
+But the annotation says it should be:
+
+    List(U64)
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -114,7 +140,7 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "made"))
-		(e-call (constraint-fn-var 256)
+		(e-call (constraint-fn-var 254)
 			(e-lookup-local
 				(p-assign (ident "identity")))
 			(e-empty_list))
@@ -123,15 +149,13 @@ NO CHANGE
 				(ty-rigid-var (name "a")))))
 	(d-let
 		(p-assign (ident "nums"))
-		(e-lookup-local
-			(p-assign (ident "made")))
+		(e-runtime-error (tag "erroneous_value_use"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "strs"))
-		(e-lookup-local
-			(p-assign (ident "made")))
+		(e-runtime-error (tag "erroneous_value_use"))
 		(annotation
 			(ty-apply (name "List") (builtin)
 				(ty-lookup (name "Str") (builtin)))))
@@ -147,13 +171,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "List(a)"))
+		(patt (type "Error"))
 		(patt (type "List(U64)"))
 		(patt (type "List(Str)"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "List(a)"))
+		(expr (type "Error"))
 		(expr (type "List(U64)"))
 		(expr (type "List(Str)"))
 		(expr (type "_arg -> {}"))))

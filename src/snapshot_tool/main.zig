@@ -4510,6 +4510,7 @@ fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
     return tag != .effectful_function_name and
         tag != .redundant_pattern and
         tag != .redundant_open_tag_union and
+        tag != .weak_type_variable and
         tag != .unmatchable_pattern and
         tag != .comptime_unused_branch and
         tag != .comptime_condition and

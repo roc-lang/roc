@@ -19,7 +19,7 @@ d=(0->X .a)
 
 It is:
 
-    [X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+    [X(b)] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
 
 But I need a record with a a field.
 

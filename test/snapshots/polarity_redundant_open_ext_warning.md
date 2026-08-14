@@ -26,18 +26,16 @@ main! = |_| {}
 # EXPECTED
 REDUNDANT OPEN TAG UNION - polarity_redundant_open_ext_warning.md:3:36:3:38
 # PROBLEMS
+── ● redundant open tag union ────── polarity_redundant_open_ext_warning.md:3:36
 
-┌──────────────────────────┐
-│ REDUNDANT OPEN TAG UNION ├─ This tag union has an explicit `..`, but it ────┐
-└┬─────────────────────────┘  is already implicitly open.                     │
- │                                                                            │
- │  parse : Str -> Try(U8, [InvalidU8, ..])                                   │
- │                                     ‾‾                                     │
- └─────────────────────────────── polarity_redundant_open_ext_warning.md:3:36 ┘
+This tag union has an explicit `..`, but it is already implicitly open.
 
-    Tag unions in output positions, like the return type of a function, are
-    automatically open. Remove the `..` or bind it to a named type variable
-    like `..others` if you want to refer to the extension elsewhere.
+parse : Str -> Try(U8, [InvalidU8, ..])
+                                   ^^
+
+Tag unions in output positions, like the return type of a function, are
+automatically open. Remove the .. or bind it to a named type variable like
+..others if you want to refer to the extension elsewhere.
 
 # TOKENS
 ~~~zig

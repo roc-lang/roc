@@ -849,7 +849,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, ..]
+    [Blue]
 
 ── ✗ type mismatch ───────────────────────────────────── fuzz_crash_019.md:52:17
 
@@ -884,7 +884,7 @@ This fifth branch is trying to match:
 
 But the expression between the match parenthesis has the type:
 
-    [Blue, ..]
+    [Blue]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -948,7 +948,7 @@ m (
 
 It has the type:
 
-    (f, j, Error, [O, ..], (Error, Error), List(l))
+    (f, j, Error, [O], (Error, Error), List(l))
       where [
         f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
         j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),

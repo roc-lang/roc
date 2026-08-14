@@ -944,11 +944,11 @@ ist
 
 In the second pattern, lue is:
 
-    [Red, ..]
+    [Red]
 
 But in the first pattern, lue is:
 
-    [Red, ..]
+    [Red]
 
 A name shared across | patterns in the same match branch must have one
 compatible type.
@@ -963,7 +963,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 ── ✗ missing method ───────────────────────────────────── fuzz_crash_027.md:70:3
 
@@ -975,7 +975,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 ── ✗ type mismatch ───────────────────────────────────── fuzz_crash_027.md:64:22
 
@@ -1023,7 +1023,7 @@ This fifth branch is trying to match:
 
 But the expression between the match parenthesis has the type:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 These can never match! Either the pattern or expression has a problem.
 

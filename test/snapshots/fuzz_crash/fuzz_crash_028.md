@@ -1506,11 +1506,11 @@ ar: 2,
 
 In the second pattern, lue is:
 
-    [Red, ..]
+    [Red]
 
 But in the first pattern, lue is:
 
-    [Red, ..]
+    [Red]
 
 A name shared across | patterns in the same match branch must have one
 compatible type.
@@ -1525,7 +1525,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 ── ✗ missing method ───────────────────────────────────── fuzz_crash_028.md:70:3
 
@@ -1537,7 +1537,7 @@ method.
 
 The value's type, which does not have a method named from_quote, is:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 ── ✗ type mismatch ───────────────────────────────────── fuzz_crash_028.md:64:22
 
@@ -1581,7 +1581,7 @@ This fifth branch is trying to match:
 
 But the expression between the match parenthesis has the type:
 
-    [Blue, Red, ..]
+    [Blue, Red]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -1638,7 +1638,7 @@ On error, this would return:
 
 But the function body evaluates to:
 
-    [Blue, ..]
+    [Blue]
 
 Hint: The error types from all ? operators and the function body must be
 compatible since any of them could be the actual return value.

@@ -4122,7 +4122,7 @@ runtime representation.
 After the module fully solves, `Check.closeUnquantifiedTagRowExts` grounds
 every tag-row extension that is still an unconstrained flex var and is not
 reachable from anything a later instantiation consumes (top-level def
-schemes, generalized local schemes, expression-position schemes recorded at
+schemes, generalized local FUNCTION schemes, expression-position schemes recorded at
 construction edges and their dispatch-evidence pairs, type declarations and
 their backing templates, standalone annotations, annotation-only Builtin
 intrinsic signatures, and platform requirements). Nothing can constrain such

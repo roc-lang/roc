@@ -132,7 +132,7 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-dispatch-call (method "frobnicate") (constraint-fn-var 285)
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 283)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -152,7 +152,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 296)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 294)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))

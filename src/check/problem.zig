@@ -54,6 +54,7 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const RedundantOpenTagUnion = types.RedundantOpenTagUnion;
+pub const WeakTypeVariable = types.WeakTypeVariable;
 pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const UnreachableCode = types.UnreachableCode;
 pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;

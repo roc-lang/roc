@@ -22,7 +22,7 @@ that method.
 
 The value's type, which does not have a method named from_numeral, is:
 
-    [A, ..]
+    [A]
 
 # TOKENS
 ~~~zig
@@ -57,5 +57,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A, ..]"))
+(expr (type "[A]"))
 ~~~

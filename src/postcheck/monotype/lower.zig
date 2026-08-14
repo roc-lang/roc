@@ -8215,6 +8215,12 @@ const Builder = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
+        // A weak (non-generalized) stored codec's rows can still carry live
+        // checked row defaults here; commit them before demanding resolved
+        // views (design.md "Polarity": Monotype row adaptation).
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(callable_node);
+        }
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
@@ -8341,6 +8347,12 @@ const Builder = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
+        // A weak (non-generalized) stored codec's rows can still carry live
+        // checked row defaults here; commit them before demanding resolved
+        // views (design.md "Polarity": Monotype row adaptation).
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(callable_node);
+        }
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
@@ -30408,6 +30420,12 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
+        // A weak (non-generalized) stored codec's rows can still carry live
+        // checked row defaults here; commit them before demanding resolved
+        // views (design.md "Polarity": Monotype row adaptation).
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(callable_node);
+        }
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.builder.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(fn_data.args));
@@ -30421,6 +30439,9 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(shape_node);
+        }
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
@@ -30560,6 +30581,15 @@ const BodyContext = struct {
         if (!self.graph.sameClass(callable.ret, request_fn_node)) {
             Common.invariant("stored parser constructor result cell differed from its graph-native request");
         }
+        // A weak (non-generalized) stored parser's rows can still carry live
+        // checked row defaults here — implicit output-position openness on a
+        // value-restricted binding is grounded by sealing, not by
+        // instantiation. Commit the defaults before demanding resolved views,
+        // exactly as the prepared-codec-call emission below does.
+        if (!fn_ctx.frozen_sealed_emission) {
+            try self.graph.groundUnresolvedDefaults(callable_node);
+            try self.graph.groundUnresolvedDefaults(request_fn_node);
+        }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
         const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
@@ -30572,6 +30602,9 @@ const BodyContext = struct {
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(shape_node);
+        }
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
@@ -30725,6 +30758,12 @@ const BodyContext = struct {
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
+        // A weak (non-generalized) stored codec's rows can still carry live
+        // checked row defaults here; commit them before demanding resolved
+        // views (design.md "Polarity": Monotype row adaptation).
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(callable_node);
+        }
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.builder.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(fn_data.args));
@@ -30738,6 +30777,9 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 2) Common.invariant("stored encoder_for runtime function had an unexpected arity");
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(shape_node);
+        }
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_node = (try self.graph.functionNodes(callable_node)).ret;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
@@ -30894,6 +30936,11 @@ const BodyContext = struct {
         if (!self.graph.sameClass(callable.ret, request_fn_node)) {
             Common.invariant("stored encoder_for constructor result cell differed from its graph-native request");
         }
+        // Same weak-value row-default commit as the parser variant above.
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(callable_node);
+            try fn_ctx.graph.groundUnresolvedDefaults(request_fn_node);
+        }
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
         const encoding_ty = try fn_ctx.resolvedTypeViewForNode(encoding_node);
@@ -30908,6 +30955,9 @@ const BodyContext = struct {
         const ret_ty = try fn_ctx.resolvedTypeViewForNode(runtime_fn.ret);
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
+        if (!fn_ctx.frozen_sealed_emission) {
+            try fn_ctx.graph.groundUnresolvedDefaults(shape_node);
+        }
         const shape_ty = try fn_ctx.resolvedTypeViewForNode(shape_node);
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),

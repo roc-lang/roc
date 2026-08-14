@@ -140,7 +140,7 @@ NO CHANGE
 							(if-branch
 								(e-method-eq (negated "false")
 									(lhs
-										(e-dispatch-call (method "rem_by") (constraint-fn-var 393)
+										(e-dispatch-call (method "rem_by") (constraint-fn-var 392)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "n"))))
@@ -151,7 +151,7 @@ NO CHANGE
 								(e-block
 									(s-reassign
 										(p-assign (ident "count_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 413)
+										(e-dispatch-call (method "plus") (constraint-fn-var 412)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "count_"))))
@@ -159,7 +159,7 @@ NO CHANGE
 												(e-num (value "1")))))
 									(s-reassign
 										(p-assign (ident "sum_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 415)
+										(e-dispatch-call (method "plus") (constraint-fn-var 414)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "sum_"))))
@@ -170,7 +170,7 @@ NO CHANGE
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-dispatch-call (method "times") (constraint-fn-var 420)
+			(e-dispatch-call (method "times") (constraint-fn-var 419)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "count_"))))

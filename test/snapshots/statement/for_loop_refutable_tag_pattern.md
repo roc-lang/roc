@@ -21,7 +21,7 @@ for Ok(_value) in [Ok(1), Err("bad")] {}
     ^^^^^^^^^^
 
 The value being destructured has type:
-        [Err(Str), Ok(Dec), ..]
+        [Err(Str), Ok(Dec)]
 
 Missing patterns:
         Err _
@@ -108,8 +108,8 @@ main! = |_args| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "_arg -> [Ok({}), ..]")))
+		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "_arg -> [Ok({}), ..]"))))
+		(expr (type "_arg -> [Ok({})]"))))
 ~~~
