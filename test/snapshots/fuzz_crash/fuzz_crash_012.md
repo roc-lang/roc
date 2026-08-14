@@ -16,126 +16,112 @@ UNEXPECTED STATEMENT - fuzz_crash_012.md:1:5:1:6
 UNEXPECTED STATEMENT - fuzz_crash_012.md:1:6:1:16
 UNEXPECTED STATEMENT - fuzz_crash_012.md:1:16:1:17
 # PROBLEMS
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+||(|(l888888888|
+^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `|` here.
+For example:
+    answer = 42
 
+I found | here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │   ‾                                                                        │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:2 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:2
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+||(|(l888888888|
+ ^
 
-    I found `|` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:3 ┘
+I found | here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:3
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `(` here.
+||(|(l888888888|
+  ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:4 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found ( here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:4
 
-    I found `|` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+||(|(l888888888|
+   ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:5 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found | here.
 
-    I found `(` here.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:5
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │       ‾‾‾‾‾‾‾‾‾‾                                                           │
- └───────────────────────────────────────────────────── fuzz_crash_012.md:1:6 ┘
+||(|(l888888888|
+    ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `l888888888` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found ( here.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_012.md:1:6
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||(|(l888888888|                                                          │
- │                 ‾                                                          │
- └──────────────────────────────────────────────────── fuzz_crash_012.md:1:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+||(|(l888888888|
+     ^^^^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `|` here.
+For example:
+    answer = 42
+
+I found l888888888 here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
+
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_012.md:1:16
+
+I was parsing a statement, and this token cannot start a statement here.
+
+||(|(l888888888|
+               ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found | here.
 
 # TOKENS
 ~~~zig

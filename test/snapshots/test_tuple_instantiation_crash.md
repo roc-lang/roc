@@ -18,18 +18,16 @@ main = swap(1, 2)
 # EXPECTED
 TOO MANY ARGS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
+── ✗ too many args ─────────────────────── test_tuple_instantiation_crash.md:9:8
 
-┌───────────────┐
-│ TOO MANY ARGS ├─ The `swap` function expects 1 argument, but it got 2 ──────┐
-└┬──────────────┘  instead.                                                   │
- │                                                                            │
- │  main = swap(1, 2)                                                         │
- │         ‾‾‾‾‾‾‾‾‾‾                                                         │
- └───────────────────────────────────── test_tuple_instantiation_crash.md:9:8 ┘
+The swap function expects 1 argument, but it got 2 instead.
 
-    The `swap` function has the type:
+main = swap(1, 2)
+       ^^^^^^^^^^
 
-        (a, b) -> (b, a)
+The swap function has the type:
+
+    (a, b) -> (b, a)
 
 # TOKENS
 ~~~zig

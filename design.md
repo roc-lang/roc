@@ -937,6 +937,23 @@ branch, central dispatch, or recursive parser call. Each path uses one compact,
 source-ordered segment span in dedicated side storage; it does not widen the
 parser's node column.
 
+Uppercase-led expression qualification across trivia was audited separately on
+2026-08-13:
+
+```text
+change: issue 10708 qualified-lookup trivia parsing
+baseline: 7f9b644e33
+target: native x86_64-linux-musl, baseline CPU
+build: zig build run-test-zig-module-parse -Doptimize=ReleaseFast
+baseline kernel sizes: 0x1234e, 0x1172b, 0x11ef0
+target kernel sizes:   0x1234e, 0x1172b, 0x11ef0
+baseline indirect jumps per kernel: 13, 13, 13
+target indirect jumps per kernel:   13, 13, 13
+```
+
+The new qualification-mode branch therefore adds neither an indirect jump nor
+code-size growth to any ReleaseFast expression/statement kernel instantiation.
+
 Nested Roc syntax uses explicit open-syntax state, like simdjson's open
 container depth. This state records concrete syntax currently being parsed:
 open lists, records, strings, blocks, matches, type applications, and similar
@@ -2337,10 +2354,31 @@ REQUIRED/OPTIONAL UNIFICATION, AND THE SINGLE SHARED `Try(_, [FieldMissing])`
 WRAP. CANONICALIZATION MUST NOT RECONSTRUCT A PATH FROM NESTED EXPRESSIONS AND
 MUST NOT DESUGAR IT TO TAG CONSTRUCTORS OR CONTROL FLOW.
 
-THE DOT-CALL SPELLING HAS NO WHITESPACE BETWEEN THE RECEIVER AND DOT, BETWEEN
-THE DOT AND NAME, OR BETWEEN A METHOD NAME AND ITS OPENING PARENTHESIS. TRIVIA
-RECOVERY AND FORMAT NORMALIZATION MUST NEVER BE USED AS A SIGNAL FOR CHOOSING
-FIELD ACCESS VERSUS METHOD DISPATCH.
+THE DOT AND LOWERCASE NAME OF A FIELD ACCESS OR METHOD CALL FORM ONE LEXICAL
+TOKEN. TRIVIA MAY PRECEDE THAT TOKEN; IN PARTICULAR, FORMAT-NORMAL MULTILINE
+CHAINS PUT EACH DOTTED OPERATION ON ITS OWN LINE. A METHOD NAME AND ITS OPENING
+PARENTHESIS HAVE NO INTERVENING TRIVIA. WHETHER TRIVIA PRECEDES THE DOTTED TOKEN
+MUST NEVER BE USED AS A SIGNAL FOR CHOOSING FIELD ACCESS VERSUS METHOD DISPATCH.
+TRIVIA RECOVERY AND FORMAT NORMALIZATION MUST NOT CHANGE THAT CHOICE.
+
+AN ORDINARY EXPRESSION PRIMARY THAT STARTS WITH AN UNPARENTHESIZED UPPERCASE
+IDENTIFIER CONSUMES ITS DOTTED UPPERCASE QUALIFICATION SEGMENTS AND THEN ITS
+FIRST DOTTED LOWERCASE SEGMENT AS ONE QUALIFIED VALUE LOOKUP. THIS IS
+INDEPENDENT OF WHETHER EACH DOTTED SEGMENT'S TOKEN IS THE TRIVIA-SEPARATED OR
+ADJACENT VARIANT. AFTER THE FIRST LOWERCASE SEGMENT, FURTHER DOTTED SEGMENTS ARE
+ORDINARY POSTFIX OPERATIONS ON THE LOOKUP RESULT. PARENTHESES END THE
+QUALIFICATION PRIMARY: `Blub .go()` AND `Blub\n    .go()` LOOK UP `Blub.go`,
+WHILE `(Blub).go()` CALLS `go` AS A METHOD ON THE `Blub` TAG VALUE. THE PARSER
+MAKES THIS DECISION FROM TOKENS ALONE; SCOPE CONTENTS AND TYPES NEVER
+PARTICIPATE.
+
+A PIPE TARGET IS THE EXPLICIT GRAMMAR EXCEPTION TO THAT OWNERSHIP RULE. AN
+ADJACENT DOTTED SEGMENT CONTINUES THE TARGET, WHILE A TRIVIA-SEPARATED DOTTED
+SEGMENT IS A POSTFIX OPERATION ON THE COMPLETED PIPE RESULT. THUS `x |> X.a`
+PIPES INTO THE QUALIFIED TARGET `X.a`, WHILE `x |> X .a` IS `(x |> X).a`. THIS
+LAYOUT DISTINCTION SELECTS WHICH EXPRESSION OWNS THE POSTFIX; THE FOLLOWING
+`NoSpaceOpenRound` STILL SELECTS FIELD ACCESS VERSUS METHOD DISPATCH EXACTLY AS
+IT DOES OUTSIDE A PIPE.
 
 THE PARSER, NOT THE TYPE CHECKER, MAKES THE COMPLETE AND FINAL CHOICE:
 
@@ -3271,12 +3309,39 @@ Stream(item) :: {
     len_if_known : [Known(U64), Unknown],
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
+
+Range(num) :: {
+    lower : num,
+    upper : num,
+    step : num,
+    upper_bound : [Exclusive, Inclusive],
+    direction : [To, From],
+    len_if_known : [Known(U64), Unknown],
+}
 ```
 
 Adapters, custom sources, and consumers remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
+
+Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
+exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
+`num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
+absolute step with another value of `num`; it does not compose or multiply
+steps. `Range.size_hint` returns the stored exact count when that count fits in
+`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+propagates that hint into the resulting iterator.
+
+Reverse iteration is an explicit numeric capability. `Range.iter_rev`
+reconstructs the opposite direction through `num.range_exclusive_from` or
+`num.range_inclusive_from`, reapplies the stored step, and iterates that range.
+Integers and `Dec` provide both `_to` and `_from` constructors. `F32` and `F64`
+provide only `_to`, so their ranges deliberately have no `iter_rev` dispatch.
+`Range.custom` permits third-party number types to construct the same stored
+representation and participate by implementing the explicit range methods;
+range behavior comes only from those explicit methods, and arithmetic method
+names are not consulted.
 
 #### Explicit Iterator Representation Tiers
 
@@ -3297,8 +3362,7 @@ const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range_exclusive,
-    range_inclusive,
+    range,
     numeric_until,
     numeric_to,
     map,
@@ -3562,14 +3626,22 @@ a known iterator constructor, SpecConstr can:
 
 When the continuation observes only part of a compiler-generated tuple loop
 result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. That rewrite is lexical: the ordinary full expression clone
-carries the selected exit ABI while cloning the owning loop body, rewrites
-every `break` owned by that loop wherever it occurs (including inside mixed
-value-producing branch arms and statement values), and pushes an explicit null
-selection while cloning a nested loop body. Initial values remain in the
-enclosing lexical loop context. Re-cloned output breaks carry an explicit
-SpecConstr-owned selected-ABI stamp, so normalization propagates the already
-completed transfer instead of trying to recognize it from its scalar shape.
+back-edge state. Exit selection is a distinct final clone phase after the
+specialization graph is complete. Ordinary specialization and body-rewrite
+clones never initiate it. The exit-selection clone keeps calls opaque, does not
+rewrite call patterns, and cannot emit callable workers, so it cannot reopen
+the specialization graph through recursive call edges. Its recursive input is
+limited to the selected function's finite, acyclic expression ownership.
+
+That rewrite is lexical: the dedicated full expression clone carries the
+selected exit ABI while cloning the owning loop body, rewrites every `break`
+owned by that loop wherever it occurs (including inside mixed value-producing
+branch arms and statement values), and pushes an explicit null selection while
+cloning a nested loop body. Initial values remain in the enclosing lexical loop
+context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
+stamp, so the exit-selection clone's internal normalization propagates the
+already completed transfer instead of trying to recognize it from its scalar
+shape.
 It is invalid to change the loop result type after rewriting only a terminating
 spine or a subset of exits; every selected exit must transfer exactly the
 explicitly selected tuple items.
@@ -4343,6 +4415,17 @@ The kind rules:
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
   destructure prematurely.
+  Binding a destructure can also ground a deferred static-dispatch receiver
+  without adding an ordinary equality constraint. Every literal-defaulting
+  boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
+  constraints and every now-runnable dispatch relation alternate to a
+  fixpoint before the boundary gathers any default candidates. Defaulting may
+  only classify a literal after the method signatures selected by all
+  pre-boundary type evidence have propagated through the graph. Each defaulting
+  round runs the same joint quiescence after its commits, with default-origin
+  diagnostics enabled for relations grounded by those commits. Still-flex
+  receivers remain parked, so quiescence does not speculatively select or
+  reject a method.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
   optional field they see the Try. Exhaustiveness analysis consumes that
   exact checker-judged sub-pattern type for every record column, rather
@@ -10384,13 +10467,18 @@ reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
 Successful rebuild workers write a fresh shared-memory image descriptor plus a
-new dev `RunImage` into either a compiler-selected free image region or the
-append position of the same mapping. Descriptor slots are managed separately
-from image bytes and are reused only as descriptors, never as code or data. The
-descriptor records the generation, `RunImage` header offset, image bound, image
-allocation start/end, lifecycle state, and atomic reference count. The worker
-commits the descriptor offset through the hot-load control block with
-release/acquire atomics. The host shim checks that control
+new dev `RunImage` candidate into either a compiler-selected free image region
+or the append position of the same mapping. Descriptor slots are managed
+separately from image bytes and are reused only as descriptors, never as code or
+data. The descriptor records the generation, `RunImage` header offset, image
+bound, image allocation start/end, lifecycle state, and atomic reference count.
+The worker leaves that descriptor in the writing state and exits after recording
+the exact source-input states it consumed. The parent installs the refreshed
+watch set, compares those recorded states with the current source-input states,
+and commits the descriptor offset through the hot-load control block only when
+they still match. A stale candidate is reclaimed without becoming visible to the
+host, and the parent starts a rebuild from the newer input states. The host shim
+checks that control
 block at Roc entrypoint boundaries. If a newer generation is available, the shim
 retains the latest descriptor, validates and relocates the replacement
 `RunImage` in place, marks its code pages read/execute in the shared mapping,
@@ -10408,8 +10496,8 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
-The compiler parent process is the sole owner of shared-memory image-byte
-reclamation. It keeps unbounded process-local lists of descriptor offsets,
+The compiler parent process is the sole owner of committing candidate descriptor offsets
+and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
 a descriptor, after the host acknowledges, and before choosing storage for
 another rebuild, the parent sweeps all known descriptors. The current descriptor

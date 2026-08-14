@@ -14,18 +14,16 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
+── ✗ type mismatch ────────────────────────── can_list_multiline_mismatch.md:3:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  "hello world",                                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────── can_list_multiline_mismatch.md:3:5 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+"hello world",
+^^^^^^^^^^^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

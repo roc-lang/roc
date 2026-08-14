@@ -15,18 +15,16 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
+── ✗ type mismatch ────────────────────── test_instantiated_arg_mismatch.md:5:14
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  pair(42, "hello")                                                         │
- │           ‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────── test_instantiated_arg_mismatch.md:5:14 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+pair(42, "hello")
+         ^^^^^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -87,7 +85,7 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 233)
+	(e-call (constraint-fn-var 243)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-num (value "42"))

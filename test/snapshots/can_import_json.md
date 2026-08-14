@@ -13,31 +13,26 @@ main = Json.utf8
 DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
+── ● duplicate definition ─────────────────────────────── can_import_json.md:1:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────── can_import_json.md:1:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json                                                     │
-      │  ‾                                                                    │
-      └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
+import json.Json
+^^^^^^^^^^^^^^^^
 
+In this scope, Json was already defined in can_import_json.md:1:1:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main = Json.utf8                                                          │
- │         ‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
+import json.Json
+^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ────────────────────────────────── can_import_json.md:3:8
+
+Nothing is named utf8 in this scope.
+
+main = Json.utf8
+       ^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

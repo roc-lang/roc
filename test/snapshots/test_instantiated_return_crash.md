@@ -18,22 +18,20 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
+── ✗ type mismatch ────────────────────── test_instantiated_return_crash.md:6:26
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  needs_string = |f| f(["hello"])                                           │
- │                       ‾‾‾‾‾‾‾‾‾                                            │
- └──────────────────────────────────── test_instantiated_return_crash.md:6:26 ┘
+The first argument being passed to this function has the wrong type.
 
-    This argument has the type:
+needs_string = |f| f(["hello"])
+                     ^^^^^^^^^
 
-        List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
+This argument has the type:
 
-    But `f` needs the first argument to be:
+    List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
 
-        Str
+But f needs the first argument to be:
+
+    Str
 
 # TOKENS
 ~~~zig
@@ -114,7 +112,7 @@ EndOfFile,
 					(elems
 						(e-string
 							(e-literal (string "hello"))))))))
-	(e-call (constraint-fn-var 252)
+	(e-call (constraint-fn-var 262)
 		(e-lookup-local
 			(p-assign (ident "needs_string")))
 		(e-lookup-local

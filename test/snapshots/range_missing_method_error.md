@@ -10,22 +10,20 @@ r = "a"..<"z"
 # EXPECTED
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
+── ✗ missing method ────────────────────────── range_missing_method_error.md:1:5
 
-┌────────────────┐
-│ MISSING METHOD ├─ The value before this `..<` operator has a type that ─────┐
-└┬───────────────┘  doesn't have a `range_exclusive` method.                  │
- │                                                                            │
- │  r = "a"..<"z"                                                             │
- │      ‾‾‾‾‾‾‾‾‾                                                             │
- └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
+The value before this ..< operator has a type that doesn't have a
+range_exclusive_to method.
 
-    The value's type, which does not have a method named `range_exclusive`, is:
+r = "a"..<"z"
+    ^^^^^^^^^
 
-        Str
+The value's type, which does not have a method named range_exclusive_to, is:
 
-    Hint: The `..<` operator calls a method named `range_exclusive` on the
-    value preceding it, passing the value after the operator as the one
-    argument.
+    Str
+
+Hint: The ..< operator calls a method named range_exclusive_to on the value
+preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -60,7 +58,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Iter(Str)")))
+		(patt (type "Range(Str)")))
 	(expressions
-		(expr (type "Iter(Str)"))))
+		(expr (type "Range(Str)"))))
 ~~~

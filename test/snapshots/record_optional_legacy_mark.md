@@ -12,37 +12,31 @@ value = { x: 1 }
 INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:23:1:24
 INVALID OPTIONAL FIELD SYNTAX - record_optional_legacy_mark.md:1:34:1:35
 # PROBLEMS
+── ✗ invalid optional field syntax ───────── record_optional_legacy_mark.md:1:23
 
-┌───────────────────────────────┐
-│ INVALID OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────┐
-└┬──────────────────────────────┘  optional field puts the `?` after the      │
- │                                 `:`.                                       │
- │                                                                            │
- │  value : { x : U32, y :? U32, z : ? U32 }                                  │
- │                        ‾                                                   │
- └─────────────────────────────────────── record_optional_legacy_mark.md:1:23 ┘
+I was parsing a record type, and this optional field puts the `?` after the `:`.
 
-    Optional fields are written with the `?` before the `:`: `?:` declares the
-    field optional.
+value : { x : U32, y :? U32, z : ? U32 }
+                      ^
 
-    For example:
-        { name ?: Str }
+Optional fields are written with the ? before the :: ?: declares the field
+optional.
 
+For example:
+    { name ?: Str }
 
-┌───────────────────────────────┐
-│ INVALID OPTIONAL FIELD SYNTAX ├─ I was parsing a record type, and this ─────┐
-└┬──────────────────────────────┘  optional field puts the `?` after the      │
- │                                 `:`.                                       │
- │                                                                            │
- │  value : { x : U32, y :? U32, z : ? U32 }                                  │
- │                                   ‾                                        │
- └─────────────────────────────────────── record_optional_legacy_mark.md:1:34 ┘
+── ✗ invalid optional field syntax ───────── record_optional_legacy_mark.md:1:34
 
-    Optional fields are written with the `?` before the `:`: `?:` declares the
-    field optional.
+I was parsing a record type, and this optional field puts the `?` after the `:`.
 
-    For example:
-        { name ?: Str }
+value : { x : U32, y :? U32, z : ? U32 }
+                                 ^
+
+Optional fields are written with the ? before the :: ?: declares the field
+optional.
+
+For example:
+    { name ?: Str }
 
 # TOKENS
 ~~~zig

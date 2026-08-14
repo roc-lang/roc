@@ -10,22 +10,20 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - unknown_operator.md:1:4:1:5
 # PROBLEMS
+── ✗ unexpected expression syntax ────────────────────── unknown_operator.md:1:4
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  1 ++ 2                                                                    │
- │     ‾                                                                      │
- └─────────────────────────────────────────────────── unknown_operator.md:1:4 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+1 ++ 2
+   ^
 
-    For example:
-        add(1, 2)
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    I found `+` here.
+For example:
+    add(1, 2)
+
+I found + here.
 
 # TOKENS
 ~~~zig

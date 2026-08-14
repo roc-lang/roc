@@ -26,55 +26,40 @@ UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
 MOD NOT IMPORTED - type_declarations.md:13:11:13:21
 # PROBLEMS
+── ✗ undeclared type ────────────────────────────────── type_declarations.md:3:8
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │         ‾‾‾                                                                │
- └────────────────────────────────────────────────── type_declarations.md:3:8 ┘
+The type Bar is not declared in this scope.
 
+Foo : (Bar, Baz)
+       ^^^
 
+── ✗ undeclared type ───────────────────────────────── type_declarations.md:3:13
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │              ‾‾‾                                                           │
- └───────────────────────────────────────────────── type_declarations.md:3:13 ┘
+The type Baz is not declared in this scope.
 
+Foo : (Bar, Baz)
+            ^^^
 
+── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:19
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                    ‾‾                                                      │
- └───────────────────────────────────────────────── type_declarations.md:5:19 ┘
+The type Ok is not declared in this scope.
 
+Some(a) : { foo : Ok(a), bar : Something }
+                  ^^
 
+── ✗ undeclared type ───────────────────────────────── type_declarations.md:5:32
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                                 ‾‾‾‾‾‾‾‾‾                                  │
- └───────────────────────────────────────────────── type_declarations.md:5:32 ┘
+The type Something is not declared in this scope.
 
+Some(a) : { foo : Ok(a), bar : Something }
+                               ^^^^^^^^^
 
+── ✗ mod not imported ──────────────────────────── type_declarations.md:13:11
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Mod` imported ─────┐
-└┬────────────────────┘  into this Roc file.                                  │
- │                                                                            │
- │  MyType2 : Mod.Thingy                                                      │
- │            ‾‾‾‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────────────── type_declarations.md:13:11 ┘
+There is no mod with the name Mod imported into this Roc file.
 
+MyType2 : Mod.Thingy
+          ^^^^^^^^^^
 
 # TOKENS
 ~~~zig

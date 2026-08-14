@@ -4414,6 +4414,11 @@ const HotReloadRebuild = struct {
     }
 };
 
+const HotReloadRebuildFinish = struct {
+    changed_during_refresh: bool,
+    published: bool,
+};
+
 const HotReloadSourceRewrite = struct {
     source_path: []const u8,
     synthetic_app_path: []const u8,
@@ -4572,7 +4577,9 @@ fn finishHotReloadRebuild(
     state: *WatchState,
     signal: *WatchEventSignal,
     rebuild: *HotReloadRebuild,
-) CliMainError!bool {
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+) CliMainError!HotReloadRebuildFinish {
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
@@ -4586,7 +4593,10 @@ fn finishHotReloadRebuild(
             error.WatchInputsMissing,
             error.WatchInputsReadFailed,
             error.WatchInputsMalformed,
-            => return false,
+            => return .{
+                .changed_during_refresh = false,
+                .published = false,
+            },
             error.Canceled,
             error.CurrentDirUnlinked,
             error.NameTooLong,
@@ -4596,11 +4606,20 @@ fn finishHotReloadRebuild(
         };
     const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
 
-    if (rebuild_succeeded) {
+    const published = rebuild_succeeded and try publishPreparedHotReloadCandidate(
+        control,
+        shm_handle,
+        rebuild.allocation,
+        changed_during_refresh,
+    );
+    if (published) {
         try reportHotReloadRebuildPublished(ctx, rebuild);
     }
 
-    return changed_during_refresh;
+    return .{
+        .changed_during_refresh = changed_during_refresh,
+        .published = published,
+    };
 }
 
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
@@ -4639,13 +4658,28 @@ fn reportHotReloadAcknowledgement(
 fn hotReloadRecycleUnpublishedAllocation(
     gpa: Allocator,
     control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
     tracker: *HotReloadDescriptorTracker,
     allocation: HotReloadImageAllocation,
-) Allocator.Error!void {
+) CliMainError!void {
     if (ipc.hot_reload.publishedImage(control)) |image| {
         if (image.generation == allocation.generation and image.descriptor_offset == allocation.descriptor_offset) {
             try hotReloadTrackDescriptor(gpa, tracker, image.descriptor_offset);
             return;
+        }
+    }
+
+    if (hotReloadDescriptor(shm_handle, allocation.descriptor_offset) catch null) |descriptor| {
+        const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+        if (hotReloadPreparedAllocationMatches(shm_handle, allocation, snapshot)) {
+            ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            if (snapshot.allocation_start == allocation.append_offset) {
+                try SharedMemoryAllocator.rewindMappedHeader(
+                    hotReloadBasePtr(shm_handle),
+                    shm_handle.mapped_size,
+                    allocation.append_offset,
+                );
+            }
         }
     }
     try hotReloadReleaseDescriptorSlot(gpa, tracker, allocation.descriptor_offset, allocation.preserve_descriptor_refs);
@@ -4799,6 +4833,50 @@ fn hotReloadValidAllocation(
     if (snapshot.image_offset >= snapshot.allocation_end) return false;
     if (snapshot.image_size <= snapshot.image_offset) return false;
     if (snapshot.image_size > snapshot.allocation_end) return false;
+    return true;
+}
+
+fn hotReloadPreparedAllocationMatches(
+    shm_handle: SharedMemoryHandle,
+    allocation: HotReloadImageAllocation,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) bool {
+    if (snapshot.state != .writing) return false;
+    if (snapshot.generation != allocation.generation) return false;
+    if (!hotReloadValidAllocation(shm_handle, @sizeOf(SharedMemoryAllocator.Header), snapshot)) return false;
+
+    if (allocation.region_start != 0) {
+        const used_reclaimed_region = snapshot.allocation_start == allocation.region_start and
+            snapshot.allocation_end <= allocation.region_end;
+        const used_append_fallback = snapshot.allocation_start == allocation.append_offset and
+            snapshot.allocation_end <= allocation.image_limit;
+        return used_reclaimed_region or used_append_fallback;
+    }
+
+    return snapshot.allocation_start == allocation.append_offset and
+        snapshot.allocation_end <= allocation.image_limit;
+}
+
+fn publishPreparedHotReloadCandidate(
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    allocation: HotReloadImageAllocation,
+    inputs_changed: bool,
+) error{InvalidSharedMemory}!bool {
+    if (inputs_changed) return false;
+
+    const descriptor = try hotReloadDescriptor(shm_handle, allocation.descriptor_offset);
+    const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+    if (!hotReloadPreparedAllocationMatches(shm_handle, allocation, snapshot)) {
+        return error.InvalidSharedMemory;
+    }
+
+    ipc.hot_reload.publishDescriptor(
+        control,
+        allocation.generation,
+        allocation.descriptor_offset,
+        descriptor,
+    );
     return true;
 }
 
@@ -5063,15 +5141,15 @@ fn runHotReloadDevShim(
 
         if (active_rebuild) |*rebuild| {
             if (rebuild.child.done.load(.seq_cst)) {
-                const changed_during_refresh = finishHotReloadRebuild(ctx, &state, &signal, rebuild) catch |err| {
-                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                const finished = finishHotReloadRebuild(ctx, &state, &signal, rebuild, hot_reload_control, shm_handle) catch |err| {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                     rebuild.deinit(ctx);
                     active_rebuild = null;
                     return err;
                 };
-                pending_rebuild = changed_during_refresh or pending_rebuild;
-                if (!hotReloadRebuildSucceeded(rebuild.child)) {
-                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                pending_rebuild = finished.changed_during_refresh or pending_rebuild;
+                if (!finished.published) {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                 }
                 rebuild.deinit(ctx);
                 active_rebuild = null;
@@ -5088,7 +5166,7 @@ fn runHotReloadDevShim(
         if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
             if (active_rebuild) |*rebuild| {
                 rebuild.cancelAndJoin();
-                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                 rebuild.deinit(ctx);
                 active_rebuild = null;
             }
@@ -5115,7 +5193,7 @@ fn runHotReloadDevShim(
                 allocation,
                 source_rewrite,
             ) catch |err| {
-                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, allocation);
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, allocation);
                 return err;
             };
             next_generation += 1;
@@ -5135,7 +5213,7 @@ fn runHotReloadDevShim(
 
     if (active_rebuild) |*rebuild| {
         rebuild.cancelAndJoin();
-        try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+        try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
         rebuild.deinit(ctx);
         active_rebuild = null;
     }
@@ -5309,6 +5387,78 @@ fn testingInitHotReloadDescriptorTracker(
     try hotReloadInitDescriptorTracker(tracker, initial_descriptor_offset);
     tracker.descriptor_floor = lowest_descriptor_offset;
     tracker.next_descriptor_offset = hotReloadPreviousDescriptorOffset(lowest_descriptor_offset) orelse return error.InvalidSharedMemory;
+}
+
+test "hot reload parent publishes only current prepared candidate" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+
+    const allocation = HotReloadImageAllocation{
+        .generation = 2,
+        .descriptor_offset = desc1_offset,
+        .image_limit = desc1_offset,
+        .region_start = 1024,
+        .region_end = 1536,
+        .append_offset = 2048,
+    };
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+
+    try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
+    try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.writing, ipc.hot_reload.descriptorSnapshot(desc1).state);
+
+    try std.testing.expect(try publishPreparedHotReloadCandidate(control, handle, allocation, false));
+    try std.testing.expectEqual(@as(u64, 2), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc1).state);
+}
+
+test "hot reload stale prepared candidate reclaims append allocation" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const allocation = HotReloadImageAllocation{
+        .generation = 2,
+        .descriptor_offset = desc1_offset,
+        .image_limit = desc1_offset,
+        .region_start = 1024,
+        .region_end = 1536,
+        .append_offset = 2048,
+    };
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+
+    try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
+    try hotReloadRecycleUnpublishedAllocation(std.testing.allocator, control, handle, &tracker, allocation);
+
+    try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 2048), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+    try std.testing.expectEqual(@as(usize, 1), tracker.free_descriptor_slots.items.len);
+    try std.testing.expectEqual(desc1_offset, tracker.free_descriptor_slots.items[0].offset);
 }
 
 test "hot reload allocation coalesces adjacent reclaimed image regions" {
@@ -5568,6 +5718,52 @@ pub const SharedMemoryResult = struct {
     diagnostics: CheckDiagnosticCounts,
 };
 
+fn renderSummaryHeaderLine(
+    writer: anytype,
+    error_count: usize,
+    warning_count: usize,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) error{WriteFailed}!void {
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+
+    const error_suffix = if (error_count == 1) "" else "s";
+    const warning_suffix = if (warning_count == 1) "" else "s";
+
+    var error_buf: [32]u8 = undefined;
+    const err_str = std.fmt.bufPrint(&error_buf, "{} error{s}", .{ error_count, error_suffix }) catch "";
+
+    var warn_buf: [32]u8 = undefined;
+    const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
+
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const prefix_w = 3 + err_str.len + 5 + warn_str.len + 1;
+
+    const sanitised_path = reporting.sanitisePathForSnapshots(path);
+    const loc_w = if (sanitised_path.len > 0) 1 + reporting.source_region.displayWidth(sanitised_path) else 0;
+
+    const dashes = @max(total_w -| prefix_w -| loc_w, 1);
+
+    try writer.writeAll(palette.secondary);
+    try writer.writeAll("── ");
+    try writer.writeAll(palette.error_color);
+    try writer.writeAll(err_str);
+    try writer.writeAll(palette.reset);
+    try writer.writeAll(" and ");
+    try writer.writeAll(palette.warning);
+    try writer.writeAll(warn_str);
+    try writer.writeAll(palette.secondary);
+    try writer.writeByte(' ');
+    try writer.splatBytesAll("─", dashes);
+    if (sanitised_path.len > 0) {
+        try writer.writeByte(' ');
+        try writer.writeAll(palette.primary);
+        try writer.writeAll(sanitised_path);
+    }
+    try writer.writeAll(palette.reset);
+    try writer.writeAll("\n\n");
+}
+
 fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
     const error_suffix = if (error_count == 1) "" else "s";
     const warning_suffix = if (warning_count == 1) "" else "s";
@@ -5615,6 +5811,40 @@ test "diagnostic summaries support colored and plain output" {
             "No errors",
         output.written(),
     );
+}
+
+test "diagnostic summary header has exact colors and bounded width" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    var plain_config = reporting.ReportingConfig.initColorTerminal();
+    plain_config.color_preference = .never;
+    plain_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+    try std.testing.expectEqualStrings(
+        "── 1 error and 1 warning " ++ ("─" ** 43) ++ " example.roc\n\n",
+        output.written(),
+    );
+
+    output.clearRetainingCapacity();
+    var color_config = reporting.ReportingConfig.initColorTerminal();
+    color_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", color_config);
+    try std.testing.expectEqualStrings(
+        ansi_term.bright_black ++ "── " ++
+            ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
+            ansi_term.yellow ++ "1 warning" ++ ansi_term.bright_black ++ " " ++
+            ("─" ** 43) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
+        output.written(),
+    );
+
+    inline for (.{ .{ 55, 55 }, .{ 200, 120 } }) |case| {
+        output.clearRetainingCapacity();
+        plain_config.max_line_width = case[0];
+        try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
+        try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
+    }
 }
 
 const LoweredCoordinatorResult = struct {
@@ -5666,7 +5896,6 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
     for (drained) |mod| {
         for (mod.reports) |*report| {
             switch (report.severity) {
-                .info => continue,
                 .fatal, .runtime_error => counts.errors += 1,
                 .warning => counts.warnings += 1,
             }
@@ -5678,10 +5907,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, counts.errors, counts.warnings, report_config.shouldUseColors()) catch {};
-        stderr.print(" for {s}.\n", .{display_path}) catch {};
+        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -6008,7 +6234,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = &lowered_result.lowered;
-    const publication = try writeDevRunImageToSharedMemory(
+    _ = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
         selected_target,
@@ -6026,12 +6252,6 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         },
     );
     shm.updateHeader();
-    ipc.hot_reload.publishDescriptor(
-        control,
-        args.generation,
-        publication.descriptor_offset,
-        publication.descriptor orelse return error.InvalidSharedMemory,
-    );
 }
 
 fn writeDevRunImageToSharedMemory(
@@ -7460,7 +7680,6 @@ fn discoverAndAddBundleModules(
                     .warning => {
                         try stderr.print("{s}: warning in module\n", .{mod.abs_path});
                     },
-                    .info => {},
                 }
             }
         }
@@ -13814,8 +14033,14 @@ fn refreshWatchState(
 fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
     if (state.inputs.len == 0) return true;
     const current = try computeWatchSnapshot(ctx, state.inputs);
-    defer ctx.gpa.free(current);
-    return watchSnapshotChanged(state.snapshot, current);
+    if (!watchSnapshotChanged(state.snapshot, current)) {
+        ctx.gpa.free(current);
+        return false;
+    }
+
+    ctx.gpa.free(state.snapshot);
+    state.snapshot = current;
+    return true;
 }
 
 fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
@@ -16159,6 +16384,14 @@ fn remapDefaultAppDocumentElement(
                 underline.end_line -= synthetic_header_lines;
             }
         }
+    } else if (element.* == .source_location) {
+        const location = &element.source_location;
+        if (location.line <= synthetic_header_lines) return;
+
+        const filename = try allocator.dupe(u8, original_path);
+        if (location.filename) |old_filename| allocator.free(old_filename);
+        location.filename = filename;
+        location.line -= synthetic_header_lines;
     }
 }
 
@@ -16342,7 +16575,6 @@ fn checkFileWithBuildEnvPreserved(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16392,7 +16624,6 @@ fn checkFileWithBuildEnvPreserved(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -16549,7 +16780,6 @@ fn checkFileWithBuildEnv(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16587,7 +16817,6 @@ fn checkFileWithBuildEnv(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -16643,12 +16872,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, check_result.error_count, check_result.warning_count, stderr_report_config.shouldUseColors()) catch {};
-        stderr.writeAll(" in ") catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);
@@ -17622,8 +17846,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     const report_config = ctx.reportConfig(.stderr);
 
-    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
-
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -17653,7 +17875,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     defer result_with_env.deinit(ctx.gpa);
 
     const check_result = &result_with_env.check_result;
-    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -17669,13 +17890,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     }
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            check_result.error_count,
-            check_result.warning_count,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s}.", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
 
         if (check_result.error_count > 0) {
             return error.DocsFailed;
@@ -18102,6 +18317,40 @@ test "refreshWatchState reports stale snapshot for existing watch set" {
     });
 
     try testing.expect(changed);
+}
+
+test "watch byte change advances snapshot before rebuild completes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    try testing.expect(try watchStateHasByteChanges(&ctx, &state));
+    try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
 }
 
 test "appendWindowsQuotedArg" {

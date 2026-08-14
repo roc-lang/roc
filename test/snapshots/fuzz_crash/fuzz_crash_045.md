@@ -10,21 +10,19 @@ platform""requires{}{}exposes[]packages{}provides[
 # EXPECTED
 EXPECTED OPENING BRACE - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
+── ✗ expected opening brace ───────────────────────────── fuzz_crash_045.md:1:50
 
-┌────────────────────────┐
-│ EXPECTED OPENING BRACE ├─ I was parsing a `provides` section, and I ────────┐
-└┬───────────────────────┘  expected an opening `{`.                          │
- │                                                                            │
- │  platform""requires{}{}exposes[]packages{}provides[                        │
- │                                                   ‾                        │
- └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
+I was parsing a `provides` section, and I expected an opening `{`.
 
-    Host symbol mappings are written as record-like entries inside braces.
+platform""requires{}{}exposes[]packages{}provides[
+                                                 ^
 
-    For example:
-        provides { "roc_main": main }
+Host symbol mappings are written as record-like entries inside braces.
 
-    I found `[` here.
+For example:
+    provides { "roc_main": main }
+
+I found [ here.
 
 # TOKENS
 ~~~zig

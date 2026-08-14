@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 INVALID NUMBER - expr_int_invalid.md:1:1:1:42
 # PROBLEMS
+── ✗ invalid number ──────────────────────────────────── expr_int_invalid.md:1:1
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  99999999999999999999999999999999999999999                                 │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
- └─────────────────────────────────────────────────── expr_int_invalid.md:1:1 ┘
+This number literal does not fit in the inferred type.
 
-    The inferred type is:
+99999999999999999999999999999999999999999
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        Dec
+The inferred type is:
+
+    Dec
 
 # TOKENS
 ~~~zig
