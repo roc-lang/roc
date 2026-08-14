@@ -20,22 +20,21 @@ main = {
 # EXPECTED
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
+── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
 
-┌────────────────────┐
-│ RECURSIVE DISPATCH ├─ This `from_interpolation` dispatch would have to ─────┐
-└┬───────────────────┘  call itself to satisfy its own type.                  │
- │                                                                            │
- │  url : Try(Try(Url, [InvalidUrl]), [Outer])                                │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └─────────────────────── nested_try_interpolation_recursive_dispatch.md:8:11 ┘
+This from_interpolation dispatch would have to call itself to satisfy its own
+type.
 
-    The dispatcher type is:
+url : Try(Try(Url, [InvalidUrl]), [Outer])
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        Try(Url, [InvalidUrl])
+The dispatcher type is:
 
-    Hint: Use a more specific result type, or add an associated function whose
-    `from_interpolation` implementation does not require the same dispatch on
-    the same type.
+    Try(Url, [InvalidUrl])
+
+Hint: Use a more specific result type, or add an associated function whose
+from_interpolation implementation does not require the same dispatch on the
+same type.
 
 # TOKENS
 ~~~zig

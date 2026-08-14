@@ -19,117 +19,102 @@ UNEXPECTED STATEMENT - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
+── ✗ unclosed single quote ────────────────────────────── fuzz_crash_031.md:4:10
 
-┌───────────────────────┐
-│ UNCLOSED SINGLE QUOTE ├─ This single-quoted literal is missing a closing ───┐
-└┬──────────────────────┘  quote.                                             │
- │                                                                            │
- │  vavar t= '                                                                │
- │           ‾                                                                │
- └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+This single-quoted literal is missing a closing quote.
 
+vavar t= '
+         ^
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  mule []                                                                   │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_031.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+mule []
+^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `mule` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found mule here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  mule []                                                                   │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_031.md:1:6 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:6
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+mule []
+     ^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  mule []                                                                   │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_031.md:1:7 ┘
+I found [ here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:1:7
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+mule []
+      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  vavar t= '                                                                │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_031.md:4:1 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_031.md:4:1
 
-    I found `vavar` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+vavar t= '
+^^^^^
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  vavar t= '                                                                │
- │           ‾                                                                │
- └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+For example:
+    answer = 42
 
-    For example:
-        add(1, 2)
+I found vavar here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `'` here.
+── ✗ unexpected expression syntax ─────────────────────── fuzz_crash_031.md:4:10
 
+I was parsing an expression, and this token cannot start an expression here.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  vavar t= '                                                                │
- │           ‾                                                                │
- └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
+vavar t= '
+         ^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
+
+For example:
+    add(1, 2)
+
+I found ' here.
+
+── ✗ unrecognized syntax ──────────────────────────────── fuzz_crash_031.md:4:10
+
+I don't recognize this syntax.
+
+vavar t= '
+         ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

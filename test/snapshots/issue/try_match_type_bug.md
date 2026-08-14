@@ -16,15 +16,13 @@ get_greeting = |{}| {
 # EXPECTED
 UNCONDITIONAL CONDITION - try_match_type_bug.md:3:11:3:16
 # PROBLEMS
+── ● unconditional condition ──────────────────────── try_match_type_bug.md:3:11
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match 0.U64 {                                                             │
- │        ‾‾‾‾‾                                                               │
- └──────────────────────────────────────────────── try_match_type_bug.md:3:11 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match 0.U64 {
+      ^^^^^
 
 # TOKENS
 ~~~zig

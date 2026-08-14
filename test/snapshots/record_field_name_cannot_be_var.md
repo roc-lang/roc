@@ -18,53 +18,45 @@ INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:3:8:3:10
 INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:5:7:5:9
 UNUSED VARIABLE - record_field_name_cannot_be_var.md:3:8:3:10
 # PROBLEMS
+── ✗ invalid record field name ───────── record_field_name_cannot_be_var.md:1:15
 
-┌───────────────────────────┐
-│ INVALID RECORD FIELD NAME ├─ Record field names cannot start with a ────────┐
-└┬──────────────────────────┘  dollar sign.                                   │
- │                                                                            │
- │  my_record = { $field: "value", ok: 1 }                                    │
- │                ‾‾‾‾‾‾                                                      │
- └─────────────────────────────────── record_field_name_cannot_be_var.md:1:15 ┘
+Record field names cannot start with a dollar sign.
 
-    Names that start with `$` are reassignable variables declared with the
-    `var` keyword, so they cannot be used as record field names.
+my_record = { $field: "value", ok: 1 }
+              ^^^^^^
 
+Names that start with $ are reassignable variables declared with the var
+keyword, so they cannot be used as record field names.
 
-┌───────────────────────────┐
-│ INVALID RECORD FIELD NAME ├─ Record field names cannot start with a ────────┐
-└┬──────────────────────────┘  dollar sign.                                   │
- │                                                                            │
- │  f = |{ $a }| "y"                                                          │
- │         ‾‾                                                                 │
- └──────────────────────────────────── record_field_name_cannot_be_var.md:3:8 ┘
+── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:3:8
 
-    Names that start with `$` are reassignable variables declared with the
-    `var` keyword, so they cannot be used as record field names.
+Record field names cannot start with a dollar sign.
 
+f = |{ $a }| "y"
+       ^^
 
-┌───────────────────────────┐
-│ INVALID RECORD FIELD NAME ├─ Record field names cannot start with a ────────┐
-└┬──────────────────────────┘  dollar sign.                                   │
- │                                                                            │
- │  g : { $b : Str } -> Str                                                   │
- │        ‾‾                                                                  │
- └──────────────────────────────────── record_field_name_cannot_be_var.md:5:7 ┘
+Names that start with $ are reassignable variables declared with the var
+keyword, so they cannot be used as record field names.
 
-    Names that start with `$` are reassignable variables declared with the
-    `var` keyword, so they cannot be used as record field names.
+── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:5:7
 
+Record field names cannot start with a dollar sign.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `$a` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  f = |{ $a }| "y"                                                          │
- │         ‾‾                                                                 │
- └──────────────────────────────────── record_field_name_cannot_be_var.md:3:8 ┘
+g : { $b : Str } -> Str
+      ^^
 
-    If you don't need this variable, prefix it with an underscore like `_$a` to
-    suppress this warning.
+Names that start with $ are reassignable variables declared with the var
+keyword, so they cannot be used as record field names.
+
+── ● unused variable ──────────────────── record_field_name_cannot_be_var.md:3:8
+
+Variable $a is defined here and then never used:
+
+f = |{ $a }| "y"
+       ^^
+
+If you don't need this variable, prefix it with an underscore like _$a to
+suppress this warning.
 
 # TOKENS
 ~~~zig

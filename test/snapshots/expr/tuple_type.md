@@ -16,31 +16,27 @@ type=expr
 TYPE MISMATCH - tuple_type.md:5:8:5:9
 TYPE MISMATCH - tuple_type.md:5:11:5:12
 # PROBLEMS
+── ✗ type mismatch ─────────────────────────────────────────── tuple_type.md:5:8
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  f((1, 2))                                                                 │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────────── tuple_type.md:5:8 ┘
+This number is being used where a non-number type is needed.
 
-    Other code expects this to have the type:
+f((1, 2))
+   ^
 
-        Str
+Other code expects this to have the type:
 
+    Str
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  f((1, 2))                                                                 │
- │        ‾                                                                   │
- └──────────────────────────────────────────────────────── tuple_type.md:5:11 ┘
+── ✗ type mismatch ────────────────────────────────────────── tuple_type.md:5:11
 
-    Other code expects this to have the type:
+This number is being used where a non-number type is needed.
 
-        Str
+f((1, 2))
+      ^
+
+Other code expects this to have the type:
+
+    Str
 
 # TOKENS
 ~~~zig

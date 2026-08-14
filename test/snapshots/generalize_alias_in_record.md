@@ -14,18 +14,16 @@ main = ((r.f)(1), (r.f)("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
+── ✗ type mismatch ────────────────────────── generalize_alias_in_record.md:5:25
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = ((r.f)(1), (r.f)("a"))                                             │
- │                          ‾‾‾                                               │
- └──────────────────────────────────────── generalize_alias_in_record.md:5:25 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+main = ((r.f)(1), (r.f)("a"))
+                        ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

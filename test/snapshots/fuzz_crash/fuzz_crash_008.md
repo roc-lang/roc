@@ -13,62 +13,54 @@ UNEXPECTED STATEMENT - fuzz_crash_008.md:1:1:1:2
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_008.md:1:4:1:5
 # PROBLEMS
-
-ASCII CONTROL CHARACTER
+── ✗ ascii control character ───────────────────────────────────────────────────
 
 ASCII control characters are not allowed in Roc source code.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||1                                                                      │
- │  ‾                                                                         │
- └───────────────────────────────────────────────────── fuzz_crash_008.md:1:1 ┘
+||1
+^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `|` here.
+I found | here.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:3
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||1                                                                      │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_008.md:1:3 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+||1
+  ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `|` here.
+For example:
+    answer = 42
 
+I found | here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ||1                                                                      │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_008.md:1:4 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_008.md:1:4
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+||1
+   ^
 
-    I found `1` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found 1 here.
 
 # TOKENS
 ~~~zig

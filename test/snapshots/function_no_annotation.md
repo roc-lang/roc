@@ -23,16 +23,14 @@ main! = process!(42)
 # EXPECTED
 NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
+── ✗ name not in scope ────────────────────────── function_no_annotation.md:9:21
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  print_number! = |n| Stdout.line!(n)                                       │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
+Nothing is named line! in this scope.
 
-    Is it misspelled, or is there an import missing?
+print_number! = |n| Stdout.line!(n)
+                    ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

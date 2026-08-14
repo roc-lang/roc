@@ -19,95 +19,82 @@ UNEXPECTED STATEMENT - fuzz_crash_010.md:1:3:1:4
 UNEXPECTED STATEMENT - fuzz_crash_010.md:1:4:1:5
 UNEXPECTED STATEMENT - fuzz_crash_010.md:2:6:2:7
 # PROBLEMS
-
-ASCII CONTROL CHARACTER
+── ✗ ascii control character ───────────────────────────────────────────────────
 
 ASCII control characters are not allowed in Roc source code.
 
+── ✗ unclosed string ───────────────────────────────────── fuzz_crash_010.md:5:5
 
+This string is missing a closing quote.
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  "on        (string 'onmo %')))                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └───────────────────────────────────────────────────── fuzz_crash_010.md:5:5 ┘
+"on        (string 'onmo %')))
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+── ✗ type application needs parentheses ────────────────── fuzz_crash_010.md:1:2
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  H{o,                                                                      │
- │   ‾                                                                        │
- └───────────────────────────────────────────────────── fuzz_crash_010.md:1:2 ┘
+H{o,
+ ^
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    For example:
-        List(U8)
+For example:
+    List(U8)
 
-    I found `{` here.
+I found { here.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:3
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  H{o,                                                                      │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_010.md:1:3 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+H{o,
+  ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `o` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found o here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  H{o,                                                                      │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_010.md:1:4 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:1:4
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+H{o,
+   ^
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │    ]                                                                      │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_010.md:2:6 ┘
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_010.md:2:6
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+  ]
+   ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
 # TOKENS
 ~~~zig

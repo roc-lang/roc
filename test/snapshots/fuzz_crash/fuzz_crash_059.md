@@ -19,158 +19,136 @@ UNEXPECTED STATEMENT - fuzz_crash_059.md:2:14:2:15
 UNEXPECTED STATEMENT - fuzz_crash_059.md:2:15:2:16
 MOD NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:3
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │    ‾‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_059.md:2:3 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+G if 0{}else||0
+  ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `if` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+For example:
+    answer = 42
 
+I found if here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │       ‾                                                                    │
- └───────────────────────────────────────────────────── fuzz_crash_059.md:2:6 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:6
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+G if 0{}else||0
+     ^
 
-    I found `0` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_059.md:2:7 ┘
+I found 0 here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:7
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `{` here.
+G if 0{}else||0
+      ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_059.md:2:8 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found { here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:8
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+I was parsing a statement, and this token cannot start a statement here.
 
+G if 0{}else||0
+       ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │          ‾‾‾‾                                                              │
- └───────────────────────────────────────────────────── fuzz_crash_059.md:2:9 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found } here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    I found `else` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_059.md:2:9
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │              ‾                                                             │
- └──────────────────────────────────────────────────── fuzz_crash_059.md:2:13 ┘
+G if 0{}else||0
+        ^^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `|` here.
+I found else here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:13
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │               ‾                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_059.md:2:14 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+G if 0{}else||0
+            ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `|` here.
+For example:
+    answer = 42
 
+I found | here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  G if 0{}else||0                                                           │
- │                ‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_059.md:2:15 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:14
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+G if 0{}else||0
+             ^
 
-    I found `0` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `B` was not found in this Roc project. ──────┐
-└┬─────────────────┘                                                          │
- │                                                                            │
- │  app[]{f:platform""}import B as                                            │
- │  G if 0{}else||0                                                           │
- │                                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_059.md:1:20 ┘
+I found | here.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_059.md:2:15
+
+I was parsing a statement, and this token cannot start a statement here.
+
+G if 0{}else||0
+              ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found 0 here.
+
+── ✗ mod not found ─────────────────────────────────── fuzz_crash_059.md:1:20
+
+The mod B was not found in this Roc project.
+
+app[]{f:platform""}import B as
+G if 0{}else||0
 
 # TOKENS
 ~~~zig

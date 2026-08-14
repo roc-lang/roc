@@ -76,41 +76,35 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 # PROBLEMS
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:59:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result3 = combine(result1, result2)                                       │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:59:5 ┘
+Variable result3 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result3` to suppress this warning.
+result3 = combine(result1, result2)
+^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _result3 to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result4` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result4 = yetAnotherIdentity(True)                                        │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:60:5 ┘
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:60:5
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result4` to suppress this warning.
+Variable result4 is defined here and then never used:
 
+result4 = yetAnotherIdentity(True)
+^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result5` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result5 = finalIdentity(3.14)                                             │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:61:5 ┘
+If you don't need this variable, prefix it with an underscore like _result4 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result5` to suppress this warning.
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:61:5
+
+Variable result5 is defined here and then never used:
+
+result5 = finalIdentity(3.14)
+^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _result5 to
+suppress this warning.
 
 # TOKENS
 ~~~zig

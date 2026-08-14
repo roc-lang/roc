@@ -141,239 +141,199 @@ NOT A WHERE ALIAS - everything.md:65:4:65:6
 DECLARATION HAS NO VALUE - everything.md:62:1:66:3
 NON EXHAUSTIVE MATCH - everything.md:94:2:117:3
 # PROBLEMS
+── ✗ where clause not allowed in type declaration ─────────── everything.md:12:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  A(a) : a                                                                  │
- │      where [                                                               │
- │          a.a1 : (                                                          │
- │              a,                                                            │
- │              a,                                                            │
- │          ) -> Str,                                                         │
- │          a.a2 : (                                                          │
- │              a,                                                            │
- │              a,                                                            │
- │          ) -> Str,                                                         │
- │      ]                                                                     │
- │                                                                            │
- └──────────────────────────────────────────────────────── everything.md:12:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+A(a) : a
+    where [
+        a.a1 : (
+            a,
+            a,
+        ) -> Str,
+        a.a2 : (
+            a,
+            a,
+        ) -> Str,
+    ]
 
+── ✗ where clause not allowed in type declaration ─────────── everything.md:24:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  B(b) : b                                                                  │
- │      where [                                                               │
- │          b.b1 : (                                                          │
- │              b,                                                            │
- │              b,                                                            │
- │          ) -> Str,                                                         │
- │          b.b2 : (                                                          │
- │              b,                                                            │
- │              b,                                                            │
- │          ) -> Str,                                                         │
- │      ]                                                                     │
- │                                                                            │
- └──────────────────────────────────────────────────────── everything.md:24:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+B(b) : b
+    where [
+        b.b1 : (
+            b,
+            b,
+        ) -> Str,
+        b.b2 : (
+            b,
+            b,
+        ) -> Str,
+    ]
 
+── ● unused variable ──────────────────────────────────────── everything.md:98:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────────── everything.md:98:5 ┘
+Variable b is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+b,
+^
 
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────────── everything.md:103:4 ┘
+── ● unused variable ─────────────────────────────────────── everything.md:103:4
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+Variable b is defined here and then never used:
 
+b,
+^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────────── everything.md:108:5 ┘
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+── ● unused variable ─────────────────────────────────────── everything.md:108:5
 
+Variable b is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────────── everything.md:114:5 ┘
+b,
+^
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
+── ● unused variable ─────────────────────────────────────── everything.md:114:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `h1` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  h1 = {                                                                    │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────── everything.md:69:2 ┘
+Variable b is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_h1` to
-    suppress this warning.
+b,
+^
 
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `h2` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  h2 = h(                                                                   │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────── everything.md:77:2 ┘
+── ● unused variable ──────────────────────────────────────── everything.md:69:2
 
-    If you don't need this variable, prefix it with an underscore like `_h2` to
-    suppress this warning.
+Variable h1 is defined here and then never used:
 
+h1 = {
+^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `h3` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  h3 = A(                                                                   │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────── everything.md:81:2 ┘
+If you don't need this variable, prefix it with an underscore like _h1 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_h3` to
-    suppress this warning.
+── ● unused variable ──────────────────────────────────────── everything.md:77:2
 
+Variable h2 is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `h4` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  h4 = [                                                                    │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────── everything.md:85:2 ┘
+h2 = h(
+^^
 
-    If you don't need this variable, prefix it with an underscore like `_h4` to
-    suppress this warning.
+If you don't need this variable, prefix it with an underscore like _h2 to
+suppress this warning.
 
+── ● unused variable ──────────────────────────────────────── everything.md:81:2
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `h5` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  h5 = (                                                                    │
- │  ‾‾                                                                        │
- └──────────────────────────────────────────────────────── everything.md:89:2 ┘
+Variable h3 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_h5` to
-    suppress this warning.
+h3 = A(
+^^
 
+If you don't need this variable, prefix it with an underscore like _h3 to
+suppress this warning.
 
-┌───────────────────┐
-│ NOT A WHERE ALIAS ├─ A where clause can only name a where alias, but A is ──┐
-└┬──────────────────┘  a type.                                                │
- │                                                                            │
- │  e.A,                                                                      │
- │   ‾‾                                                                       │
- └──────────────────────────────────────────────────────── everything.md:64:4 ┘
+── ● unused variable ──────────────────────────────────────── everything.md:85:2
 
-    A where alias names a set of method constraints, declared like `a.Sortable
-    : where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as
-    `where [a.Sortable]`
+Variable h4 is defined here and then never used:
 
+h4 = [
+^^
 
-┌───────────────────┐
-│ NOT A WHERE ALIAS ├─ A where clause can only name a where alias, but B is ──┐
-└┬──────────────────┘  a type.                                                │
- │                                                                            │
- │  e.B,                                                                      │
- │   ‾‾                                                                       │
- └──────────────────────────────────────────────────────── everything.md:65:4 ┘
+If you don't need this variable, prefix it with an underscore like _h4 to
+suppress this warning.
 
-    A where alias names a set of method constraints, declared like `a.Sortable
-    : where [a.compare : a -> [LT, EQ, GT]]` and written in a where clause as
-    `where [a.Sortable]`
+── ● unused variable ──────────────────────────────────────── everything.md:89:2
 
+Variable h5 is defined here and then never used:
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  g : e -> e                                                                │
- │      where [                                                               │
- │          e.A,                                                              │
- │          e.B,                                                              │
- │      ]                                                                     │
- │                                                                            │
- └──────────────────────────────────────────────────────── everything.md:62:1 ┘
+h5 = (
+^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+If you don't need this variable, prefix it with an underscore like _h5 to
+suppress this warning.
 
+── ✗ not a where alias ────────────────────────────────────── everything.md:64:4
 
-┌──────────────────────┐
-│ NON EXHAUSTIVE MATCH ├─ This match expression doesn't cover all possible ───┐
-└┬─────────────────────┘  cases.                                              │
- │                                                                            │
- │  match x {                                                                 │
- │      Z1(                                                                   │
- │          (                                                                 │
- │              a,                                                            │
- │              b,                                                            │
- │          ),                                                                │
- │      ) => a                                                                │
- │      Z2(                                                                   │
- │          a,                                                                │
- │          b,                                                                │
- │      ) => a                                                                │
- │      Z3(                                                                   │
- │          {                                                                 │
- │              a,                                                            │
- │              b,                                                            │
- │          },                                                                │
- │      ) => a                                                                │
- │      Z4(                                                                   │
- │          [                                                                 │
- │              a,                                                            │
- │              b,                                                            │
- │          ],                                                                │
- │      ) => a                                                                │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────────────────────────────────── everything.md:94:2 ┘
+A where clause can only name a where alias, but A is a type.
 
-    The value being matched on has type:
-            [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]
+e.A,
+ ^^
 
-    Missing patterns:
-            Z4 []
+A where alias names a set of method constraints, declared like a.Sortable :
+where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
+[a.Sortable]
 
-    Hint: Add branches to handle these cases, or use `_` to match anything.
+── ✗ not a where alias ────────────────────────────────────── everything.md:65:4
+
+A where clause can only name a where alias, but B is a type.
+
+e.B,
+ ^^
+
+A where alias names a set of method constraints, declared like a.Sortable :
+where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
+[a.Sortable]
+
+── ● declaration has no value ─────────────────────────────── everything.md:62:1
+
+This declaration has a type annotation but no implementation.
+
+g : e -> e
+    where [
+        e.A,
+        e.B,
+    ]
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ non exhaustive match ─────────────────────────────────── everything.md:94:2
+
+This match expression doesn't cover all possible cases.
+
+match x {
+    Z1(
+        (
+            a,
+            b,
+        ),
+    ) => a
+    Z2(
+        a,
+        b,
+    ) => a
+    Z3(
+        {
+            a,
+            b,
+        },
+    ) => a
+    Z4(
+        [
+            a,
+            b,
+        ],
+    ) => a
+}
+
+The value being matched on has type:
+        [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]
+
+Missing patterns:
+        Z4 []
+
+Hint: Add branches to handle these cases, or use _ to match anything.
 
 # TOKENS
 ~~~zig

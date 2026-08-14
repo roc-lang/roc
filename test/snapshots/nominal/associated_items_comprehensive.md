@@ -449,115 +449,95 @@ NAME NOT IN SCOPE - associated_items_comprehensive.md:429:14:429:21
 NAME NOT IN SCOPE - associated_items_comprehensive.md:430:14:430:22
 NAME NOT IN SCOPE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:350:21
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `value` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  errModUnqualified = value  # ERROR: 'value' not in scope at mod level     │
- │                      ‾‾‾‾‾                                                 │
- └────────────────────────────────── associated_items_comprehensive.md:350:21 ┘
+Nothing is named value in this scope.
 
-    Is it misspelled, or is there an import missing?
+errModUnqualified = value  # ERROR: 'value' not in scope at mod level
+                    ^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `innerItem` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  badAccess = innerItem  # ERROR: 'innerItem' not in scope here             │
- │              ‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:361:17
 
-    Is it misspelled, or is there an import missing?
+Nothing is named innerItem in this scope.
 
+badAccess = innerItem  # ERROR: 'innerItem' not in scope here
+            ^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope               │
- │                     ‾‾‾‾‾‾‾                                                │
- └────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:372:28
 
+Nothing is named sibAVal in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope              │
- │                    ‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
+badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope
+                   ^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:387:31
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope│
- │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
- └────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
+Nothing is named leaf1Val in this scope.
 
-    Is it misspelled, or is there an import missing?
+badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope
+                  ^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `otherVal` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope                │
- │                  ‾‾‾‾‾‾‾‾                                                  │
- └────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:401:27
 
-    Is it misspelled, or is there an import missing?
+Nothing is named grandchildVal in this scope.
 
+badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope
+                      ^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `outerItem` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  errTryOuter = outerItem      # ERROR: not in scope                        │
- │                ‾‾‾‾‾‾‾‾‾                                                   │
- └────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:423:25
 
+Nothing is named otherVal in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  errTrySibA = sibAVal         # ERROR: not in scope                        │
- │               ‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
+badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope
+                ^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:428:15
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  errTryLeaf = leaf1Val        # ERROR: not in scope                        │
- │               ‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
+Nothing is named outerItem in this scope.
 
-    Is it misspelled, or is there an import missing?
+errTryOuter = outerItem      # ERROR: not in scope
+              ^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  errTryGrand = grandchildVal  # ERROR: not in scope                        │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:429:14
 
-    Is it misspelled, or is there an import missing?
+Nothing is named sibAVal in this scope.
+
+errTrySibA = sibAVal         # ERROR: not in scope
+             ^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:430:14
+
+Nothing is named leaf1Val in this scope.
+
+errTryLeaf = leaf1Val        # ERROR: not in scope
+             ^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ──────────────── associated_items_comprehensive.md:431:15
+
+Nothing is named grandchildVal in this scope.
+
+errTryGrand = grandchildVal  # ERROR: not in scope
+              ^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

@@ -13,27 +13,24 @@ match undefined_scrutinee {
 # EXPECTED
 TYPE MISMATCH - erroneous_scrutinee_pattern_consistency.md:1:1:1:1
 # PROBLEMS
+── ✗ type mismatch ────────────── erroneous_scrutinee_pattern_consistency.md:1:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │  match undefined_scrutinee {                                               │
- │      { name } => name                                                      │
- │      { name, age } => age                                                  │
- │  }                                                                         │
- │                                                                            │
- └──────────────────────────── erroneous_scrutinee_pattern_consistency.md:1:5 ┘
+The second branch of this match does not match the previous ones.
 
-    This second branch is trying to match:
+match undefined_scrutinee {
+    { name } => name
+    { name, age } => age
+}
 
-        { age: _field, name: _field2 }
+This second branch is trying to match:
 
-    But the expression between the `match` parenthesis has the type:
+    { age: _field, name: _field2 }
 
-        { name: _field }
+But the expression between the match parenthesis has the type:
 
-    These can never match! Either the pattern or expression has a problem.
+    { name: _field }
+
+These can never match! Either the pattern or expression has a problem.
 
 # TOKENS
 ~~~zig

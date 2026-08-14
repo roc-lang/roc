@@ -15,20 +15,17 @@ main = 42
 # EXPECTED
 DUPLICATE DEFINITION - can_import_type_alias_conflict.md:1:1:1:38
 # PROBLEMS
+── ● duplicate definition ──────────────── can_import_type_alias_conflict.md:1:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json exposing [JsonValue]                                     │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └───────────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json exposing [JsonValue]                                │
-      │  ‾                                                                    │
-      └──────────────────────────────── can_import_type_alias_conflict.md:1:1 ┘
+import json.Json exposing [JsonValue]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In this scope, Json was already defined in can_import_type_alias_conflict.md:1:1:
+
+import json.Json exposing [JsonValue]
+^
 
 # TOKENS
 ~~~zig
