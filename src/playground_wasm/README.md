@@ -578,3 +578,8 @@ zig build build-playground
 ```
 
 Output: `zig-out/bin/playground.wasm`
+
+This module bundles the whole compiler, so it is built at ReleaseSmall unless
+`-Doptimize=` says otherwise—a Debug build is ~85 MB and needs roughly
+12 GiB of RAM to link. The playground integration tests
+(`zig build run-test-playground`) run against this same artifact.

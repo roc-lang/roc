@@ -4160,6 +4160,19 @@ pub fn build(b: *std.Build) void {
     wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
     wasm_archive_exe.root_module.linkLibrary(host_zstd.artifact("zstd"));
 
+    // The playground Wasm module compiles the whole compiler for wasm32, which
+    // makes it the most expensive job in `build-ci`. Measured peak linker RSS
+    // for the same sources: Debug 11.8 GiB (85 MB of output), ReleaseSafe
+    // 9.6 GiB, ReleaseSmall 4.0 GiB. Nothing here needs a Debug Wasm module --
+    // the playground is driven over a Wasm protocol rather than a debugger, and
+    // the compiler code it contains is safety-checked by the native Debug tests
+    // -- so pin Debug to ReleaseSmall and pass explicit `-Doptimize=` values
+    // through unchanged. That also makes the local build agree with CI, which
+    // runs `run-test-playground -Doptimize=ReleaseSmall`, and with `repl_wasm`
+    // and `echo`, which are pinned to ReleaseSmall for the same reason.
+    const playground_wasm_optimize: std.builtin.OptimizeMode =
+        if (optimize == .Debug) .ReleaseSmall else optimize;
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{
@@ -4168,7 +4181,7 @@ pub fn build(b: *std.Build) void {
                 .cpu_arch = .wasm32,
                 .os_tag = .freestanding,
             }),
-            .optimize = optimize,
+            .optimize = playground_wasm_optimize,
         }),
     });
     configureBackend(playground_exe, b.resolveTargetQuery(.{
@@ -4409,36 +4422,20 @@ pub fn build(b: *std.Build) void {
     }
 
     // Build playground integration tests - now enabled for all optimization modes.
+    // These drive `playground_exe` itself rather than a private copy of the same
+    // root source: a second full compiler-for-wasm32 build would be duplicated
+    // work, and testing the module `build-web` actually ships is the point.
     const playground_test_install = blk: {
-        const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSafe else optimize;
-        const playground_wasm_target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
-        });
-        const playground_test_wasm = b.addExecutable(.{
-            .name = "playground-test",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/playground_wasm/main.zig"),
-                .target = playground_wasm_target,
-                .optimize = playground_test_optimize,
-            }),
-        });
-        configureBackend(playground_test_wasm, playground_wasm_target);
-        playground_test_wasm.entry = .disabled;
-        playground_test_wasm.rdynamic = true;
-        playground_test_wasm.link_function_sections = true;
-        playground_test_wasm.import_memory = false;
-        roc_modules.addAll(playground_test_wasm);
-        playground_test_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
-        playground_test_wasm.step.dependOn(&write_compiled_builtins.step);
-        add_tracy(b, roc_modules.build_options, playground_test_wasm, playground_wasm_target, false, null);
-
+        // The native runner follows `optimize` like every other test runner.
+        // It used to share the Wasm copy's optimize mode so that the two agreed
+        // on `compiler_version`; that expectation is now passed in explicitly
+        // below, so the runner is free to keep Debug's safety checks.
         const playground_integration_test_exe = b.addExecutable(.{
             .name = "playground_integration_test",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/playground-integration/main.zig"),
                 .target = target,
-                .optimize = playground_test_optimize,
+                .optimize = optimize,
             }),
         });
         configureBackend(playground_integration_test_exe, target);
@@ -4448,12 +4445,18 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(playground_integration_test_exe);
 
         const install = b.addInstallArtifact(playground_integration_test_exe, .{});
-        install.step.dependOn(&playground_test_wasm.step);
+        install.step.dependOn(&playground_exe.step);
         build_test_playground_runner_step.dependOn(&install.step);
 
         const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
         run_playground_test.addArg("--wasm-path");
-        run_playground_test.addFileArg(playground_test_wasm.getEmittedBin());
+        run_playground_test.addFileArg(playground_exe.getEmittedBin());
+        // The runner cannot read the playground's version off its own
+        // build_options: that prefix comes from the runner's own build mode, and
+        // the two binaries are built at different optimize levels.
+        run_playground_test.addArg("--playground-version");
+        run_playground_test.addArg(compiler_version_override orelse
+            compilerVersionForMode(b, playground_wasm_optimize, compiler_version_git));
         for (test_filters) |f| {
             run_playground_test.addArg("--filter");
             run_playground_test.addArg(f);
@@ -7934,6 +7937,24 @@ fn getCompilerVersionGit(b: *std.Build) []const u8 {
 
     // Git not available or failed, use fallback
     return "no-git";
+}
+
+/// The `compiler_version` string a binary built at `mode` reports at runtime.
+///
+/// Mirrors the `@import("builtin").mode` switch in the generated build_options
+/// module (see where `compiler_version` is assembled in build()). Needed when
+/// one binary has to predict another's version, because the build-mode prefix
+/// is resolved at each binary's own compile time rather than here.
+fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compiler_version_git: []const u8) []const u8 {
+    return b.fmt("{s}-{s}", .{
+        switch (mode) {
+            .Debug => "debug",
+            .ReleaseSafe => "release-safe",
+            .ReleaseFast => "release-fast",
+            .ReleaseSmall => "release-small",
+        },
+        compiler_version_git,
+    });
 }
 
 /// Return the semantic checked-artifact compiler hash.
