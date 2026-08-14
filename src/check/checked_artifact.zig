@@ -2601,6 +2601,10 @@ fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
     return expr == .e_lambda or expr == .e_closure or expr == .e_anno_only or expr == .e_hosted_lambda;
 }
 
+fn topLevelExprIsUnsupportedGeneratedMethod(expr: CIR.Expr) bool {
+    return expr == .e_anno_only and expr.e_anno_only.kind == .unsupported_generated_method;
+}
+
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
     return module.typeStoreConst().varResolvesToFunction(var_);
 }
@@ -24297,6 +24301,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (topLevelExprIsUnsupportedGeneratedMethod(def.expr.data)) continue;
             if (!topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
 
             const export_name = if (def.patternName()) |name|
@@ -29347,6 +29352,7 @@ pub const CompileTimeRootTable = struct {
         const module_env = module.moduleEnvConst();
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (topLevelExprIsUnsupportedGeneratedMethod(def.expr.data)) continue;
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
 
@@ -30719,6 +30725,7 @@ pub const TopLevelValueTable = struct {
 
         for (global_value_defs) |def_idx| {
             const def = module.def(def_idx);
+            if (topLevelExprIsUnsupportedGeneratedMethod(def.expr.data)) continue;
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
             if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
