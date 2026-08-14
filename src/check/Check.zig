@@ -21190,17 +21190,37 @@ fn checkNominalTypeUsage(
 
 // validate constraints //
 
-/// Check all constraints
-/// We loop here because checkStaticDispatchConstraints and add new regular
-/// constraints.
-fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+/// Drive ordinary constraints and every runnable static-dispatch relation to
+/// quiescence. A semantic judgment can ground a dispatch receiver without
+/// adding an ordinary constraint (record-destructure binder judgment is one
+/// example), so the ordinary queue alone cannot decide whether this fixpoint
+/// has work left.
+///
+/// `anyDeferredDispatchReceiverResolved` keeps inert flex receivers parked:
+/// we only pay for a dispatch pass when at least one queued relation can make
+/// progress. Static dispatch can add ordinary constraints, and checking those
+/// constraints can ground more dispatch receivers, hence the joint loop.
+fn quiesceConstraints(
+    self: *Self,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    while (self.constraints.items.items.len > 0) {
-        try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env, false);
+    while (true) {
+        if (self.constraints.items.items.len > 0) {
+            try self.checkConstraints(env);
+        }
+
+        if (!try self.anyDeferredDispatchReceiverResolved(env)) return;
+        try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
     }
+}
+
+/// Check all non-defaulting constraints.
+fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    try self.quiesceConstraints(env, false);
 }
 
 fn poisonRecursiveNonFunctionProcessingDef(
@@ -22267,6 +22287,12 @@ const LiteralDefaultUniverse = union(enum) {
 /// `anyDeferredDispatchReceiverResolved`) and its semantic dispatch-cycle
 /// detection.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
+    // Round zero: semantic judgments immediately before this boundary can
+    // ground a deferred receiver without adding an ordinary constraint. Let
+    // every such relation propagate through its callable signature before we
+    // classify any literal as an unconstrained default candidate.
+    try self.quiesceConstraints(env, false);
+
     // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
     // of each step. Safe despite cascade reentrancy: every buffer is cleared
     // before use and never read across the step-4 cascade.
@@ -22439,10 +22465,8 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
         }
 
-        // --- 4. Cascade the dispatches the commits unblocked. ---
-        while (try self.anyDeferredDispatchReceiverResolved(env)) {
-            try self.checkStaticDispatchConstraints(env, true);
-        }
+        // --- 4. Cascade the constraints the commits unblocked. ---
+        try self.quiesceConstraints(env, true);
     }
 }
 
