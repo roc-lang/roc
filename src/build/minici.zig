@@ -86,6 +86,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-simd-codegen" },
     .{ .name = "run-check-baseline-codegen" },
     .{ .name = "run-check-match-extension-codegen" },
+    .{ .name = "run-check-str-eq-same-allocation" },
     .{ .name = "run-check-snapshots" },
     .{ .name = "run-check-test-asset-coverage" },
     .{ .name = "run-test-zig-module-collections" },

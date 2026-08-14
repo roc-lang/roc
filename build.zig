@@ -2735,6 +2735,7 @@ pub fn build(b: *std.Build) void {
     const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
     const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
     const run_check_baseline_codegen_step = b.step("run-check-baseline-codegen", "Check that v1 targets emit no instruction above the architecture baseline");
+    const run_check_str_eq_same_allocation_step = b.step("run-check-str-eq-same-allocation", "Check that comparing a string against itself does not read its bytes");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -3332,6 +3333,11 @@ pub fn build(b: *std.Build) void {
     run_match_extension_codegen_check.addArtifactArg(roc_exe);
     run_match_extension_codegen_check.step.dependOn(build_test_hosts_step);
     run_check_match_extension_codegen_step.dependOn(&run_match_extension_codegen_check.step);
+
+    const run_str_eq_same_allocation_check = b.addSystemCommand(&.{ "bash", "ci/check_str_eq_same_allocation.sh" });
+    run_str_eq_same_allocation_check.addArtifactArg(roc_exe);
+    run_str_eq_same_allocation_check.step.dependOn(build_test_hosts_step);
+    run_check_str_eq_same_allocation_step.dependOn(&run_str_eq_same_allocation_check.step);
 
     // Glue ABI locks compile the generated bindings themselves. Zig is checked
     // for every native architecture/OS plus wasm, C is checked against the
