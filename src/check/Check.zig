@@ -386,6 +386,18 @@ type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty,
 /// binding explicitly registers its expression, pattern, and definition vars
 /// against the same scheme index, and retirement removes all of those aliases.
 type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Source-node identities that checking has explicitly classified as rank-1
+/// polymorphic bindings. This is deliberately separate from descriptor rank:
+/// a partially generalized scheme may have a monomorphic structural root.
+/// The dense node table keeps ordinary local lookup O(1).
+binding_scheme_nodes: std.DynamicBitSetUnmanaged,
+/// Scheme identities without a source node, currently pristine annotation
+/// schemes created by the annotated-definition pre-pass.
+synthetic_binding_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// Reused exact graph walk for classifying a freshly generalized binding.
+/// Classification happens once at the producer boundary, never on lookup.
+binding_scheme_classification_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// Constraint function vars whose deferred relation was actually consumed by
 /// static-dispatch checking (success or rejection). Receiver shape alone is not
 /// evidence of discharge: an unrelated error can poison the receiver, and a
@@ -2180,6 +2192,13 @@ fn initAssumePrepared(
 
     const node_count: usize = @intCast(cir.store.nodes.len());
 
+    var binding_scheme_nodes = try std.DynamicBitSetUnmanaged.initEmpty(gpa, node_count);
+    errdefer binding_scheme_nodes.deinit(gpa);
+    for (cir.binding_schemes.items.items) |binding_scheme| {
+        std.debug.assert(binding_scheme.node_idx < node_count);
+        binding_scheme_nodes.set(binding_scheme.node_idx);
+    }
+
     // Rehydrate the durable rejection records onto their constraint callables'
     // equivalence classes, so a re-check of an env that already carries them
     // sees the same rejections a fresh check would.
@@ -2258,6 +2277,7 @@ fn initAssumePrepared(
         .predeclared_scheme_vars = try initNodeSlots(?Var, gpa, node_count, null),
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, cir.getIdentStore(), null),
+        .binding_scheme_nodes = binding_scheme_nodes,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
@@ -2353,6 +2373,10 @@ pub fn deinit(self: *Self) void {
     }
     self.type_schemes.deinit(self.gpa);
     self.type_scheme_by_var.deinit(self.gpa);
+    self.binding_scheme_nodes.deinit(self.gpa);
+    self.synthetic_binding_schemes.deinit(self.gpa);
+    self.binding_scheme_classification_seen.deinit(self.gpa);
+    self.binding_scheme_classification_stack.deinit(self.gpa);
     self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
     self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
@@ -4873,6 +4897,120 @@ fn typeSchemeIndexForRoot(self: *Self, root_var: Var) ?usize {
     return index;
 }
 
+fn isBindingSchemeVar(self: *const Self, var_: Var) bool {
+    const raw_var: usize = @intFromEnum(var_);
+    if (raw_var < self.binding_scheme_nodes.bit_length) {
+        return self.binding_scheme_nodes.isSet(raw_var);
+    }
+    return self.synthetic_binding_schemes.contains(var_);
+}
+
+fn markBindingSchemeVar(self: *Self, var_: Var) Allocator.Error!void {
+    const raw_var: usize = @intFromEnum(var_);
+    if (raw_var < self.binding_scheme_nodes.bit_length) {
+        if (self.binding_scheme_nodes.isSet(raw_var)) return;
+        self.binding_scheme_nodes.set(raw_var);
+        return;
+    }
+    try self.synthetic_binding_schemes.put(self.gpa, var_, {});
+}
+
+/// Publish the dense checker-local classification as the compact sorted table
+/// stored in checked module output. Scanning node order once avoids maintaining
+/// a sorted list while dependency-order checking discovers schemes.
+fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
+    self.cir.binding_schemes.items.clearRetainingCapacity();
+    var raw_node: usize = 0;
+    while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
+        if (self.binding_scheme_nodes.isSet(raw_node)) {
+            try self.cir.recordBindingScheme(@enumFromInt(raw_node));
+        }
+    }
+}
+
+fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
+    if (self.isBindingSchemeVar(scheme_var)) {
+        try self.markBindingSchemeVar(alias_var);
+    }
+}
+
+/// Whether the post-generalization graph reachable from `root_var` contains a
+/// quantified variable. This exact producer-side walk classifies a rank-1
+/// binding once; use sites consume the recorded classification in O(1).
+fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
+    if (self.types.resolveVar(root_var).desc.rank == .generalized) return true;
+
+    self.binding_scheme_classification_seen.clearRetainingCapacity();
+    self.binding_scheme_classification_stack.clearRetainingCapacity();
+    defer self.binding_scheme_classification_stack.clearRetainingCapacity();
+
+    try self.binding_scheme_classification_stack.append(self.gpa, root_var);
+    while (self.binding_scheme_classification_stack.pop()) |pending_var| {
+        const resolved = self.types.resolveVar(pending_var);
+        if (resolved.desc.rank == .generalized) return true;
+        const seen = try self.binding_scheme_classification_seen.getOrPut(self.gpa, resolved.var_);
+        if (seen.found_existing) continue;
+
+        switch (resolved.desc.content) {
+            .err, .field_presence => {},
+            .flex, .rigid => {},
+            .alias => |alias| try self.binding_scheme_classification_stack.appendSlice(
+                self.gpa,
+                self.types.sliceAliasArgs(alias),
+            ),
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .tuple => |tuple| try self.binding_scheme_classification_stack.appendSlice(
+                    self.gpa,
+                    self.types.sliceVars(tuple.elems),
+                ),
+                .nominal_type => |nominal| try self.binding_scheme_classification_stack.appendSlice(
+                    self.gpa,
+                    self.types.sliceNominalArgs(nominal),
+                ),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try self.binding_scheme_classification_stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try self.binding_scheme_classification_stack.append(self.gpa, func.ret);
+                    try self.binding_scheme_classification_stack.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
+                },
+                .record => |record| {
+                    const presences = self.types.getRecordFieldsSlice(record.fields).items(.presence);
+                    for (presences) |presence| {
+                        try self.binding_scheme_classification_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try self.binding_scheme_classification_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                    try self.binding_scheme_classification_stack.append(self.gpa, record.ext);
+                },
+                .record_unbound => |fields_range| {
+                    const presences = self.types.getRecordFieldsSlice(fields_range).items(.presence);
+                    for (presences) |presence| {
+                        try self.binding_scheme_classification_stack.append(self.gpa, presence.typeVar());
+                        if (presence.presenceVar()) |presence_var| {
+                            try self.binding_scheme_classification_stack.append(self.gpa, presence_var);
+                        }
+                    }
+                },
+                .tag_union => |tag_union| {
+                    const tag_args = self.types.getTagsSlice(tag_union.tags).items(.args);
+                    for (tag_args) |args| {
+                        try self.binding_scheme_classification_stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                    }
+                    try self.binding_scheme_classification_stack.append(self.gpa, tag_union.ext);
+                },
+            },
+        }
+    }
+    return false;
+}
+
+fn publishBindingScheme(self: *Self, root_var: Var) Allocator.Error!void {
+    if (try self.typeHasGeneralizedVar(root_var)) {
+        try self.markBindingSchemeVar(root_var);
+    }
+}
+
 /// Instantiate a variable
 ///
 /// * Substituting generalized flex vars with fresh flex vars
@@ -4897,7 +5035,61 @@ fn instantiateVar(
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_flex,
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
+}
+
+/// Instantiate a binding explicitly classified as a rank-1 type scheme.
+fn instantiateTypeScheme(
+    self: *Self,
+    var_to_instantiate: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+    std.debug.assert(self.isBindingSchemeVar(var_to_instantiate));
+
+    var instantiate_ctx = Instantiator{
+        .store = self.types,
+        .idents = self.cir.getIdentStoreConst(),
+        .var_map = &self.var_map,
+        .current_rank = env.rank(),
+        .rigid_behavior = .fresh_flex,
+    };
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true);
+}
+
+fn instantiateBindingVar(
+    self: *Self,
+    binding_var: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
+        return self.instantiateVar(binding_var, env, region_behavior);
+    }
+    if (self.isBindingSchemeVar(binding_var)) {
+        return self.instantiateTypeScheme(binding_var, env, region_behavior);
+    }
+    self.var_map.clearRetainingCapacity();
+    return binding_var;
+}
+
+/// Cross-module graph copies are cached templates whose descriptors all carry
+/// generalized rank. Every use must therefore receive an independent copy
+/// before unification, even when source binding metadata says the value is a
+/// monotype. Scheme metadata selects the partial-scheme operation; monotypes
+/// use the ordinary imported-template copy.
+fn instantiateImportedBindingVar(
+    self: *Self,
+    imported_var: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    if (self.isBindingSchemeVar(imported_var)) {
+        return self.instantiateTypeScheme(imported_var, env, region_behavior);
+    }
+    return self.instantiateVar(imported_var, env, region_behavior);
 }
 
 /// You probably are looking for `instantiateVar`.
@@ -4921,7 +5113,7 @@ fn instantiateVarOrphan(
         .rigid_behavior = .fresh_rigid,
         .rank_behavior = .ignore_rank,
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
 /// Like `instantiateVarOrphan`, but rigids in the copy become fresh FLEX
@@ -4946,7 +5138,7 @@ fn instantiateVarOrphanFlexed(
         .rigid_behavior = .fresh_flex,
         .rank_behavior = .ignore_rank,
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
 /// Instantiate a variable, substituting any encountered rigids with
@@ -4975,7 +5167,7 @@ fn instantiateVarWithSubs(
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
     };
-    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+    return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false);
 }
 
 /// Map a requirement's recorded creation relation through an instantiation
@@ -5010,6 +5202,7 @@ fn instantiateVarHelp(
     instantiator: *Instantiator,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
+    force_type_scheme_root: bool,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -5023,7 +5216,10 @@ fn instantiateVarHelp(
     instantiator.var_map.clearRetainingCapacity();
 
     // Then, instantiate the variable with the provided context
-    const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
+    const instantiated_var = if (force_type_scheme_root)
+        try instantiator.instantiateTypeScheme(var_to_instantiate)
+    else
+        try instantiator.instantiateVar(var_to_instantiate);
 
     // A scheme is the root type plus its explicit pending dispatch
     // requirements. Copy both under this one var_map so generalized variables
@@ -6824,6 +7020,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
+
+    try self.finalizeBindingSchemeNodes();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -10636,6 +10834,8 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
 
+    try self.finalizeBindingSchemeNodes();
+
     self.debugAssertNominalDeclTableComplete();
 }
 
@@ -10736,6 +10936,8 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
+
+    try self.finalizeBindingSchemeNodes();
 
     self.debugAssertNominalDeclTableComplete();
 }
@@ -11017,6 +11219,7 @@ fn predeclareAnnotationScheme(
     );
     try self.judgeFieldKindsAtBoundary(env);
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.publishBindingScheme(scheme_var);
     env.var_pool.popRank();
 
     self.problems.truncate(problems_len);
@@ -11379,6 +11582,16 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        for (scc.defs) |member_def_idx| {
+            const member_def = self.cir.store.getDef(member_def_idx);
+            const expr_var = ModuleEnv.varFrom(member_def.expr);
+            try self.publishBindingScheme(expr_var);
+            try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def.pattern));
+            try self.bindBindingSchemeVar(expr_var, ModuleEnv.varFrom(member_def_idx));
+            if (self.predeclaredSchemeVar(member_def_idx)) |predeclared_scheme_var| {
+                try self.bindBindingSchemeVar(expr_var, predeclared_scheme_var);
+            }
+        }
         self.retireNonGeneralizedTypeSchemes(member_roots);
         try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env.rank());
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
@@ -11626,7 +11839,7 @@ fn instantiatePendingPredeclaredSchemeUse(
 ) Allocator.Error!void {
     try self.ensurePredeclaredIdentityCorrespondence(target_def, scheme_var);
     const scheme_uses_before = self.cir.scheme_uses.items.items.len;
-    const instantiated = try self.instantiateVar(scheme_var, env, .use_last_var);
+    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
     const use_pairs_start: u32 = @intCast(self.pending_predeclared_use_pairs.items.len);
     var use_pairs = self.var_map.iterator();
     while (use_pairs.next()) |pair| {
@@ -15094,7 +15307,8 @@ fn checkStoredValueExpr(
 ) std.mem.Allocator.Error!CheckedStoredValue {
     const does_fx = try self.checkExpr(expr_idx, env, expected);
     const source_var = ModuleEnv.varFrom(expr_idx);
-    if (self.types.resolveVar(source_var).desc.rank != .generalized) {
+    const resolved_source = self.types.resolveVar(source_var);
+    if (resolved_source.desc.rank != .generalized and !self.isBindingSchemeVar(source_var)) {
         return .{ .does_fx = does_fx, .var_ = source_var };
     }
 
@@ -15103,7 +15317,7 @@ fn checkStoredValueExpr(
     defer self.instantiation_source_expr = previous_source;
     std.debug.assert(self.pending_nested_function_use == null);
     self.pending_nested_function_use = expr_idx;
-    const instance_var = try self.instantiateVar(source_var, env, .use_last_var);
+    const instance_var = try self.instantiateBindingVar(source_var, env, .use_last_var);
     std.debug.assert(self.pending_nested_function_use == null);
     return .{
         .does_fx = does_fx,
@@ -15805,7 +16019,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // recursive edge, not an external use of the body's
                             // eventual scheme; the enclosing body's own
                             // requirements cover the implementation cycle.
-                            const instantiated = try self.instantiateVar(scheme_var, env, .use_last_var);
+                            const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                             _ = try self.unify(expr_var, instantiated, env);
                             break :blk;
                         }
@@ -15848,7 +16062,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // shared generalization boundary yet. Preserve
                                 // the annotation's polymorphic-recursion rule
                                 // until that boundary publishes the body scheme.
-                                const instantiated = try self.instantiateVar(scheme_var, env, .use_last_var);
+                                const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                                 _ = try self.unify(expr_var, instantiated, env);
                                 break :blk;
                             }
@@ -15875,7 +16089,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 if (self.predeclared_local_scheme_vars.get(lookup.pattern_idx)) |scheme_var| {
                     // Annotated local self/enclosing reference: instantiate
                     // the declared scheme (sound polymorphic recursion).
-                    const instantiated = try self.instantiateVar(scheme_var, env, .use_last_var);
+                    const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var);
                     _ = try self.unify(expr_var, instantiated, env);
                     break :blk;
                 }
@@ -15919,10 +16133,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 self.markCurrentHoistRuntimeDependency();
             }
 
-            // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
-            if (resolved_pat.desc.rank == Rank.generalized) {
-                const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
+            if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
+                const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
                 _ = try self.unify(expr_var, pat_var, env);
@@ -15944,7 +16157,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 if (generatedDerivedMethodDef(ext_ref.other_cir, target_def)) {
                     try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
                 } else {
-                    const ext_instantiated_var = try self.instantiateVar(
+                    const ext_instantiated_var = try self.instantiateImportedBindingVar(
                         ext_ref.local_var,
                         env,
                         .{ .explicit = expr_region },
@@ -16288,11 +16501,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // generalization into the enclosing function's types.
                     const func_var = blk_instantiate: {
                         const resolved = self.types.resolveVar(call_func_expr_var);
-                        if (resolved.desc.rank == Rank.generalized) {
+                        if (resolved.desc.rank == Rank.generalized or self.isBindingSchemeVar(call_func_expr_var)) {
                             const saved_instantiation_is_immediate_callee = self.instantiation_is_immediate_callee;
                             self.instantiation_is_immediate_callee = true;
                             defer self.instantiation_is_immediate_callee = saved_instantiation_is_immediate_callee;
-                            break :blk_instantiate try self.instantiateVar(
+                            break :blk_instantiate try self.instantiateBindingVar(
                                 call_func_expr_var,
                                 env,
                                 .use_last_var,
@@ -17193,6 +17406,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         }
         try self.judgeFieldKindsAtBoundary(env);
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        try self.publishBindingScheme(expr_var_raw);
         self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = expr_var_raw, .interface = expr_var }});
         try self.retireStructurallyPublishedTypeSchemeRequirements(
             &.{.{ .owner = expr_var_raw, .interface = expr_var }},
@@ -17664,10 +17878,7 @@ fn methodTypeVarFromOriginalEnv(
 ) Allocator.Error!Var {
     const def_var: Var = ModuleEnv.varFrom(type_node_idx);
     return if (is_this_module) blk: {
-        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(def_var, env, .use_last_var);
-        }
-        break :blk def_var;
+        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var);
     } else blk: {
         const imported_scheme = try self.importedMethodSchemeFromSource(original_env, type_node_idx);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
@@ -17699,9 +17910,9 @@ fn derivedMethodValidationVar(
     // available at that edge; the in-flight definition var is not.
     const def_var: Var = ModuleEnv.varFrom(binding.type_node_idx);
     const scheme_var = self.predeclaredSchemeVar(binding.def_idx) orelse def_var;
-    if (self.types.resolveVar(scheme_var).desc.rank == .generalized) {
+    if (self.types.resolveVar(scheme_var).desc.rank == .generalized or self.isBindingSchemeVar(scheme_var)) {
         self.pending_shape_validation_instantiation = true;
-        return try self.instantiateVar(scheme_var, env, .use_last_var);
+        return try self.instantiateBindingVar(scheme_var, env, .use_last_var);
     }
     return scheme_var;
 }
@@ -18318,6 +18529,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
                     try self.judgeFieldKindsAtBoundary(env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    try self.publishBindingScheme(decl_pattern_var);
+                    try self.bindBindingSchemeVar(decl_pattern_var, decl_expr_var);
                     self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
                     try self.retireStructurallyPublishedTypeSchemeRequirements(
                         &.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }},
@@ -20707,6 +20920,10 @@ fn resolveVarFromExternal(
             break :blk new_copy;
         };
 
+        if (other_module_env.nodeIsBindingScheme(target_node_idx)) {
+            try self.markBindingSchemeVar(copied_var);
+        }
+
         return .{
             .local_var = copied_var,
             .other_cir_node_idx = target_node_idx,
@@ -22833,6 +23050,7 @@ fn ensureTypeScheme(self: *Self, root_var: Var, capture_rank: Rank) Allocator.Er
 /// scheme. This is called when a binding receives another source var; it does
 /// not inspect union-find classes.
 fn bindTypeSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
+    try self.bindBindingSchemeVar(scheme_var, alias_var);
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
     if (self.type_scheme_by_var.get(alias_var)) |existing_idx| {
         std.debug.assert(existing_idx == @as(u32, @intCast(scheme_idx)));
@@ -23049,13 +23267,14 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
 
 /// A recursive binding group can contain value-restricted members alongside
 /// functions. Capture runs before generalization so it cannot know which roots
-/// will actually be promoted; discard side-table entries for members that did
-/// not become schemes once the generalizer has made that fact explicit.
+/// will become schemes; discard side-table entries for members that the
+/// boundary did not explicitly classify as schemes. Root rank is insufficient:
+/// a partially generalized scheme can have a monomorphic structural root.
 fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
         const scheme = &self.type_schemes.items[scheme_idx];
-        if (self.types.resolveVar(scheme.root_var).desc.rank == .generalized) continue;
+        if (self.isBindingSchemeVar(scheme.root_var)) continue;
         self.removeTypeSchemeAt(scheme_idx);
     }
 }
@@ -24175,10 +24394,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     const def_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
 
     const method_var = if (method_lookup.is_this_module) blk: {
-        if (self.types.resolveVar(def_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(def_var, env, .use_last_var);
-        }
-        break :blk def_var;
+        break :blk try self.instantiateBindingVar(def_var, env, .use_last_var);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = self.getRegionAt(candidate_var) });
@@ -25357,10 +25573,7 @@ fn instantiateDispatchTargetMethodVar(
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
         const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-        if (self.types.resolveVar(local_method_type_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(local_method_type_var, env, .use_last_var);
-        }
-        break :blk local_method_type_var;
+        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region });
@@ -30113,14 +30326,10 @@ fn instantiateGeneratedCodecMethodTarget(
     };
     defer self.evidence_target_site = previous_evidence_target_site;
 
-    const method_var = if (self.types.resolveVar(scheme_var).desc.rank == .generalized)
-        try self.instantiateVar(
-            scheme_var,
-            env,
-            if (method_lookup.is_this_module) .use_last_var else .{ .explicit = region },
-        )
+    const method_var = if (method_lookup.is_this_module)
+        try self.instantiateBindingVar(scheme_var, env, .use_last_var)
     else
-        scheme_var;
+        try self.instantiateVar(scheme_var, env, .{ .explicit = region });
 
     if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))

@@ -831,6 +831,19 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A source node whose checked value is a rank-1 polymorphic type scheme.
+///
+/// Generalization records this explicitly because a partially generalized
+/// scheme can have a monomorphic structural root with quantified descendants.
+/// Consumers must therefore not infer scheme-ness from the root variable's
+/// rank. The table is kept sorted by `node_idx` for allocation-free imported
+/// lookup.
+pub const BindingScheme = extern struct {
+    node_idx: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -957,6 +970,9 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Exact source bindings that checking generalized into rank-1 type schemes.
+/// Sorted by source node for allocation-free cross-module lookup.
+binding_schemes: BindingScheme.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
 /// artifact publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
@@ -1085,6 +1101,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.method_defs.relocate(offset);
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.binding_schemes.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
 
@@ -1181,6 +1198,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
@@ -1211,6 +1229,7 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1313,6 +1332,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -3683,6 +3703,7 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    binding_schemes: BindingScheme.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
@@ -3795,6 +3816,7 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
@@ -3862,6 +3884,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -3929,6 +3952,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -3998,6 +4022,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
@@ -4143,6 +4168,29 @@ fn findSortedByNode(comptime T: type, entries: []const T, raw_node: u32) ?T {
     const slot = sortedNodeSlot(T, entries, raw_node);
     if (slot < entries.len and entries[slot].node_idx == raw_node) return entries[slot];
     return null;
+}
+
+/// Record that `node_idx` names a rank-1 polymorphic value scheme. This is
+/// checker-produced binding metadata, not a property reconstructed from the
+/// solved type graph.
+pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        BindingScheme,
+        &self.binding_schemes,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx) },
+    );
+}
+
+/// Whether checking classified `node_idx` as a rank-1 polymorphic value
+/// scheme. Imported value lookup uses this exact producer-authored bit to
+/// choose scheme instantiation versus monotype sharing.
+pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(
+        BindingScheme,
+        self.binding_schemes.items.items,
+        @intFromEnum(node_idx),
+    ) != null;
 }
 
 /// Return the digits before the decimal point for a recorded numeral.

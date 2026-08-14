@@ -2453,6 +2453,60 @@ test "check type - value restriction - should fail 2" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
+test "issue 10763 - a stored call result is monomorphic" {
+    // `mk` is rank-1 polymorphic: each call may choose a fresh `val`, but the
+    // closure returned by one particular call is not itself polymorphic.
+    const source =
+        \\mk : {} -> ((() -> val), val -> Try({}, [NotEq, ..])) where [val.is_eq : val, val -> Bool]
+        \\mk = |_| |thunk, expected| if thunk() == expected { Ok({}) } else { Err(NotEq) }
+        \\
+        \\main = {
+        \\    check = mk({})
+        \\    _ = check(|| 42.U64, 42)
+        \\    check(|| "a", "a")
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "issue 10763 - imported partial schemes retain rank-1 binding metadata" {
+    const source_a =
+        \\module [mk]
+        \\
+        \\mk : {} -> (val -> val)
+        \\mk = |_| |value| value
+    ;
+    var env_a = try TestEnv.init("A", source_a);
+    defer env_a.deinit();
+    try testing.expectEqual(0, try env_a.typeProblemCount());
+
+    const source_b =
+        \\import A
+        \\
+        \\main = {
+        \\    check_num = A.mk({})
+        \\    check_str = A.mk({})
+        \\    (check_num(42.U64), check_str("a"))
+        \\}
+    ;
+    var env_b = try TestEnv.initWithImport("B", source_b, "A", &env_a);
+    defer env_b.deinit();
+    try env_b.assertNoErrors();
+
+    const source_c =
+        \\import A
+        \\
+        \\main = {
+        \\    check = A.mk({})
+        \\    _ = check(42.U64)
+        \\    check("a")
+        \\}
+    ;
+    var env_c = try TestEnv.initWithImport("C", source_c, "A", &env_a);
+    defer env_c.deinit();
+    try env_c.assertOneTypeError("Type Mismatch");
+}
+
 // type aliases //
 
 test "check type - basic alias" {

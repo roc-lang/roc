@@ -299,6 +299,18 @@ pub const Instantiator = struct {
         return self.instantiateVarHelp(initial_var, false);
     }
 
+    /// Instantiate a binding that the checker explicitly classified as a
+    /// rank-1 type scheme. A scheme may be partially generalized: its
+    /// structural root can be monomorphic while descendants are quantified.
+    /// Force-copying the root enters that structure so the ordinary rank-aware
+    /// walk can freshen exactly those generalized descendants.
+    pub fn instantiateTypeScheme(
+        self: *Self,
+        initial_var: Var,
+    ) std.mem.Allocator.Error!Var {
+        return self.instantiateVarHelp(initial_var, true);
+    }
+
     fn instantiateVarHelp(
         self: *Self,
         initial_var: Var,
